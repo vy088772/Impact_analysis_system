@@ -1,0 +1,879 @@
+# code_analyzer/sql_analyzer.py
+"""
+SQL 分析器（精簡版）
+策略：靜態分析建立基礎關聯，複雜分析交給 AI
+"""
+
+import re
+import pyodbc
+from typing import List, Dict, Set, Optional, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+import json
+
+from config.settings import settings, DatabaseConfig
+
+
+# ============================================
+# 資料模型
+# ============================================
+
+@dataclass
+class SimplifiedSPInfo:
+    """精簡版 SP 資訊（靜態分析）"""
+    procedure_name: str
+    database: str
+    schema: str = "dbo"
+    
+    # 基本資訊（從資料庫查詢）
+    exists: bool = False
+    parameters: List[str] = field(default_factory=list)
+    created_date: Optional[str] = None
+    modified_date: Optional[str] = None
+    definition: str = ""
+    definition_length: int = 0
+    
+    # 簡單分析（正規表達式提取）
+    referenced_tables: Set[str] = field(default_factory=set)
+    has_dynamic_sql: bool = False
+    has_temp_tables: bool = False
+    has_cursor: bool = False
+    has_transaction: bool = False
+    
+    # 統計
+    estimated_complexity: str = "簡單"  # 簡單/中等/複雜
+    line_count: int = 0
+    
+    def to_dict(self) -> Dict:
+        """轉為字典"""
+        return {
+            'name': self.procedure_name,
+            'database': self.database,
+            'schema': self.schema,
+            'exists': self.exists,
+            'parameters': self.parameters,
+            'created_date': self.created_date,
+            'modified_date': self.modified_date,
+            'tables': list(self.referenced_tables),
+            'flags': {
+                'dynamic_sql': self.has_dynamic_sql,
+                'temp_tables': self.has_temp_tables,
+                'cursor': self.has_cursor,
+                'transaction': self.has_transaction
+            },
+            'complexity': self.estimated_complexity,
+            'definition_length': self.definition_length,
+            'line_count': self.line_count
+        }
+    
+    def __str__(self):
+        status = "✅" if self.exists else "❌"
+        return f"{status} {self.database}.{self.schema}.{self.procedure_name} [{self.estimated_complexity}]"
+
+
+@dataclass
+class DatabaseSummary:
+    """資料庫摘要"""
+    database: str
+    total_tables: int = 0
+    total_views: int = 0
+    total_procedures: int = 0
+    total_functions: int = 0
+    analyzed_procedures: int = 0
+    
+    procedures: List[SimplifiedSPInfo] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict:
+        return {
+            'database': self.database,
+            'statistics': {
+                'tables': self.total_tables,
+                'views': self.total_views,
+                'procedures': self.total_procedures,
+                'functions': self.total_functions,
+                'analyzed': self.analyzed_procedures
+            },
+            'procedures': [sp.to_dict() for sp in self.procedures]
+        }
+
+
+# ============================================
+# SQL 分析器（精簡版）
+# ============================================
+
+class SQLAnalyzer:
+    """SQL 分析器（精簡實用版）"""
+    
+    def __init__(self, database_alias: str = None):
+        """
+        初始化 SQL 分析器
+        
+        Args:
+            database_alias: 資料庫簡稱（例如: "STC", "PUR"）
+        """
+        if database_alias:
+            self.db_config = settings.get_database_config(database_alias)
+            if not self.db_config:
+                raise ValueError(f"找不到資料庫設定: {database_alias}")
+        else:
+            self.db_config = settings.get_default_database()
+            if not self.db_config:
+                raise ValueError("未設定預設資料庫")
+        
+        self.connection = None
+        self.cursor = None
+        
+        print(f"✅ SQL 分析器已初始化: {self.db_config.alias} ({self.db_config.database_name})")
+    
+    # ========================================
+    # 連線管理
+    # ========================================
+    
+    def connect(self) -> bool:
+        """建立資料庫連線"""
+        try:
+            print(f"🔌 連接資料庫: {self.db_config.alias}...")
+            
+            conn_str = self.db_config.get_connection_string()
+            self.connection = pyodbc.connect(conn_str)
+            self.cursor = self.connection.cursor()
+            
+            # 取得資料庫資訊
+            self.cursor.execute("SELECT DB_NAME(), SUSER_SNAME()")
+            db_name, user_name = self.cursor.fetchone()
+            
+            print(f"✅ 連線成功")
+            print(f"   資料庫: {db_name}")
+            print(f"   登入身分: {user_name}")
+            
+            return True
+            
+        except pyodbc.Error as e:
+            print(f"❌ 連線失敗: {e}")
+            return False
+    
+    def disconnect(self):
+        """關閉資料庫連線"""
+        if self.cursor:
+            self.cursor.close()
+        if self.connection:
+            self.connection.close()
+        print(f"✅ 已關閉資料庫連線: {self.db_config.alias}")
+    
+    def test_connection(self) -> Dict:
+        """測試連線並返回資訊"""
+        if not self.connection:
+            return {'success': False, 'error': '未連線'}
+        
+        try:
+            self.cursor.execute("SELECT @@VERSION")
+            version = self.cursor.fetchone()[0]
+            
+            return {
+                'success': True,
+                'database': self.db_config.database_name,
+                'version': version.split('\n')[0]
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    # ========================================
+    # 資料庫概覽
+    # ========================================
+    
+    def get_database_summary(self) -> DatabaseSummary:
+        """取得資料庫摘要"""
+        summary = DatabaseSummary(database=self.db_config.alias)
+        
+        # 資料表數量
+        self.cursor.execute("""
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_TYPE = 'BASE TABLE'
+        """)
+        summary.total_tables = self.cursor.fetchone()[0]
+        
+        # View 數量
+        self.cursor.execute("""
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.VIEWS
+        """)
+        summary.total_views = self.cursor.fetchone()[0]
+        
+        # 預存程序數量
+        self.cursor.execute("""
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.ROUTINES 
+            WHERE ROUTINE_TYPE = 'PROCEDURE'
+        """)
+        summary.total_procedures = self.cursor.fetchone()[0]
+        
+        # 函數數量
+        self.cursor.execute("""
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.ROUTINES 
+            WHERE ROUTINE_TYPE = 'FUNCTION'
+        """)
+        summary.total_functions = self.cursor.fetchone()[0]
+        
+        return summary
+    
+    def get_all_procedures(self, schema: str = 'dbo') -> List[str]:
+        """取得所有預存程序名稱"""
+        query = """
+        SELECT ROUTINE_NAME
+        FROM INFORMATION_SCHEMA.ROUTINES
+        WHERE ROUTINE_TYPE = 'PROCEDURE'
+        AND ROUTINE_SCHEMA = ?
+        ORDER BY ROUTINE_NAME
+        """
+        
+        self.cursor.execute(query, schema)
+        return [row.ROUTINE_NAME for row in self.cursor.fetchall()]
+    
+    def get_all_tables(self, schema: str = 'dbo') -> List[str]:
+        """取得所有資料表名稱"""
+        query = """
+        SELECT TABLE_NAME
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_TYPE = 'BASE TABLE'
+        AND TABLE_SCHEMA = ?
+        ORDER BY TABLE_NAME
+        """
+        
+        self.cursor.execute(query, schema)
+        return [row.TABLE_NAME for row in self.cursor.fetchall()]
+    
+    # ========================================
+    # 單一 SP 快速分析
+    # ========================================
+    
+    def quick_analyze_sp(
+        self, 
+        proc_name: str, 
+        schema: str = 'dbo'
+    ) -> SimplifiedSPInfo:
+        """
+        快速分析單一預存程序
+        只做靜態分析，不深入解析複雜邏輯
+        """
+        print(f"\n🔍 快速分析: {proc_name}")
+        
+        info = SimplifiedSPInfo(
+            procedure_name=proc_name,
+            database=self.db_config.alias,
+            schema=schema
+        )
+        
+        # 1. 檢查是否存在
+        info.exists = self._check_sp_exists(proc_name, schema)
+        
+        if not info.exists:
+            print(f"   ❌ 預存程序不存在")
+            return info
+        
+        # 2. 取得基本資訊
+        basic_info = self._get_sp_basic_info(proc_name, schema)
+        if basic_info:
+            info.parameters = basic_info['parameters']
+            info.created_date = basic_info['created_date']
+            info.modified_date = basic_info['modified_date']
+            info.definition = basic_info['definition']
+            info.definition_length = len(info.definition)
+            info.line_count = info.definition.count('\n') + 1
+            
+            # 3. 快速特徵識別
+            info.has_dynamic_sql = self._detect_dynamic_sql(info.definition)
+            info.has_temp_tables = self._detect_temp_tables(info.definition)
+            info.has_cursor = self._detect_cursor(info.definition)
+            info.has_transaction = self._detect_transaction(info.definition)
+            
+            # 4. 快速提取資料表
+            info.referenced_tables = self._quick_extract_tables(info.definition)
+            
+            # 5. 估算複雜度
+            info.estimated_complexity = self._estimate_complexity(info)
+            
+            print(f"   ✅ 完成 - 複雜度: {info.estimated_complexity}")
+            print(f"      參數: {len(info.parameters)}")
+            print(f"      資料表: {len(info.referenced_tables)}")
+        
+        return info
+    
+    def _check_sp_exists(self, proc_name: str, schema: str) -> bool:
+        """檢查 SP 是否存在 (修正 schema 支援)"""
+        
+        # 1. 正常查詢 (使用指定 schema)
+        query = """
+        SELECT COUNT(*)
+        FROM INFORMATION_SCHEMA.ROUTINES
+        WHERE ROUTINE_NAME = ? AND ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'
+        """
+        self.cursor.execute(query, proc_name, schema)
+        if self.cursor.fetchone()[0] > 0:
+            return True
+            
+        # 2. 如果失敗，嘗試移除方括號 (處理像 [dbo].[spName] 或 [spName] 的情況)
+        clean_name = proc_name.replace('[', '').replace(']', '')
+        if '.' in clean_name:
+            # 如果包含 schema.name
+            parts = clean_name.split('.')
+            if len(parts) == 2:
+                sp_schema, sp_name = parts
+                self.cursor.execute(query, sp_name, sp_schema)
+                if self.cursor.fetchone()[0] > 0:
+                    return True
+        else:
+            # 只有名稱，用傳入的 schema 再試一次
+            self.cursor.execute(query, clean_name, schema)
+            if self.cursor.fetchone()[0] > 0:
+                return True
+                
+        return False
+    
+    def _get_sp_basic_info(self, proc_name: str, schema: str) -> Optional[Dict]:
+        """取得 SP 基本資訊 (修正 schema 支援)"""
+        
+        # 預處理名稱
+        target_name = proc_name
+        target_schema = schema
+        
+        clean_name = proc_name.replace('[', '').replace(']', '')
+        if '.' in clean_name:
+            parts = clean_name.split('.')
+            if len(parts) == 2:
+                target_schema = parts[0]
+                target_name = parts[1]
+        else:
+            target_name = clean_name
+
+        # 取得定義和時間
+        query = """
+        SELECT 
+            ROUTINE_DEFINITION,
+            CREATED,
+            LAST_ALTERED
+        FROM INFORMATION_SCHEMA.ROUTINES
+        WHERE ROUTINE_NAME = ? AND ROUTINE_SCHEMA = ?
+        """
+        self.cursor.execute(query, target_name, target_schema)
+        row = self.cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        # 強化定義抓取 (如果 INFORMATION_SCHEMA 取不到或太短，嘗試使用 OBJECT_DEFINITION)
+        definition = row[0]
+        if not definition or len(definition) < 10:
+             self.cursor.execute(f"SELECT OBJECT_DEFINITION(OBJECT_ID('{target_schema}.{target_name}'))")
+             def_row = self.cursor.fetchone()
+             if def_row and def_row[0]:
+                 definition = def_row[0]
+
+        # 取得參數
+        param_query = """
+        SELECT 
+            PARAMETER_NAME,
+            DATA_TYPE,
+            CHARACTER_MAXIMUM_LENGTH,
+            PARAMETER_MODE
+        FROM INFORMATION_SCHEMA.PARAMETERS
+        WHERE SPECIFIC_NAME = ? AND SPECIFIC_SCHEMA = ?
+        ORDER BY ORDINAL_POSITION
+        """
+        self.cursor.execute(param_query, target_name, target_schema)
+        
+        parameters = []
+        for r in self.cursor.fetchall():
+            param_type = r[1].upper()
+            if r[2]:  # 有長度
+                param_type += f"({r[2]})" if r[2] != -1 else "(MAX)"
+            
+            param_str = f"{r[0]} {param_type}"
+            if r[3] and r[3] != 'IN':
+                param_str += f" ({r[3]})"
+            
+            parameters.append(param_str)
+        
+        return {
+            'definition': row[0] or "",
+            'created_date': str(row[1]) if row[1] else None,
+            'modified_date': str(row[2]) if row[2] else None,
+            'parameters': parameters
+        }
+    
+    # ========================================
+    # 快速特徵識別（正規表達式）
+    # ========================================
+    
+    def _detect_dynamic_sql(self, sql: str) -> bool:
+        """偵測動態 SQL"""
+        patterns = [
+            r'EXEC\s*\(\s*@',
+            r'sp_executesql',
+            r'EXECUTE\s+sp_executesql'
+        ]
+        return any(re.search(p, sql, re.IGNORECASE) for p in patterns)
+    
+    def _detect_temp_tables(self, sql: str) -> bool:
+        """偵測暫存資料表"""
+        return bool(re.search(r'#\w+', sql))
+    
+    def _detect_cursor(self, sql: str) -> bool:
+        """偵測游標"""
+        return bool(re.search(r'DECLARE\s+\w+\s+CURSOR', sql, re.IGNORECASE))
+    
+    def _detect_transaction(self, sql: str) -> bool:
+        """偵測交易"""
+        return bool(re.search(r'BEGIN\s+(?:TRAN|TRANSACTION)', sql, re.IGNORECASE))
+    
+    def _quick_extract_tables(self, sql: str) -> Set[str]:
+        """
+        快速提取資料表（簡單模式）
+        只提取明顯的資料表引用，不深入分析
+        """
+        tables = set()
+        
+        # 移除註解（避免誤判）
+        sql = re.sub(r'--.*?$', '', sql, flags=re.MULTILINE)
+        sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+        
+        # 提取模式 (修正：支援 schema.table 格式)
+        # 允許捕捉 字母、數字、底線、方括號 [] 以及 點號 .
+        patterns = [
+            (r'FROM\s+([\[\w\]\.]+)', 'FROM'),
+            (r'JOIN\s+([\[\w\]\.]+)', 'JOIN'),
+            (r'INTO\s+([\[\w\]\.]+)', 'INTO'),
+            (r'UPDATE\s+([\[\w\]\.]+)', 'UPDATE'),
+        ]
+        
+        for pattern, context in patterns:
+            matches = re.findall(pattern, sql, re.IGNORECASE)
+            for match in matches:
+                # 清理表格名稱
+                table = match.strip('[]').strip()
+                
+                # 過濾條件
+                if (
+                    table and 
+                    not table.startswith('#') and  # 排除暫存表
+                    not table.startswith('@') and  # 排除變數
+                    table.upper() not in ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'EXEC', 'EXECUTE'] and
+                    len(table) > 1 and
+                    not table.startswith('(')  # 排除子查詢
+                ):
+                    # 處理 schema.table 格式
+                    if '.' in table:
+                        table = table.split('.')[-1].strip('[]')
+                    
+                    tables.add(table)
+        
+        return tables
+    
+    def _estimate_complexity(self, info: SimplifiedSPInfo) -> str:
+        """估算複雜度"""
+        score = 0
+        
+        # 特徵評分
+        if info.has_dynamic_sql:
+            score += 3
+        if info.has_temp_tables:
+            score += 2
+        if info.has_cursor:
+            score += 2
+        if info.has_transaction:
+            score += 1
+        
+        # 長度評分
+        if info.definition_length > 10000:
+            score += 3
+        elif info.definition_length > 5000:
+            score += 2
+        elif info.definition_length > 2000:
+            score += 1
+        
+        # 資料表數量評分
+        table_count = len(info.referenced_tables)
+        if table_count > 10:
+            score += 2
+        elif table_count > 5:
+            score += 1
+        
+        # 行數評分
+        if info.line_count > 500:
+            score += 2
+        elif info.line_count > 200:
+            score += 1
+        
+        # 判定
+        if score >= 6:
+            return "複雜"
+        elif score >= 3:
+            return "中等"
+        else:
+            return "簡單"
+    
+    # ========================================
+    # 批次分析
+    # ========================================
+    
+    def analyze_all_procedures(
+        self, 
+        schema: str = 'dbo',
+        limit: Optional[int] = None
+    ) -> DatabaseSummary:
+        """
+        分析所有預存程序
+        
+        Args:
+            schema: Schema 名稱
+            limit: 限制數量（用於測試）
+        """
+        print("\n" + "=" * 80)
+        print(f"批次分析資料庫: {self.db_config.alias}")
+        print("=" * 80)
+        
+        # 取得摘要
+        summary = self.get_database_summary()
+        
+        # 取得所有 SP
+        all_procs = self.get_all_procedures(schema)
+        
+        if limit:
+            all_procs = all_procs[:limit]
+        
+        print(f"\n找到 {len(all_procs)} 個預存程序")
+        print("開始分析...\n")
+        
+        # 批次分析
+        from tqdm import tqdm
+        
+        for proc_name in tqdm(all_procs, desc="分析進度"):
+            try:
+                sp_info = self.quick_analyze_sp(proc_name, schema)
+                summary.procedures.append(sp_info)
+                summary.analyzed_procedures += 1
+            except Exception as e:
+                print(f"\n   ⚠️  分析失敗 ({proc_name}): {e}")
+        
+        print(f"\n✅ 分析完成: {summary.analyzed_procedures}/{len(all_procs)}")
+        
+        return summary
+    
+    # ========================================
+    # 輸出與匯出
+    # ========================================
+    
+    def print_sp_info(self, info: SimplifiedSPInfo, detailed: bool = True):
+        """美化輸出 SP 資訊"""
+        print("\n" + "=" * 80)
+        print(f"預存程序: {info.procedure_name}")
+        print("=" * 80)
+        
+        if not info.exists:
+            print("❌ 預存程序不存在")
+            return
+        
+        # 基本資訊
+        print(f"\n📋 基本資訊:")
+        print(f"   資料庫: {info.database}")
+        print(f"   Schema: {info.schema}")
+        print(f"   建立時間: {info.created_date}")
+        print(f"   修改時間: {info.modified_date}")
+        print(f"   複雜度: {info.estimated_complexity}")
+        
+        # 統計
+        print(f"\n📊 統計:")
+        print(f"   行數: {info.line_count}")
+        print(f"   字元數: {info.definition_length}")
+        print(f"   參數數: {len(info.parameters)}")
+        print(f"   資料表數: {len(info.referenced_tables)}")
+        
+        # 特���
+        features = []
+        if info.has_dynamic_sql:
+            features.append("動態 SQL")
+        if info.has_temp_tables:
+            features.append("暫存資料表")
+        if info.has_cursor:
+            features.append("游標")
+        if info.has_transaction:
+            features.append("交易")
+        
+        if features:
+            print(f"\n⚙️  特徵:")
+            for feature in features:
+                print(f"   - {feature}")
+        
+        # 參數
+        if info.parameters:
+            print(f"\n📥 參數 ({len(info.parameters)}):")
+            for param in info.parameters:
+                print(f"   - {param}")
+        
+        # 資料表
+        if info.referenced_tables:
+            print(f"\n📊 涉及的資料表 ({len(info.referenced_tables)}):")
+            for table in sorted(info.referenced_tables):
+                print(f"   - {table}")
+        
+        # 詳細定義
+        if detailed and info.definition:
+            print(f"\n📝 SQL 定義（前 500 字元）:")
+            print("   " + "-" * 76)
+            preview = info.definition[:500].replace('\n', '\n   ')
+            print(f"   {preview}")
+            if len(info.definition) > 500:
+                print(f"   ... (共 {len(info.definition)} 字元)")
+            print("   " + "-" * 76)
+        
+        print("\n" + "=" * 80)
+    
+    def print_summary(self, summary: DatabaseSummary):
+        """輸出資料庫摘要"""
+        print("\n" + "=" * 80)
+        print(f"資料庫摘要: {summary.database}")
+        print("=" * 80)
+        
+        print(f"\n📊 統計:")
+        print(f"   資料表: {summary.total_tables}")
+        print(f"   檢視表: {summary.total_views}")
+        print(f"   預存程序: {summary.total_procedures}")
+        print(f"   函數: {summary.total_functions}")
+        print(f"   已分析: {summary.analyzed_procedures}")
+        
+        if summary.procedures:
+            # 按複雜度分組
+            by_complexity = {'簡單': [], '中等': [], '複雜': []}
+            for sp in summary.procedures:
+                by_complexity[sp.estimated_complexity].append(sp)
+            
+            print(f"\n📈 複雜度分布:")
+            print(f"   簡單: {len(by_complexity['簡單'])}")
+            print(f"   中等: {len(by_complexity['中等'])}")
+            print(f"   複雜: {len(by_complexity['複雜'])}")
+            
+            # 特徵統計
+            dynamic_sql_count = sum(1 for sp in summary.procedures if sp.has_dynamic_sql)
+            temp_table_count = sum(1 for sp in summary.procedures if sp.has_temp_tables)
+            cursor_count = sum(1 for sp in summary.procedures if sp.has_cursor)
+            
+            if any([dynamic_sql_count, temp_table_count, cursor_count]):
+                print(f"\n⚙️  特徵統計:")
+                if dynamic_sql_count:
+                    print(f"   動態 SQL: {dynamic_sql_count}")
+                if temp_table_count:
+                    print(f"   暫存資料表: {temp_table_count}")
+                if cursor_count:
+                    print(f"   游標: {cursor_count}")
+        
+        print("\n" + "=" * 80)
+    
+    def export_to_json(
+        self, 
+        data, 
+        output_path: str = None
+    ) -> str:
+        """
+        匯出為 JSON
+        
+        Args:
+            data: SimplifiedSPInfo 或 DatabaseSummary
+            output_path: 輸出路徑
+        """
+        if output_path is None:
+            # 自動生成路徑
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            if isinstance(data, SimplifiedSPInfo):
+                output_path = f"output/sp_analysis/{data.database}_{data.procedure_name}_{timestamp}.json"
+            elif isinstance(data, DatabaseSummary):
+                output_path = f"output/sp_analysis/{data.database}_summary_{timestamp}.json"
+            else:
+                output_path = f"output/sp_analysis/export_{timestamp}.json"
+        
+        # 建立目錄
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        # 轉換為字典
+        if isinstance(data, SimplifiedSPInfo):
+            export_data = data.to_dict()
+        elif isinstance(data, DatabaseSummary):
+            export_data = data.to_dict()
+        else:
+            export_data = data
+        
+        # 寫入檔案
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"✅ 已匯出: {output_path}")
+        return output_path
+    
+    def export_summary_to_excel(
+        self,
+        summary: DatabaseSummary,
+        output_path: str = None
+    ) -> str:
+        """匯出摘要為 Excel"""
+        import pandas as pd
+        
+        if output_path is None:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_path = f"output/sp_analysis/{summary.database}_summary_{timestamp}.xlsx"
+        
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        # 準備資料
+        data = []
+        for sp in summary.procedures:
+            data.append({
+                '預存程序名稱': sp.procedure_name,
+                'Schema': sp.schema,
+                '是否存在': '是' if sp.exists else '否',
+                '複雜度': sp.estimated_complexity,
+                '參數數量': len(sp.parameters),
+                '資料表數量': len(sp.referenced_tables),
+                '行數': sp.line_count,
+                '動態SQL': '是' if sp.has_dynamic_sql else '否',
+                '暫存資料表': '是' if sp.has_temp_tables else '否',
+                '游標': '是' if sp.has_cursor else '否',
+                '建立時間': sp.created_date,
+                '修改時間': sp.modified_date,
+                '涉及資料表': ', '.join(sorted(sp.referenced_tables))
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # 寫入 Excel
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='預存程序清單', index=False)
+            
+            # 調整欄寬
+            worksheet = writer.sheets['預存程序清單']
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+        
+        print(f"✅ 已匯出 Excel: {output_path}")
+        return output_path
+
+
+# ============================================
+# 測試與使用範例
+# ============================================
+
+def main():
+    """主測試程式"""
+    print("=" * 80)
+    print("SQL 分析器測試")
+    print("=" * 80)
+    
+    # 顯示可用資料庫
+    all_dbs = settings.get_all_databases()
+    print(f"\n可用的資料庫 ({len(all_dbs)}):")
+    for i, (alias, db_config) in enumerate(all_dbs.items(), 1):
+        print(f"  {i}. {alias}: {db_config.database_name}")
+    
+    # 選擇資料庫
+    choice = input(f"\n請選擇資料庫 (預設: {settings.DB_DEFAULT_DATABASE}): ").strip()
+    
+    if choice.isdigit():
+        db_alias = list(all_dbs.keys())[int(choice) - 1]
+    elif choice in all_dbs:
+        db_alias = choice
+    else:
+        db_alias = settings.DB_DEFAULT_DATABASE
+    
+    try:
+        # 建立分析器
+        analyzer = SQLAnalyzer(db_alias)
+        
+        # 連接資料庫
+        if not analyzer.connect():
+            return
+        
+        # 選擇功能
+        print("\n" + "=" * 80)
+        print("請選擇功能:")
+        print("  1. 分析單一預存程序")
+        print("  2. 分析所有預存程序")
+        print("  3. 顯示資料庫摘要")
+        print("=" * 80)
+        
+        function_choice = input("\n請輸入選項 (1-3): ").strip()
+        
+        if function_choice == '1':
+            # 單一 SP 分析
+            procedures = analyzer.get_all_procedures()
+            print(f"\n找到 {len(procedures)} 個預存程序")
+            print("\n前 20 個:")
+            for i, proc in enumerate(procedures[:20], 1):
+                print(f"  {i}. {proc}")
+            
+            sp_choice = input("\n請輸入預存程序名稱（或編號）: ").strip()
+            
+            if sp_choice.isdigit():
+                sp_index = int(sp_choice) - 1
+                if 0 <= sp_index < len(procedures):
+                    sp_name = procedures[sp_index]
+                else:
+                    print("❌ 編號無效")
+                    analyzer.disconnect()
+                    return
+            else:
+                sp_name = sp_choice
+            
+            # 分析
+            sp_info = analyzer.quick_analyze_sp(sp_name)
+            analyzer.print_sp_info(sp_info, detailed=True)
+            
+            # 匯出
+            export = input("\n是否匯出為 JSON？(y/n): ").strip().lower()
+            if export == 'y':
+                analyzer.export_to_json(sp_info)
+        
+        elif function_choice == '2':
+            # 批次分析
+            limit_input = input("\n限制數量（測試用，直接按 Enter 分析全部）: ").strip()
+            limit = int(limit_input) if limit_input.isdigit() else None
+            
+            summary = analyzer.analyze_all_procedures(limit=limit)
+            analyzer.print_summary(summary)
+            
+            # 匯出
+            export = input("\n是否匯出結果？(json/excel/n): ").strip().lower()
+            if export == 'json':
+                analyzer.export_to_json(summary)
+            elif export == 'excel':
+                analyzer.export_summary_to_excel(summary)
+        
+        elif function_choice == '3':
+            # 資料庫摘要
+            summary = analyzer.get_database_summary()
+            analyzer.print_summary(summary)
+        
+        # 關閉連線
+        analyzer.disconnect()
+        
+    except Exception as e:
+        print(f"\n❌ 錯誤: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print("\n" + "=" * 80)
+    print("✅ 測試完成")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    main()

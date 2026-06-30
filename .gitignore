@@ -1,0 +1,6 @@
+venv/
+.env
+.env.example
+tests/
+output/
+__pycache__/

@@ -1,0 +1,38 @@
+{
+  "wrapper_methods": [
+    "ExeProcRead",
+    "CreateReader",
+    "CreateDataSet",
+    "ExecuteReader",
+    "ExecuteScalar",
+    "ExecuteNonQuery",
+    "GetDataReader",
+    "GetDataSet",
+    "GetDataTable",
+    "CreateTable",
+    "ExeProcNon",
+    "GetFirstValue",
+    "usp_ExecCmdGetDataTableAsync",
+    "ExecCmdGetDataTableAsync",
+    "ExecuteStoredProcedureAsync",
+    "ExecuteStoredProcedure"
+  ],
+  "sp_name_patterns": [
+    "^sp[A-Z_]",
+    "^SP[A-Z_]",
+    "^proc[A-Z_]",
+    "^usp[A-Z_]"
+  ],
+  "detect_command_type": true,
+  "detect_exec_statements": true,
+  "require_sp_prefix": false,
+  "min_proc_name_length": 3,
+  "comments": {
+    "wrapper_methods": "自訂的預存程序封裝方法名稱",
+    "sp_name_patterns": "預存程序命名模式（正規表達式）",
+    "detect_command_type": "是否偵測 SqlCommand with CommandType.StoredProcedure",
+    "detect_exec_statements": "是否偵測直接 EXEC/EXECUTE 語句",
+    "require_sp_prefix": "是否要求預存程序名稱必須有前綴（sp, usp等）",
+    "min_proc_name_length": "預存程序名稱最小長度"
+  }
+}
