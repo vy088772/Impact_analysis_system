@@ -121,7 +121,17 @@ class Settings:
     AZURE_DEVOPS_BRANCH: str = os.getenv('AZURE_DEVOPS_BRANCH', 'main')
     # Clone 目標目錄（留空則使用系統暫存目錄）
     AZURE_DEVOPS_CLONE_DIR: str = os.getenv('AZURE_DEVOPS_CLONE_DIR', '')
-    
+
+    # ========================================
+    # HTTP 服務設定（FastAPI / 影響分析服務）
+    # ========================================
+    SERVICE_HOST: str = os.getenv('SERVICE_HOST', '127.0.0.1')
+    SERVICE_PORT: int = int(os.getenv('SERVICE_PORT', '8800'))
+    # 多系統共用 repo 的本機快取根目錄；依 <project>__<repo> 分目錄
+    AZURE_CLONE_ROOT: str = os.getenv('AZURE_CLONE_ROOT', './data/repos')
+    # 靜態掃描結果的持久化快取根目錄（pickle）；避免每次重新解析 C#
+    SCAN_CACHE_ROOT: str = os.getenv('SCAN_CACHE_ROOT', './data/scan_cache')
+
     # ========================================
     # 檔案路徑設定
     # ========================================

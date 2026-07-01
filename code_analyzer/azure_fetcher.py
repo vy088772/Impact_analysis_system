@@ -48,19 +48,24 @@ class AzureDevOpsFetcher:
     # 公開方法
     # ------------------------------------------------------------------
 
-    def fetch(self) -> Path:
+    def fetch(self, update: bool = True) -> Path:
         """
         Clone 或更新程式碼，回傳本機路徑。
 
-        - 若 clone_dir 已存在且含 .git，執行 git pull（更新）。
+        - 若 clone_dir 已存在且含 .git：
+            update=True  → 執行 git pull（更新）。
+            update=False → 直接沿用現有 clone（不連線、不更新）。
         - 若 clone_dir 為空，建立暫存目錄後 clone。
         - 回傳 clone 根目錄的 Path 物件。
         """
         target = self._resolve_target()
 
         if (target / '.git').exists():
-            print(f"📂 目錄已存在，執行 git pull：{target}")
-            self._git_pull(target)
+            if update:
+                print(f"📂 目錄已存在，執行 git pull：{target}")
+                self._git_pull(target)
+            else:
+                print(f"📂 已存在 clone，沿用（未更新）：{target}")
         else:
             print(f"⬇️  開始 clone：{self._safe_url()}")
             print(f"   分支：{self.branch}")

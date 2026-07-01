@@ -36,7 +36,14 @@ pyodbc==5.0.1             # MS SQL 連線
 # 正規表達式增強
 regex==2023.12.25
 
+# ========================================
+# HTTP 服務（FastAPI 影響分析服務）
+# ========================================
+fastapi>=0.110           # HTTP API 框架（Python 3.14 需較新版）
+uvicorn>=0.29            # ASGI 伺服器
+pydantic>=2.6            # 資料模型驗證
+
 # 安裝指令：
-pip install beautifulsoup4 sqlparse pandas openpyxl networkx matplotlib tqdm colorama python-dotenv pyodbc regex
+pip install beautifulsoup4 sqlparse pandas openpyxl networkx matplotlib tqdm colorama python-dotenv pyodbc regex fastapi uvicorn
 
 
