@@ -43,6 +43,7 @@ def extract_snippets(
     max_snippets: int = 20,
     max_lines_per_snippet: int = 600,
     head_lines: int = 40,
+    method_filter: set[str] | None = None,
 ) -> List[CodeSnippet]:
     """
     從單一檔案的解析結果擷取程式碼片段。
@@ -53,6 +54,8 @@ def extract_snippets(
       max_snippets         ：最多回傳幾個片段。
       max_lines_per_snippet：單一方法片段的行數上限（避免過長）。
       head_lines           ：無方法位置時，擷取檔案開頭的行數。
+      method_filter        ：若指定，只擷取這些方法名（用於跨程式展開時只拿
+                             實際被呼叫到的單一方法，控制篇幅）。
     """
     file_path = Path(result.file_path)
     lines = _read_lines(file_path)
@@ -68,6 +71,8 @@ def extract_snippets(
         for method in cls.methods:
             if len(snippets) >= max_snippets:
                 break
+            if method_filter is not None and method.name not in method_filter:
+                continue
             loc = getattr(method, "location", None)
             if not loc or not getattr(loc, "line_number", 0):
                 continue

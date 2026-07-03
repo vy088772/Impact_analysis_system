@@ -161,9 +161,12 @@ llamaindex-spec-rag/               【.venv #1】協調者 / 大腦（仍可單�
 │   └── run_cli.py                   # 互動式 CLI（免寫程式碼）
 ├── prompts/integrated_answer.txt    # 整合答案 Prompt 模板
 ├── query/chat.py                   # 【擴充】Chat.analyze_impact()
-├── storage/code_embeddings/         # 程式碼向量 + 注記快取
 └── config.py                       # 【擴充】IMPACT_*、RUN_AI、SEE_AI_PROMPT、USE_CODE_* 等
 ```
+
+> `storage/code_embeddings/`（程式碼向量 + 注記快取）與影響分析輸出報告，實際存放於
+> `Impact_analysis_system/data/code_embeddings/` 與 `Impact_analysis_system/output/impact_analysis/`
+> （屬於程式碼分析的衍生產物，放在 code 專案側，而非 spec-rag 自己的 `storage/`）。
 
 ---
 

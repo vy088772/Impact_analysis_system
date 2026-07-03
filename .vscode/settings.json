@@ -8,5 +8,17 @@
             "icon": "terminal-powershell"
         }
     },
-    "terminal.integrated.defaultProfile.windows": "PowerShell"
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "github.copilot.chat.commitMessageGeneration.instructions": [
+        {
+            "file": ".copilot-commit-message-instructions.md"
+        }
+    ],
+    "python-envs.pythonProjects": [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:venv",
+            "packageManager": "ms-python.python:pip"
+        }
+    ]
 }

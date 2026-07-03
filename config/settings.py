@@ -107,7 +107,6 @@ class Settings:
     # ========================================
     # 專案掃描設定
     # ========================================
-    PROJECT_ROOT: str = os.getenv('PROJECT_ROOT', '')
     EXCLUDE_FOLDERS: List[str] = os.getenv('EXCLUDE_FOLDERS', 'bin,obj,packages,node_modules,.git,.vs').split(',')
     EXCLUDE_PATTERNS: List[str] = os.getenv('EXCLUDE_PATTERNS', '*.Designer.cs,*.g.cs,*.g.i.cs').split(',')
 
@@ -243,10 +242,6 @@ class Settings:
             if not cls.DB_PASSWORD:
                 errors.append("SQL Server 驗證模式需要設定 DB_PASSWORD")
         
-        # 檢查專案路徑
-        if cls.PROJECT_ROOT and not Path(cls.PROJECT_ROOT).exists():
-            errors.append(f"PROJECT_ROOT 路徑不存在: {cls.PROJECT_ROOT}")
-        
         # 建立必要目錄
         Path(cls.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
         Path(cls.LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
@@ -275,7 +270,6 @@ class Settings:
         print(f"\n預設資料庫: {cls.DB_DEFAULT_DATABASE}")
         
         print(f"\n專案:")
-        print(f"  專案根目錄: {cls.PROJECT_ROOT}")
         print(f"  排除資料夾: {', '.join(cls.EXCLUDE_FOLDERS)}")
         
         print(f"\n輸出:")

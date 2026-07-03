@@ -121,6 +121,11 @@ class ProjectScanResult:
     # C# 分析結果
     csharp_results: List[FileAnalysisResult] = field(default_factory=list)
     
+    # View 層分析結果（依框架偵測結果選擇性填入；未偵測到對應框架時維持空清單）
+    aspx_results: List[FileAnalysisResult] = field(default_factory=list)    # .aspx / .ascx
+    razor_results: List[FileAnalysisResult] = field(default_factory=list)  # .cshtml
+    vue_results: List[FileAnalysisResult] = field(default_factory=list)    # .vue
+    
     # 關聯資訊
     sp_relations: List[CSharpSPRelation] = field(default_factory=list)
     table_relations: List[CSharpTableRelation] = field(default_factory=list)
@@ -188,7 +193,7 @@ class ProjectScanner:
             project_root: 專案根目錄
             project_name: 專案名稱
         """
-        self.project_root = project_root or settings.PROJECT_ROOT
+        self.project_root = project_root
         self.project_name = project_name or Path(self.project_root).name
         
         if not self.project_root or not Path(self.project_root).exists():
@@ -389,6 +394,36 @@ class ProjectScanner:
         print(f"   找到 {len(csharp_files)} 個 C# 檔案")
         return csharp_files
     
+    def _find_files_by_extensions(self, extensions: Set[str]) -> List[str]:
+        """依副檔名尋找檔案（套用與 find_csharp_files 相同的排除資料夾／樣式規則）。
+
+        供 View 層解析器（aspx/razor/vue）使用；這些解析器過去雖已依框架偵測
+        結果被建立（self.parsers），卻從未被呼叫，.aspx/.cshtml/.vue 本身
+        從未被搜尋或讀取。
+        """
+        found_files = []
+        exclude_folders = set(settings.EXCLUDE_FOLDERS)
+        exclude_patterns = settings.EXCLUDE_PATTERNS
+
+        for root, dirs, files in os.walk(self.project_root):
+            dirs[:] = [d for d in dirs if d not in exclude_folders]
+
+            for file in files:
+                if Path(file).suffix.lower() not in extensions:
+                    continue
+
+                should_exclude = False
+                for pattern in exclude_patterns:
+                    import fnmatch
+                    if fnmatch.fnmatch(file, pattern):
+                        should_exclude = True
+                        break
+
+                if not should_exclude:
+                    found_files.append(os.path.join(root, file))
+
+        return found_files
+    
     # ========================================
     # 主掃描流程
     # ========================================
@@ -443,6 +478,39 @@ class ProjectScanner:
                 print(f"\n   ⚠️  解析失敗 ({Path(file_path).name}): {e}")
         
         print(f"\n   ✅ 完成: {self.scan_result.scanned_files}/{self.scan_result.total_files}")
+        
+        # 3.5 解析 View 層檔案（aspx/ascx、razor .cshtml、vue .vue）
+        # 只解析框架偵測結果實際需要的類型（self.parsers 依 required_parsers 建立）；
+        # 失敗採「盡力而為」，單一檔案解析失敗不影響其餘掃描流程。
+        if 'aspx' in self.parsers:
+            aspx_files = self._find_files_by_extensions({'.aspx', '.ascx'})
+            print(f"\n📝 解析 ASPX/ASCX 檔案（共 {len(aspx_files)} 個）...")
+            for file_path in tqdm(aspx_files, desc="ASPX 解析進度"):
+                try:
+                    result = self.parsers['aspx'].parse_file(file_path)
+                    self.scan_result.aspx_results.append(result)
+                except Exception as e:
+                    print(f"\n   ⚠️  ASPX 解析失敗 ({Path(file_path).name}): {e}")
+        
+        if 'razor' in self.parsers:
+            razor_files = self._find_files_by_extensions({'.cshtml'})
+            print(f"\n📝 解析 Razor 檔案（共 {len(razor_files)} 個）...")
+            for file_path in tqdm(razor_files, desc="Razor 解析進度"):
+                try:
+                    result = self.parsers['razor'].parse_file(file_path)
+                    self.scan_result.razor_results.append(result)
+                except Exception as e:
+                    print(f"\n   ⚠️  Razor 解析失敗 ({Path(file_path).name}): {e}")
+        
+        if 'vue' in self.parsers:
+            vue_files = self._find_files_by_extensions({'.vue'})
+            print(f"\n📝 解析 Vue 檔案（共 {len(vue_files)} 個）...")
+            for file_path in tqdm(vue_files, desc="Vue 解析進度"):
+                try:
+                    result = self.parsers['vue'].parse_file(file_path)
+                    self.scan_result.vue_results.append(result)
+                except Exception as e:
+                    print(f"\n   ⚠️  Vue 解析失敗 ({Path(file_path).name}): {e}")
         
         # 4. 建立關聯
         print(f"\n🔗 建立關聯...")
@@ -967,10 +1035,7 @@ def main():
     print("專案掃描器測試（含智慧搜尋）")
     print("=" * 80)
     
-    project_root = settings.PROJECT_ROOT
-    
-    if not project_root or not Path(project_root).exists():
-        project_root = input("\n請輸入專案根目錄: ").strip()
+    project_root = input("\n請輸入專案根目錄: ").strip()
     
     if not project_root or not Path(project_root).exists():
         print("❌ 專案路徑無效")

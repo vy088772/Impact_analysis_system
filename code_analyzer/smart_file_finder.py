@@ -395,10 +395,7 @@ def test_smart_finder():
     """測試智慧搜尋"""
     from config.settings import settings
     
-    project_root = settings.PROJECT_ROOT
-    
-    if not project_root or not Path(project_root).exists():
-        project_root = input("請輸入專案根目錄: ").strip()
+    project_root = input("請輸入專案根目錄: ").strip()
     
     if not project_root:
         print("❌ 未指定專案路徑")

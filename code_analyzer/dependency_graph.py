@@ -1114,10 +1114,7 @@ def main():
     print("依賴關係圖與統計圖表測試")
     print("=" * 80)
     
-    project_root = settings.PROJECT_ROOT
-    
-    if not project_root:
-        project_root = input("請輸入專案根目錄: ").strip()
+    project_root = input("請輸入專案根目錄: ").strip()
     
     if not project_root or not Path(project_root).exists():
         print("❌ 專案路徑無效")

@@ -20,6 +20,7 @@ class ASPXControl:
     properties: Dict[str, str] = field(default_factory=dict)  # 屬性
     events: Dict[str, str] = field(default_factory=dict)      # 事件處理 (例如: OnClick="Button1_Click")
     line_number: int = 0
+    start_pos: int = 0      # 開始標籤在檔案內容中的字元位移（供判斷是否落在某容器範圍內用）
 
 
 @dataclass
@@ -101,6 +102,10 @@ class ASPXParser:
         # 提取事件處理方法
         event_handlers = self._extract_event_handlers(controls)
         
+        # 提取畫面實際顯示給使用者看的欄位文字（GridView 欄位 HeaderText、Label.Text 等），
+        # 並依所屬的 GridView/DataGrid 分組、附上該 Grid 的事件處理（OnRowCommand 等）
+        result.ui_fields = self._extract_ui_fields(content, controls)
+        
         # 儲存到結果（使用 dependencies 暫存）
         result.dependencies.add(f"CodeBehind: {code_behind.code_file if code_behind else 'N/A'}")
         result.dependencies.add(f"Controls: {len(controls)}")
@@ -166,7 +171,8 @@ class ASPXParser:
                 control_id=control_id,
                 properties=attributes,
                 events=events,
-                line_number=line_num
+                line_number=line_num,
+                start_pos=match.start()
             ))
         
         # 模式 2: HTML Server 控制項 <input runat="server" ...>
@@ -191,7 +197,8 @@ class ASPXParser:
                 control_id=control_id,
                 properties=attributes,
                 events=events,
-                line_number=line_num
+                line_number=line_num,
+                start_pos=match.start()
             ))
         
         return controls
@@ -236,6 +243,128 @@ class ASPXParser:
                     handlers.add(handler_name)
         
         return handlers
+    
+    # 會在畫面上顯示欄位標題文字的控制項（GridView/DataGrid 欄位定義）
+    _HEADER_TEXT_CONTROLS = {
+        'boundfield', 'templatefield', 'hyperlinkfield',
+        'checkboxfield', 'buttonfield', 'commandfield', 'imagefield',
+    }
+    # 本身就是顯示用文字的控制項（畫面上的標籤/按鈕文字）
+    _DISPLAY_TEXT_CONTROLS = {
+        'label', 'button', 'linkbutton', 'literal', 'checkbox', 'radiobutton',
+    }
+    # 會把欄位分組、且本身帶有 OnRowCommand/OnRowDataBound 等事件的容器控制項
+    _GRID_CONTAINER_TYPES = {'gridview', 'datagrid'}
+
+    def _compute_container_spans(self, content: str) -> Dict[int, int]:
+        """
+        找出每個 GridView/DataGrid 開始標籤的字元位移 → 對應結束標籤結尾位移。
+        用堆疊配對同名開合標籤（處理同一頁多個/理論上巢狀的情形）；
+        self-closing（無子節點）的容器不會有對應範圍，略過即可。
+        """
+        spans: Dict[int, int] = {}
+        for type_name in self._GRID_CONTAINER_TYPES:
+            open_pattern = re.compile(rf'<asp:{type_name}\b[^>]*?(/?)>', re.IGNORECASE)
+            close_pattern = re.compile(rf'</asp:{type_name}\s*>', re.IGNORECASE)
+            tagged: List[Tuple[int, str, int]] = []  # (位置, open/close, 結束位移)
+            for m in open_pattern.finditer(content):
+                if m.group(1) == '/':
+                    continue  # self-closing，沒有子節點需要配對
+                tagged.append((m.start(), 'open', m.end()))
+            for m in close_pattern.finditer(content):
+                tagged.append((m.start(), 'close', m.end()))
+            tagged.sort(key=lambda t: t[0])
+            
+            stack: List[int] = []
+            for pos, kind, end in tagged:
+                if kind == 'open':
+                    stack.append(pos)
+                elif stack:
+                    open_pos = stack.pop()
+                    spans[open_pos] = end
+        return spans
+
+    def _extract_ui_fields(self, content: str, controls: List[ASPXControl]) -> List[Dict]:
+        """
+        從控制項清單挑出「畫面上實際顯示給使用者看的文字」，
+        例如 GridView 欄位的 HeaderText、Label/Button 的 Text，並依 DataField 補上
+        對應的資料欄位名稱。
+
+        落在某個 GridView/DataGrid 範圍內的欄位會依該 Grid 的 ID 分組，並附上該
+        Grid 本身的事件處理（例如 OnRowCommand="gvData_RowCommand"、
+        OnRowDataBound="gvData_RowDataBound"），方便對照「按下某按鈕/資料繫結時
+        會顯示/處理哪些欄位」。不屬於任何 Grid 的控制項（如頁面上的 Label）則
+        以獨立項目列出。
+
+        不含 TextBox/DropDownList 等純輸入控制項的 Text（那是預設值，不是欄位名稱），
+        也不含只是傳資料用、沒有 HeaderText/Text/DataField 的控制項。
+        """
+        container_spans = self._compute_container_spans(content)
+        
+        # 建立每個 Grid 容器的分組（保留原始順序）
+        grid_groups: List[Dict] = []
+        grid_spans: List[Tuple[int, int, Dict]] = []  # (start, end, group)
+        for control in controls:
+            control_kind = control.control_type.split(':', 1)[-1].lower()
+            if control_kind in self._GRID_CONTAINER_TYPES and control.start_pos in container_spans:
+                group = {
+                    'kind': 'grid',
+                    'control': control.control_type,
+                    'id': control.control_id,
+                    'events': dict(control.events),
+                    'fields': [],
+                }
+                grid_groups.append(group)
+                grid_spans.append((control.start_pos, container_spans[control.start_pos], group))
+        
+        standalone: List[Dict] = []
+        seen: Set[Tuple] = set()
+        
+        for control in controls:
+            control_kind = control.control_type.split(':', 1)[-1].lower()
+            
+            if control_kind in self._HEADER_TEXT_CONTROLS:
+                kind = 'header'
+                text = control.properties.get('HeaderText', '').strip()
+                data_field = control.properties.get('DataField', '').strip()
+            elif control_kind in self._DISPLAY_TEXT_CONTROLS:
+                kind = 'label'
+                text = control.properties.get('Text', '').strip()
+                data_field = ''
+            else:
+                continue
+            
+            if not text and not data_field:
+                continue
+            
+            entry: Dict[str, str] = {'control': control.control_type, 'id': control.control_id, 'kind': kind}
+            if text:
+                entry['text'] = text
+            if data_field:
+                entry['data_field'] = data_field
+            
+            dedup_key = (control.control_type, control.control_id, text, data_field)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            
+            # 找出此控制項落在哪個 Grid 範圍內；若巢狀重疊，取範圍最小（最貼近）的那個
+            best_group = None
+            best_span_len = None
+            for start, end, group in grid_spans:
+                if start <= control.start_pos < end:
+                    span_len = end - start
+                    if best_span_len is None or span_len < best_span_len:
+                        best_group = group
+                        best_span_len = span_len
+            
+            if best_group is not None:
+                best_group['fields'].append(entry)
+            else:
+                standalone.append(entry)
+        
+        # 只保留有實際欄位內容的分組，避免空的 Grid 群組混入結果
+        return [g for g in grid_groups if g['fields']] + standalone
     
     def _extract_inline_code(self, content: str) -> List[str]:
         """提取內嵌程式碼區塊"""

@@ -33,7 +33,20 @@ class CSharpParser:
     CLASS_PATTERN = r'(public|internal|private|protected)?\s*(abstract|sealed|static|partial)?\s*class\s+(\w+)(?:\s*:\s*([\w\s,<>\.]+))?'
     
     # 方法定義
-    METHOD_PATTERN = r'(public|private|protected|internal)\s+(static\s+)?(virtual\s+)?(override\s+)?(abstract\s+)?(async\s+)?([\w\<\>\[\]]+)\s+(\w+)\s*\('
+    # 存取修飾詞為 optional：C# 允許類別成員省略修飾詞（預設為 private），
+    # 例如 WebForms code-behind 常見的 `void CheckQryData() { ... }`。
+    # 錨定在行首（可有前導空白）以避免誤配到 `new Foo(...)`、`await Foo(...)`
+    # 這類「兩個以空白分隔的識別字後接左括號」的陳述式。
+    METHOD_PATTERN = r'^[ \t]*(public|private|protected|internal)?\s*(static\s+)?(virtual\s+)?(override\s+)?(abstract\s+)?(async\s+)?([\w\<\>\[\]]+)\s+(\w+)\s*\('
+
+    # METHOD_PATTERN 錨定行首後，仍可能誤配到「關鍵字 識別字(」的陳述式
+    # （例如 `new SqlParameter(...)`、`await FooAsync()`），故以傳回型別
+    # 是否為下列關鍵字作為過濾依據。
+    _METHOD_RETURN_TYPE_DENYLIST = {
+        "new", "await", "return", "throw", "yield", "else", "do", "try",
+        "using", "lock", "checked", "unchecked", "typeof", "sizeof",
+        "nameof", "case", "goto", "break", "continue",
+    }
     
     # 屬性定義
     PROPERTY_PATTERN = r'(public|private|protected|internal)\s+(static\s+)?([\w\<\>\[\]]+)\s+(\w+)\s*\{\s*(get|set)'
@@ -305,14 +318,22 @@ class CSharpParser:
         method_matches = list(re.finditer(self.METHOD_PATTERN, class_content, re.MULTILINE))
         
         for match in method_matches:
-            access_modifier = match.group(1)
+            return_type = match.group(7)
+            method_name = match.group(8)
+
+            # METHOD_PATTERN 的存取修飾詞已改為 optional，錨定行首後仍可能誤配到
+            # 「關鍵字 識別字(」的陳述式（如 new/await/return...），以傳回型別是否
+            # 為關鍵字過濾掉這類誤判。
+            if return_type in self._METHOD_RETURN_TYPE_DENYLIST:
+                continue
+
+            # C# 允許類別成員省略存取修飾詞，此時預設為 private。
+            access_modifier = match.group(1) or "private"
             is_static = bool(match.group(2))
             is_virtual = bool(match.group(3))
             is_override = bool(match.group(4))
             is_abstract = bool(match.group(5))
             is_async = bool(match.group(6))
-            return_type = match.group(7)
-            method_name = match.group(8)
             
             # 計算實際行號
             line_num = full_content[:class_start + match.start()].count('\n') + 1
@@ -489,19 +510,36 @@ class CSharpParser:
         return list(set(sql_queries))  # 去重
     
     def _extract_method_calls(self, method_body: str) -> List[str]:
-        """提取方法呼叫"""
-        # 找出 xxx() 格式
-        pattern = r'(\w+)\s*\('
+        """提取方法呼叫。
+
+        無限定子呼叫（如 `Foo()`）回傳 `"Foo"`；
+        有限定子呼叫（如 `Bar.Foo()` 或 `bar.Foo()`）回傳 `"Bar.Foo"`（保留限定子）。
+        保留限定子讓 reference_expander 能判斷該限定子是否恰為一個已知類別名，
+        藉此精準解析 `ClassName.Method(...)` 這類靜態工具呼叫（如
+        `CommonFunction.AlertMsg`），避免同名方法在多個不相干類別間誤配。
+        呼叫端若需要純方法名（如 call_chain_builder 比對同檔案內部呼叫），
+        可自行取 `.split('.')[-1]`，或直接用完整字串比對本類別自己的方法名
+        （不含限定子的本地呼叫不受影響）。
+        """
+        # 找出 xxx() 或 xxx.yyy() 格式（限定子選用）
+        pattern = r'(?:(\w+)\.)?(\w+)\s*\('
         matches = re.findall(pattern, method_body)
-        
+
         # 過濾關鍵字和常見方法
         keywords = {
             'if', 'for', 'while', 'switch', 'catch', 'return', 'new', 'throw',
             'var', 'await', 'using', 'lock', 'yield', 'typeof', 'sizeof',
             'ToString', 'GetHashCode', 'Equals', 'GetType'  # 常見方法
         }
-        
-        return [m for m in matches if m not in keywords]
+
+        calls: List[str] = []
+        for qualifier, name in matches:
+            if name in keywords:
+                continue
+            if qualifier in ("this", "base"):
+                qualifier = ""
+            calls.append(f"{qualifier}.{name}" if qualifier else name)
+        return calls
     
     def _extract_sql_queries(self, content: str, lines: List[str]) -> List[SQLQuery]:
         """
@@ -1473,9 +1511,15 @@ class CSharpParser:
             
             # 找出對應的方法
             method_start = match.end()
-            method_match = re.search(self.METHOD_PATTERN, content[method_start:method_start + 500])
+            method_match = re.search(
+                self.METHOD_PATTERN,
+                content[method_start:method_start + 500],
+                re.MULTILINE,
+            )
             
             if not method_match:
+                continue
+            if method_match.group(7) in self._METHOD_RETURN_TYPE_DENYLIST:
                 continue
             
             action_name = method_match.group(8)

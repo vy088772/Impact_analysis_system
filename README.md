@@ -73,7 +73,6 @@ DB_DATABASES=STC:STC_DB,PUR:PUR_DB
 DB_DEFAULT_DATABASE=STC
 
 # === 專案掃描 ===
-PROJECT_ROOT=D:\YourProject
 EXCLUDE_FOLDERS=bin,obj,packages,node_modules,.git,.vs
 EXCLUDE_PATTERNS=*.Designer.cs,*.g.cs,*.g.i.cs
 
@@ -125,8 +124,7 @@ python main.py
 ### 原始碼來源（掃描時可選）
 
 1. **手動輸入** 本機專案路徑
-2. 讀取 `.env` 的 `PROJECT_ROOT`
-3. **從 Azure DevOps 自動 clone**（以 PAT 認證，shallow clone；已存在則 `git pull`）
+2. **從 Azure DevOps 自動 clone**（以 PAT 認證，shallow clone；已存在則 `git pull`）
 
 ## 影響分析服務（FastAPI，供 spec-rag 呼叫）
 
@@ -148,6 +146,27 @@ python -m service.api
 | GET | `/health` | 健康檢查，回 `{"status": "ok"}` |
 | POST | `/analyze` | 依 `program_names` 回傳每支程式的檔案/框架/方法/SP/資料表/FK 連動表/呼叫鏈/程式碼片段 |
 | POST | `/refresh` | 更新指令：git pull 取最新程式碼並重新解析，覆寫快取 |
+
+#### 觸發 `/refresh`（更新程式碼）
+
+`/analyze` 預設一律直接用快取結果，**不會**自動偵測原始碼變動；只有明確呼叫 `/refresh`
+（或帶 `"refresh": true` 呼叫 `/analyze`）才會 `git pull` 取最新程式碼並強制重新解析、覆寫快取。
+
+```powershell
+# 直接呼叫本服務的 /refresh（PowerShell 範例）
+$body = @{ system = "Y-Docs_TTPUR"; source = @{ project = "System Dept 1"; repo = "Y-DOCs"; branch = ""; path = "TTPUR" } } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8800/refresh -Method Post -Body $body -ContentType "application/json"
+```
+
+若是透過上游 llamaindex-spec-rag 協調端使用，也可直接在該專案下執行對應的獨立指令
+（不需自己組 JSON，會自動從 catalog 帶入 `source`）：
+
+```powershell
+cd d:\pratice\Python\llamaindex-spec-rag
+.\.venv\Scripts\python.exe -m impact_orch.refresh_cli Y-Docs_TTPUR
+# 可一次更新多個系統
+.\.venv\Scripts\python.exe -m impact_orch.refresh_cli Y-Docs_TTPUR PUR
+```
 
 `POST /analyze` 請求主要欄位：
 

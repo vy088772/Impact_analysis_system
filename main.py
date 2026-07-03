@@ -11,15 +11,13 @@ def _resolve_project_root() -> str:
     """
     互動式選擇專案來源：
       1. 手動輸入本機路徑
-      2. 使用 .env 中的 PROJECT_ROOT
-      3. 從 Azure DevOps 自動 clone
+      2. 從 Azure DevOps 自動 clone
     回傳本機路徑字串；若使用者取消則回傳空字串。
     """
     print("\n請選擇專案來源:")
     print("  1. 手動輸入本機路徑")
-    print("  2. 使用設定檔中的 PROJECT_ROOT")
-    print("  3. 從 Azure DevOps 自動取得")
-    src = input("請選擇 (1-3): ").strip()
+    print("  2. 從 Azure DevOps 自動取得")
+    src = input("請選擇 (1-2): ").strip()
 
     if src == '1':
         path = input("請輸入專案路徑: ").strip()
@@ -29,14 +27,6 @@ def _resolve_project_root() -> str:
         return path
 
     elif src == '2':
-        from config.settings import settings
-        if not settings.PROJECT_ROOT:
-            print("❌ .env 中未設定 PROJECT_ROOT")
-            return ''
-        print(f"✅ 使用 PROJECT_ROOT: {settings.PROJECT_ROOT}")
-        return settings.PROJECT_ROOT
-
-    elif src == '3':
         from code_analyzer.azure_fetcher import fetch_from_settings, AzureFetchError
         try:
             project_path = fetch_from_settings()

@@ -886,10 +886,7 @@ def main():
     print("HTML 報告生成測試")
     print("=" * 80)
     
-    project_root = settings.PROJECT_ROOT
-    
-    if not project_root:
-        project_root = input("請輸入專案根目錄: ").strip()
+    project_root = input("請輸入專案根目錄: ").strip()
     
     if not project_root:
         print("❌ 未指定專案路徑")

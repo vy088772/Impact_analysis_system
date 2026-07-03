@@ -19,7 +19,21 @@ from config.settings import settings
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 
 # 快取格式版本：模型結構若變動可遞增，使舊快取自動失效
-_CACHE_VERSION = 1
+# v2：csharp_parser.METHOD_PATTERN 修正「省略存取修飾詞（隱含 private）的方法
+# 會被漏掉」的問題，方法清單內容改變，故遞增版本號讓舊快取失效、強制重新掃描。
+# v3：csharp_parser._extract_method_calls 改為保留呼叫的限定子（如
+# "CommonFunction.AlertMsg" 而非只有 "AlertMsg"），供 reference_expander
+# 精準解析同名方法歸屬哪個類別；MethodInfo.calls 內容格式改變，故遞增版本號。
+# v4：ProjectScanResult 新增 aspx_results/razor_results/vue_results 欄位
+# （scan_project() 開始實際呼叫 ASPXParser/RazorParser/VueParser），舊快取的
+# pickle 物件沒有這些屬性，存取時會 AttributeError，故遞增版本號使舊快取失效。
+# v5：FileAnalysisResult 新增 ui_fields 欄位（ASPXParser 額外整理 GridView 欄位
+# HeaderText、Label/Button Text 等「畫面實際顯示文字」），舊快取的 FileAnalysisResult
+# 物件沒有此屬性，故遞增版本號使舊快取失效、強制重新掃描以補上。
+# v6：ASPXParser._extract_ui_fields 改為依所屬 GridView/DataGrid 分組（含該 Grid 的
+# OnRowCommand/OnRowDataBound 等事件）並補上 DataField，ui_fields 內容結構整個改變
+# （舊版是扁平清單），故遞增版本號使舊快取失效。
+_CACHE_VERSION = 6
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

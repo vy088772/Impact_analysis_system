@@ -440,6 +440,18 @@ class FileAnalysisResult:
     dependencies: Set[str] = field(default_factory=set)
     referenced_files: Set[str] = field(default_factory=set)
     
+    # View 層顯示欄位（aspx/razor/vue 解析器選填）：GridView 欄位 HeaderText、
+    # Label.Text 等「畫面上實際顯示給使用者看的文字」，供「畫面會顯示哪些欄位」
+    # 這類問題直接引用，而不只是控制項數量統計。
+    # 每筆若屬於某個 GridView/DataGrid，會是分組項：
+    #   {"kind": "grid", "control": "asp:GridView", "id": "gvData",
+    #    "events": {"OnRowCommand": "gvData_RowCommand", ...},
+    #    "fields": [{"control": "asp:BoundField", "id": "...", "kind": "header",
+    #                "text": "Invoice No.", "data_field": "IVNo"}, ...]}
+    # 不屬於任何 Grid 的獨立控制項（如頁面上的 Label）則是單一欄位項：
+    #   {"control": "asp:Label", "id": "...", "kind": "label", "text": "..."}
+    ui_fields: List[Dict] = field(default_factory=list)
+    
     # 統計資訊
     line_count: int = 0
     code_line_count: int = 0
