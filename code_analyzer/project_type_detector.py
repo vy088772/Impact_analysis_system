@@ -81,29 +81,33 @@ class ProjectTypeDetector:
             print(f"      {file_type.value}: {count}")
     
     def _check_config_files(self):
-        """檢查設定檔"""
+        """檢查設定檔（檔名比對不分大小寫，例如 Web.config / web.config）"""
+        # key 統一使用小寫，比對時也將實際檔名轉小寫
         config_patterns = {
             'web.config': 'ASP.NET Framework (WebForms/MVC)',
             'appsettings.json': 'ASP.NET Core',
             'package.json': 'Node.js/Vue/React',
             'vue.config.js': 'Vue',
-            'Global.asax': 'ASP.NET Framework',
-            'Startup.cs': 'ASP.NET Core',
-            'Program.cs': '.NET Core/5+',
+            'global.asax': 'ASP.NET Framework',
+            'startup.cs': 'ASP.NET Core',
+            'program.cs': '.NET Core/5+',
         }
-        
+
         found_configs = []
-        
+        root_path = str(self.project_root)
+
         for root, dirs, files in os.walk(self.project_root):
-            # 只檢查根目錄和第一層
-            if root != str(self.project_root) and root != str(self.project_root):
-                break
-                
+            # 只檢查根目錄（第一層），其餘子目錄不再往下遞迴
+            if root != root_path:
+                dirs[:] = []
+                continue
+
             for file in files:
-                if file in config_patterns:
+                match = config_patterns.get(file.lower())
+                if match:
                     found_configs.append(file)
-                    print(f"      ✓ {file} ({config_patterns[file]})")
-        
+                    print(f"      ✓ {file} ({match})")
+
         self.config_files = found_configs
     
     def _analyze_framework(self) -> FrameworkType:
@@ -126,12 +130,13 @@ class ProjectTypeDetector:
         razor_count = self.file_stats.get(FileType.RAZOR, 0)
         csharp_count = self.file_stats.get(FileType.CSHARP, 0)
         
-        has_web_config = 'web.config' in self.config_files
-        has_appsettings = 'appsettings.json' in self.config_files
-        has_package_json = 'package.json' in self.config_files
-        has_vue_config = 'vue.config.js' in self.config_files
-        has_startup = 'Startup.cs' in self.config_files
-        has_program = 'Program.cs' in self.config_files
+        config_files_lower = {f.lower() for f in self.config_files}
+        has_web_config = 'web.config' in config_files_lower
+        has_appsettings = 'appsettings.json' in config_files_lower
+        has_package_json = 'package.json' in config_files_lower
+        has_vue_config = 'vue.config.js' in config_files_lower
+        has_startup = 'startup.cs' in config_files_lower
+        has_program = 'program.cs' in config_files_lower
         
         # 判斷 1: Vue + Web API
         if vue_count > 0 and csharp_count > 0:

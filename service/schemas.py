@@ -32,7 +32,9 @@ class AnalyzeRequest(BaseModel):
     fk_depth: int = 1                        # FK 連動追蹤層數（S3 實作）
     expand_depth: int = 0                    # 跨程式呼叫參照展開層數（0=不展開，向下相容）
     expand_max_programs: int = 10            # 展開時每支程式最多帶入幾個相關程式
-    database: str = ""                        # 資料庫簡稱（FK 查詢用；留空則用預設或跳過）
+    database: str = ""                        # 資料庫簡稱／快取鍵（通常是 spec-rag 的 system_id；留空則跳過 DB 相關功能）
+    db_server: str = ""                       # 資料庫主機位址（由 catalog 逐系統提供；與 db_name 需同時提供）
+    db_name: str = ""                         # 實際資料庫名稱（由 catalog 逐系統提供）
     refresh: bool = False                    # True → git pull + 重新解析，覆寫快取
     include_view_layer: bool = False         # 是否帶出 View 層資訊（aspx/razor/vue 解析摘要）
 
@@ -56,6 +58,8 @@ class ProgramAnalysis(BaseModel):
     call_chains: List[List[str]] = Field(default_factory=list)
     code_snippets: List[CodeSnippet] = Field(default_factory=list)
     sp_definitions: List[Dict] = Field(default_factory=list)  # SP 完整定義（include_sp_defs=True 時）
+    view_definitions: List[Dict] = Field(default_factory=list)  # SQL View 完整定義（include_sp_defs=True 且表名實際為 View 時）
+    udf_definitions: List[Dict] = Field(default_factory=list)  # UDF 完整定義（include_sp_defs=True 且程式 SQL 文字實際呼叫到該 UDF 時）
     related_programs: List[Dict] = Field(default_factory=list)  # 跨程式呼叫展開（expand_depth>0 時）
     view_layer: List[Dict] = Field(default_factory=list)  # View 層資訊（include_view_layer=True 時；aspx/razor/vue 摘要）
 
@@ -77,3 +81,25 @@ class RefreshResponse(BaseModel):
     files: int = 0
     sp_relations: int = 0
     table_relations: int = 0
+
+
+class RefreshSqlRequest(BaseModel):
+    """POST /refresh_sql 請求：重新連線 SQL Server 撷取整庫 SP/View/Function/資料表
+    Schema，覆寫本機快取（data/sql_cache/）。
+
+    server/db_name 由呼叫端（spec-rag 的 catalog，逐系統標注）提供，不使用
+    Impact 端 .env 的 DB_SERVER/DB_DATABASES；兩者缺一即報錯，不嘗試連線。
+    """
+    database: str                            # 快取鍵／顯示簡稱（通常是 spec-rag 的 system_id），必填
+    server: str                              # 資料庫主機位址，必填
+    db_name: str                             # 實際資料庫名稱，必填
+    db_schema: str = "dbo"                    # SQL schema（欄位名稱不用 schema，避免與 BaseModel.schema() 名稱衝突）
+
+
+class RefreshSqlResponse(BaseModel):
+    database: str = ""
+    db_schema: str = ""
+    procedures: int = 0
+    views: int = 0
+    functions: int = 0
+    tables: int = 0

@@ -11,6 +11,8 @@
     GET  /health   → {"status": "ok"}
     POST /analyze  → AnalyzeResponse（依 program_names 回傳靜態分析結果）
     POST /refresh  → RefreshResponse（git pull + 重新解析，覆寫快取）
+    POST /refresh_sql → RefreshSqlResponse（重新連線 SQL Server 撈取 SP/View/
+                        Function/資料表 Schema，覆寫本機 SQL 快取）
 """
 from __future__ import annotations
 
@@ -22,6 +24,8 @@ from .schemas import (
     AnalyzeResponse,
     RefreshRequest,
     RefreshResponse,
+    RefreshSqlRequest,
+    RefreshSqlResponse,
 )
 from . import analyze_service
 
@@ -67,6 +71,29 @@ def refresh(req: RefreshRequest) -> RefreshResponse:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"更新失敗：{exc}")
+
+
+@app.post("/refresh_sql", response_model=RefreshSqlResponse)
+def refresh_sql(req: RefreshSqlRequest) -> RefreshSqlResponse:
+    """更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與
+    資料表 Schema，覆寫本機落地快取（data/sql_cache/）。
+
+    server/db_name 由呼叫端（catalog）提供，缺一即報錯、不嘗試連線。"""
+    if not req.database:
+        raise HTTPException(status_code=400, detail="database 不可為空")
+    if not req.server or not req.db_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"server/db_name 不可為空（收到 server={req.server!r}, db_name={req.db_name!r}）；"
+                   f"請在 catalog（spec-rag 端）為此系統設定完整的 database.server/database.name。",
+        )
+    try:
+        result = analyze_service.refresh_sql_source(req.database, req.server, req.db_name, req.db_schema)
+        return RefreshSqlResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"SQL 快取更新失敗：{exc}")
 
 
 def main() -> None:

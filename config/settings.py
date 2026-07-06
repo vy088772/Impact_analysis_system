@@ -130,6 +130,10 @@ class Settings:
     AZURE_CLONE_ROOT: str = os.getenv('AZURE_CLONE_ROOT', './data/repos')
     # 靜態掃描結果的持久化快取根目錄（pickle）；避免每次重新解析 C#
     SCAN_CACHE_ROOT: str = os.getenv('SCAN_CACHE_ROOT', './data/scan_cache')
+    # SQL 物件（SP/View/Function/資料表 Schema）的本機落地快取根目錄（JSON）；
+    # 避免每次問問題都要即時連線 SQL Server 查詢，只有明確執行「更新 SQL 快取」
+    # 指令時才重新連線撈取並覆寫。
+    SQL_CACHE_ROOT: str = os.getenv('SQL_CACHE_ROOT', './data/sql_cache')
 
     # ========================================
     # 檔案路徑設定
@@ -208,6 +212,46 @@ class Settings:
         """
         cls._parse_databases()
         return cls._databases.get(alias)
+
+    @classmethod
+    def build_database_config(cls, alias: str, server: str, database_name: str) -> DatabaseConfig:
+        """
+        依「呼叫端明確提供的 server + database_name」現組一個 DatabaseConfig，
+        不查 .env 的 DB_SERVER／DB_DATABASES（每個系統的伺服器/資料庫不同，
+        改由 spec-rag 的 catalog 逐系統標注、隨請求帶入）。
+
+        連線共用參數（帳號/密碼/連線模式/連接埠/逾時/加密/驅動程式等）
+        仍沿用 .env（跨系統共用，通常是同一組服務帳號）。
+
+        Args:
+            alias: 用於顯示/快取鍵的簡稱（通常是呼叫端的 system_id）
+            server: 實際主機位址（不可為空）
+            database_name: 實際資料庫名稱（不可為空）
+
+        Raises:
+            ValueError: server 或 database_name 為空時，不嘗試連線。
+        """
+        if not server or not database_name:
+            raise ValueError(
+                f"資料庫連線資訊不完整（alias={alias!r}, server={server!r}, "
+                f"database={database_name!r}）：server/database 需由呼叫端（catalog）"
+                f"提供，不會使用 .env 的 DB_SERVER/DB_DATABASES 作為 fallback。"
+            )
+        return DatabaseConfig(
+            alias=alias,
+            database_name=database_name,
+            server=server,
+            auth_mode=cls.DB_AUTH_MODE,
+            user_id=cls.DB_USER_ID,
+            password=cls.DB_PASSWORD,
+            port=cls.DB_PORT,
+            timeout=cls.DB_TIMEOUT,
+            encrypt=cls.DB_ENCRYPT,
+            trust_server_certificate=cls.DB_TRUST_SERVER_CERTIFICATE,
+            application_name=cls.DB_APPLICATION_NAME,
+            driver=cls.DB_DRIVER,
+        )
+
     
     @classmethod
     def get_all_databases(cls) -> Dict[str, DatabaseConfig]:

@@ -44,11 +44,26 @@ class ASPXParser:
     
     # 正規表達式模式
     DIRECTIVE_PATTERN = r'<%@\s*(\w+)\s+([^%]*?)%>'
-    CONTROL_PATTERN = r'<(asp|uc\d+):(\w+)\s+([^>]*?)/?>'
-    SERVER_CONTROL_PATTERN = r'<(\w+)\s+runat="server"([^>]*?)/?>'
+    # 屬性值以「"..."」或「'...'」逐一比對，避免屬性值內含 '>' 時
+    # （例如 CommandArgument='<%# Container.DataItemIndex %>'）提早截斷標籤，
+    # 導致該標籤後面的屬性（如 Text、CommandName）遺漏。
+    _ATTRS_GROUP = r'((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|\'[^\']*\'))*)'
+    CONTROL_PATTERN = r'<(asp|uc\d+):(\w+)' + _ATTRS_GROUP + r'\s*/?>'
+    SERVER_CONTROL_PATTERN = r'<(\w+)' + _ATTRS_GROUP + r'\s*/?>'
     INLINE_CODE_PATTERN = r'<%([^%]+)%>'
     DATABIND_PATTERN = r'<%#([^%]+)%>'
     SCRIPT_BLOCK_PATTERN = r'<script\s+runat="server"[^>]*?>(.*?)</script>'
+    # 純前端（無 runat="server"）的 <script> 區塊，例如查詢按鈕點擊前的欄位格式驗證
+    CLIENT_SCRIPT_PATTERN = r'<script(?![^>]*\brunat\s*=\s*["\']server["\'])[^>]*>(.*?)</script>'
+    # 查詢區塊等純 HTML 標籤欄位標題（如 <th>結關日：</th>）
+    TH_PATTERN = r'<th\b[^>]*>(.*?)</th>'
+    TR_CLOSE_PATTERN = r'</tr>'
+    # 會出現在查詢區塊、需要「輸入」的控制項（其 Text 是預設值而非欄位名稱，
+    # 欄位名稱要靠緊鄰的 <th>/<label> 純文字取得）
+    _INPUT_CONTROL_KINDS = {
+        'textbox', 'dropdownlist', 'checkbox', 'checkboxlist',
+        'radiobutton', 'radiobuttonlist', 'listbox', 'fileupload',
+    }
     
     def __init__(self):
         """初始化解析器"""
@@ -105,7 +120,19 @@ class ASPXParser:
         # 提取畫面實際顯示給使用者看的欄位文字（GridView 欄位 HeaderText、Label.Text 等），
         # 並依所屬的 GridView/DataGrid 分組、附上該 Grid 的事件處理（OnRowCommand 等）
         result.ui_fields = self._extract_ui_fields(content, controls)
-        
+
+        # 查詢區塊等純 HTML 標籤（<th>結關日：</th>）標題文字，與鄰近的輸入控制項
+        # （TextBox/DropDownList 等）建立對應，讓「查詢畫面上有哪些欄位」也能被回答。
+        form_fields = self._extract_form_fields(content, controls)
+        if form_fields:
+            result.ui_fields.extend(form_fields)
+
+        # 純前端（無 runat="server"）的 <script> 區塊（如查詢按鈕前的欄位驗證規則），
+        # 以原始程式碼形式保留，交由呼叫端（spec-rag）決定是否需要 AI 摘要/挑選。
+        client_scripts = self._extract_client_scripts(content)
+        for idx, script_body in enumerate(client_scripts):
+            result.ui_fields.append({'kind': 'script', 'index': idx, 'text': script_body})
+
         # 儲存到結果（使用 dependencies 暫存）
         result.dependencies.add(f"CodeBehind: {code_behind.code_file if code_behind else 'N/A'}")
         result.dependencies.add(f"Controls: {len(controls)}")
@@ -183,6 +210,13 @@ class ASPXParser:
             attributes_str = match.group(2)
             
             attributes = self._parse_attributes(attributes_str)
+            # SERVER_CONTROL_PATTERN 已泛化為比對任意標籤（修正屬性值含 '>' 時提早截斷
+            # 的問題），故在此以解析後的屬性過濾，只保留真正帶 runat="server" 的標籤，
+            # 避免把一般 HTML 標籤（如 <table>、<th>）也誤判為 server 控制項。
+            runat = attributes.get('runat', attributes.get('Runat', ''))
+            if runat.lower() != 'server':
+                continue
+            
             control_id = attributes.get('ID', attributes.get('id', 'unknown'))
             
             events = {}
@@ -251,8 +285,14 @@ class ASPXParser:
     }
     # 本身就是顯示用文字的控制項（畫面上的標籤/按鈕文字）
     _DISPLAY_TEXT_CONTROLS = {
-        'label', 'button', 'linkbutton', 'literal', 'checkbox', 'radiobutton',
+        'label', 'button', 'linkbutton', 'literal', 'checkbox', 'radiobutton', 'hyperlink',
     }
+    # 會導覽到其他頁面、值得額外擷取 NavigateUrl 目標頁面的控制項
+    _NAVIGATION_CONTROLS = {'hyperlink'}
+    # 資料繫結運算式裡的欄位名稱，如 <%# Eval("IVNO") %> → IVNO
+    _EVAL_FIELD_PATTERN = re.compile(r'Eval\(\s*["\']([^"\']+)["\']')
+    # NavigateUrl 運算式裡的目標頁面檔名，如 string.Format("../ship/PUR_IVPntMan.aspx?IVNO={0}", ...) → PUR_IVPntMan.aspx
+    _NAVIGATE_TARGET_PATTERN = re.compile(r'([\w./\\]+\.aspx)', re.IGNORECASE)
     # 會把欄位分組、且本身帶有 OnRowCommand/OnRowDataBound 等事件的容器控制項
     _GRID_CONTAINER_TYPES = {'gridview', 'datagrid'}
 
@@ -331,6 +371,13 @@ class ASPXParser:
                 kind = 'label'
                 text = control.properties.get('Text', '').strip()
                 data_field = ''
+                # Text 常見是資料繫結運算式（如 <%# Eval("IVNO") %>），而非純文字；
+                # 直接顯示整段運算式對「畫面顯示什麼欄位」這類問題沒有意義，改為
+                # 取出實際繫結的欄位名稱當作 data_field（比照 BoundField 的用法）。
+                if '<%' in text:
+                    m = self._EVAL_FIELD_PATTERN.search(text)
+                    data_field = m.group(1) if m else ''
+                    text = ''
             else:
                 continue
             
@@ -342,6 +389,16 @@ class ASPXParser:
                 entry['text'] = text
             if data_field:
                 entry['data_field'] = data_field
+
+            # HyperLink 等導覽控制項：額外擷取 NavigateUrl 指向的目標頁面（如
+            # string.Format("../ship/PUR_IVPntMan.aspx?IVNO={0}", ...) → PUR_IVPntMan.aspx），
+            # 讓「點這個連結會到哪個頁面」這類問題也能直接引用。
+            if control_kind in self._NAVIGATION_CONTROLS:
+                navigate_url = control.properties.get('NavigateUrl', '')
+                if navigate_url:
+                    m = self._NAVIGATE_TARGET_PATTERN.search(navigate_url)
+                    if m:
+                        entry['navigate_to'] = Path(m.group(1)).name
             
             dedup_key = (control.control_type, control.control_id, text, data_field)
             if dedup_key in seen:
@@ -365,6 +422,63 @@ class ASPXParser:
         
         # 只保留有實際欄位內容的分組，避免空的 Grid 群組混入結果
         return [g for g in grid_groups if g['fields']] + standalone
+
+    def _strip_html_tags(self, text: str) -> str:
+        """去除 HTML 標籤，只留下純文字內容（供 <th> 等靜態標籤文字使用）。"""
+        return re.sub(r'<[^>]+>', '', text).strip()
+
+    def _extract_form_fields(self, content: str, controls: List[ASPXControl]) -> List[Dict]:
+        """
+        從查詢區塊等純 HTML 標籤（<th>結關日：</th> 之類）擷取欄位標籤文字，並與其後
+        （同一列內、下一個 <th> 或 </tr> 之前）出現的輸入控制項（TextBox/DropDownList
+        等）建立對應。
+
+        這類欄位名稱不是 ASP.NET 控制項的屬性（TextBox/DropDownList 的 Text 只是預設值，
+        不是欄位名稱），而是相鄰的純 HTML 文字，故 _extract_ui_fields()（處理控制項屬性）
+        抓不到，需另外比對位置關係取得。
+        """
+        th_matches = list(re.finditer(self.TH_PATTERN, content, re.IGNORECASE | re.DOTALL))
+        if not th_matches:
+            return []
+
+        groups: List[Dict] = []
+        for i, m in enumerate(th_matches):
+            label = self._strip_html_tags(m.group(1))
+            if not label:
+                continue
+
+            window_start = m.end()
+            window_end = len(content)
+            if i + 1 < len(th_matches):
+                window_end = min(window_end, th_matches[i + 1].start())
+            tr_close = re.search(self.TR_CLOSE_PATTERN, content[window_start:], re.IGNORECASE)
+            if tr_close:
+                window_end = min(window_end, window_start + tr_close.start())
+
+            fields = []
+            for control in controls:
+                if window_start <= control.start_pos < window_end:
+                    control_kind = control.control_type.split(':', 1)[-1].lower()
+                    if control_kind in self._INPUT_CONTROL_KINDS:
+                        fields.append({'control': control.control_type, 'id': control.control_id})
+
+            if fields:
+                groups.append({'kind': 'form', 'label': label, 'fields': fields})
+
+        return groups
+
+    def _extract_client_scripts(self, content: str) -> List[str]:
+        """
+        擷取純前端（無 runat="server"）的 <script> 區塊內容，例如查詢按鈕點擊前的
+        欄位格式/必填驗證規則。只保留有實際內嵌程式碼的區塊；純引用外部檔案
+        （如 <script src="jquery.js"></script>，body 為空）予以略過。
+        """
+        scripts: List[str] = []
+        for m in re.finditer(self.CLIENT_SCRIPT_PATTERN, content, re.IGNORECASE | re.DOTALL):
+            body = m.group(1).strip()
+            if body:
+                scripts.append(body)
+        return scripts
     
     def _extract_inline_code(self, content: str) -> List[str]:
         """提取內嵌程式碼區塊"""
@@ -394,13 +508,17 @@ class ASPXParser:
         """
         attributes = {}
         
-        # 正規表達式: key="value" 或 key='value'
-        pattern = r'(\w+)\s*=\s*["\']([^"\']*)["\']'
+        # 正規表達式：分別比對雙引號/單引號兩種情況（各自的值只排除「自己那種」
+        # 引號字元）。舊版用共用字元類別 [^"\']（同時排除雙引號與單引號），
+        # 導致單引號屬性值裡若含雙引號（ASP.NET 資料繫結運算式很常見，例如
+        # Text='<%# Eval("IVNO") %>'），會在還沒到真正的結尾單引號前，就被
+        # 值裡的雙引號提早截斷（如上例只會擷取到 "<%# Eval("）。
+        pattern = r'(\w+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')'
         matches = re.finditer(pattern, attributes_str)
         
         for match in matches:
             key = match.group(1)
-            value = match.group(2)
+            value = match.group(2) if match.group(2) is not None else match.group(3)
             attributes[key] = value
         
         return attributes

@@ -105,14 +105,33 @@ class DatabaseSummary:
 class SQLAnalyzer:
     """SQL 分析器（精簡實用版）"""
     
-    def __init__(self, database_alias: str = None):
+    def __init__(
+        self,
+        database_alias: str = None,
+        server: str = None,
+        database_name: str = None,
+    ):
         """
         初始化 SQL 分析器
-        
+
         Args:
-            database_alias: 資料庫簡稱（例如: "STC", "PUR"）
+            database_alias: 資料庫簡稱（例如: "STC", "PUR"）；同時提供 server/
+                database_name 時僅作為顯示/快取鍵用途，不查 .env 的 DB_DATABASES。
+            server: 明確指定的資料庫主機位址（由呼叫端如 spec-rag 的 catalog
+                逐系統提供）。與 database_name 需同時提供才會現組設定，兩者只
+                提供其一視為設定不完整，直接報錯不嘗試連線。
+            database_name: 明確指定的實際資料庫名稱。
+
+        每個系統的伺服器/資料庫可能不同，故優先使用明確提供的 server/
+        database_name（見 settings.build_database_config()）；只有在完全沒
+        提供時才退回舊行為（查 .env 的 DB_DATABASES/DB_DEFAULT_DATABASE，
+        供尚未遷移到 catalog 標注方式的呼叫端相容使用）。
         """
-        if database_alias:
+        if server or database_name:
+            self.db_config = settings.build_database_config(
+                alias=database_alias or server, server=server, database_name=database_name
+            )
+        elif database_alias:
             self.db_config = settings.get_database_config(database_alias)
             if not self.db_config:
                 raise ValueError(f"找不到資料庫設定: {database_alias}")
@@ -244,6 +263,150 @@ class SQLAnalyzer:
         
         self.cursor.execute(query, schema)
         return [row.TABLE_NAME for row in self.cursor.fetchall()]
+
+    def get_all_views(self, schema: str = 'dbo') -> List[str]:
+        """取得所有 View（檢視表）名稱"""
+        query = """
+        SELECT TABLE_NAME
+        FROM INFORMATION_SCHEMA.VIEWS
+        WHERE TABLE_SCHEMA = ?
+        ORDER BY TABLE_NAME
+        """
+        self.cursor.execute(query, schema)
+        return [row.TABLE_NAME for row in self.cursor.fetchall()]
+
+    def get_all_functions(self, schema: str = 'dbo') -> List[str]:
+        """取得所有使用者定義函數（UDF）名稱"""
+        query = """
+        SELECT ROUTINE_NAME
+        FROM INFORMATION_SCHEMA.ROUTINES
+        WHERE ROUTINE_TYPE = 'FUNCTION'
+        AND ROUTINE_SCHEMA = ?
+        ORDER BY ROUTINE_NAME
+        """
+        self.cursor.execute(query, schema)
+        return [row.ROUTINE_NAME for row in self.cursor.fetchall()]
+
+    def get_object_definition(self, name: str, schema: str = 'dbo') -> str:
+        """
+        取得任意物件（View/Function/Procedure）的完整定義本體（通用版，
+        不含參數解析，供 View/Function 這類「只需要本體」的物件使用）。
+        """
+        query = "SELECT OBJECT_DEFINITION(OBJECT_ID(?))"
+        full_name = f"{schema}.{name}" if '.' not in name else name
+        self.cursor.execute(query, full_name)
+        row = self.cursor.fetchone()
+        return (row[0] or "") if row else ""
+
+    def get_function_parameters(self, func_name: str, schema: str = 'dbo') -> Tuple[List[str], str]:
+        """取得函數的參數清單與回傳型別。"""
+        param_query = """
+        SELECT PARAMETER_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, PARAMETER_MODE
+        FROM INFORMATION_SCHEMA.PARAMETERS
+        WHERE SPECIFIC_NAME = ? AND SPECIFIC_SCHEMA = ?
+        ORDER BY ORDINAL_POSITION
+        """
+        self.cursor.execute(param_query, func_name, schema)
+        parameters: List[str] = []
+        return_type = ""
+        for r in self.cursor.fetchall():
+            # 回傳值在 INFORMATION_SCHEMA.PARAMETERS 裡 PARAMETER_NAME 為 NULL
+            if r[0] is None:
+                return_type = r[1].upper() if r[1] else ""
+                continue
+            ptype = r[1].upper() if r[1] else ""
+            if r[2]:
+                ptype += f"({r[2]})" if r[2] != -1 else "(MAX)"
+            parameters.append(f"{r[0]} {ptype}")
+        return parameters, return_type
+
+    def get_table_columns(self, table_name: str, schema: str = 'dbo') -> List[Dict]:
+        """取得資料表的欄位 Schema（名稱/型別/長度/是否可為 NULL）。"""
+        query = """
+        SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = ? AND TABLE_SCHEMA = ?
+        ORDER BY ORDINAL_POSITION
+        """
+        self.cursor.execute(query, table_name, schema)
+        columns: List[Dict] = []
+        for r in self.cursor.fetchall():
+            col_type = r[1] or ""
+            if r[2]:
+                col_type += f"({r[2]})" if r[2] != -1 else "(MAX)"
+            columns.append({
+                "name": r[0],
+                "type": col_type,
+                "nullable": (r[3] or "").upper() == "YES",
+                "default": r[4],
+            })
+        return columns
+
+    def dump_all_sql_objects(self, schema: str = 'dbo') -> Dict:
+        """
+        把整個資料庫（指定 schema）的 SP/View/Function 完整定義與資料表欄位 Schema
+        一次全部撈出來，供本機落地快取（sql_cache_store.py），避免每次問問題都要
+        即時連線查詢。純靜態擷取，不含任何 AI 摘要（AI 注記交由 spec-rag 端按需做）。
+
+        逐類別（SP/View/Function/資料表）顯示 tqdm 進度條，避免物件數量多時
+        （尤其逐一查詢 SP 定義/參數）使用者看著終端機沒有任何輸出、以為當機。
+
+        回傳結構：
+        {
+            "database": alias, "schema": schema,
+            "procedures": [{"name","definition","parameters"}],
+            "views": [{"name","definition"}],
+            "functions": [{"name","definition","parameters","return_type"}],
+            "tables": [{"name","columns":[{"name","type","nullable","default"}]}],
+        }
+        """
+        from tqdm import tqdm
+
+        procedures: List[Dict] = []
+        proc_names = self.get_all_procedures(schema)
+        for name in tqdm(proc_names, desc="   SP 定義", unit="個"):
+            info = self._get_sp_basic_info(name, schema) or {}
+            procedures.append({
+                "name": name,
+                "definition": info.get("definition", ""),
+                "parameters": info.get("parameters", []),
+            })
+
+        views: List[Dict] = []
+        view_names = self.get_all_views(schema)
+        for name in tqdm(view_names, desc="   View 定義", unit="個"):
+            views.append({
+                "name": name,
+                "definition": self.get_object_definition(name, schema),
+            })
+
+        functions: List[Dict] = []
+        function_names = self.get_all_functions(schema)
+        for name in tqdm(function_names, desc="   Function 定義", unit="個"):
+            parameters, return_type = self.get_function_parameters(name, schema)
+            functions.append({
+                "name": name,
+                "definition": self.get_object_definition(name, schema),
+                "parameters": parameters,
+                "return_type": return_type,
+            })
+
+        tables: List[Dict] = []
+        table_names = self.get_all_tables(schema)
+        for name in tqdm(table_names, desc="   資料表 Schema", unit="個"):
+            tables.append({
+                "name": name,
+                "columns": self.get_table_columns(name, schema),
+            })
+
+        return {
+            "database": self.db_config.alias,
+            "schema": schema,
+            "procedures": procedures,
+            "views": views,
+            "functions": functions,
+            "tables": tables,
+        }
     
     # ========================================
     # 單一 SP 快速分析

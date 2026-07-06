@@ -29,6 +29,8 @@ from .snippet_extractor import extract_snippets
 from .call_chain_builder import build_call_chains
 from .fk_resolver import resolve_fk_related
 from .sp_fetcher import fetch_sp_definitions
+from .view_fetcher import fetch_view_definitions
+from .udf_fetcher import fetch_udf_definitions
 from .reference_expander import expand_related_programs
 from .repo_manager import ensure_repo
 from .scan_store import get_or_scan
@@ -176,6 +178,8 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 table_names,
                 database_alias=req.database or None,
                 depth=req.fk_depth,
+                db_server=req.db_server or None,
+                db_name=req.db_name or None,
             )
 
         # SP 完整定義（選用，需 DB 連線；讓 AI 看得到 SP 實際邏輯）
@@ -184,7 +188,39 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             sp_definitions = fetch_sp_definitions(
                 sp_names,
                 database_alias=req.database or None,
+                db_server=req.db_server or None,
+                db_name=req.db_name or None,
             )
+
+        # SQL View 完整定義（選用）：table_names 裡如果其實是 View（而非一般資料表），
+        # 從本機 SQL 快取（sql_cache_store，由 /refresh_sql 落地）取得其完整定義，
+        # 讓 AI 看得到 View 實際查詢邏輯，而不只是一個表名。只讀本機快取，不即時連線
+        # （見 view_fetcher.py 說明），避免每個表名都額外連線判斷是否為 View。
+        view_definitions: List[Dict] = []
+        if req.include_sp_defs and table_names:
+            view_definitions = fetch_view_definitions(
+                table_names,
+                database_alias=req.database or None,
+            )
+
+        # 使用者定義函數（UDF）完整定義（選用）：靜態解析沒有專門的「UDF 呼叫」
+        # 關聯（不像 SP 有 sp_relations），改用「比對」取代「解析」——把該程式自己
+        # 內嵌的 SQL 查詢文字（matched_files 的 sql_queries）跟本機 SQL 快取的整庫
+        # UDF 名單比對，只有真的以函數呼叫形式出現在這支程式 SQL 裡的 UDF 才會附上
+        # 完整定義，做到「依程式篩選相關 UDF」而不是整庫塞給 AI（見 udf_fetcher.py）。
+        udf_definitions: List[Dict] = []
+        if req.include_sp_defs and matched_files:
+            sql_texts = [
+                q.query_text
+                for fr in matched_files
+                for q in fr.sql_queries
+                if getattr(q, "query_text", "")
+            ]
+            if sql_texts:
+                udf_definitions = fetch_udf_definitions(
+                    sql_texts,
+                    database_alias=req.database or None,
+                )
 
         # 跨程式呼叫參照展開（類似 Copilot 跟隨參照）：
         # 找出這支程式呼叫了、但定義在「其他檔案」的方法，帶入相關程式碼片段。
@@ -238,6 +274,8 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 call_chains=call_chains,
                 code_snippets=code_snippets,
                 sp_definitions=sp_definitions,
+                view_definitions=view_definitions,
+                udf_definitions=udf_definitions,
                 related_programs=related_programs,
                 view_layer=view_layer,
             )
@@ -270,4 +308,27 @@ def refresh_source(source: dict) -> dict:
         "files": len(scan.csharp_results),
         "sp_relations": len(scan.sp_relations),
         "table_relations": len(scan.table_relations),
+    }
+
+
+def refresh_sql_source(database: str, server: str, db_name: str, schema: str = "dbo") -> dict:
+    """更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與
+    資料表 Schema，覆寫本機落地快取（data/sql_cache/）。
+
+    database：快取鍵／顯示簡稱（通常是呼叫端的 system_id）。
+    server/db_name：實際連線目標，由呼叫端（catalog）提供；缺一時
+    get_or_dump()→SQLAnalyzer 會直接報錯，不嘗試連線。
+
+    回傳 {database, db_schema, procedures, views, functions, tables} 數量摘要。
+    """
+    from .sql_cache_store import get_or_dump
+
+    data = get_or_dump(database, schema=schema, refresh=True, server=server, db_name=db_name)
+    return {
+        "database": data.get("database", database),
+        "db_schema": data.get("schema", schema),
+        "procedures": len(data.get("procedures", [])),
+        "views": len(data.get("views", [])),
+        "functions": len(data.get("functions", [])),
+        "tables": len(data.get("tables", [])),
     }

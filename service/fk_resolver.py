@@ -23,11 +23,15 @@ def _normalize_table(name: str) -> str:
     return base.lower()
 
 
-def _fetch_fk_pairs(database_alias: Optional[str]) -> Optional[List[tuple]]:
+def _fetch_fk_pairs(
+    database_alias: Optional[str],
+    db_server: Optional[str] = None,
+    db_name: Optional[str] = None,
+) -> Optional[List[tuple]]:
     """查詢所有 FK（child_table, parent_table）配對。失敗回傳 None。"""
     try:
         from code_analyzer.sql_analyzer import SQLAnalyzer
-        analyzer = SQLAnalyzer(database_alias)
+        analyzer = SQLAnalyzer(database_alias, server=db_server, database_name=db_name)
     except Exception:
         return None
 
@@ -53,16 +57,19 @@ def resolve_fk_related(
     database_alias: Optional[str] = None,
     depth: int = 1,
     max_related: int = 50,
+    db_server: Optional[str] = None,
+    db_name: Optional[str] = None,
 ) -> List[str]:
     """
     回傳與 base_tables 經由外鍵相連的相關資料表（不含 base_tables 本身）。
 
-    無資料庫或查詢失敗時回傳空清單（不丟例外）。
+    無資料庫或查詢失敗時回傳空清單（不丟例外）。db_server/db_name 由呼叫端
+    （catalog）提供；未提供時退回舊行為（查 .env 的 DB_DATABASES/database_alias）。
     """
     if depth < 1 or not base_tables:
         return []
 
-    pairs = _fetch_fk_pairs(database_alias)
+    pairs = _fetch_fk_pairs(database_alias, db_server, db_name)
     if not pairs:
         return []
 

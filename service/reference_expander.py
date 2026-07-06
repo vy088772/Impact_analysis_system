@@ -129,6 +129,14 @@ def expand_related_programs(
                     # 靜態工具呼叫）→ 只取該類別的定義，避免同名方法在其他
                     # 不相干類別間誤配（如許多頁面各自複製貼上的同名 helper）。
                     candidates = [c for c in candidates if c[1] == qualifier]
+                elif len(candidates) > 1:
+                    # 限定子不是已知類別名（無限定子，或 obj.Xxx 這種實例變數呼叫，
+                    # 例如 DB helper 的 obj.CreateTable(...)），只能靠「方法名」比對，
+                    # 無法確定歸屬哪個類別。若此名稱在整個 repo 有多個同名定義
+                    # （最典型如每支頁面各自的 private CreateTable() 建 DataTable），
+                    # 這是巧合同名、而非同一個真正的呼叫目標；把它們全部展開只會
+                    # 塞進大量不相干、又佔行數的片段。無法確定 → 直接跳過。
+                    continue
 
                 for target_file, target_class in candidates:
                     if target_file in start_files:

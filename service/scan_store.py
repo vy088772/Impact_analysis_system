@@ -33,7 +33,18 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # v6：ASPXParser._extract_ui_fields 改為依所屬 GridView/DataGrid 分組（含該 Grid 的
 # OnRowCommand/OnRowDataBound 等事件）並補上 DataField，ui_fields 內容結構整個改變
 # （舊版是扁平清單），故遞增版本號使舊快取失效。
-_CACHE_VERSION = 6
+# v7：修正 ASPXParser.CONTROL_PATTERN 在屬性值含 '>'（如 ASP.NET 資料繫結運算式
+# CommandArgument='<%# Container.DataItemIndex %>'）時會提早截斷標籤、遺漏後續屬性
+# （如 Text、CommandName）的問題；另新增 ui_fields 的 'form'（查詢區塊 <th> 標籤文字
+# 與相鄰輸入控制項對應）與 'script'（純前端 <script> 區塊原始碼）兩種項目，故遞增
+# 版本號使舊快取失效、強制重新掃描以補上正確結果。
+# v8：修正 ASPXParser._parse_attributes 用共用字元類別 [^"\']（同時排除雙引號與
+# 單引號）比對屬性值，導致單引號屬性值裡若含雙引號（ASP.NET 資料繫結運算式很常見，
+# 例如 Text='<%# Eval("IVNO") %>'）會被提早截斷，遺漏該屬性後半段與後續屬性
+# （影響範圍不只 HyperLink，任何混用引號的屬性值都會中獎）；另新增 'hyperlink'
+# 至 _DISPLAY_TEXT_CONTROLS（先前完全未擷取 asp:HyperLink 的 Text），並新增
+# navigate_to（從 NavigateUrl 擷取目標頁面檔名）欄位，故遞增版本號使舊快取失效。
+_CACHE_VERSION = 8
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
