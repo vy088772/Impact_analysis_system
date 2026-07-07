@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -24,6 +25,9 @@ from .schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
     ProgramAnalysis,
+    FindBySPRequest,
+    FindBySPResponse,
+    SPMatchProgram,
 )
 from .snippet_extractor import extract_snippets
 from .call_chain_builder import build_call_chains
@@ -32,8 +36,8 @@ from .sp_fetcher import fetch_sp_definitions
 from .view_fetcher import fetch_view_definitions
 from .udf_fetcher import fetch_udf_definitions
 from .reference_expander import expand_related_programs
-from .repo_manager import ensure_repo
-from .scan_store import get_or_scan
+from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
+from .scan_store import get_or_scan, has_cache
 
 # 以「解析後的本機路徑」為鍵，快取掃描結果，避免同一 repo 重複掃描
 _scan_cache: Dict[str, ProjectScanResult] = {}
@@ -90,15 +94,16 @@ def _view_layer_summary(fr, root: Path) -> Dict:
 # 來源解析
 # ─────────────────────────────────────────────────────────────────────────────
 
-def resolve_source(req: AnalyzeRequest) -> Path:
+def resolve_source(req: AnalyzeRequest) -> List[Path]:
     """
-    解析請求來源 → 回傳要掃描的本機路徑（一律位於 data/repos 之下）。
+    解析請求來源 → 回傳要掃描的本機路徑清單（一律位於 data/repos 之下）。
 
     - 透過 repo_manager 確保程式碼已 clone 至 data/；不讀取任意本機路徑。
     - req.refresh=True 時，已存在的 clone 會先 git pull 取得最新。
-    - source.path 非空且存在 → 限定在該子資料夾（區分同 repo 多系統）。
+    - source.path 通常只有一個子資料夾；若為清單（同一套系統拆成多個 VS 專案
+      資料夾），回傳多個路徑，呼叫端需各自取得掃描結果後合併（見 _merge_scans）。
     """
-    return ensure_repo(
+    return resolve_scan_roots(
         {
             "project": req.source.project if req.source else "",
             "repo": req.source.repo if req.source else "",
@@ -114,14 +119,42 @@ def _get_scan(root: Path, refresh: bool = False) -> ProjectScanResult:
     return get_or_scan(root, refresh=refresh)
 
 
+def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
+    """把同一系統底下、分散在多個子資料夾（同一套系統拆成多個 VS 專案）的多次
+    掃描結果合併成一個邏輯上的 ProjectScanResult，讓後續依檔名/SP 名比對的邏輯
+    可以直接沿用既有單一 scan 的處理方式，不需另外改寫。
+    """
+    merged = ProjectScanResult(
+        project_root=" + ".join(s.project_root for s in scans),
+        project_name=scans[0].project_name if scans else "",
+        scan_time=max((s.scan_time for s in scans), default=datetime.now()),
+    )
+    for s in scans:
+        merged.total_files += s.total_files
+        merged.scanned_files += s.scanned_files
+        merged.failed_files += s.failed_files
+        merged.csharp_results.extend(s.csharp_results)
+        merged.aspx_results.extend(s.aspx_results)
+        merged.razor_results.extend(s.razor_results)
+        merged.vue_results.extend(s.vue_results)
+        merged.sp_relations.extend(s.sp_relations)
+        merged.table_relations.extend(s.table_relations)
+    merged.calculate_statistics()
+    return merged
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 主分析
 # ─────────────────────────────────────────────────────────────────────────────
 
 def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     """依 program_names 過濾掃描結果，組成回應（純靜態，無 AI）。"""
-    root = resolve_source(req)
-    scan = _get_scan(root, refresh=getattr(req, "refresh", False))
+    roots = resolve_source(req)
+    scans = [_get_scan(r, refresh=getattr(req, "refresh", False)) for r in roots]
+    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
+    root = roots[0] if len(roots) == 1 else repo_dir(
+        req.source.project if req.source else "", req.source.repo if req.source else ""
+    )
 
     programs: List[ProgramAnalysis] = []
     not_found: List[str] = []
@@ -296,13 +329,84 @@ def _rel(file_path: str, root: Path) -> str:
         return file_path
 
 
+def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
+    """反查「哪些程式呼叫了這支 SP」，純比對已快取的掃描結果（sp_relations），無 AI。
+
+    req.cache_only=True（預設）時，若這個系統實際會掃描到的路徑「還沒有掃描快取」
+    就直接跳過（skipped=True），不觸發 Azure clone、也不觸發任何掃描 —— 因為呼叫端
+    （spec-rag 的 search_specs_by_sp 工具）通常不知道這支 SP 屬於哪個系統，得逐系統
+    嘗試，若每個未分析過的系統都重新掃一次會太貴。
+
+    注意：不能只用 repo_manager.is_cloned(project, repo) 判斷「這個系統是否已分析
+    過」——多個系統可能共用同一個 Azure repo、只是 path 子資料夾不同（例如
+    Y-Docs_TTPUR 與 Y-DOCs_TTRDQ 都指向 repo=Y-DOCs，只差 path=TTPUR/TTRDQ）。
+    is_cloned() 只檢查 repo 根目錄有沒有 .git，只要「任一」共用該 repo 的系統先
+    分析過，其他共用系統的 is_cloned() 也會回傳 True，即使它自己的子路徑從沒被
+    掃描過、快取根本不存在 —— 那樣會誤判成「已分析過」而略過 cache_only 檢查，
+    導致直接掉進下面的 get_or_scan() 觸發一次全新的完整掃描（就是使用者看到
+    「明明 cache_only=True 卻還是重新掃描」的成因）。
+    正確做法：比對「這個系統實際會用到的掃描快取」是否存在（scan_store.has_cache()，
+    以解析後的實際路徑雜湊為鍵），而不是只看 repo 有沒有 clone 過。
+    """
+    sp_name = (req.sp_name or "").strip()
+    if not sp_name:
+        return FindBySPResponse(sp_name=sp_name, matches=[])
+
+    project = req.source.project if req.source else ""
+    repo = req.source.repo if req.source else ""
+    sub_path = req.source.path if req.source else ""
+
+    if req.cache_only and not req.refresh:
+        # 在不觸發 clone/pull 的前提下，推算這個系統實際會掃描的路徑清單
+        # （與 resolve_scan_roots() 內部邏輯一致：子路徑存在才用子路徑，
+        # 否則用整個 repo 根目錄），只用來檢查快取是否已存在。若 source.path 是
+        # 多個子資料夾清單，必須每個都已有快取才算「已分析過」，只要有任一個
+        # 尚未掃描就跳過，避免回傳部分過時的比對結果。
+        candidate_roots = peek_scan_roots({"project": project, "repo": repo, "path": sub_path})
+        if not all(has_cache(r) for r in candidate_roots):
+            return FindBySPResponse(sp_name=sp_name, matches=[], skipped=True)
+
+    source = {
+        "project": project,
+        "repo": repo,
+        "branch": req.source.branch if req.source else "",
+        "path": sub_path,
+    }
+    roots = resolve_scan_roots(source, refresh=req.refresh)
+    scans = [_get_scan(r, refresh=req.refresh) for r in roots]
+    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
+    root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
+
+    sp_lower = sp_name.lower()
+    matches: List[SPMatchProgram] = []
+    seen_files: set = set()
+    for rel in scan.sp_relations:
+        if rel.sp_name.strip().lower() != sp_lower:
+            continue
+        if rel.csharp_file in seen_files:
+            continue
+        seen_files.add(rel.csharp_file)
+        matches.append(
+            SPMatchProgram(
+                program=_normalize_program(Path(rel.csharp_file).name),
+                file=_rel(rel.csharp_file, root),
+            )
+        )
+
+    return FindBySPResponse(sp_name=sp_name, matches=matches, source_root=str(root))
+
+
 def refresh_source(source: dict) -> dict:
     """更新指令：git pull 取得最新程式碼並重新解析，覆寫快取。
 
     回傳 {source_root, files} 摘要。
     """
-    root = ensure_repo(source, refresh=True)
-    scan = get_or_scan(root, refresh=True)
+    roots = resolve_scan_roots(source, refresh=True)
+    scans = [get_or_scan(r, refresh=True) for r in roots]
+    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
+    root = roots[0] if len(roots) == 1 else repo_dir(
+        (source or {}).get("project", ""), (source or {}).get("repo", "")
+    )
     return {
         "source_root": str(root),
         "files": len(scan.csharp_results),

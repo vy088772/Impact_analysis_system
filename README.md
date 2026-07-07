@@ -128,93 +128,17 @@ python main.py
 
 ## 影響分析服務（FastAPI，供 spec-rag 呼叫）
 
-`service/` 提供一個**無 AI** 的 HTTP 服務，供上游 RAG 大腦（llamaindex-spec-rag）協調呼叫。職責是「給程式名 → 回傳静態分析」，AI 整合由 spec-rag 負責。
-
-### 啟動
+`service/` 另外提供一個**無 AI** 的 HTTP 服務（`/health`、`/analyze`、`/refresh`、`/refresh_sql`、
+`/find_by_sp`），供上游 RAG 大腦（llamaindex-spec-rag）協調呼叫，職責是「給程式名 → 回傳靜態
+分析」，AI 整合、完整操作流程、`.env` 設定與端點細節皆由 spec-rag 側統一協調。
 
 ```bash
-# 方式一
 uvicorn service.api:app --host 127.0.0.1 --port 8800
-# 方式二
-python -m service.api
 ```
 
-### 端點
-
-| 方法 | 路徑 | 說明 |
-|------|------|------|
-| GET | `/health` | 健康檢查，回 `{"status": "ok"}` |
-| POST | `/analyze` | 依 `program_names` 回傳每支程式的檔案/框架/方法/SP/資料表/FK 連動表/呼叫鏈/程式碼片段 |
-| POST | `/refresh` | 更新指令：git pull 取最新程式碼並重新解析，覆寫快取 |
-
-#### 觸發 `/refresh`（更新程式碼）
-
-`/analyze` 預設一律直接用快取結果，**不會**自動偵測原始碼變動；只有明確呼叫 `/refresh`
-（或帶 `"refresh": true` 呼叫 `/analyze`）才會 `git pull` 取最新程式碼並強制重新解析、覆寫快取。
-
-```powershell
-# 直接呼叫本服務的 /refresh（PowerShell 範例）
-$body = @{ system = "Y-Docs_TTPUR"; source = @{ project = "System Dept 1"; repo = "Y-DOCs"; branch = ""; path = "TTPUR" } } | ConvertTo-Json
-Invoke-RestMethod -Uri http://127.0.0.1:8800/refresh -Method Post -Body $body -ContentType "application/json"
-```
-
-若是透過上游 llamaindex-spec-rag 協調端使用，也可直接在該專案下執行對應的獨立指令
-（不需自己組 JSON，會自動從 catalog 帶入 `source`）：
-
-```powershell
-cd d:\pratice\Python\llamaindex-spec-rag
-.\.venv\Scripts\python.exe -m impact_orch.refresh_cli Y-Docs_TTPUR
-# 可一次更新多個系統
-.\.venv\Scripts\python.exe -m impact_orch.refresh_cli Y-Docs_TTPUR PUR
-```
-
-`POST /analyze` 請求主要欄位：
-
-```jsonc
-{
-  "system": "Y-Docs_TTPUR",          // 系統 id（記錄/快取用）
-  "source": {                         // 由 spec-rag 從 catalog 帶入
-    "project": "System Dept 1",
-    "repo": "Y-DOCs",
-    "branch": "",                     // 留空用預設分支
-    "path": "TTPUR"                   // repo 內子資料夾（多系統共用 repo）
-  },
-  "program_names": ["PUR_CostUpload", "PUR_YMMCPriceImport.aspx"],
-  "include_snippets": true,           // 是否回傳程式碼片段
-  "include_sp_defs": false,           // 是否連資料庫擷取 SP 完整定義（需 DB）
-  "fk_depth": 1,                      // FK 連動追蹤層數
-  "database": "",                     // FK 查詢 / SP 擷取用資料庫簡稱（留空用預設）
-  "refresh": false                    // true → git pull + 重新解析
-}
-```
-
-### 來源管理：clone 進 `data/`
-
-服務**不讀取任意本機路徑**，而是依 `source` 將原始碼集中管理在：
-
-```
-data/repos/<project>/<repo>/        # 對應 Azure DevOps 的 org/project/_git/repo 階層
-```
-
-- 首次分析：若目錄不存在 → 從 Azure DevOps clone。
-- 之後：直接沿用已 clone 的副本，**不**自動 `git pull`。
-- 只有 `refresh=true`（或 `POST /refresh`）才 `git pull` 取最新。
-- 多系統共用同一 repo 時，以 `source.path` 子資料夾區分（如 `Y-DOCs/TTPUR`、`Y-DOCs/TTRDQ`）。
-
-### 解析快取（避免重複掃描）
-
-首次掃描某路徑後，`ProjectScanResult` 以 pickle 持久化至：
-
-```
-data/scan_cache/<hash>.pkl          # 掃描結果
-data/scan_cache/<hash>.meta.json    # 快取版本與時間
-```
-
-- 之後的 `/analyze` 直接載入快取（秒回），**不**重新解析 C#。
-- `refresh=true` 才會重新掃描並覆寫快取。
-- 含記憶體 + 磁碟雙層快取；模型結構變動時可遞增快取版本碼使舊快取自動失效。
-
-> 備註：服務以 `analyze_sp=False` 掃描（不連資料庫）；FK 連動表為「盡力而為」，無資料庫或無 FK 時回傳空。
+> 📖 完整端點說明、`/analyze`／`/refresh`／`/refresh_sql`／`/find_by_sp` 請求格式、來源
+> clone／掃描快取／SQL 快取機制、故障排除，請參考 [使用說明書](docs/使用說明書.md)（本
+> README 只保留最基本的啟動方式，避免兩份文件重複維護、內容跟著功能演進而失準）。
 
 ## 專案結構
 

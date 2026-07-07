@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from typing import List, Dict
+from typing import List, Dict, Union
 from pydantic import BaseModel, Field
 
 
@@ -19,7 +19,12 @@ class AzureSource(BaseModel):
     project: str = ""        # Azure DevOps 專案（必填，不可留空）
     repo: str = ""           # 儲存庫（可多系統共用，必填）
     branch: str = ""         # 留空使用預設分支
-    path: str = ""           # repo 內子資料夾，區分同 repo 的多系統；留空則整個 repo
+    path: Union[str, List[str]] = ""
+    # repo 內子資料夾，區分同 repo 的多系統；留空則整個 repo。
+    # 若同一套系統的功能拆成多個 VS 專案資料夾（例如 Y-Docs_TTPUR 除了 TTPUR/
+    # 外，還有 ATV/、Notification/、Response/ 這些屬於同一系統的兄弟資料夾），
+    # 可傳入子資料夾清單，會一併掃描並合併成一個邏輯上的分析結果
+    # （見 repo_manager.resolve_scan_roots() / analyze_service._merge_scans()）。
 
 
 class AnalyzeRequest(BaseModel):
@@ -81,6 +86,31 @@ class RefreshResponse(BaseModel):
     files: int = 0
     sp_relations: int = 0
     table_relations: int = 0
+
+
+class FindBySPRequest(BaseModel):
+    """POST /find_by_sp 請求：反查「哪些程式呼叫了這支 SP」（純快取比對，不觸發 clone）。
+
+    cache_only=True（預設）時，若該 repo 尚未 clone 過，直接回傳 skipped=True，
+    不會觸發 Azure clone —— 這支端點常被逐系統掃描式呼叫（不知道 SP 屬於哪個
+    系統），避免對每個未分析過的系統都觸發一次昂貴的 clone。
+    """
+    source: AzureSource = Field(default_factory=AzureSource)
+    sp_name: str                              # 要反查的 SP 名稱（不分大小寫比對）
+    cache_only: bool = True                   # True → repo 未 clone 過就跳過，不觸發 clone
+    refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
+
+
+class SPMatchProgram(BaseModel):
+    program: str = ""                         # 程式基底名（不含副檔名）
+    file: str = ""                            # 相對 repo 根目錄的檔案路徑
+
+
+class FindBySPResponse(BaseModel):
+    sp_name: str = ""
+    matches: List[SPMatchProgram] = Field(default_factory=list)
+    skipped: bool = False                     # True：該 repo 尚未 clone/分析過，本次未比對
+    source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）
 
 
 class RefreshSqlRequest(BaseModel):

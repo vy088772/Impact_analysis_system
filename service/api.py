@@ -13,6 +13,8 @@
     POST /refresh  → RefreshResponse（git pull + 重新解析，覆寫快取）
     POST /refresh_sql → RefreshSqlResponse（重新連線 SQL Server 撈取 SP/View/
                         Function/資料表 Schema，覆寫本機 SQL 快取）
+    POST /find_by_sp  → FindBySPResponse（反查哪些程式呼叫了指定 SP，純比對已
+                        快取的掃描結果；cache_only=True 時不觸發 clone）
 """
 from __future__ import annotations
 
@@ -26,6 +28,8 @@ from .schemas import (
     RefreshResponse,
     RefreshSqlRequest,
     RefreshSqlResponse,
+    FindBySPRequest,
+    FindBySPResponse,
 )
 from . import analyze_service
 
@@ -71,6 +75,19 @@ def refresh(req: RefreshRequest) -> RefreshResponse:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"更新失敗：{exc}")
+
+
+@app.post("/find_by_sp", response_model=FindBySPResponse)
+def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
+    """反查「哪些程式呼叫了這支 SP」（純快取比對；cache_only=True 時不觸發 clone）。"""
+    if not req.sp_name.strip():
+        raise HTTPException(status_code=400, detail="sp_name 不可為空")
+    try:
+        return analyze_service.find_by_sp(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"SP 反查失敗：{exc}")
 
 
 @app.post("/refresh_sql", response_model=RefreshSqlResponse)
