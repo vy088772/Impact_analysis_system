@@ -427,21 +427,101 @@ class ASPXParser:
         """去除 HTML 標籤，只留下純文字內容（供 <th> 等靜態標籤文字使用）。"""
         return re.sub(r'<[^>]+>', '', text).strip()
 
+    # 純 HTML 結構容器（非 ASP.NET 控制項）：查詢區塊/新增視窗常見的 <table>/<div>
+    # 包住一整組 <th>欄位。用來把同一個容器內的多個 <th> 欄位群組成同一個區塊，
+    # 避免每個 <th> 各自變成一個獨立的語意檢索項目，被 select_relevant 只挑中其中
+    # 一兩個、其餘（同一張表單裡的其他必填欄位）被漏掉。
+    _FORM_CONTAINER_TAGS = ('table', 'div')
+    # 偵測「用 jQuery 依 ID 綁定某控制項」的前端函式呼叫，例如：
+    #   SetVendorAutocomplete($("[id$=txtVendorID]"), "");
+    # 藉此找出某欄位除了本身的 Server Control 之外，還被哪個前端函式（如自動完成）
+    # 綁定行為，這類資訊只存在於 <script> 內容裡，控制項本身的屬性看不出來。
+    _JS_ID_BINDING_PATTERN = re.compile(
+        r'(\w+)\s*\(\s*\$\(\s*["\']\[id\$=([\w]+)\]["\']'
+    )
+
+    def _compute_html_container_spans(self, content: str, tag_names: Tuple[str, ...]) -> List[Tuple[int, int, str, str]]:
+        """
+        找出純 HTML 標籤（如 <table>/<div>，非 ASP.NET 控制項）的 (開始位移, 結束位移,
+        標籤名稱, id屬性) 清單。作法與 `_compute_container_spans`（GridView 用）相同：
+        用堆疊配對同名開合標籤，self-closing 標籤（無子節點）略過。
+        """
+        spans: List[Tuple[int, int, str, str]] = []
+        for tag in tag_names:
+            open_pattern = re.compile(rf'<{tag}\b((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|\'[^\']*\'))*)\s*(/?)>', re.IGNORECASE)
+            close_pattern = re.compile(rf'</{tag}\s*>', re.IGNORECASE)
+            tagged: List[Tuple[int, str, int, str]] = []
+            for m in open_pattern.finditer(content):
+                if m.group(2) == '/':
+                    continue  # self-closing，沒有子節點需要配對
+                attrs = self._parse_attributes(m.group(1))
+                tagged.append((m.start(), 'open', m.end(), attrs.get('id', '')))
+            for m in close_pattern.finditer(content):
+                tagged.append((m.start(), 'close', m.end(), ''))
+            tagged.sort(key=lambda t: t[0])
+
+            stack: List[Tuple[int, str]] = []
+            for pos, kind, end, tag_id in tagged:
+                if kind == 'open':
+                    stack.append((pos, tag_id))
+                elif stack:
+                    open_pos, open_id = stack.pop()
+                    spans.append((open_pos, end, tag, open_id))
+        return spans
+
+    def _extract_js_id_bindings(self, content: str) -> Dict[str, str]:
+        """
+        掃描全文，找出「函式名稱(...$("[id$=控制項ID]")...)」形式的前端綁定呼叫，
+        回傳 {控制項ID(小寫): 函式名稱} 的對應表（例如 SetVendorAutocomplete 幫
+        txtVendorID 掛上自動完成）。同一個控制項若被多個函式呼叫，保留第一個
+        比對到的即可（實務上一個欄位通常只會被一個輔助函式綁定）。
+        """
+        bindings: Dict[str, str] = {}
+        for m in self._JS_ID_BINDING_PATTERN.finditer(content):
+            func_name, control_id = m.group(1), m.group(2)
+            key = control_id.lower()
+            if key not in bindings:
+                bindings[key] = func_name
+        return bindings
+
     def _extract_form_fields(self, content: str, controls: List[ASPXControl]) -> List[Dict]:
         """
-        從查詢區塊等純 HTML 標籤（<th>結關日：</th> 之類）擷取欄位標籤文字，並與其後
-        （同一列內、下一個 <th> 或 </tr> 之前）出現的輸入控制項（TextBox/DropDownList
-        等）建立對應。
+        從查詢區塊/新增視窗等純 HTML 標籤（<th>結關日：</th> 之類）擷取欄位標籤文字，
+        並與其後（同一列內、下一個 <th> 或 </tr> 之前）出現的輸入控制項
+        （TextBox/DropDownList 等）建立對應。
 
         這類欄位名稱不是 ASP.NET 控制項的屬性（TextBox/DropDownList 的 Text 只是預設值，
         不是欄位名稱），而是相鄰的純 HTML 文字，故 _extract_ui_fields()（處理控制項屬性）
         抓不到，需另外比對位置關係取得。
+
+        同一個 <table>/<div> 容器內的多個 <th> 欄位（例如新增視窗裡的「客戶」「Invoice
+        NO.」「Cut off Date」「廠商」）會合併成同一個 `kind="form_group"` 區塊，而不是
+        各自獨立的 `kind="form"` 項目——這幾個欄位本來就是同一張表單，語意檢索
+        （select_relevant）若把它們當成互相獨立的項目，很容易只挑中其中一兩個（例如
+        只挑到含有使用者問題關鍵字的那個欄位），導致同一張表單其餘欄位（含必填規則）
+        被漏掉，回答時看起來像是漏掉了某些欄位。不落在任何容器內的 <th>（例如頁面上
+        散落、沒有 table/div 包住的情形）維持原本的 `kind="form"` 逐一輸出，作為後備。
+
+        另外會附上 `_extract_js_id_bindings()` 找到的前端 JS 綁定（如自動完成函式），
+        讓「這個欄位還有沒有其他前端行為」也能被回答（純 ASP.NET 控制項屬性看不出來）。
+
+        也會附上控制項本身的 `CssClass`（如 `RequireColumn`/`StringFormat`/
+        `IntegerFormat`/`CheckDate`）與 `MaxLength` 屬性——這兩者是這類專案常見的
+        「宣告式前端驗證」慣例：必填與格式規則不是寫死在某個特定方法裡，而是掛在
+        控制項的 CssClass 上，由共用的 `<script>`（如 `.btnQry`/`.btnAdd` click
+        handler 內用 `hasClass("RequireColumn")` 判斷必填、`CheckInt`/`CheckEmpty`/
+        `CheckDate` 依 class 名稱做對應格式檢查）在送出前掃描比對；`MaxLength` 則是
+        瀏覽器端就會限制的長度上限。這些原本只存在於控制項屬性/純前端 script 裡、
+        沒有反映在後端 `CheckXxxData()` 方法內的規則，若不附上會讓 AI 誤以為「後端沒
+        檢查所以沒有這條規則」，其實規則存在，只是實作在前端而非後端。
         """
         th_matches = list(re.finditer(self.TH_PATTERN, content, re.IGNORECASE | re.DOTALL))
         if not th_matches:
             return []
 
-        groups: List[Dict] = []
+        js_bindings = self._extract_js_id_bindings(content)
+
+        raw_groups: List[Tuple[int, Dict]] = []  # (window_start, {'label', 'fields'})
         for i, m in enumerate(th_matches):
             label = self._strip_html_tags(m.group(1))
             if not label:
@@ -460,12 +540,58 @@ class ASPXParser:
                 if window_start <= control.start_pos < window_end:
                     control_kind = control.control_type.split(':', 1)[-1].lower()
                     if control_kind in self._INPUT_CONTROL_KINDS:
-                        fields.append({'control': control.control_type, 'id': control.control_id})
+                        entry = {'control': control.control_type, 'id': control.control_id}
+                        css_class = control.properties.get('CssClass', '').strip()
+                        if css_class:
+                            entry['css_class'] = css_class
+                        max_length = control.properties.get('MaxLength', '').strip()
+                        if max_length:
+                            entry['max_length'] = max_length
+                        binding = js_bindings.get(control.control_id.lower(), '')
+                        if binding:
+                            entry['js_binding'] = binding
+                        fields.append(entry)
 
             if fields:
-                groups.append({'kind': 'form', 'label': label, 'fields': fields})
+                raw_groups.append((window_start, {'label': label, 'fields': fields}))
 
-        return groups
+        if not raw_groups:
+            return []
+
+        container_spans = self._compute_html_container_spans(content, self._FORM_CONTAINER_TAGS)
+
+        # 依「最貼近（範圍最小）」的容器分組，同一容器內的項目依原始順序合併
+        containers: List[Dict] = []  # 依出現順序建立的容器分組
+        container_index: Dict[Tuple[int, int], int] = {}
+        standalone: List[Dict] = []
+
+        for window_start, item in raw_groups:
+            best_span = None
+            best_len = None
+            for start, end, tag, tag_id in container_spans:
+                if start <= window_start < end:
+                    span_len = end - start
+                    if best_len is None or span_len < best_len:
+                        best_span = (start, end, tag, tag_id)
+                        best_len = span_len
+
+            if best_span is None:
+                standalone.append({'kind': 'form', **item})
+                continue
+
+            key = (best_span[0], best_span[1])
+            if key not in container_index:
+                container_index[key] = len(containers)
+                containers.append({
+                    'kind': 'form_group',
+                    'container': best_span[2],
+                    'id': best_span[3],
+                    'items': [],
+                })
+            containers[container_index[key]]['items'].append(item)
+
+        # 只保留有實際內容的容器分組（理論上必然有，防禦性檢查）
+        return [c for c in containers if c['items']] + standalone
 
     def _extract_client_scripts(self, content: str) -> List[str]:
         """

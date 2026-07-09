@@ -15,6 +15,8 @@
                         Function/資料表 Schema，覆寫本機 SQL 快取）
     POST /find_by_sp  → FindBySPResponse（反查哪些程式呼叫了指定 SP，純比對已
                         快取的掃描結果；cache_only=True 時不觸發 clone）
+    POST /find_by_table → FindByTableResponse（反查哪些程式存取了指定資料表，
+                        純比對已快取的掃描結果；cache_only=True 時不觸發 clone）
 """
 from __future__ import annotations
 
@@ -30,6 +32,8 @@ from .schemas import (
     RefreshSqlResponse,
     FindBySPRequest,
     FindBySPResponse,
+    FindByTableRequest,
+    FindByTableResponse,
 )
 from . import analyze_service
 
@@ -88,6 +92,19 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"SP 反查失敗：{exc}")
+
+
+@app.post("/find_by_table", response_model=FindByTableResponse)
+def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
+    """反查「哪些程式存取了這張資料表」（純快取比對；cache_only=True 時不觸發 clone）。"""
+    if not req.table_name.strip():
+        raise HTTPException(status_code=400, detail="table_name 不可為空")
+    try:
+        return analyze_service.find_by_table(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"資料表反查失敗：{exc}")
 
 
 @app.post("/refresh_sql", response_model=RefreshSqlResponse)

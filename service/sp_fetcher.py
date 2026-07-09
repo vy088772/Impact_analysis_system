@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from .sql_cache_store import load_cached
+from code_analyzer.sql_analyzer import estimate_complexity_from_definition
 
 
 def _normalize(name: str) -> str:
@@ -50,7 +51,9 @@ def _from_cache(sp_names: List[str], database_alias: Optional[str], max_def_char
             "exists": bool(definition),
             "parameters": p.get("parameters", []),
             "tables": [],  # 快取版不重算引用資料表；如需要可由 definition 另外解析
-            "complexity": "",
+            # 複雜度：純字串靜態分析（見 estimate_complexity_from_definition），
+            # 不需要即時連線，可直接對快取的 definition 文字計算，故不再留空。
+            "complexity": estimate_complexity_from_definition(definition) if definition else "",
             "definition": definition[:max_def_chars],
             "truncated": len(definition) > max_def_chars,
         })

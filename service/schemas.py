@@ -113,6 +113,32 @@ class FindBySPResponse(BaseModel):
     source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）
 
 
+class FindByTableRequest(BaseModel):
+    """POST /find_by_table 請求：反查「哪些程式存取了這張資料表」（純快取比對，不觸發 clone）。
+
+    情境：使用者打算異動某張資料表（改欄位、改約束等），需要先知道哪些程式會受影響——
+    這跟 FindBySPRequest 是同一種「反查」需求，只是比對對象從 sp_relations 換成
+    table_relations。cache_only=True（預設）時，若該系統尚未分析過就直接跳過，不觸發
+    clone（供逐系統嘗試反查時使用）。
+    """
+    source: AzureSource = Field(default_factory=AzureSource)
+    table_name: str                           # 要反查的資料表名稱（可含或不含 schema 前綴，不分大小寫比對）
+    cache_only: bool = True                   # True → repo 未 clone/分析過就跳過，不觸發 clone
+    refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
+
+
+class TableMatchProgram(BaseModel):
+    program: str = ""                         # 程式基底名（不含副檔名）
+    file: str = ""                             # 相對 repo 根目錄的檔案路徑
+
+
+class FindByTableResponse(BaseModel):
+    table_name: str = ""
+    matches: List[TableMatchProgram] = Field(default_factory=list)
+    skipped: bool = False                     # True：該 repo 尚未 clone/分析過，本次未比對
+    source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）
+
+
 class RefreshSqlRequest(BaseModel):
     """POST /refresh_sql 請求：重新連線 SQL Server 撷取整庫 SP/View/Function/資料表
     Schema，覆寫本機快取（data/sql_cache/）。

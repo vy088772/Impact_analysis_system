@@ -28,6 +28,9 @@ from .schemas import (
     FindBySPRequest,
     FindBySPResponse,
     SPMatchProgram,
+    FindByTableRequest,
+    FindByTableResponse,
+    TableMatchProgram,
 )
 from .snippet_extractor import extract_snippets
 from .call_chain_builder import build_call_chains
@@ -394,6 +397,67 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         )
 
     return FindBySPResponse(sp_name=sp_name, matches=matches, source_root=str(root))
+
+
+def _normalize_table(name: str) -> str:
+    """正規化資料表名稱供比對：去除中括號、取 schema 前綴後的最後一段、轉小寫。
+
+    例如 `[dbo].[Customers]`／`dbo.Customers`／`Customers` 都會正規化成 `customers`，
+    因為 table_relations 收集自各處程式碼的原始寫法不保證一致（有無 schema 前綴、
+    有無中括號皆有可能）。
+    """
+    cleaned = (name or "").replace("[", "").replace("]", "").strip()
+    return cleaned.rsplit(".", 1)[-1].lower()
+
+
+def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
+    """反查「哪些程式存取了這張資料表」，純比對已快取的掃描結果（table_relations），無 AI。
+
+    邏輯與 find_by_sp() 完全對稱（cache_only 的 skip 判斷、多子資料夾 source 的處理），
+    差異只在比對對象換成 table_relations／資料表名稱正規化規則。詳見 find_by_sp() 的
+    docstring 說明 cache_only 為何不能只用 repo_manager.is_cloned() 判斷。
+    """
+    table_name = (req.table_name or "").strip()
+    if not table_name:
+        return FindByTableResponse(table_name=table_name, matches=[])
+
+    project = req.source.project if req.source else ""
+    repo = req.source.repo if req.source else ""
+    sub_path = req.source.path if req.source else ""
+
+    if req.cache_only and not req.refresh:
+        candidate_roots = peek_scan_roots({"project": project, "repo": repo, "path": sub_path})
+        if not all(has_cache(r) for r in candidate_roots):
+            return FindByTableResponse(table_name=table_name, matches=[], skipped=True)
+
+    source = {
+        "project": project,
+        "repo": repo,
+        "branch": req.source.branch if req.source else "",
+        "path": sub_path,
+    }
+    roots = resolve_scan_roots(source, refresh=req.refresh)
+    scans = [_get_scan(r, refresh=req.refresh) for r in roots]
+    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
+    root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
+
+    table_norm = _normalize_table(table_name)
+    matches: List[TableMatchProgram] = []
+    seen_files: set = set()
+    for rel in scan.table_relations:
+        if _normalize_table(rel.table_name) != table_norm:
+            continue
+        if rel.csharp_file in seen_files:
+            continue
+        seen_files.add(rel.csharp_file)
+        matches.append(
+            TableMatchProgram(
+                program=_normalize_program(Path(rel.csharp_file).name),
+                file=_rel(rel.csharp_file, root),
+            )
+        )
+
+    return FindByTableResponse(table_name=table_name, matches=matches, source_root=str(root))
 
 
 def refresh_source(source: dict) -> dict:

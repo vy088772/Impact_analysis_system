@@ -676,7 +676,7 @@ class SQLAnalyzer:
             return "中等"
         else:
             return "簡單"
-    
+
     # ========================================
     # 批次分析
     # ========================================
@@ -929,6 +929,39 @@ class SQLAnalyzer:
         
         print(f"✅ 已匯出 Excel: {output_path}")
         return output_path
+
+
+# ============================================
+# 純字串靜態分析（不需要資料庫連線）
+# ============================================
+
+def estimate_complexity_from_definition(definition: str) -> str:
+    """依 SP/View/UDF 的完整定義文字估算複雜度，純字串正規表達式分析，
+    不需要任何資料庫連線 —— 給「已有 definition 文字、但沒有走 quick_analyze_sp()
+    即時查詢」的路徑使用（例如 service/sp_fetcher.py 從本機 SQL 快取
+    sql_cache_store.py 讀出的 definition，之前一直缺這個複雜度欄位）。
+
+    邏輯與 quick_analyze_sp() 內的複雜度估算步驟（動態 SQL/暫存表/游標/交易偵測、
+    資料表提取、_estimate_complexity 計分）完全一致，只是輸入從即時查詢改成
+    現成的 definition 字串。4 個 `_detect_*`／`_quick_extract_tables`／
+    `_estimate_complexity` 方法本身都是純字串分析（不使用 self 的任何屬性），
+    故用 `object.__new__` 建立一個不觸發 `__init__`（不需要 DB 連線設定）的
+    空殼實例即可安全呼叫。
+    """
+    definition = definition or ""
+    info = SimplifiedSPInfo(procedure_name="", database="")
+    info.definition = definition
+    info.definition_length = len(definition)
+    info.line_count = definition.count("\n") + 1 if definition else 0
+
+    analyzer = object.__new__(SQLAnalyzer)
+    info.has_dynamic_sql = analyzer._detect_dynamic_sql(definition)
+    info.has_temp_tables = analyzer._detect_temp_tables(definition)
+    info.has_cursor = analyzer._detect_cursor(definition)
+    info.has_transaction = analyzer._detect_transaction(definition)
+    info.referenced_tables = analyzer._quick_extract_tables(definition)
+
+    return analyzer._estimate_complexity(info)
 
 
 # ============================================

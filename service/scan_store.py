@@ -44,7 +44,19 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # （影響範圍不只 HyperLink，任何混用引號的屬性值都會中獎）；另新增 'hyperlink'
 # 至 _DISPLAY_TEXT_CONTROLS（先前完全未擷取 asp:HyperLink 的 Text），並新增
 # navigate_to（從 NavigateUrl 擷取目標頁面檔名）欄位，故遞增版本號使舊快取失效。
-_CACHE_VERSION = 8
+# v9：ASPXParser._extract_form_fields 改為把同一個 <table>/<div> 容器內的多個
+# <th> 欄位（例如新增視窗的完整表單）合併成單一 kind="form_group" 區塊（原本每個
+# <th> 各自一個 kind="form" 項目，容易被下游語意檢索只挑中其中一兩個、漏掉同一張
+# 表單的其他欄位），並新增 _extract_js_id_bindings() 偵測 $("[id$=控制項ID]") 形式
+# 的前端 JS 綁定（如自動完成函式），附加在對應欄位的 js_binding 屬性上——這些都是
+# ui_fields 內容結構的變更，故遞增版本號使舊快取失效。
+# v10：ASPXParser._extract_form_fields 新增 css_class（控制項 CssClass 屬性，如
+# "StringFormat RequireColumn"——這類專案常見的宣告式前端驗證慣例，必填/格式規則
+# 掛在 class 名稱上、由共用 script 依 hasClass() 判斷）與 max_length（MaxLength
+# 屬性，瀏覽器端長度上限）兩個欄位。先前這兩者完全沒有擷取，導致「必填/長度限制
+# 明明存在於 markup，卻只實作在前端、後端 CheckXxxData() 看不到」的規則會被誤判
+# 成「沒有這條規則」。故遞增版本號使舊快取失效。
+_CACHE_VERSION = 10
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

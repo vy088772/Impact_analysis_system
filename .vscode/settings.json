@@ -1,5 +1,5 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "python.defaultInterpreterPath": "./.venv/Scripts/python.exe",
     "python.terminal.activateEnvironment": false,
     "python-envs.terminal.autoActivationType": "shellStartup",
     "terminal.integrated.profiles.windows": {
