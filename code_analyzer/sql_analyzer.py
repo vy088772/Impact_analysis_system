@@ -320,6 +320,26 @@ class SQLAnalyzer:
             parameters.append(f"{r[0]} {ptype}")
         return parameters, return_type
 
+    def get_primary_key_columns(self, table_name: str, schema: str = 'dbo') -> List[str]:
+        """取得資料表的主鍵欄位名稱清單（依組成順序）。
+
+        供「命名慣例推論關聯」使用（見 service/fk_resolver.py）：資料庫沒有
+        建立實際 FK 約束時，改用「某表的主鍵欄位名稱，剛好也出現在其他表當
+        欄位名」這種命名慣例，推論兩表可能相關（例如 Customer 表主鍵
+        CustomerCode，Order 表也有 CustomerCode 欄位）。純靜態 Schema 查詢，
+        不需要額外連線（跟其他 dump_all_sql_objects 內的查詢共用同一次連線）。
+        """
+        query = """
+        SELECT kcu.COLUMN_NAME
+        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+        JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+          ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+        WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' AND tc.TABLE_NAME = ? AND tc.TABLE_SCHEMA = ?
+        ORDER BY kcu.ORDINAL_POSITION
+        """
+        self.cursor.execute(query, table_name, schema)
+        return [row[0] for row in self.cursor.fetchall()]
+
     def get_table_columns(self, table_name: str, schema: str = 'dbo') -> List[Dict]:
         """取得資料表的欄位 Schema（名稱/型別/長度/是否可為 NULL）。"""
         query = """
@@ -397,6 +417,7 @@ class SQLAnalyzer:
             tables.append({
                 "name": name,
                 "columns": self.get_table_columns(name, schema),
+                "primary_keys": self.get_primary_key_columns(name, schema),
             })
 
         return {
