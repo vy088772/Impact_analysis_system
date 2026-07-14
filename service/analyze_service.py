@@ -31,6 +31,8 @@ from .schemas import (
     FindByTableRequest,
     FindByTableResponse,
     TableMatchProgram,
+    FlowChainRequest,
+    FlowChainResponse,
 )
 from .snippet_extractor import extract_snippets
 from .call_chain_builder import build_call_chains
@@ -41,6 +43,7 @@ from .udf_fetcher import fetch_udf_definitions
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import get_or_scan, has_cache
+from . import flow_chain_builder
 
 # 以「解析後的本機路徑」為鍵，快取掃描結果，避免同一 repo 重複掃描
 _scan_cache: Dict[str, ProjectScanResult] = {}
@@ -458,6 +461,67 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         )
 
     return FindByTableResponse(table_name=table_name, matches=matches, source_root=str(root))
+
+
+def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
+    """組出「關係鏈」候選清單（純靜態組裝，見 flow_chain_builder.py，無 AI 判斷）。
+
+    cache_only 的 skip 判斷邏輯與 find_by_sp()/find_by_table() 完全對稱
+    （多子資料夾 source 需全部已有快取才算「已分析過」），詳見 find_by_sp()
+    的 docstring 說明為何不能只用 repo_manager.is_cloned() 判斷。
+    """
+    project = req.source.project if req.source else ""
+    repo = req.source.repo if req.source else ""
+    sub_path = req.source.path if req.source else ""
+
+    if req.cache_only and not req.refresh:
+        candidate_roots = peek_scan_roots({"project": project, "repo": repo, "path": sub_path})
+        if not all(has_cache(r) for r in candidate_roots):
+            return FlowChainResponse(direction=req.direction, skipped=True)
+
+    source = {
+        "project": project,
+        "repo": repo,
+        "branch": req.source.branch if req.source else "",
+        "path": sub_path,
+    }
+    roots = resolve_scan_roots(source, refresh=req.refresh)
+    scans = [_get_scan(r, refresh=req.refresh) for r in roots]
+    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
+    root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
+
+    database_alias = req.database or None
+    db_server = req.db_server or None
+    db_name = req.db_name or None
+
+    if req.direction == "backward":
+        chains = flow_chain_builder.build_backward_chains(
+            scan,
+            root,
+            req.table_name,
+            column_name=req.column_name or None,
+            database_alias=database_alias,
+        )
+        return FlowChainResponse(direction="backward", backward_chains=chains, source_root=str(root))
+
+    # direction == "forward"（預設）
+    program_base = _normalize_program(req.program_name)
+    matched_files = [r for r in scan.csharp_results if _file_matches(r.file_path, program_base)]
+    if not matched_files:
+        return FlowChainResponse(direction="forward", forward_chain=None, source_root=str(root))
+
+    forward = flow_chain_builder.build_forward_chain(
+        matched_files,
+        scan.sp_relations,
+        root,
+        req.anchor_method,
+        database_alias=database_alias,
+        db_server=db_server,
+        db_name=db_name,
+        max_sp_depth=req.max_sp_depth,
+        fk_depth=req.fk_depth,
+    )
+    return FlowChainResponse(direction="forward", forward_chain=forward, source_root=str(root))
 
 
 def refresh_source(source: dict) -> dict:

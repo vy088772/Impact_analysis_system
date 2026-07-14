@@ -17,6 +17,10 @@
                         快取的掃描結果；cache_only=True 時不觸發 clone）
     POST /find_by_table → FindByTableResponse（反查哪些程式存取了指定資料表，
                         純比對已快取的掃描結果；cache_only=True 時不觸發 clone）
+    POST /flow_chain  → FlowChainResponse（組出變更影響「關係鏈」候選清單，純靜態
+                        組裝、無 AI 判斷；forward：錨點方法→呼叫鏈→SP→SP→資料表；
+                        backward：資料表（可選欄位）→SP→C#方法→UI控制項事件；
+                        cache_only=True 時不觸發 clone）
 """
 from __future__ import annotations
 
@@ -34,6 +38,8 @@ from .schemas import (
     FindBySPResponse,
     FindByTableRequest,
     FindByTableResponse,
+    FlowChainRequest,
+    FlowChainResponse,
 )
 from . import analyze_service
 
@@ -105,6 +111,27 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"資料表反查失敗：{exc}")
+
+
+@app.post("/flow_chain", response_model=FlowChainResponse)
+def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
+    """組出變更影響「關係鏈」候選清單（純靜態組裝，無 AI 判斷；cache_only=True 時不觸發 clone）。
+
+    direction="forward" 時 program_name/anchor_method 必填；
+    direction="backward" 時 table_name 必填（column_name 選填，僅近似文字比對）。
+    """
+    if req.direction not in ("forward", "backward"):
+        raise HTTPException(status_code=400, detail="direction 必須是 forward 或 backward")
+    if req.direction == "forward" and (not req.program_name.strip() or not req.anchor_method.strip()):
+        raise HTTPException(status_code=400, detail="direction=forward 時 program_name/anchor_method 不可為空")
+    if req.direction == "backward" and not req.table_name.strip():
+        raise HTTPException(status_code=400, detail="direction=backward 時 table_name 不可為空")
+    try:
+        return analyze_service.flow_chain(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"關係鏈組裝失敗：{exc}")
 
 
 @app.post("/refresh_sql", response_model=RefreshSqlResponse)

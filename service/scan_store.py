@@ -56,7 +56,20 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 屬性，瀏覽器端長度上限）兩個欄位。先前這兩者完全沒有擷取，導致「必填/長度限制
 # 明明存在於 markup，卻只實作在前端、後端 CheckXxxData() 看不到」的規則會被誤判
 # 成「沒有這條規則」。故遞增版本號使舊快取失效。
-_CACHE_VERSION = 10
+# v11：ASPXParser._extract_ui_fields 的獨立控制項（不在 GridView/DataGrid 內，
+# 例如頁面上單獨一個按鈕）entry 新增 events 欄位（複製自 control.events，如
+# {"OnClick": "btnDelete_Click"}）。先前只有 Grid 容器層級事件（OnRowCommand 等）
+# 有寫進 ui_fields，獨立控制項的事件完全沒有，導致「按下這個按鈕會呼叫哪個方法」
+# 這種畫面動作到後端方法的對應，對獨立按鈕完全找不到。故遞增版本號使舊快取失效。
+# v12：ProjectScanner._find_class_and_method 修正一個長期存在的錯誤歸屬 bug——
+# 舊邏輯「遇到第一個起始行號 <= 呼叫行號的方法就回傳」，由於 cls.methods 依宣告
+# 順序排列，類別中最早宣告的方法（WebForms 常見的 Page_Load）幾乎必然滿足這個
+# 條件，導致同一支程式裡「所有」SP／資料表呼叫，不論實際寫在哪個方法裡，全部被
+# 誤判成 Page_Load 呼叫的。修正為「取起始行號 <= 呼叫行號中最大者」（該行之前最後
+# 宣告的方法），使 sp_relations／table_relations 的 method_name 欄位變得可信。
+# 此為既有欄位「內容」的修正（不是新增欄位），但影響既有 method_name 的實際值，
+# 故仍遞增版本號使舊快取失效，讓使用者重新掃描後拿到正確歸屬。
+_CACHE_VERSION = 12
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

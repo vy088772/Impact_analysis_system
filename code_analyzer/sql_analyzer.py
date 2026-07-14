@@ -985,6 +985,23 @@ def estimate_complexity_from_definition(definition: str) -> str:
     return analyzer._estimate_complexity(info)
 
 
+def extract_tables_from_definition(definition: str) -> Set[str]:
+    """依 SP/View/UDF 的完整定義文字提取引用資料表，純字串分析，不需要資料庫連線。
+
+    給「已有 definition 文字、但沒有走 quick_analyze_sp() 即時查詢」的路徑使用
+    （例如 service/sp_fetcher.py 從本機 SQL 快取讀出的 definition，先前這個欄位
+    在快取路徑一直是空清單——estimate_complexity_from_definition() 內部其實已經
+    算出 referenced_tables，只是沒有另外回傳，這裡把它獨立成一個公開函式）。
+    做法與 estimate_complexity_from_definition() 相同：用 object.__new__ 建立
+    不觸發 __init__（不需要 DB 連線設定）的空殼實例呼叫純字串方法
+    _quick_extract_tables。
+    """
+    if not definition:
+        return set()
+    analyzer = object.__new__(SQLAnalyzer)
+    return analyzer._quick_extract_tables(definition)
+
+
 # ============================================
 # 測試與使用範例
 # ============================================

@@ -671,18 +671,39 @@ class ProjectScanner:
         file_path: str, 
         line_number: int
     ) -> Tuple[str, str]:
-        """找出特定行號所屬的類別和方法"""
+        """找出特定行號所屬的類別和方法。
+
+        修正（重要）：先前的邏輯是「遇到第一個 method.location.line_number <=
+        line_number 的方法就直接回傳」——由於 cls.methods 是依宣告順序排列，
+        類別裡宣告在最前面的方法（例如 WebForms code-behind 常見的
+        `Page_Load`）幾乎必然滿足「起始行 <= 任何後面呼叫的行號」，導致同一支
+        程式裡「所有」SP/資料表呼叫，不論實際寫在哪個方法裡，全部被誤判成
+        `Page_Load` 呼叫的（除非 Page_Load 本身就在該行號之後才宣告）。這個
+        bug 影響全域：sp_relations／table_relations 的 method_name 欄位長期
+        不可信，只是先前的功能大多只用到「檔案層級」的 SP/表清單（不在乎是
+        哪個方法呼叫的），沒有明顯暴露出來；直到需要「方法層級」精準歸屬的
+        新功能（flow_chain_builder.py 的正向鏈）才實際觸發並被發現。
+
+        修正做法：在同一個類別的所有方法裡，找出「起始行號 <= line_number
+        且起始行號最大」的那一個（也就是「這行之前，最後宣告的方法」），而不
+        是第一個符合條件就回傳——沒有方法結束行號可用時，這是判斷「這行屬於
+        哪個方法」最合理的近似值。
+        """
         # 從已解析的結果中查找
         for result in self.scan_result.csharp_results:
             if result.file_path == file_path:
                 for cls in result.classes:
-                    # 找出包含該行號的方法
+                    best_method = None
+                    best_line = -1
                     for method in cls.methods:
                         if method.location and method.location.line_number <= line_number:
-                            # 簡單判斷：如果方法在該行之前，可能是該方法
-                            return cls.name, method.name
-                    
-                    # 如果沒找到方法，至少返回類別
+                            if method.location.line_number > best_line:
+                                best_line = method.location.line_number
+                                best_method = method
+                    if best_method:
+                        return cls.name, best_method.name
+
+                    # 沒有任何方法起始行號在該行之前，至少返回類別
                     return cls.name, "unknown"
         
         return "unknown", "unknown"

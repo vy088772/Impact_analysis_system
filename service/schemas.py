@@ -159,3 +159,42 @@ class RefreshSqlResponse(BaseModel):
     views: int = 0
     functions: int = 0
     tables: int = 0
+
+
+class FlowChainRequest(BaseModel):
+    """POST /flow_chain 請求：組出「關係鏈」候選清單（純靜態組裝，無 AI 判斷）。
+
+    direction="forward"：從 anchor_method（program_name 內某個方法，通常是
+    UI 事件處理常式）出發，走呼叫鏈到 SP、再到 SP 內部巢狀呼叫的其他 SP、
+    最後彙整各層引用的資料表（含 FK 連動表）。program_name/anchor_method 必填。
+
+    direction="backward"：從 table_name（可選 column_name，僅文字比對，非
+    結構化保證）出發，反查引用該表的 SP、呼叫這些 SP（或直接用 SQL 存取此表）
+    的 C# 方法、以及觸發該方法的 UI 控制項事件。table_name 必填，program_name/
+    anchor_method 會被忽略。
+
+    cache_only=True（預設）時，若該系統尚未 clone/分析過就直接跳過（與
+    FindBySPRequest/FindByTableRequest 同樣的理由：這支端點也可能被逐系統
+    嘗試呼叫），不觸發 Azure clone。
+    """
+    source: AzureSource = Field(default_factory=AzureSource)
+    direction: str = "forward"                # "forward" | "backward"
+    program_name: str = ""                    # forward 用：要分析的程式名
+    anchor_method: str = ""                   # forward 用：錨點方法名稱
+    table_name: str = ""                      # backward 用：資料表名稱
+    column_name: str = ""                     # backward 用：欄位名稱（選填，近似文字比對）
+    database: str = ""                        # 資料庫簡稱／快取鍵（通常是 spec-rag 的 system_id）
+    db_server: str = ""                       # 資料庫主機位址（與 db_name 需同時提供）
+    db_name: str = ""                         # 實際資料庫名稱
+    max_sp_depth: int = 2                     # forward 用：SP 巢狀展開層數上限
+    fk_depth: int = 1                         # forward 用：FK 連動追蹤層數
+    cache_only: bool = True                   # True → 系統未 clone/分析過就跳過，不觸發 clone
+    refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再組鏈
+
+
+class FlowChainResponse(BaseModel):
+    direction: str = ""
+    forward_chain: Union[Dict, None] = None   # direction=forward 時的結果（None 代表找不到錨點方法）
+    backward_chains: List[Dict] = Field(default_factory=list)  # direction=backward 時的候選清單
+    skipped: bool = False                     # True：該系統尚未 clone/分析過，本次未組鏈
+    source_root: str = ""

@@ -390,6 +390,15 @@ class ASPXParser:
             if data_field:
                 entry['data_field'] = data_field
 
+            # 控制項自身的事件處理對應（例如 Button 的 OnClick="btnDelete_Click"）。
+            # 先前只有 GridView/DataGrid 容器層級的事件（OnRowCommand 等）會被寫進
+            # ui_fields（見上方 group 的 'events'），獨立按鈕（不在 Grid 內）的事件
+            # 完全沒有被複製進來——導致「這個按鈕按下去會呼叫哪個方法」這種「畫面
+            # 動作 → 後端方法」的錨點對應，對獨立按鈕完全找不到。control.events 在
+            # 解析階段就已經有了（見 _parse_attributes），這裡只是把它也複製進 entry。
+            if control.events:
+                entry['events'] = dict(control.events)
+
             # HyperLink 等導覽控制項：額外擷取 NavigateUrl 指向的目標頁面（如
             # string.Format("../ship/PUR_IVPntMan.aspx?IVNO={0}", ...) → PUR_IVPntMan.aspx），
             # 讓「點這個連結會到哪個頁面」這類問題也能直接引用。
