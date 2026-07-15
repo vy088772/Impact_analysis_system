@@ -37,6 +37,11 @@ def _from_cache(sp_names: List[str], database_alias: Optional[str], max_def_char
         return [], sp_names
 
     lookup = {_normalize(p["name"]): p for p in cached.get("procedures", [])}
+    # 原生依賴關係（sys.sql_expression_dependencies，由 refresh_sql_cli 一次落地，
+    # 見 sql_analyzer.get_all_dependencies）已經跟 procedures/views/functions/tables
+    # 存在同一份快取裡——這裡直接查表即可，不需要再對 definition 文字跑一次 regex
+    # （regex 只在快取本身沒有這支 SP 的原生依賴紀錄時，才當 fallback 用）。
+    deps_lookup = {_normalize(k): v for k, v in (cached.get("dependencies", {}) or {}).items()}
 
     found: List[dict] = []
     missing: List[str] = []
@@ -46,14 +51,23 @@ def _from_cache(sp_names: List[str], database_alias: Optional[str], max_def_char
             missing.append(raw)
             continue
         definition = p.get("definition", "") or ""
+        dep_entry = deps_lookup.get(_normalize(raw))
+        if dep_entry is not None:
+            # 原生依賴優先：這支 SP 在快取的 dependencies 裡有紀錄（即使 depends_on
+            # 是空清單，也代表原生查詢當初確實有查到這支 SP，只是它沒有引用其他物件）
+            tables = sorted(dep_entry.get("depends_on", []))
+            dependency_source = "native"
+        else:
+            # dependencies 裡沒有這支 SP 的紀錄（例如舊快取版本、或原生查詢當初
+            # 就查不到），才 fallback 回 regex 對 definition 文字分析
+            tables = sorted(extract_tables_from_definition(definition)) if definition else []
+            dependency_source = "regex"
         found.append({
             "name": raw,
             "exists": bool(definition),
             "parameters": p.get("parameters", []),
-            # 引用資料表：純字串靜態分析（見 extract_tables_from_definition），
-            # 不需要即時連線，可直接對快取的 definition 文字計算，故不再留空
-            # （先前這裡一直是 []，是已知待補的技術債）。
-            "tables": sorted(extract_tables_from_definition(definition)) if definition else [],
+            "tables": tables,
+            "dependency_source": dependency_source,
             # 複雜度：純字串靜態分析（見 estimate_complexity_from_definition），
             # 不需要即時連線，可直接對快取的 definition 文字計算，故不再留空。
             "complexity": estimate_complexity_from_definition(definition) if definition else "",
@@ -112,6 +126,7 @@ def _from_live_query(
                 "exists": True,
                 "parameters": list(info.parameters),
                 "tables": list(info.referenced_tables),
+                "dependency_source": getattr(info, "dependency_source", "regex"),
                 "complexity": info.estimated_complexity,
                 "definition": definition[:max_def_chars],
                 "truncated": truncated,

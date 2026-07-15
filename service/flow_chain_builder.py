@@ -11,7 +11,10 @@
   - forward（build_forward_chain）：從指定的錨點方法（通常是 spec-rag 端依
     UI 動作用語意檢索，從 ui_fields 的 events 挑出的候選 handler 方法名稱）出發，
     走方法呼叫鏈，再到直接呼叫的 SP，再遞迴展開 SP 內部呼叫的其他 SP，最後彙整
-    各層 SP 引用的資料表（含 FK 連動表）。
+    各層 SP 引用的資料表（含 FK 連動表）；同時也會補上可達方法「自己方法體內裸
+    SQL 字串」引用的資料表（`inline_sql_tables`，見 _inline_sql_tables），涵蓋
+    完全沒呼叫 SP、只靠內嵌 SQL 查表的方法（例如只是組 DropDownList 選項的
+    BindXxx 方法）。
   - backward（build_backward_chains）：從指定的資料表（可選：欄位名稱）出發，
     反查哪些 SP 引用了這張表，再反查哪些 C# 方法呼叫了這些 SP（或直接用 SQL
     存取這張表），最後反查哪個 UI 控制項事件會觸發這個方法。
@@ -82,6 +85,29 @@ def _method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List[str]]:
                     if call in names and call != m.name and call not in targets:
                         targets.append(call)
     return adj
+
+
+def _inline_sql_tables(matched_files: List[FileAnalysisResult], reachable_methods: Set[str]) -> Set[str]:
+    """從可達方法「自己方法體內的裸 SQL 字串」提取資料表，補足 SP 鏈以外的來源。
+
+    有些方法（例如只組 DropDownList 選項的 BindXxx）直接用
+    `obj.CreateReader("select ... from Table")` 這種內嵌 SQL 字串查資料，完全
+    沒有呼叫 SP，這種情況下單看 stored_procedures/sp_relations 永遠是空的。
+    csharp_parser 其實已經把每個方法體內解析到的裸 SQL 文字存進
+    `MethodInfo.sql_queries`（純字串清單，見 csharp_parser._extract_sql_in_text），
+    這裡只是把「屬於可達方法範圍內」的那些字串挑出來，重用既有的
+    `extract_tables_from_definition`（純字串分析，同一套規則）解析出表名，
+    不需要新增任何解析規則。
+    """
+    tables: Set[str] = set()
+    for fr in matched_files:
+        for cls in fr.classes:
+            for m in cls.methods:
+                if m.name not in reachable_methods or not m.sql_queries:
+                    continue
+                for sql_text in m.sql_queries:
+                    tables.update(extract_tables_from_definition(sql_text))
+    return tables
 
 
 def _reachable_from(start: str, adj: Dict[str, List[str]], max_depth: int = 8) -> Tuple[List[str], Set[str]]:
@@ -247,6 +273,13 @@ def build_forward_chain(
     for entry in sp_chain:
         all_tables.update(entry.get("tables", []))
 
+    # 補上「可達方法自己方法體內裸 SQL」引用的資料表（見 _inline_sql_tables 說明）——
+    # 有些方法完全沒呼叫 SP，只靠內嵌 SQL 字串查表，單看 sp_chain 會漏掉這些表。
+    # 獨立回傳一份（inline_sql_tables）方便呼叫端知道「這些表不是從哪支 SP 來的」，
+    # 同時也併入 all_tables，讓 tables/FK 展開跟 SP 來源的表一視同仁。
+    inline_tables = _inline_sql_tables(matched_files, reachable_methods)
+    all_tables.update(inline_tables)
+
     related_tables: List[str] = []
     if fk_depth > 0 and all_tables:
         related_tables = resolve_fk_related(
@@ -263,6 +296,7 @@ def build_forward_chain(
         "reachable_methods": sorted(reachable_methods),
         "stored_procedures": sp_chain,
         "tables": sorted(all_tables),
+        "inline_sql_tables": sorted(inline_tables),
         "related_tables_fk": related_tables,
     }
 
@@ -292,17 +326,45 @@ def _column_referenced(definition: str, column_name: str) -> bool:
     return bool(pattern.search(definition))
 
 
-def _find_ui_anchors_for_method(aspx_files: List[FileAnalysisResult], method_names: Set[str]) -> List[dict]:
+def _paired_view_file_names(csharp_file: str) -> Set[str]:
+    """WebForms 命名慣例：`Foo.aspx.cs`/`Foo.ascx.cs` 的畫面檔案是同目錄的
+    `Foo.aspx`/`Foo.ascx`。回傳期望的畫面檔名（不含目錄，小寫），非
+    `.aspx.cs`/`.ascx.cs` 命名（例如共用的 helper 類別、Web API controller）則
+    回傳空集合——呼叫端遇到空集合應視為「這個方法本身沒有對應畫面」，而不是
+    退回去比對整個 repo（那正是這裡要修的過度比對問題）。
+    """
+    name = Path(csharp_file).name.lower()
+    for suffix in (".aspx.cs", ".ascx.cs"):
+        if name.endswith(suffix):
+            return {name[: -len(".cs")]}
+    return set()
+
+
+def _find_ui_anchors_for_method(
+    aspx_files: List[FileAnalysisResult],
+    method_names: Set[str],
+    csharp_file: str,
+) -> List[dict]:
     """在 aspx 解析結果的 ui_fields 裡，找出哪個控制項的 events 對應到這批方法名稱
     的任何一個（method_names 通常是「目標方法本身」加上「所有會（直接或間接）
     呼叫到它的方法」，見 _ancestors_of()——因為觸發 UI 事件的方法，往往不是真正
     存取資料表/呼叫 SP 的那個方法本身，而是它的上層呼叫者，例如
     btnDelete_Click（事件處理常式）呼叫 DeleteData（真正動資料庫的方法））。
 
+    只在「這個方法所屬的 csharp_file 依 WebForms 命名慣例對應到的那個畫面檔案」
+    裡找，不會掃整個 repo 的 aspx_results——ASP.NET WebForms 專案裡
+    `btnQry_Click`/`btnSend_Click`/`gvData_PageIndexChanging` 這類事件處理常式
+    名稱是極常見的樣板命名，幾十個完全無關的畫面都可能剛好用同一個 handler
+    名稱；先前沒有這層限制時，比對會把這些完全無關頁面的按鈕全部誤判成這個
+    方法的觸發來源，讓 ui_anchors 塞滿看起來毫無關聯的項目。
+
     ui_fields 條目可能是巢狀結構（grid 的 fields、form_group 的 items 各自再有
     fields），需要遞迴走訪；grid 容器本身與獨立控制項都可能帶 events。
     """
     anchors: List[dict] = []
+    paired_names = _paired_view_file_names(csharp_file)
+    if not paired_names:
+        return anchors
 
     def walk(entry: dict, file_path: str) -> None:
         events = entry.get("events") or {}
@@ -321,6 +383,8 @@ def _find_ui_anchors_for_method(aspx_files: List[FileAnalysisResult], method_nam
             walk(it, file_path)
 
     for fr in aspx_files:
+        if Path(fr.file_path).name.lower() not in paired_names:
+            continue
         for entry in fr.ui_fields or []:
             walk(entry, fr.file_path)
 
@@ -378,21 +442,40 @@ def build_backward_chains(
 
     ui_anchors 的反查不是只檢查「這個方法本身有沒有直接綁 UI 事件」——實務上
     真正動資料表的方法（如 DeleteData）常常不是事件處理常式本身，而是被事件
-    處理常式（如 btnDelete_Click）呼叫。這裡用 scan.csharp_results 建一份反向
-    呼叫關係（誰呼叫了誰），把「這個方法自己 + 所有會直接或間接呼叫到它的方法」
-    一起拿去比對 UI 事件，才不會漏掉這種常見的多層呼叫情形。
+    處理常式（如 btnDelete_Click）呼叫。這裡用「這個方法自己所屬的那個檔案」
+    （不是整包 scan.csharp_results！）建一份反向呼叫關係（誰呼叫了誰），把
+    「這個方法自己 + 所有會直接或間接呼叫到它的方法」一起拿去比對 UI 事件，
+    才不會漏掉這種常見的多層呼叫情形。
+
+    刻意把反向呼叫關係限縮在「同一個檔案」內建圖，而不是像早期版本那樣對整包
+    scan.csharp_results 建一份全域反向呼叫圖：_method_adjacency 是純粹「以方法
+    名稱」為 key 建鄰接表，完全沒有 class/檔案範圍限制——ASP.NET WebForms 專案
+    裡 `BindData`/`Page_Load`/`btnSave_Click` 這類方法名稱在幾十個不同頁面裡
+    重複出現是常態，若對整包 repo 建圖，A 頁面的 btnSave_Click 呼叫了它自己的
+    BindData，會跟 B 頁面完全無關的 BindData 合併成同一個圖節點，導致 B 頁面
+    的 ui_anchors 誤把 A 頁面的 btnSave_Click 也列進來（明明兩者的呼叫關係毫無
+    關聯，只是方法名稱剛好相同）。限縮在同一檔案後，仍能正確處理「事件處理常式
+    呼叫同頁面內的其他方法」這個常見情境，但不會再跨無關頁面誤配。
     """
     chains: List[dict] = []
     seen: Set[Tuple[str, str]] = set()
-    rev_adj = _reverse_method_adjacency(scan.csharp_results)
+    rev_adj_cache: Dict[str, Dict[str, List[str]]] = {}
+
+    def _rev_adj_for_file(csharp_file: str) -> Dict[str, List[str]]:
+        if csharp_file not in rev_adj_cache:
+            file_name = Path(csharp_file).name.lower()
+            same_file = [fr for fr in scan.csharp_results if Path(fr.file_path).name.lower() == file_name]
+            rev_adj_cache[csharp_file] = _reverse_method_adjacency(same_file)
+        return rev_adj_cache[csharp_file]
 
     def add_chain(csharp_file: str, class_name: str, method_name: str, via: str, sp_name: str = "") -> None:
         key = (csharp_file, method_name)
         if key in seen:
             return
         seen.add(key)
+        rev_adj = _rev_adj_for_file(csharp_file)
         candidate_methods = {method_name} | _ancestors_of(method_name, rev_adj)
-        ui_anchors = _find_ui_anchors_for_method(scan.aspx_results, candidate_methods)
+        ui_anchors = _find_ui_anchors_for_method(scan.aspx_results, candidate_methods, csharp_file)
         entry = {
             "table": table_name,
             "via": via,
@@ -415,17 +498,28 @@ def build_backward_chains(
             continue
         add_chain(rel.csharp_file, rel.class_name, rel.method_name, via="direct_sql")
 
-    # 2) 透過 SP 引用此表（比對本機 SQL 快取的 SP 定義文字；欄位為近似比對）
+    # 2) 透過 SP 引用此表（優先查快取的原生依賴關係 dependencies，
+    #    見 sql_analyzer.get_all_dependencies；沒有原生紀錄的 SP 才 fallback
+    #    回 regex 對 definition 文字比對。欄位為近似比對，一律用 regex，因為
+    #    原生依賴只到「物件」層級，沒有欄位級資訊）
     cached = load_cached(database_alias) if database_alias else None
     sp_hits: List[str] = []
     if cached:
+        deps_lookup = {_normalize_name(k): v for k, v in (cached.get("dependencies", {}) or {}).items()}
+        table_norm_for_deps = _normalize_name(table_name)
         for proc in cached.get("procedures", []):
+            proc_name = proc.get("name", "")
             definition = proc.get("definition", "") or ""
-            if not definition or not _table_referenced(definition, table_name):
+            dep_entry = deps_lookup.get(_normalize_name(proc_name))
+            if dep_entry is not None:
+                depends_on_norm = {_normalize_name(t) for t in dep_entry.get("depends_on", [])}
+                if table_norm_for_deps not in depends_on_norm:
+                    continue
+            elif not definition or not _table_referenced(definition, table_name):
                 continue
             if column_name and not _column_referenced(definition, column_name):
                 continue
-            sp_hits.append(proc.get("name", ""))
+            sp_hits.append(proc_name)
 
     if sp_hits:
         sp_hits_norm = {_normalize_name(n) for n in sp_hits}

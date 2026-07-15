@@ -34,8 +34,9 @@ class SimplifiedSPInfo:
     definition: str = ""
     definition_length: int = 0
     
-    # 簡單分析（正規表達式提取）
+    # 簡單分析（原生依賴查詢優先，regex 為 fallback，見 quick_analyze_sp）
     referenced_tables: Set[str] = field(default_factory=set)
+    dependency_source: str = "regex"  # "native"（sys.dm_sql_referenced_entities）或 "regex"（fallback）
     has_dynamic_sql: bool = False
     has_temp_tables: bool = False
     has_cursor: bool = False
@@ -56,6 +57,7 @@ class SimplifiedSPInfo:
             'created_date': self.created_date,
             'modified_date': self.modified_date,
             'tables': list(self.referenced_tables),
+            'dependency_source': self.dependency_source,
             'flags': {
                 'dynamic_sql': self.has_dynamic_sql,
                 'temp_tables': self.has_temp_tables,
@@ -287,6 +289,88 @@ class SQLAnalyzer:
         self.cursor.execute(query, schema)
         return [row.ROUTINE_NAME for row in self.cursor.fetchall()]
 
+    def get_all_dependencies(self, schema: str = 'dbo') -> Dict[str, Dict[str, List[str]]]:
+        """
+        一次查出整個 schema 內所有物件（SP/View/Function）的原生依賴關係
+        （取代 _quick_extract_tables 的 regex 猜測），使用 SQL Server 中繼資料
+        `sys.sql_expression_dependencies`（一次查整個資料庫，效能佳，不需要
+        逐物件呼叫），同時建立正向（depends_on：這個物件依賴誰）與反向
+        （depended_by：誰依賴這個物件）兩種索引，供上下游影響分析使用。
+
+        已知限制（SQL Server 本身的限制，非查詢方式問題）：
+        - 動態 SQL（EXEC(@sql)）組出來的引用一律看不到。
+        - 跨資料庫依賴的 referenced_id 可能是 NULL（無法解析），這裡會被
+          WHERE referenced_id IS NOT NULL 排除，不會出現在結果中。
+
+        回傳: { "usp_SO_Qry": {"depends_on": ["Customers","SOrder",...],
+                               "depended_by": [...]}, ... }
+        （key 為 schema 下該物件自己的名稱，不含 schema 前綴）
+        """
+        query = """
+        SELECT
+            OBJECT_NAME(referencing_id) AS referencing_name,
+            COALESCE(referenced_schema_name, ?) AS referenced_schema,
+            referenced_entity_name
+        FROM sys.sql_expression_dependencies AS d
+        JOIN sys.objects AS o ON d.referencing_id = o.object_id
+        WHERE SCHEMA_NAME(o.schema_id) = ?
+          AND referenced_id IS NOT NULL
+          AND referenced_entity_name IS NOT NULL
+        """
+        self.cursor.execute(query, schema, schema)
+        rows = self.cursor.fetchall()
+
+        dependencies: Dict[str, Dict[str, List[str]]] = {}
+
+        def _ensure(name: str) -> Dict[str, List[str]]:
+            return dependencies.setdefault(name, {"depends_on": [], "depended_by": []})
+
+        for row in rows:
+            referencing_name, referenced_schema, referenced_name = row[0], row[1], row[2]
+            if not referencing_name or not referenced_name:
+                continue
+            src = _ensure(referencing_name)
+            if referenced_name not in src["depends_on"]:
+                src["depends_on"].append(referenced_name)
+            dst = _ensure(referenced_name)
+            if referencing_name not in dst["depended_by"]:
+                dst["depended_by"].append(referencing_name)
+
+        return dependencies
+
+    def _get_native_referenced_tables(self, proc_name: str, schema: str = 'dbo') -> Set[str]:
+        """
+        單一物件的原生依賴查詢（給 quick_analyze_sp 即時分析單一 SP 用），
+        使用 `sys.dm_sql_referenced_entities`（比 sys.sql_expression_dependencies
+        更適合單一物件查詢，且能一併過濾出實際「資料表/View」類型的引用）。
+        查詢失敗（權限不足、物件含無法解析的動態 SQL 導致 TVF 整個丟例外等）
+        一律回傳空集合，由呼叫端 fallback 回 regex 版 _quick_extract_tables。
+        """
+        clean_name = proc_name.replace('[', '').replace(']', '')
+        if '.' in clean_name:
+            full_name = clean_name
+        else:
+            full_name = f"{schema}.{clean_name}"
+
+        query = """
+        SELECT DISTINCT referenced_entity_name
+        FROM sys.dm_sql_referenced_entities(?, 'OBJECT')
+        WHERE referenced_entity_name IS NOT NULL
+          AND referenced_minor_name IS NULL
+        """
+        try:
+            self.cursor.execute(query, full_name)
+            rows = self.cursor.fetchall()
+        except Exception:
+            return set()
+
+        tables: Set[str] = set()
+        for row in rows:
+            name = row[0]
+            if name:
+                tables.add(name)
+        return tables
+
     def get_object_definition(self, name: str, schema: str = 'dbo') -> str:
         """
         取得任意物件（View/Function/Procedure）的完整定義本體（通用版，
@@ -420,6 +504,15 @@ class SQLAnalyzer:
                 "primary_keys": self.get_primary_key_columns(name, schema),
             })
 
+        # 原生依賴關係（sys.sql_expression_dependencies，一次查整個 schema，
+        # 取代逐物件 regex 猜測），失敗（權限不足等）不影響其餘資料的落地，
+        # 直接落成空 dict，消費端各自 fallback 回 regex 版 referenced_tables
+        try:
+            dependencies = self.get_all_dependencies(schema)
+        except Exception as e:
+            print(f"   ⚠️ 原生依賴關係查詢失敗（將僅依賴各 SP 自身的 tables 欄位/regex fallback）: {e}")
+            dependencies = {}
+
         return {
             "database": self.db_config.alias,
             "schema": schema,
@@ -427,6 +520,7 @@ class SQLAnalyzer:
             "views": views,
             "functions": functions,
             "tables": tables,
+            "dependencies": dependencies,
         }
     
     # ========================================
@@ -473,15 +567,23 @@ class SQLAnalyzer:
             info.has_cursor = self._detect_cursor(info.definition)
             info.has_transaction = self._detect_transaction(info.definition)
             
-            # 4. 快速提取資料表
-            info.referenced_tables = self._quick_extract_tables(info.definition)
+            # 4. 提取資料表：原生依賴查詢（sys.dm_sql_referenced_entities）優先，
+            #    查不到（權限不足/動態SQL導致整包查詢失敗/查得到但結果是空集合）
+            #    才 fallback 回 regex 版 _quick_extract_tables
+            native_tables = self._get_native_referenced_tables(proc_name, schema)
+            if native_tables:
+                info.referenced_tables = native_tables
+                info.dependency_source = "native"
+            else:
+                info.referenced_tables = self._quick_extract_tables(info.definition)
+                info.dependency_source = "regex"
             
             # 5. 估算複雜度
             info.estimated_complexity = self._estimate_complexity(info)
             
             print(f"   ✅ 完成 - 複雜度: {info.estimated_complexity}")
             print(f"      參數: {len(info.parameters)}")
-            print(f"      資料表: {len(info.referenced_tables)}")
+            print(f"      資料表: {len(info.referenced_tables)}（來源: {info.dependency_source}）")
         
         return info
     

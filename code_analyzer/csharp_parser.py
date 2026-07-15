@@ -701,6 +701,7 @@ class CSharpParser:
         sql_methods = [
             'CreateReader',
             'CreateDataSet',
+            'CreateTable',
             'Execute',
             'ExecuteReader',
             'ExecuteScalar',

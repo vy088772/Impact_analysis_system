@@ -69,7 +69,7 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 宣告的方法），使 sp_relations／table_relations 的 method_name 欄位變得可信。
 # 此為既有欄位「內容」的修正（不是新增欄位），但影響既有 method_name 的實際值，
 # 故仍遞增版本號使舊快取失效，讓使用者重新掃描後拿到正確歸屬。
-_CACHE_VERSION = 12
+_CACHE_VERSION = 13
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

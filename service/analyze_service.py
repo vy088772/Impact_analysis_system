@@ -40,6 +40,7 @@ from .fk_resolver import resolve_fk_related
 from .sp_fetcher import fetch_sp_definitions
 from .view_fetcher import fetch_view_definitions
 from .udf_fetcher import fetch_udf_definitions
+from .dependency_fetcher import fetch_dependencies
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import get_or_scan, has_cache
@@ -261,6 +262,21 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                     database_alias=req.database or None,
                 )
 
+        # 物件上下游依賴（選用）：原生依賴關係（sys.sql_expression_dependencies，
+        # 由 refresh_sql_cli 一次落地進本機 SQL 快取）中，只挑出這支程式關心的
+        # 物件（sp_names + table_names + 實際比對出的 UDF 名稱）對應的
+        # depends_on/depended_by，讓 AI 看得到「這個 SP/表/View 上游被誰引用、
+        # 下游依賴誰」，不用整個資料庫的依賴圖都塞進單一程式的分析結果。
+        dependencies: Dict[str, Dict] = {}
+        if req.include_sp_defs and (sp_names or table_names):
+            dep_object_names = list(sp_names) + list(table_names) + [
+                u.get("name", "") for u in udf_definitions if u.get("name")
+            ]
+            dependencies = fetch_dependencies(
+                dep_object_names,
+                database_alias=req.database or None,
+            )
+
         # 跨程式呼叫參照展開（類似 Copilot 跟隨參照）：
         # 找出這支程式呼叫了、但定義在「其他檔案」的方法，帶入相關程式碼片段。
         related_programs: List[Dict] = []
@@ -315,6 +331,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 sp_definitions=sp_definitions,
                 view_definitions=view_definitions,
                 udf_definitions=udf_definitions,
+                dependencies=dependencies,
                 related_programs=related_programs,
                 view_layer=view_layer,
             )

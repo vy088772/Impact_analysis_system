@@ -65,6 +65,7 @@ class ProgramAnalysis(BaseModel):
     sp_definitions: List[Dict] = Field(default_factory=list)  # SP 完整定義（include_sp_defs=True 時）
     view_definitions: List[Dict] = Field(default_factory=list)  # SQL View 完整定義（include_sp_defs=True 且表名實際為 View 時）
     udf_definitions: List[Dict] = Field(default_factory=list)  # UDF 完整定義（include_sp_defs=True 且程式 SQL 文字實際呼叫到該 UDF 時）
+    dependencies: Dict[str, Dict] = Field(default_factory=dict)  # 物件上下游依賴（sys.sql_expression_dependencies，僅列出 sp_names/tables 中出現者，include_sp_defs=True 時）
     related_programs: List[Dict] = Field(default_factory=list)  # 跨程式呼叫展開（expand_depth>0 時）
     view_layer: List[Dict] = Field(default_factory=list)  # View 層資訊（include_view_layer=True 時；aspx/razor/vue 摘要）
 

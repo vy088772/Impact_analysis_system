@@ -23,7 +23,10 @@ from config.settings import settings
 
 # 快取格式版本：dump_all_sql_objects() 回傳結構若變動則遞增，讓舊快取自動失效
 # v2：tables[].primary_keys（供 fk_resolver.py 的 PK 命名慣例推論關聯使用）
-_SQL_CACHE_VERSION = 2
+# v3：新增 dependencies 欄位（sys.sql_expression_dependencies 原生依賴關係，
+#     {name: {"depends_on":[...], "depended_by":[...]}}），取代 quick_analyze_sp
+#     內原本純 regex 猜測資料表的做法（原生依賴優先，regex 僅作 fallback）
+_SQL_CACHE_VERSION = 3
 
 # 同 process 內的記憶體快取
 _mem_cache: Dict[str, Dict] = {}
