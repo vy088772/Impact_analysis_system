@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import pickle
+import subprocess
 import time
 from pathlib import Path
 from typing import Dict, Optional
@@ -69,7 +70,18 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 宣告的方法），使 sp_relations／table_relations 的 method_name 欄位變得可信。
 # 此為既有欄位「內容」的修正（不是新增欄位），但影響既有 method_name 的實際值，
 # 故仍遞增版本號使舊快取失效，讓使用者重新掃描後拿到正確歸屬。
-_CACHE_VERSION = 13
+# v14：CSharpParser._find_nearest_variable_assignment 修正一個錯誤排序 bug——
+# 「宣告 → 條件式重新賦值 → 呼叫」這種常見寫法（例如依下拉選單值切換要呼叫的
+# SP：`string sql = "spA"; if (...) { sql = "spB"; } obj.CreateTable(sql, ...);`），
+# 舊邏輯把「只比對宣告」的 matches2 直接接在「宣告+重新賦值都比對得到」的
+# matches1 後面（`matches1 + matches2`），取 `[-1]` 並不是「文字位置最後一筆」，
+# 而是「串接後清單最後一筆」——matches2 只會命中最前面的宣告，串接後反而排在
+# matches1 找到的重新賦值後面，導致誤取到「最前面的宣告」（如 spSelMasterQryV2）
+# 而非「最接近呼叫點的重新賦值」（如 spSelMasterQryV3），使條件分支實際呼叫的 SP
+# 完全消失在 sp_relations 裡。修正為依 match.start() 排序後再取最後一筆。此為既有
+# 欄位「內容」的修正，影響任何「同一變數先宣告、後續依條件重新賦值再呼叫」寫法
+# 的程式所抓到的 SP 名稱，故遞增版本號使舊快取失效。
+_CACHE_VERSION = 14
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
@@ -93,6 +105,55 @@ def _paths(root: Path) -> tuple[Path, Path]:
 def has_cache(root: Path) -> bool:
     pkl, _ = _paths(root)
     return pkl.exists()
+
+
+def _git_head_commit(path: Path) -> Optional[str]:
+    """從 path 往上尋找 .git 目錄，讀取目前 HEAD 的 commit hash。
+
+    只讀取本機已 clone 的 repo 現況（`git rev-parse HEAD`），不連網路、不觸發
+    任何 fetch/pull。找不到 .git（例如尚未 clone）或指令失敗時回傳 None。
+    """
+    cur = path.resolve()
+    for _ in range(6):  # 最多往上找 6 層，避免子路徑巢狀過深時無止盡往上尋找
+        if (cur / ".git").exists():
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=str(cur),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except Exception:
+                pass
+            return None
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return None
+
+
+def cached_commit(root: Path) -> Optional[str]:
+    """讀取快取寫入當下記錄的原始碼 commit hash（僅供狀態檢查用途，不驗證
+    cache_version，純粹反映『上次掃描時 repo 是哪個 commit』）。
+    """
+    _, meta = _paths(root)
+    if not meta.exists():
+        return None
+    try:
+        info = json.loads(meta.read_text(encoding="utf-8"))
+        return info.get("source_commit")
+    except Exception:
+        return None
+
+
+def current_commit(root: Path) -> Optional[str]:
+    """讀取 root 所屬 git repo『目前』本機的 HEAD commit hash（不連網路、不觸發
+    pull），用於跟 cached_commit() 比對是否有新 commit 尚未重新掃描。
+    """
+    return _git_head_commit(root)
 
 
 def _load(root: Path) -> Optional[ProjectScanResult]:
@@ -122,6 +183,7 @@ def _save(root: Path, result: ProjectScanResult) -> None:
                     "cache_version": _CACHE_VERSION,
                     "root": str(root.resolve()),
                     "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "source_commit": _git_head_commit(root),
                 },
                 ensure_ascii=False,
                 indent=2,

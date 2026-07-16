@@ -80,7 +80,20 @@ def _code_status(azure: dict) -> tuple[str, str]:
     # 全部都要有掃描快取才算「已掃描」。
     scan_roots = repo_manager.peek_scan_roots(azure or {})
     has_cache = bool(scan_roots) and all(scan_store.has_cache(r) for r in scan_roots)
-    scan_str = f"{OK} 已掃描" if has_cache else f"{NO} 未掃描"
+    if not has_cache:
+        return clone_str, f"{NO} 未掃描"
+
+    # 已有快取 → 再比對「掃描當下記錄的 commit」與「repo 目前本機 HEAD」是否一致，
+    # 偵測 repo 已 git pull 到新版、但掃描快取還是舊版程式碼結果的情況。快取本身
+    # 是否過期不影響快取是否可用（get_or_scan 仍會沿用），這裡只是額外提醒。
+    stale = False
+    for r in scan_roots:
+        cached = scan_store.cached_commit(r)
+        current = scan_store.current_commit(r)
+        if cached is not None and current is not None and cached != current:
+            stale = True
+            break
+    scan_str = f"⚠️ 已掃描(有新版未同步)" if stale else f"{OK} 已掃描"
     return clone_str, scan_str
 
 
@@ -123,7 +136,7 @@ def main() -> None:
         rows.append((system_id, raw, vec, code, scan, sql))
 
         has_repo = bool((azure or {}).get("repo"))
-        if has_repo and (NO in code or NO in scan):
+        if has_repo and (NO in code or NO in scan or "⚠️" in scan):
             need_code_refresh.append(system_id)
 
         has_db = bool((database or {}).get("server")) and bool((database or {}).get("name"))

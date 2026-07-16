@@ -1081,11 +1081,20 @@ class CSharpParser:
                 db_var = match.group(1)  # 例如: _TOPCSCY_db
                 param_var = match.group(2)  # 例如: _spName
                 
-                # 找出這個呼叫之前最近的變數賦值
+                # 找出這個呼叫之前「所有」對該變數的賦值，而不是只找最近一次。
+                # 常見寫法是「宣告預設值 → 依條件（下拉選單/參數）重新賦值 → 呼叫」
+                # （例如 `string sql = "spA"; if (cond) { sql = "spB"; }
+                # obj.CreateTable(sql, ...);`）——這種呼叫點實際上依執行期分支可能
+                # 呼叫到 spA 或 spB 兩者之一，只回傳「最接近呼叫點的那次賦值」會讓
+                # 條件不成立時實際會呼叫到的那個 SP（例如 spA／預設值）完全從分析
+                # 結果中消失，使用者問「這個條件為真/為假分別會查到什麼」時就只看
+                # 得到其中一個分支的定義。故改為對同一呼叫點的每個候選 SP 名稱各自
+                # 建立一筆 StoredProcedureCall（同一行號），讓下游（Impact /analyze
+                # 的 SP 定義擷取）能把兩個分支的完整 SQL 定義都撈出來。
                 call_position = match.start()
-                proc_name = self._find_nearest_variable_assignment(content, param_var, call_position)
+                proc_names = self._find_all_variable_assignments(content, param_var, call_position)
                 
-                if proc_name:
+                if proc_names:
                     line_num = content[:match.start()].count('\n') + 1
                     
                     # 追蹤資料庫來源
@@ -1095,14 +1104,60 @@ class CSharpParser:
                         db_var
                     )
                     
-                    calls.append(StoredProcedureCall(
-                        procedure_name=proc_name,
-                        location=CodeLocation(self.current_file, line_num),
-                        database_source=db_source,
-                        connection_variable=db_var
-                    ))
+                    for proc_name in proc_names:
+                        calls.append(StoredProcedureCall(
+                            procedure_name=proc_name,
+                            location=CodeLocation(self.current_file, line_num),
+                            database_source=db_source,
+                            connection_variable=db_var
+                        ))
         
         return calls
+    
+    def _find_all_variable_assignments(self, content: str, var_name: str, position: int) -> List[str]:
+        """
+        找出「呼叫位置之前」對該變數的所有候選賦值（依原始碼位置排序、去重），
+        而不是只取最接近呼叫點的一筆——同一變數若因條件分支（例如依下拉選單值）
+        在呼叫前被重新賦值成不同 SP 名稱，這裡會把每個實際出現過的候選值都列出
+        （呼叫端 `_extract_variable_sp_calls` 會為每個候選值各自建立一筆呼叫紀錄），
+        讓下游可以同時取得所有分支各自實際呼叫的 SP 完整定義，而不是只看到其中一個
+        分支、遺漏「條件不成立時預設會呼叫哪個 SP」。
+
+        Args:
+            content: 檔案內容
+            var_name: 變數名稱
+            position: 呼叫位置
+
+        Returns:
+            候選 SP 名稱清單（依出現順序去重；找不到任何賦值則回傳空清單）
+        """
+        content_before = content[:position]
+
+        # 模式 1: varName = "usp_xxx"（含宣告時的初始賦值與後續條件式重新賦值）
+        pattern1 = rf'{var_name}\s*=\s*"((?:sp|usp|proc)[\w_]+)"'
+        matches1 = list(re.finditer(pattern1, content_before, re.IGNORECASE))
+
+        # 模式 2: string/var varName = "usp_xxx"（僅宣告，理論上是 matches1 的子集，
+        # 保留是為了與既有 _find_nearest_variable_assignment 行為一致、避免遺漏
+        # 極少數 matches1 pattern 沒吃到但 matches2 吃到的邊界情況）
+        pattern2 = rf'(?:string|var)\s+{var_name}\s*=\s*"((?:sp|usp|proc)[\w_]+)"'
+        matches2 = list(re.finditer(pattern2, content_before, re.IGNORECASE))
+
+        # 依實際在原始碼中的位置排序，確保「依出現順序去重」是可信的
+        all_matches = sorted(matches1 + matches2, key=lambda m: m.start())
+
+        seen: set = set()
+        result: List[str] = []
+        for m in all_matches:
+            sp_name = m.group(1)
+            if sp_name in seen:
+                continue
+            if not self.sp_config.is_valid_sp_name(sp_name):
+                continue
+            seen.add(sp_name)
+            result.append(sp_name)
+
+        return result
     
     def _find_nearest_variable_assignment(self, content: str, var_name: str, position: int) -> Optional[str]:
         """
@@ -1128,8 +1183,19 @@ class CSharpParser:
         pattern2 = rf'(?:string|var)\s+{var_name}\s*=\s*"((?:sp|usp|proc)[\w_]+)"'
         matches2 = list(re.finditer(pattern2, content_before, re.IGNORECASE))
         
-        # 合併所有匹配
-        all_matches = matches1 + matches2
+        # 合併所有匹配。matches1（不要求 string/var 關鍵字，可比對到後續重新賦值，
+        # 例如 if 分支內的 `sql = "spSelMasterQryV3";`）與 matches2（僅比對到宣告，
+        # 例如 `string sql = "spSelMasterQryV2";`）在文字位置上可能重疊——matches2
+        # 命中的宣告，matches1 一定也會命中（同一段文字同時符合兩個 pattern）。
+        # 直接 `matches1 + matches2` 串接後取 `[-1]`，並不代表「文字位置最後一筆」，
+        # 而是「串接後清單的最後一筆」：一旦程式碼有「宣告 → 條件式重新賦值 → 呼叫」
+        # 這種常見寫法（例如依下拉選單值切換要呼叫的 SP），matches2 恰好只會命中
+        # 最前面的宣告，串接後反而排在 matches1 找到的重新賦值後面，`[-1]` 就會誤取
+        # 到「最前面的宣告」而非「最接近呼叫點的重新賦值」，導致條件分支實際呼叫的
+        # SP（例如 spSelMasterQryV3）被忽略、只抓到 if 判斷之前的預設值
+        # （spSelMasterQryV2）。修正：依實際在原始碼中的位置（match.start()）排序後
+        # 再取最後一筆，才是真正「最接近呼叫位置」的那次賦值。
+        all_matches = sorted(matches1 + matches2, key=lambda m: m.start())
         
         if all_matches:
             # 取最後一個（最接近呼叫位置的）
