@@ -371,6 +371,69 @@ class SQLAnalyzer:
                 tables.add(name)
         return tables
 
+    def get_sp_write_info(self, proc_name: str, schema: str = 'dbo') -> Dict:
+        """
+        單一 SP 的讀寫資訊查詢（給 dump_all_sql_objects 落地快取用），沿用
+        `_get_native_referenced_tables()` 同一套 `sys.dm_sql_referenced_entities`
+        查詢方式，額外多讀 `is_selected`/`is_updated`/`referenced_minor_name`
+        （欄位層級）三個欄位，藉此分辨「這支 SP 到底是讀還是寫這張表」——
+        `_get_native_referenced_tables()` 本身不分讀寫，只回傳「有引用到」。
+
+        回傳：{"writes_tables": [...], "reads_tables": [...],
+               "writes_columns": {table_name: [col, ...]}}
+        - 物件層級列（referenced_minor_name IS NULL）：is_updated=1 → writes_tables；
+          is_selected=1 → reads_tables（兩者不互斥，同一張表可能同時被 SELECT 又
+          被 UPDATE，因此可能同時出現在兩個清單，不能互斥判斷）。
+        - 欄位層級列（referenced_minor_name IS NOT NULL）且 is_updated=1 → 累加進
+          writes_columns[table_name]（如 SOrder.CancelBy/CancelTime，對「復原刪除」
+          類問題有幫助）。
+        - 查詢失敗（權限不足、動態 SQL 導致例外等）一律回傳空 dict，不中斷整包
+          dump_all_sql_objects()（呼叫端會把這支 SP 視為「無寫入資訊記錄」，
+          find_by_table 端 fallback 回 regex 文字比對）。
+        """
+        clean_name = proc_name.replace('[', '').replace(']', '')
+        if '.' in clean_name:
+            full_name = clean_name
+        else:
+            full_name = f"{schema}.{clean_name}"
+
+        query = """
+        SELECT referenced_entity_name, referenced_minor_name, is_selected, is_updated
+        FROM sys.dm_sql_referenced_entities(?, 'OBJECT')
+        WHERE referenced_entity_name IS NOT NULL
+        """
+        try:
+            self.cursor.execute(query, full_name)
+            rows = self.cursor.fetchall()
+        except Exception:
+            return {}
+
+        writes_tables: Set[str] = set()
+        reads_tables: Set[str] = set()
+        writes_columns: Dict[str, List[str]] = {}
+        for row in rows:
+            table_name, minor_name, is_selected, is_updated = row[0], row[1], row[2], row[3]
+            if not table_name:
+                continue
+            if minor_name is None:
+                if is_updated:
+                    writes_tables.add(table_name)
+                if is_selected:
+                    reads_tables.add(table_name)
+            elif is_updated:
+                writes_columns.setdefault(table_name, [])
+                if minor_name not in writes_columns[table_name]:
+                    writes_columns[table_name].append(minor_name)
+
+        if not writes_tables and not reads_tables and not writes_columns:
+            return {}
+
+        return {
+            "writes_tables": sorted(writes_tables),
+            "reads_tables": sorted(reads_tables),
+            "writes_columns": writes_columns,
+        }
+
     def get_object_definition(self, name: str, schema: str = 'dbo') -> str:
         """
         取得任意物件（View/Function/Procedure）的完整定義本體（通用版，
@@ -467,6 +530,7 @@ class SQLAnalyzer:
         from tqdm import tqdm
 
         procedures: List[Dict] = []
+        write_dependencies: Dict[str, Dict] = {}
         proc_names = self.get_all_procedures(schema)
         for name in tqdm(proc_names, desc="   SP 定義", unit="個"):
             info = self._get_sp_basic_info(name, schema) or {}
@@ -475,6 +539,15 @@ class SQLAnalyzer:
                 "definition": info.get("definition", ""),
                 "parameters": info.get("parameters", []),
             })
+            # SP 讀寫資訊（sys.dm_sql_referenced_entities，見 get_sp_write_info），
+            # 失敗（權限不足、動態 SQL 等）不影響這支 SP 本身定義的落地，只是
+            # 沒有寫入資訊記錄，find_by_table 端會 fallback 回 regex 文字比對
+            try:
+                write_info = self.get_sp_write_info(name, schema)
+            except Exception:
+                write_info = {}
+            if write_info:
+                write_dependencies[name] = write_info
 
         views: List[Dict] = []
         view_names = self.get_all_views(schema)
@@ -521,6 +594,7 @@ class SQLAnalyzer:
             "functions": functions,
             "tables": tables,
             "dependencies": dependencies,
+            "write_dependencies": write_dependencies,
         }
     
     # ========================================

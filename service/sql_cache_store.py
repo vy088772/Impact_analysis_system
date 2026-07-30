@@ -26,7 +26,11 @@ from config.settings import settings
 # v3：新增 dependencies 欄位（sys.sql_expression_dependencies 原生依賴關係，
 #     {name: {"depends_on":[...], "depended_by":[...]}}），取代 quick_analyze_sp
 #     內原本純 regex 猜測資料表的做法（原生依賴優先，regex 僅作 fallback）
-_SQL_CACHE_VERSION = 3
+# v4：新增 write_dependencies 欄位（sys.dm_sql_referenced_entities 逐 SP 讀寫資訊，
+#     {sp_name: {"writes_tables":[...], "reads_tables":[...], "writes_columns":{...}}}），
+#     供 find_by_table() 分辨「這支 SP 到底是讀還是寫這張表」（原生依讀寫優先，
+#     regex presence 比對僅作 fallback）
+_SQL_CACHE_VERSION = 4
 
 # 同 process 內的記憶體快取
 _mem_cache: Dict[str, Dict] = {}

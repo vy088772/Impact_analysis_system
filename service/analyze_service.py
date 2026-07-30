@@ -44,6 +44,7 @@ from .dependency_fetcher import fetch_dependencies
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import get_or_scan, has_cache
+from . import sql_cache_store
 from . import flow_chain_builder
 
 # 以「解析後的本機路徑」為鍵，快取掃描結果，避免同一 repo 重複掃描
@@ -474,8 +475,129 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             TableMatchProgram(
                 program=_normalize_program(Path(rel.csharp_file).name),
                 file=_rel(rel.csharp_file, root),
+                # 直接沿用既有 CSharpTableRelation.access_type（READ/INSERT/UPDATE/
+                # DELETE，見 project_scanner.py）——這裡原本從未設定過，若不補上，
+                # write_only=True 篩選會把「C# 直接內嵌 SQL 寫入」的合法命中誤濾掉。
+                access_type=rel.access_type,
             )
         )
+
+    # 補強：table_relations 只收錄「C# 程式碼內嵌 SQL 字串」裡直接出現的表名。
+    # 若這張表只在被呼叫的 SP/View 定義本文內部被引用（C# 端只呼叫 SP 名稱，
+    # 例如 obj.CreateTable("usp_Xxx", par, "SP")，未內嵌任何原始表名字串），
+    # 上面的比對永遠不會命中——額外反查已快取的 SP/View 定義文字，命中的
+    # SP/View 名稱再透過同一次掃描的 sp_relations 找出呼叫端程式（無需連線 DB；
+    # req.database 未提供或無快取則靜默略過，不影響原本的比對）。
+    #
+    # 讀寫判斷優先順序：write_dependencies（sys.dm_sql_referenced_entities 原生
+    # is_selected/is_updated 旗標，見 sql_analyzer.get_sp_write_info）> regex 對
+    # definition 文字做純 presence 比對（沒有原生紀錄時的 fallback，無法分讀寫，
+    # access_type 留空）。
+    if req.database:
+        sql_cache = sql_cache_store.load_cached(req.database, "dbo")
+        if sql_cache:
+            write_deps = sql_cache.get("write_dependencies") or {}
+            table_pattern = re.compile(
+                r"(?<!\w)(?:\[?\w+\]?\.)?\[?" + re.escape(table_norm) + r"\]?(?!\w)",
+                re.IGNORECASE,
+            )
+            # hit_objects：{物件名稱(小寫): access_type}
+            hit_objects: Dict[str, str] = {}
+            for obj in (sql_cache.get("procedures") or []) + (sql_cache.get("views") or []):
+                name = (obj.get("name") or "").strip()
+                if not name:
+                    continue
+                write_info = write_deps.get(name)
+                if write_info is not None:
+                    # 原生讀寫資訊優先：有紀錄就直接判斷 WRITE/READ，不再 fallback
+                    # 回 regex（即使該次沒引用到這張表也是正確結果，不當作命中）。
+                    writes = {_normalize_table(t) for t in write_info.get("writes_tables", [])}
+                    reads = {_normalize_table(t) for t in write_info.get("reads_tables", [])}
+                    if table_norm in writes:
+                        hit_objects[name.lower()] = "WRITE"
+                    elif table_norm in reads:
+                        hit_objects[name.lower()] = "READ"
+                    continue
+                # 沒有原生寫入紀錄（View、或舊版快取沒有 write_dependencies）→
+                # fallback 回 regex 純文字比對，無法分讀寫，access_type 留空。
+                definition = obj.get("definition") or ""
+                if table_pattern.search(definition):
+                    hit_objects[name.lower()] = ""
+
+            if hit_objects:
+                for rel in scan.sp_relations:
+                    sp_key = rel.sp_name.strip().lower()
+                    if sp_key not in hit_objects:
+                        continue
+                    if rel.csharp_file in seen_files:
+                        continue
+                    seen_files.add(rel.csharp_file)
+                    matches.append(
+                        TableMatchProgram(
+                            program=_normalize_program(Path(rel.csharp_file).name),
+                            file=_rel(rel.csharp_file, root),
+                            via_sp=True,
+                            access_type=hit_objects[sp_key],
+                        )
+                    )
+
+            # 巢狀展開：A 呼叫 B、B 才真的寫入這張表時，反查也該把 A 視為「間接
+            # 寫入者」。以上面找到的直接寫入 SP 為起點，沿 dependencies 的
+            # depended_by（誰呼叫了這支 SP，sys.sql_expression_dependencies 原生
+            # 依賴關係，非 scan_store 的 sp_relations）往上找呼叫端，最多展開 3 層
+            # （深度上限先寫死保守值，不開放成 API 參數），用 visited 防循環呼叫
+            # （A→B→A）；候選名稱必須存在於 procedures 名稱集合才繼續往上展開
+            # （型別過濾，depended_by 混雜 SP/View/Function，避免誤把 View 的
+            # 依賴關係當成 SP 呼叫鏈繼續遞迴）。
+            direct_write_sps = {name for name, atype in hit_objects.items() if atype == "WRITE"}
+            if direct_write_sps:
+                dependencies = sql_cache.get("dependencies") or {}
+                deps_lookup = {k.lower(): v for k, v in dependencies.items()}
+                proc_name_set = {
+                    (obj.get("name") or "").strip().lower()
+                    for obj in (sql_cache.get("procedures") or [])
+                }
+
+                indirect_sps: set = set()
+                visited = set(direct_write_sps)
+                frontier = set(direct_write_sps)
+                for _ in range(3):
+                    next_frontier: set = set()
+                    for sp_lower in frontier:
+                        dep_entry = deps_lookup.get(sp_lower)
+                        if not dep_entry:
+                            continue
+                        for caller in dep_entry.get("depended_by", []):
+                            caller_lower = caller.strip().lower()
+                            if caller_lower not in proc_name_set or caller_lower in visited:
+                                continue
+                            visited.add(caller_lower)
+                            indirect_sps.add(caller_lower)
+                            next_frontier.add(caller_lower)
+                    if not next_frontier:
+                        break
+                    frontier = next_frontier
+
+                if indirect_sps:
+                    for rel in scan.sp_relations:
+                        sp_key = rel.sp_name.strip().lower()
+                        if sp_key not in indirect_sps:
+                            continue
+                        if rel.csharp_file in seen_files:
+                            continue
+                        seen_files.add(rel.csharp_file)
+                        matches.append(
+                            TableMatchProgram(
+                                program=_normalize_program(Path(rel.csharp_file).name),
+                                file=_rel(rel.csharp_file, root),
+                                via_sp=True,
+                                access_type="WRITE_INDIRECT",
+                            )
+                        )
+
+    if req.write_only:
+        write_types = {"WRITE", "WRITE_INDIRECT", "INSERT", "UPDATE", "DELETE"}
+        matches = [m for m in matches if m.access_type in write_types]
 
     return FindByTableResponse(table_name=table_name, matches=matches, source_root=str(root))
 

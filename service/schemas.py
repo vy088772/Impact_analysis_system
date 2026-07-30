@@ -126,11 +126,26 @@ class FindByTableRequest(BaseModel):
     table_name: str                           # 要反查的資料表名稱（可含或不含 schema 前綴，不分大小寫比對）
     cache_only: bool = True                   # True → repo 未 clone/分析過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
+    database: str = ""                        # 選填：資料庫快取鍵（通常是 spec-rag 的 system_id）。
+    # 提供時會額外反查該系統已快取的 SP/View 定義本文——table_relations 只收錄
+    # 「C# 程式碼內嵌 SQL 字串」直接出現的表名，若某張表只在被呼叫的 SP/View
+    # 定義內部被引用（C# 端只呼叫 SP 名稱，未內嵌任何原始表名字串），純比對
+    # table_relations 永遠找不到；留空則只做原本的 table_relations 比對。
+    write_only: bool = False                  # True：只回傳「寫入」這張表的命中（access_type
+    # 屬於 WRITE/WRITE_INDIRECT/INSERT/UPDATE/DELETE），濾掉純讀取（READ）與無法判斷（""）
+    # 的命中——用於「打算異動這張表，只想知道誰會寫壞」這種比純反查更聚焦的情境。
 
 
 class TableMatchProgram(BaseModel):
     program: str = ""                         # 程式基底名（不含副檔名）
     file: str = ""                             # 相對 repo 根目錄的檔案路徑
+    via_sp: bool = False                       # True：這筆是透過「呼叫的 SP/View 定義本文有引用該表」間接找到的，
+    # 不是 C# 程式碼裡直接內嵌該表名的原始命中（見 database 欄位說明）
+    access_type: str = ""                     # 存取型態：C# 直接命中沿用 CSharpTableRelation.access_type
+    # 既有的 "READ"/"INSERT"/"UPDATE"/"DELETE"；透過 write_dependencies 反查的 SP 命中為
+    # "WRITE"/"READ"（DMF 只有 is_selected/is_updated 二元旗標，做不到動詞細緻度）；
+    # 透過巢狀呼叫展開找到的間接命中為 "WRITE_INDIRECT"；查無資訊仍為 ""（未知，維持
+    # 現行為，不代表「沒有寫入」）。
 
 
 class FindByTableResponse(BaseModel):
