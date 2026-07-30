@@ -81,7 +81,9 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 完全消失在 sp_relations 裡。修正為依 match.start() 排序後再取最後一筆。此為既有
 # 欄位「內容」的修正，影響任何「同一變數先宣告、後續依條件重新賦值再呼叫」寫法
 # 的程式所抓到的 SP 名稱，故遞增版本號使舊快取失效。
-_CACHE_VERSION = 14
+# v15：ProjectScanResult 新增最新 C# 完整 source snapshot（content hash + 內容），
+# 供後續 Execution Path 依 source span 精確取回原始碼，舊 pickle 沒有這份證據。
+_CACHE_VERSION = 15
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

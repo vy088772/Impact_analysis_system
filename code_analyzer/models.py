@@ -98,6 +98,40 @@ class CodeLocation:
         return hash((self.file_path, self.line_number, self.column_number))
 
 
+@dataclass
+class MethodSourceSpan:
+    """A method identity and its exclusive source offsets within one snapshot."""
+
+    class_name: str
+    method_name: str
+    start_offset: int
+    end_offset: int
+
+
+@dataclass
+class SourceSnapshot:
+    """One complete source file retained for the latest project scan."""
+
+    relative_path: str
+    content_hash: str
+    content: str
+    method_spans: List[MethodSourceSpan] = field(default_factory=list)
+
+    def source_for(self, span: MethodSourceSpan) -> str:
+        """Return the exact source text represented by a verified method span."""
+        return self.content[self._python_offset(span.start_offset):self._python_offset(span.end_offset)]
+
+    def _python_offset(self, utf16_offset: int) -> int:
+        units = 0
+        for index, character in enumerate(self.content):
+            if units >= utf16_offset:
+                return index
+            units += 2 if ord(character) > 0xFFFF else 1
+        if units == utf16_offset:
+            return len(self.content)
+        raise ValueError(f"UTF-16 offset outside source snapshot: {utf16_offset}")
+
+
 # ============================================
 # C# 相關資料結構
 # ============================================

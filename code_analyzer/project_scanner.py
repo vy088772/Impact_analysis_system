@@ -5,6 +5,7 @@
 """
 
 
+import hashlib
 import os
 from pathlib import Path
 from typing import List, Dict, Set, Optional, Tuple
@@ -20,7 +21,8 @@ from .vue_parser import VueParser
 from .project_type_detector import ProjectTypeDetector
 from .sql_analyzer import SQLAnalyzer, SimplifiedSPInfo
 from .db_connection_tracker import DBConnectionTracker
-from .models import FileAnalysisResult, StoredProcedureCall, SQLQuery, FrameworkType
+from .models import FileAnalysisResult, StoredProcedureCall, SQLQuery, FrameworkType, MethodSourceSpan, SourceSnapshot
+from .static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 from .smart_file_finder import SmartFileFinder, FileSearchResult
 from .config_parser import WebConfigParser
 from config.settings import settings, DatabaseConfig
@@ -120,6 +122,7 @@ class ProjectScanResult:
     
     # C# 分析結果
     csharp_results: List[FileAnalysisResult] = field(default_factory=list)
+    source_snapshots: Dict[str, SourceSnapshot] = field(default_factory=dict)
     
     # View 層分析結果（依框架偵測結果選擇性填入；未偵測到對應框架時維持空清單）
     aspx_results: List[FileAnalysisResult] = field(default_factory=list)    # .aspx / .ascx
@@ -144,6 +147,40 @@ class ProjectScanResult:
         self.total_sql_queries = sum(len(r.sql_queries) for r in self.csharp_results)
         self.unique_sps = set(rel.sp_name for rel in self.sp_relations)
         self.unique_tables = set(rel.table_name for rel in self.table_relations)
+
+    def capture_source_snapshot(self, file_path: str, host_result: Dict) -> None:
+        """Store one complete, project-relative C# file snapshot for this scan."""
+        path = Path(file_path)
+        source_bytes = path.read_bytes()
+        content = self._decode_source_bytes(source_bytes)
+        relative_path = str(path.resolve().relative_to(Path(self.project_root).resolve())).replace("\\", "/")
+        content_hash = hashlib.sha256(source_bytes).hexdigest()
+        if host_result.get("source_id") != content_hash:
+            raise StaticAnalyzerHostError(f"StaticAnalyzerHost source hash mismatch: {relative_path}")
+        method_spans = [
+            MethodSourceSpan(
+                class_name=item["class_name"],
+                method_name=item["method_name"],
+                start_offset=item["start_offset"],
+                end_offset=item["end_offset"],
+            )
+            for item in host_result.get("methods", [])
+        ]
+        self.source_snapshots[relative_path] = SourceSnapshot(
+            relative_path=relative_path,
+            content_hash=content_hash,
+            content=content,
+            method_spans=method_spans,
+        )
+
+    @staticmethod
+    def _decode_source_bytes(source_bytes: bytes) -> str:
+        """Match .NET's BOM-aware source decoding for Roslyn span alignment."""
+        if source_bytes.startswith(b"\xff\xfe\x00\x00") or source_bytes.startswith(b"\x00\x00\xfe\xff"):
+            return source_bytes.decode("utf-32")
+        if source_bytes.startswith(b"\xff\xfe") or source_bytes.startswith(b"\xfe\xff"):
+            return source_bytes.decode("utf-16")
+        return source_bytes.decode("utf-8-sig", errors="replace")
     
     def to_dict(self) -> Dict:
         self.calculate_statistics()
@@ -218,6 +255,7 @@ class ProjectScanner:
         
         # 保留向下相容
         self.csharp_parser = self.parsers.get('csharp')
+        self.static_analyzer_host = StaticAnalyzerHost.for_project(Path(__file__).resolve().parent.parent)
         
         # 初始化 SQL 分析器（多資料庫）
         self.sql_analyzers: Dict[str, SQLAnalyzer] = {}
@@ -467,15 +505,19 @@ class ProjectScanner:
         
         # 3. 解析 C# 檔案
         print(f"\n📝 解析 C# 檔案...")
-        
-        for file_path in tqdm(csharp_files, desc="解析進度"):
-            try:
-                result = self.csharp_parser.parse_file(file_path)
-                self.scan_result.csharp_results.append(result)
-                self.scan_result.scanned_files += 1
-            except Exception as e:
-                self.scan_result.failed_files += 1
-                print(f"\n   ⚠️  解析失敗 ({Path(file_path).name}): {e}")
+        if csharp_files:
+            self.static_analyzer_host.ensure_ready()
+            host_results = self.static_analyzer_host.analyze_csharp_files([Path(file_path) for file_path in csharp_files])
+
+            for file_path, host_result in tqdm(zip(csharp_files, host_results), total=len(csharp_files), desc="解析進度"):
+                try:
+                    self.scan_result.capture_source_snapshot(file_path, host_result)
+                    result = self.csharp_parser.parse_file(file_path)
+                    self.scan_result.csharp_results.append(result)
+                    self.scan_result.scanned_files += 1
+                except Exception as e:
+                    self.scan_result.failed_files += 1
+                    print(f"\n   ⚠️  解析失敗 ({Path(file_path).name}): {e}")
         
         print(f"\n   ✅ 完成: {self.scan_result.scanned_files}/{self.scan_result.total_files}")
         

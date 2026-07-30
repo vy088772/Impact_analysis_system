@@ -6,3 +6,5 @@ output/
 __pycache__/
 .vs/
 data/
+tools/StaticAnalyzerHost/bin/
+tools/StaticAnalyzerHost/obj/
