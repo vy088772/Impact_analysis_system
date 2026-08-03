@@ -183,6 +183,76 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
     }
 
 
+def test_analyze_keeps_source_wrapper_method_flow_in_execution_path(monkeypatch, tmp_path: Path) -> None:
+    source_file = tmp_path / "OrderPage.cs"
+    source_file.write_text("class OrderPage {}", encoding="utf-8")
+    file_result = FileAnalysisResult(
+        file_path=str(source_file),
+        file_type=FileType.CSHARP,
+        framework=FrameworkType.WEBFORMS,
+        classes=[
+            ClassInfo(
+                name="OrderPage",
+                namespace="",
+                file_path=str(source_file),
+                methods=[
+                    MethodInfo(name="HandleSave", access_modifier="private", return_type="void", calls=["SaveData"]),
+                    MethodInfo(name="SaveData", access_modifier="private", return_type="void"),
+                ],
+            )
+        ],
+    )
+    scan = ProjectScanResult(
+        project_root=str(tmp_path),
+        project_name="orders",
+        scan_time=datetime.now(),
+        csharp_results=[file_result],
+        db_invocations={
+            str(source_file.resolve()): [
+                {
+                    "invocation_kind": "source_wrapper",
+                    "class_name": "OrderPage",
+                    "method_name": "SaveData",
+                    "wrapper_class_name": "DbWrapper",
+                    "wrapper_method_name": "Execute",
+                    "wrapper_source_available": True,
+                    "wrapper_reaches_stored_procedure_sink": True,
+                    "wrapper_mode": "stored_procedure",
+                    "command_text_kind": "literal",
+                    "command_text": "dbo.usp_SaveOrder",
+                    "command_type_stored_procedure": True,
+                    "connection_expression": "conn",
+                    "method_chain": ["SaveData", "Execute"],
+                    "start_offset": 10,
+                    "end_offset": 90,
+                }
+            ]
+        },
+        connection_sources={str(source_file.resolve()): {"conn": "PUR"}},
+    )
+
+    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema: _cached_sql_graph(),
+    )
+
+    response = analyze_service.analyze(
+        AnalyzeRequest(
+            database="OrdersDb",
+            program_names=["OrderPage"],
+            include_snippets=False,
+            fk_depth=0,
+        )
+    )
+
+    path = response.programs[0].execution_paths[0]
+    assert path["entry_method"] == "OrderPage.HandleSave"
+    assert path["method_chain"] == ["HandleSave", "SaveData", "Execute"]
+
+
 def test_analyze_keeps_missing_graph_target_as_unresolved(monkeypatch, tmp_path: Path) -> None:
     source_file = tmp_path / "OrderPage.cs"
     source_file.write_text("class OrderPage {}", encoding="utf-8")

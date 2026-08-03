@@ -300,6 +300,22 @@ def _method_chain_for_file(
     return max(candidates, key=lambda chain: (len(chain), tuple(chain)))
 
 
+def _merge_method_chains(
+    caller_chain: List[str],
+    invocation_chain: Tuple[str, ...],
+) -> List[str]:
+    """Append raw cross-boundary methods after the same-file caller chain."""
+    if not invocation_chain:
+        return caller_chain
+
+    max_overlap = min(len(caller_chain), len(invocation_chain))
+    overlap = 0
+    for size in range(1, max_overlap + 1):
+        if caller_chain[-size:] == list(invocation_chain[:size]):
+            overlap = size
+    return caller_chain + list(invocation_chain[overlap:])
+
+
 def _build_program_execution_paths(
     req: AnalyzeRequest,
     scan: ProjectScanResult,
@@ -327,10 +343,9 @@ def _build_program_execution_paths(
         )
         relative_path = _rel(file_result.file_path, root)
         for invocation in gateway.resolve_direct_invocations(relative_path, raw_invocations):
-            method_chain = _method_chain_for_file(
-                file_result,
-                invocation.class_name,
-                invocation.method_name,
+            method_chain = _merge_method_chains(
+                _method_chain_for_file(file_result, invocation.class_name, invocation.method_name),
+                invocation.method_chain,
             )
             rated_invocations.append(replace(invocation, method_chain=tuple(method_chain)))
 

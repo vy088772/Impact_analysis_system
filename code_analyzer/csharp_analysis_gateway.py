@@ -121,6 +121,9 @@ class CSharpAnalysisGateway:
         return results
 
     def _resolve_one(self, relative_path: str, raw: dict) -> Optional[DbInvocation]:
+        if raw.get("invocation_kind") == "source_wrapper":
+            return self._resolve_wrapper_invocation(relative_path, raw)
+
         if not raw.get("command_type_stored_procedure"):
             # No explicit StoredProcedure command type: this is plain SQL text, not an SP invocation.
             return None
@@ -137,8 +140,91 @@ class CSharpAnalysisGateway:
                 class_name, method_name, database, None, InvocationEvidence.UNRESOLVED, source, "dynamic_command_text"
             )
 
-        normalized_name = normalize_procedure_name(raw["command_text"])
-        procedure_schema = normalize_procedure_schema(raw["command_text"])
+        return self._rate_literal_candidate(
+            class_name,
+            method_name,
+            database,
+            raw["command_text"],
+            source,
+        )
+
+    def _resolve_wrapper_invocation(self, relative_path: str, raw: dict) -> Optional[DbInvocation]:
+        mode = str(raw.get("wrapper_mode") or "").casefold()
+        if mode == "inline_sql":
+            return None
+
+        source = InvocationSourceSpan(relative_path, raw["start_offset"], raw["end_offset"])
+        class_name = raw["class_name"]
+        method_name = raw["method_name"]
+        connection_expression = raw.get("connection_expression")
+        database = self._connection_sources.get(connection_expression) if connection_expression else None
+
+        if raw.get("wrapper_source_available") is not True:
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "wrapper_source_unavailable",
+                method_chain=tuple(raw.get("method_chain") or ()),
+            )
+        if raw.get("wrapper_reaches_stored_procedure_sink") is not True:
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "wrapper_sink_unresolved",
+                method_chain=tuple(raw.get("method_chain") or ()),
+            )
+        if mode != "stored_procedure":
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "wrapper_mode_unresolved",
+                method_chain=tuple(raw.get("method_chain") or ()),
+            )
+
+        if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "dynamic_command_text",
+                method_chain=tuple(raw.get("method_chain") or ()),
+            )
+
+        return self._rate_literal_candidate(
+            class_name,
+            method_name,
+            database,
+            raw["command_text"],
+            source,
+            method_chain=tuple(raw.get("method_chain") or ()),
+        )
+
+    def _rate_literal_candidate(
+        self,
+        class_name: str,
+        method_name: str,
+        database: Optional[str],
+        command_text: str,
+        source: InvocationSourceSpan,
+        method_chain: tuple[str, ...] = (),
+    ) -> DbInvocation:
+        normalized_name = normalize_procedure_name(command_text)
+        procedure_schema = normalize_procedure_schema(command_text)
 
         if database:
             if self._catalog.contains(database, normalized_name, procedure_schema):
@@ -150,26 +236,44 @@ class CSharpAnalysisGateway:
                     InvocationEvidence.PROVEN,
                     source,
                     procedure_schema=procedure_schema,
+                    method_chain=method_chain,
                 )
             return DbInvocation(
-                class_name, method_name, database, normalized_name, InvocationEvidence.UNRESOLVED, source,
-                "not_in_resolved_catalog", procedure_schema,
+                class_name,
+                method_name,
+                database,
+                normalized_name,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "not_in_resolved_catalog",
+                procedure_schema,
+                method_chain,
             )
 
         matches = self._catalog.databases_containing(normalized_name, procedure_schema)
         if len(matches) == 1:
             return DbInvocation(
-                class_name, method_name, matches[0], normalized_name, InvocationEvidence.LIKELY, source,
-                "unique_across_catalogs", procedure_schema,
+                class_name,
+                method_name,
+                matches[0],
+                normalized_name,
+                InvocationEvidence.LIKELY,
+                source,
+                "unique_across_catalogs",
+                procedure_schema,
+                method_chain,
             )
-        if len(matches) == 0:
-            return DbInvocation(
-                class_name, method_name, None, normalized_name, InvocationEvidence.UNRESOLVED, source,
-                "unknown_database_source", procedure_schema,
-            )
+        reason = "unknown_database_source" if len(matches) == 0 else "ambiguous_cross_database"
         return DbInvocation(
-            class_name, method_name, None, normalized_name, InvocationEvidence.UNRESOLVED, source,
-            "ambiguous_cross_database", procedure_schema,
+            class_name,
+            method_name,
+            None,
+            normalized_name,
+            InvocationEvidence.UNRESOLVED,
+            source,
+            reason,
+            procedure_schema,
+            method_chain,
         )
 
 

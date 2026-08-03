@@ -303,6 +303,42 @@ def test_raw_direct_invocation_is_catalog_validated_before_graph_join() -> None:
     assert {path["database"] for path in paths} == {"OrdersDb"}
 
 
+def test_source_wrapper_invocation_joins_to_execution_path() -> None:
+    raw_invocation = {
+        "invocation_kind": "source_wrapper",
+        "class_name": "OrderPage",
+        "method_name": "SaveData",
+        "wrapper_class_name": "DbWrapper",
+        "wrapper_method_name": "Execute",
+        "wrapper_source_available": True,
+        "wrapper_reaches_stored_procedure_sink": True,
+        "wrapper_mode": "stored_procedure",
+        "command_text_kind": "literal",
+        "command_text": "dbo.usp_SaveOrder",
+        "command_type_stored_procedure": True,
+        "connection_expression": "_connection",
+        "method_chain": ["HandleSave", "SaveData", "Execute"],
+        "start_offset": 120,
+        "end_offset": 220,
+    }
+
+    paths = build_execution_paths_from_raw_invocations(
+        "Ship/OrderPage.aspx.cs",
+        [raw_invocation],
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        _graph(),
+        connection_sources={"_connection": "OrdersDb"},
+    )
+
+    assert len(paths) == 2
+    assert {path["entry_method"] for path in paths} == {"OrderPage.HandleSave"}
+    assert {tuple(path["method_chain"]) for path in paths} == {
+        ("HandleSave", "SaveData", "Execute"),
+    }
+    assert {path["evidence"] for path in paths} == {"proven"}
+    assert {path["target"] for path in paths} == {"dbo.SOrder"}
+
+
 def test_schema_qualified_invocation_joins_matching_graph_module() -> None:
     graph = _graph()
     graph["nodes"].extend([

@@ -22,7 +22,10 @@ internal static class Program
             }
 
             if (args[0] == "csharp")
-                return AnalyzeCSharp(ReadInputPaths(args));
+            {
+                var csharpInputs = ReadCSharpInputs(args);
+                return AnalyzeCSharp(csharpInputs.InputPaths, csharpInputs.SourceRoots);
+            }
             if (args[0] == "sql")
             {
                 var inputs = ReadInputPaths(args);
@@ -36,9 +39,16 @@ internal static class Program
         }
     }
 
-    private static int AnalyzeCSharp(List<string> inputPaths)
+    private static int AnalyzeCSharp(List<string> inputPaths, List<string> sourceRoots)
     {
-        var analyses = inputPaths.Select(CSharpAnalyzer.Analyze).ToList();
+        var contextPaths = inputPaths
+            .Concat(sourceRoots.SelectMany(root => Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var sourceFiles = contextPaths.Select(CSharpAnalyzer.ReadSource).ToList();
+        var analyses = inputPaths
+            .Select(inputPath => CSharpAnalyzer.Analyze(inputPath, sourceFiles))
+            .ToList();
         if (analyses.Count == 1)
         {
             var analysis = analyses[0];
@@ -83,6 +93,40 @@ internal static class Program
             inputPaths.Add(args[index + 1]);
         }
         return inputPaths;
+    }
+
+    private static (List<string> InputPaths, List<string> SourceRoots) ReadCSharpInputs(string[] args)
+    {
+        if (args.Length < 3 || (args.Length - 1) % 2 != 0)
+            throw new ArgumentException("usage: StaticAnalyzerHost csharp --input <file> [--input <file> ...] [--source-root <directory> ...]");
+
+        var inputPaths = new List<string>();
+        var sourceRoots = new List<string>();
+        for (var index = 1; index < args.Length; index += 2)
+        {
+            var option = args[index];
+            var path = args[index + 1];
+            if (option == "--input")
+            {
+                if (!File.Exists(path))
+                    throw new FileNotFoundException("input file not found", path);
+                inputPaths.Add(path);
+            }
+            else if (option == "--source-root")
+            {
+                if (!Directory.Exists(path))
+                    throw new DirectoryNotFoundException($"source root not found: {path}");
+                sourceRoots.Add(path);
+            }
+            else
+            {
+                throw new ArgumentException("expected --input or --source-root before each C# path");
+            }
+        }
+
+        if (inputPaths.Count == 0)
+            throw new ArgumentException("csharp requires at least one --input path");
+        return (inputPaths, sourceRoots);
     }
 
     private static void Write(object value) => Console.WriteLine(JsonSerializer.Serialize(value, JsonOptions));

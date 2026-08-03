@@ -65,24 +65,35 @@ class StaticAnalyzerHost:
     def analyze_csharp(self, input_path: Path) -> dict[str, Any]:
         return self._run("csharp", "--input", str(input_path))
 
-    def analyze_csharp_files(self, input_paths: list[Path]) -> list[dict[str, Any]]:
+    def analyze_csharp_files(
+        self,
+        input_paths: list[Path],
+        source_roots: list[Path] | None = None,
+    ) -> list[dict[str, Any]]:
         if not input_paths:
             return []
+        source_roots = source_roots or []
         results: list[dict[str, Any]] = []
         batch: list[Path] = []
-        command_length = len("csharp")
+        command_length = len("csharp") + sum(
+            len(" --source-root ") + len(str(source_root))
+            for source_root in source_roots
+        )
 
         for input_path in input_paths:
             input_length = len(str(input_path)) + len(" --input ")
             if batch and command_length + input_length > _MAX_HOST_COMMAND_CHARS:
-                results.extend(self._analyze_csharp_batch(batch))
+                results.extend(self._analyze_csharp_batch(batch, source_roots))
                 batch = []
-                command_length = len("csharp")
+                command_length = len("csharp") + sum(
+                    len(" --source-root ") + len(str(source_root))
+                    for source_root in source_roots
+                )
             batch.append(input_path)
             command_length += input_length
 
         if batch:
-            results.extend(self._analyze_csharp_batch(batch))
+            results.extend(self._analyze_csharp_batch(batch, source_roots))
         return results
 
     def analyze_sql(self, input_path: Path) -> dict[str, Any]:
@@ -112,8 +123,14 @@ class StaticAnalyzerHost:
             )
         return payload
 
-    def _analyze_csharp_batch(self, input_paths: list[Path]) -> list[dict[str, Any]]:
+    def _analyze_csharp_batch(
+        self,
+        input_paths: list[Path],
+        source_roots: list[Path],
+    ) -> list[dict[str, Any]]:
         args = ["csharp"]
+        for source_root in source_roots:
+            args.extend(["--source-root", str(source_root)])
         for input_path in input_paths:
             args.extend(["--input", str(input_path)])
         payload = self._run(*args)

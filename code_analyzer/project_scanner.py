@@ -509,7 +509,10 @@ class ProjectScanner:
         print(f"\n📝 解析 C# 檔案...")
         if csharp_files:
             self.static_analyzer_host.ensure_ready()
-            host_results = self.static_analyzer_host.analyze_csharp_files([Path(file_path) for file_path in csharp_files])
+            host_results = self.static_analyzer_host.analyze_csharp_files(
+                [Path(file_path) for file_path in csharp_files],
+                source_roots=[Path(self.project_root)],
+            )
 
             for file_path, host_result in tqdm(zip(csharp_files, host_results), total=len(csharp_files), desc="解析進度"):
                 try:
