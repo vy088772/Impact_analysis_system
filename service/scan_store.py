@@ -83,7 +83,10 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 的程式所抓到的 SP 名稱，故遞增版本號使舊快取失效。
 # v15：ProjectScanResult 新增最新 C# 完整 source snapshot（content hash + 內容），
 # 供後續 Execution Path 依 source span 精確取回原始碼，舊 pickle 沒有這份證據。
-_CACHE_VERSION = 15
+# v16：ProjectScanResult 新增 StaticAnalyzerHost 的 raw db_invocations 與每檔案
+# connection_sources，供 Execution Path 在 /analyze 時直接接上 SQL graph；舊快取
+# 沒有這些欄位，必須重新掃描。
+_CACHE_VERSION = 16
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

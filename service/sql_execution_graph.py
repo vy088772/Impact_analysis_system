@@ -104,6 +104,7 @@ def build_sql_execution_graph(
 
     return {
         "graph_version": GRAPH_VERSION,
+        "database": str(data.get("database") or ""),
         "nodes": nodes,
         "relationships": relationships,
         "parse_errors": parse_errors,

@@ -32,7 +32,8 @@ from config.settings import settings
 #     regex presence 比對僅作 fallback）
 # v5：新增 sql_execution_graph（ScriptDom AST 產生的 typed operation nodes 與
 #     reads/writes/contains relationships），舊 cache 必須重新 refresh。
-_SQL_CACHE_VERSION = 5
+# v6：sql_execution_graph 增加 database identity，供跨資料庫 Execution Path join 驗證。
+_SQL_CACHE_VERSION = 6
 
 # 同 process 內的記憶體快取
 _mem_cache: Dict[str, Dict] = {}

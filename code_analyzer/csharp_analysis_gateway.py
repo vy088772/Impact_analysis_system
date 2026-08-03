@@ -7,7 +7,7 @@ evidence-rating decisions live here so unresolved names or databases are never g
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Iterable, List, Optional, Set
 
@@ -40,6 +40,8 @@ class DbInvocation:
     evidence: InvocationEvidence
     source: InvocationSourceSpan
     reason: str = ""
+    procedure_schema: Optional[str] = None
+    method_chain: tuple[str, ...] = ()
 
 
 def normalize_procedure_name(raw_name: str) -> str:
@@ -54,22 +56,51 @@ class SpCatalog:
     """Database-scoped set of normalized stored procedure identities."""
 
     procedures_by_database: Dict[str, Set[str]]
+    qualified_procedures_by_database: Dict[str, Set[str]] = field(default_factory=dict)
 
     @classmethod
-    def from_databases(cls, procedures_by_database: Dict[str, Iterable[str]]) -> "SpCatalog":
-        return cls({
-            database: {normalize_procedure_name(name) for name in names}
-            for database, names in procedures_by_database.items()
-        })
+    def from_databases(
+        cls,
+        procedures_by_database: Dict[str, Iterable[str]],
+        default_schema: Optional[str] = "dbo",
+    ) -> "SpCatalog":
+        bare_names: Dict[str, Set[str]] = {}
+        qualified_names: Dict[str, Set[str]] = {}
+        normalized_default_schema = normalize_schema_name(default_schema or "")
+        for database, names in procedures_by_database.items():
+            bare_names[database] = set()
+            qualified_names[database] = set()
+            for name in names:
+                normalized_name = normalize_procedure_name(name)
+                bare_names[database].add(normalized_name)
+                schema = normalize_procedure_schema(name)
+                schema = schema or normalized_default_schema
+                if schema:
+                    qualified_names[database].add(f"{schema}.{normalized_name}")
+        return cls(bare_names, qualified_names)
 
-    def contains(self, database: str, normalized_name: str) -> bool:
-        return normalized_name in self.procedures_by_database.get(database, set())
+    def contains(
+        self,
+        database: str,
+        normalized_name: str,
+        schema: Optional[str] = None,
+    ) -> bool:
+        bare_names = self.procedures_by_database.get(database, set())
+        if not schema:
+            return normalized_name in bare_names
+        qualified_names = self.qualified_procedures_by_database.get(database, set())
+        qualified_identity = f"{schema}.{normalized_name}"
+        return qualified_identity in qualified_names
 
-    def databases_containing(self, normalized_name: str) -> List[str]:
+    def databases_containing(
+        self,
+        normalized_name: str,
+        schema: Optional[str] = None,
+    ) -> List[str]:
         return sorted(
             database
             for database, names in self.procedures_by_database.items()
-            if normalized_name in names
+            if self.contains(database, normalized_name, schema)
         )
 
 
@@ -107,27 +138,49 @@ class CSharpAnalysisGateway:
             )
 
         normalized_name = normalize_procedure_name(raw["command_text"])
+        procedure_schema = normalize_procedure_schema(raw["command_text"])
 
         if database:
-            if self._catalog.contains(database, normalized_name):
-                return DbInvocation(class_name, method_name, database, normalized_name, InvocationEvidence.PROVEN, source)
+            if self._catalog.contains(database, normalized_name, procedure_schema):
+                return DbInvocation(
+                    class_name,
+                    method_name,
+                    database,
+                    normalized_name,
+                    InvocationEvidence.PROVEN,
+                    source,
+                    procedure_schema=procedure_schema,
+                )
             return DbInvocation(
                 class_name, method_name, database, normalized_name, InvocationEvidence.UNRESOLVED, source,
-                "not_in_resolved_catalog",
+                "not_in_resolved_catalog", procedure_schema,
             )
 
-        matches = self._catalog.databases_containing(normalized_name)
+        matches = self._catalog.databases_containing(normalized_name, procedure_schema)
         if len(matches) == 1:
             return DbInvocation(
                 class_name, method_name, matches[0], normalized_name, InvocationEvidence.LIKELY, source,
-                "unique_across_catalogs",
+                "unique_across_catalogs", procedure_schema,
             )
         if len(matches) == 0:
             return DbInvocation(
                 class_name, method_name, None, normalized_name, InvocationEvidence.UNRESOLVED, source,
-                "unknown_database_source",
+                "unknown_database_source", procedure_schema,
             )
         return DbInvocation(
             class_name, method_name, None, normalized_name, InvocationEvidence.UNRESOLVED, source,
-            "ambiguous_cross_database",
+            "ambiguous_cross_database", procedure_schema,
         )
+
+
+def normalize_procedure_schema(raw_name: str) -> Optional[str]:
+    """Return the explicit schema from a qualified procedure name, when present."""
+    cleaned = raw_name.strip().replace("[", "").replace("]", "")
+    parts = [part.strip() for part in cleaned.split(".") if part.strip()]
+    if len(parts) < 2:
+        return None
+    return normalize_schema_name(parts[-2])
+
+
+def normalize_schema_name(raw_schema: str) -> str:
+    return raw_schema.strip().replace("[", "").replace("]", "").casefold()

@@ -42,6 +42,7 @@ class AnalyzeRequest(BaseModel):
     db_name: str = ""                         # 實際資料庫名稱（由 catalog 逐系統提供）
     refresh: bool = False                    # True → git pull + 重新解析，覆寫快取
     include_view_layer: bool = False         # 是否帶出 View 層資訊（aspx/razor/vue 解析摘要）
+    include_execution_paths: bool = True     # 是否組出 C# → SQL Execution Graph paths
 
 
 class CodeSnippet(BaseModel):
@@ -68,6 +69,9 @@ class ProgramAnalysis(BaseModel):
     dependencies: Dict[str, Dict] = Field(default_factory=dict)  # 物件上下游依賴（sys.sql_expression_dependencies，僅列出 sp_names/tables 中出現者，include_sp_defs=True 時）
     related_programs: List[Dict] = Field(default_factory=list)  # 跨程式呼叫展開（expand_depth>0 時）
     view_layer: List[Dict] = Field(default_factory=list)  # View 層資訊（include_view_layer=True 時；aspx/razor/vue 摘要）
+    execution_paths: List[Dict] = Field(default_factory=list)
+    compact_execution_paths: List[Dict] = Field(default_factory=list)
+    compact_execution_paths_meta: Dict[str, int] = Field(default_factory=dict)
 
 
 class AnalyzeResponse(BaseModel):

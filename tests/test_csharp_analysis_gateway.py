@@ -60,6 +60,40 @@ def test_explicit_stored_procedure_type_with_catalog_hit_is_proven() -> None:
     assert invocation.source.end_offset == 90
 
 
+def test_schema_qualified_catalog_matching_does_not_cross_same_name_schemas() -> None:
+    catalog = SpCatalog.from_databases({
+        "Y-Docs_TTPUR": ["dbo.usp_SO_Delete", "sales.usp_SO_Delete"],
+    })
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "Y-Docs_TTPUR"})
+
+    proven = gateway.resolve_direct_invocations(
+        "f.cs",
+        [_raw_invocation(command_text="sales.usp_SO_Delete")],
+    )[0]
+    unresolved = gateway.resolve_direct_invocations(
+        "f.cs",
+        [_raw_invocation(command_text="reporting.usp_SO_Delete")],
+    )[0]
+
+    assert proven.evidence is InvocationEvidence.PROVEN
+    assert proven.procedure_schema == "sales"
+    assert unresolved.evidence is InvocationEvidence.UNRESOLVED
+    assert unresolved.reason == "not_in_resolved_catalog"
+
+
+def test_bare_catalog_entries_are_scoped_to_default_schema_for_qualified_calls() -> None:
+    catalog = SpCatalog.from_databases({"Y-Docs_TTPUR": ["usp_SO_Delete"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "Y-Docs_TTPUR"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "f.cs",
+        [_raw_invocation(command_text="sales.usp_SO_Delete")],
+    )[0]
+
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "not_in_resolved_catalog"
+
+
 def test_inline_sql_without_stored_procedure_type_is_not_reported() -> None:
     """A SqlCommand call that never sets CommandType.StoredProcedure is plain SQL, not an SP invocation."""
     catalog = SpCatalog.from_databases({"Y-Docs_TTPUR": ["usp_SO_Delete"]})

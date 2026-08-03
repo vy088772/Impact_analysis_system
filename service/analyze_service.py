@@ -13,12 +13,14 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Tuple
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
+from code_analyzer.csharp_analysis_gateway import CSharpAnalysisGateway, SpCatalog
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 
 from .schemas import (
@@ -41,6 +43,7 @@ from .sp_fetcher import fetch_sp_definitions
 from .view_fetcher import fetch_view_definitions
 from .udf_fetcher import fetch_udf_definitions
 from .dependency_fetcher import fetch_dependencies
+from .execution_path_builder import build_compact_execution_path_payload, build_execution_paths
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import get_or_scan, has_cache
@@ -142,6 +145,9 @@ def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
         merged.scanned_files += s.scanned_files
         merged.failed_files += s.failed_files
         merged.csharp_results.extend(s.csharp_results)
+        merged.source_snapshots.update(getattr(s, "source_snapshots", {}))
+        merged.db_invocations.update(getattr(s, "db_invocations", {}))
+        merged.connection_sources.update(getattr(s, "connection_sources", {}))
         merged.aspx_results.extend(s.aspx_results)
         merged.razor_results.extend(s.razor_results)
         merged.vue_results.extend(s.vue_results)
@@ -149,6 +155,188 @@ def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
         merged.table_relations.extend(s.table_relations)
     merged.calculate_statistics()
     return merged
+
+
+def _execution_path_context(
+    req: AnalyzeRequest,
+    scan: ProjectScanResult,
+) -> Tuple[SpCatalog, Dict, str]:
+    """Load the selected SQL graph and build its database-scoped SP catalog."""
+    cached = sql_cache_store.load_cached(req.database, "dbo") if req.database else None
+    graph = dict((cached or {}).get("sql_execution_graph") or {})
+    graph_database = str(
+        graph.get("database")
+        or (cached or {}).get("database")
+        or req.database
+        or ""
+    )
+    if graph_database and not graph.get("database"):
+        graph["database"] = graph_database
+
+    procedures_by_database: Dict[str, set[str]] = {}
+
+    def add_procedure(database: str, name: str) -> None:
+        database = database.strip()
+        name = name.strip()
+        if not database or not name or database.casefold() == "unknown":
+            return
+        procedures_by_database.setdefault(database, set()).add(name)
+
+    def qualified_procedure_name(item: Mapping[str, object]) -> str:
+        name = str(item.get("name") or "").strip()
+        schema = str(item.get("schema") or "").strip()
+        return f"{schema}.{name}" if schema and "." not in name else name
+
+    if cached is None:
+        for relation in scan.sp_relations:
+            add_procedure(relation.sp_database or "", relation.sp_name or "")
+
+    for node in graph.get("nodes", []) or []:
+        if node.get("type") == "stored_procedure":
+            add_procedure(graph_database, qualified_procedure_name(node))
+
+    for procedure in (cached or {}).get("procedures", []) or []:
+        add_procedure(graph_database, qualified_procedure_name(procedure))
+
+    schema = str((cached or {}).get("schema") or "dbo")
+    return SpCatalog.from_databases(procedures_by_database, default_schema=schema), graph, graph_database
+
+
+def _execution_connection_sources(
+    scan: ProjectScanResult,
+    file_path: str,
+    graph_database: str,
+    database_aliases: Iterable[str] = (),
+) -> Dict[str, str]:
+    """Resolve raw connection expressions for one file into the selected graph scope."""
+    file_key = str(Path(file_path).resolve())
+    sources = dict(getattr(scan, "connection_sources", {}).get(file_key, {}) or {})
+    if not sources:
+        for relation in scan.sp_relations:
+            if (
+                str(Path(relation.csharp_file).resolve()) == file_key
+                and relation.connection_variable
+                and relation.sp_database
+            ):
+                sources[relation.connection_variable] = relation.sp_database
+
+    if not graph_database:
+        return sources
+
+    # One /analyze request selects one SQL cache scope. A single legacy connection
+    # label (such as "PUR") therefore resolves to that selected graph identity.
+    # Multiple distinct labels are kept separate so one file cannot silently map
+    # cross-database connections to the selected graph.
+    known_databases = {
+        value.strip().casefold()
+        for value in (*database_aliases, graph_database)
+        if value and value.strip()
+    }
+    source_values = {
+        value.strip().casefold()
+        for value in sources.values()
+        if value and value.strip()
+    }
+    if not source_values:
+        return sources
+    if len(source_values) <= 1:
+        return {expression: graph_database for expression in sources}
+    return {
+        expression: (
+            graph_database
+            if source.strip().casefold() in known_databases
+            else source
+        )
+        for expression, source in sources.items()
+    }
+
+
+def _method_chain_for_file(
+    file_result,
+    class_name: str,
+    method_name: str,
+) -> List[str]:
+    """Return the longest deterministic same-file caller chain to a sink method."""
+    methods: Dict[Tuple[str, str], object] = {}
+    methods_by_name: Dict[str, List[Tuple[str, str]]] = {}
+    for class_info in file_result.classes:
+        for method in class_info.methods:
+            key = (class_info.name, method.name)
+            methods[key] = method
+            methods_by_name.setdefault(method.name, []).append(key)
+
+    sink_candidates = [(class_name, method_name)]
+    if sink_candidates[0] not in methods:
+        sink_candidates = methods_by_name.get(method_name, []) if not class_name else []
+    if not sink_candidates:
+        return [method_name]
+
+    parents: Dict[Tuple[str, str], set[Tuple[str, str]]] = {}
+    for caller_key, method in methods.items():
+        caller_class, _ = caller_key
+        for call in method.calls:
+            target_name = str(call).rsplit(".", 1)[-1]
+            qualifier = str(call).rsplit(".", 1)[0] if "." in str(call) else ""
+            candidates = [
+                candidate
+                for candidate in methods_by_name.get(target_name, [])
+                if candidate[0] == (qualifier or caller_class)
+            ]
+            if len(candidates) == 1:
+                parents.setdefault(candidates[0], set()).add(caller_key)
+
+    def expand(key: Tuple[str, str], visited: set[Tuple[str, str]]) -> List[List[str]]:
+        if key in visited or not parents.get(key):
+            return [[key[1]]]
+        chains: List[List[str]] = []
+        for parent in sorted(parents[key]):
+            for prefix in expand(parent, visited | {key}):
+                chains.append(prefix + [key[1]])
+        return chains or [[key[1]]]
+
+    candidates: List[List[str]] = []
+    for sink in sorted(sink_candidates):
+        candidates.extend(expand(sink, set()))
+    return max(candidates, key=lambda chain: (len(chain), tuple(chain)))
+
+
+def _build_program_execution_paths(
+    req: AnalyzeRequest,
+    scan: ProjectScanResult,
+    matched_files: List,
+    root: Path,
+) -> Tuple[List[Dict], Dict[str, object]]:
+    """Join one program's raw C# facts to the selected SQL execution graph."""
+    catalog, graph, graph_database = _execution_path_context(req, scan)
+    rated_invocations = []
+    raw_by_file = getattr(scan, "db_invocations", {})
+
+    for file_result in matched_files:
+        file_key = str(Path(file_result.file_path).resolve())
+        raw_invocations = raw_by_file.get(file_key, [])
+        if not raw_invocations:
+            continue
+        gateway = CSharpAnalysisGateway(
+            catalog,
+            connection_sources=_execution_connection_sources(
+                scan,
+                file_result.file_path,
+                graph_database,
+                database_aliases=(req.database, req.db_name),
+            ),
+        )
+        relative_path = _rel(file_result.file_path, root)
+        for invocation in gateway.resolve_direct_invocations(relative_path, raw_invocations):
+            method_chain = _method_chain_for_file(
+                file_result,
+                invocation.class_name,
+                invocation.method_name,
+            )
+            rated_invocations.append(replace(invocation, method_chain=tuple(method_chain)))
+
+    paths = build_execution_paths(rated_invocations, graph)
+    compact_payload = build_compact_execution_path_payload(paths)
+    return paths, compact_payload
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -318,6 +506,22 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 if _file_matches(fr.file_path, program_base):
                     view_layer.append(_view_layer_summary(fr, root))
 
+        execution_paths: List[Dict] = []
+        compact_execution_paths: List[Dict] = []
+        compact_execution_paths_meta: Dict[str, int] = {}
+        if req.include_execution_paths and matched_files:
+            execution_paths, compact_payload = _build_program_execution_paths(
+                req,
+                scan,
+                matched_files,
+                root,
+            )
+            compact_execution_paths = compact_payload["paths"]
+            compact_execution_paths_meta = {
+                key: int(compact_payload[key])
+                for key in ("total_paths", "returned_paths", "omitted_paths")
+            }
+
         programs.append(
             ProgramAnalysis(
                 program=raw_name,
@@ -335,6 +539,9 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 dependencies=dependencies,
                 related_programs=related_programs,
                 view_layer=view_layer,
+                execution_paths=execution_paths,
+                compact_execution_paths=compact_execution_paths,
+                compact_execution_paths_meta=compact_execution_paths_meta,
             )
         )
 

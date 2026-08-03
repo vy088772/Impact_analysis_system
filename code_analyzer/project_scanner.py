@@ -123,6 +123,8 @@ class ProjectScanResult:
     # C# 分析結果
     csharp_results: List[FileAnalysisResult] = field(default_factory=list)
     source_snapshots: Dict[str, SourceSnapshot] = field(default_factory=dict)
+    db_invocations: Dict[str, List[Dict]] = field(default_factory=dict)
+    connection_sources: Dict[str, Dict[str, str]] = field(default_factory=dict)
     
     # View 層分析結果（依框架偵測結果選擇性填入；未偵測到對應框架時維持空清單）
     aspx_results: List[FileAnalysisResult] = field(default_factory=list)    # .aspx / .ascx
@@ -512,7 +514,17 @@ class ProjectScanner:
             for file_path, host_result in tqdm(zip(csharp_files, host_results), total=len(csharp_files), desc="解析進度"):
                 try:
                     self.scan_result.capture_source_snapshot(file_path, host_result)
+                    file_key = str(Path(file_path).resolve())
+                    self.scan_result.db_invocations[file_key] = [
+                        dict(invocation)
+                        for invocation in host_result.get("db_invocations", []) or []
+                    ]
                     result = self.csharp_parser.parse_file(file_path)
+                    self.scan_result.connection_sources[file_key] = {
+                        name: info.database_name
+                        for name, info in self.csharp_parser.db_tracker.connections.items()
+                        if info.database_name
+                    }
                     self.scan_result.csharp_results.append(result)
                     self.scan_result.scanned_files += 1
                 except Exception as e:
