@@ -17,6 +17,33 @@ from dataclasses import dataclass, field
 import json
 
 
+@dataclass(frozen=True)
+class _FormalSPCall:
+    """Compatibility shape for graph rendering of raw formal SP facts."""
+
+    csharp_file: str
+    class_name: str
+    method_name: str
+    line_number: int
+    sp_name: str
+    sp_database: str
+
+
+def _formal_sp_calls(scan_result) -> List[_FormalSPCall]:
+    """Adapt raw Database Invocations without reading legacy relation output."""
+    return [
+        _FormalSPCall(
+            csharp_file=item["source_file"],
+            class_name=item["class_name"],
+            method_name=item["method_name"],
+            line_number=item["line_number"],
+            sp_name=item["procedure_name"] or "<dynamic command text>",
+            sp_database=item["database"],
+        )
+        for item in scan_result.iter_formal_sp_invocations()
+    ]
+
+
 # ============================================
 # 依賴關係圖生成器
 # ============================================
@@ -37,6 +64,7 @@ class DependencyGraphGenerator:
             scan_result: ProjectScanResult 物件
         """
         self.scan_result = scan_result
+        self.formal_sp_calls = _formal_sp_calls(scan_result)
         self.graph = nx.DiGraph()
         self._setup_font()
         
@@ -60,17 +88,14 @@ class DependencyGraphGenerator:
         """估算節點數量"""
         unique_files = set()
         unique_sps = set()
-        unique_tables = set()
         
         for r in self.scan_result.csharp_results:
             unique_files.add(Path(r.file_path).stem)
         
-        for rel in self.scan_result.sp_relations:
+        for rel in self.formal_sp_calls:
             unique_sps.add(rel.sp_name)
-            if rel.sp_info and rel.sp_info.referenced_tables:
-                unique_tables.update(rel.sp_info.referenced_tables)
         
-        return len(unique_files) + len(unique_sps) + len(unique_tables)
+        return len(unique_files) + len(unique_sps)
     
     def _determine_scale(self) -> str:
         """判定規模"""
@@ -193,7 +218,7 @@ class DependencyGraphGenerator:
         """C# → SP 關係圖"""
         self.graph.clear()
         
-        for rel in self.scan_result.sp_relations:
+        for rel in self.formal_sp_calls:
             csharp_node = Path(rel.csharp_file).stem
             sp_node = rel.sp_name
             
@@ -211,32 +236,15 @@ class DependencyGraphGenerator:
         return self._render_graph("C# 程式 → 預存程序", output_path)
     
     def visualize_sp_to_table(self, output_path: str) -> Optional[str]:
-        """SP → Table 關係圖"""
-        self.graph.clear()
-        
-        for rel in self.scan_result.sp_relations:
-            if not rel.sp_info or not rel.sp_info.referenced_tables:
-                continue
-            
-            sp_node = rel.sp_name
-            
-            if not self.graph.has_node(sp_node):
-                self.graph.add_node(sp_node, node_type='sp')
-            
-            for table in rel.sp_info.referenced_tables:
-                if not self.graph.has_node(table):
-                    self.graph.add_node(table, node_type='table')
-                
-                if not self.graph.has_edge(sp_node, table):
-                    self.graph.add_edge(sp_node, table)
-        
-        return self._render_graph("預存程序 → 資料表", output_path)
+        """保留舊入口，但不從 raw invocation 猜測 SP → Table lineage。"""
+        print("⚠️  SP → Table 圖需要 SQL Execution Graph；此 scanner 結果未附 graph")
+        return None
     
     def visualize_full_dependency(self, output_path: str) -> Optional[str]:
         """完整依賴圖"""
         self.graph.clear()
         
-        for rel in self.scan_result.sp_relations:
+        for rel in self.formal_sp_calls:
             csharp_node = Path(rel.csharp_file).stem
             sp_node = rel.sp_name
             
@@ -249,27 +257,17 @@ class DependencyGraphGenerator:
             if not self.graph.has_edge(csharp_node, sp_node):
                 self.graph.add_edge(csharp_node, sp_node)
             
-            if rel.sp_info and rel.sp_info.referenced_tables:
-                for table in rel.sp_info.referenced_tables:
-                    table_node = table
-                    
-                    if not self.graph.has_node(table_node):
-                        self.graph.add_node(table_node, node_type='table')
-                    
-                    if not self.graph.has_edge(sp_node, table_node):
-                        self.graph.add_edge(sp_node, table_node)
-        
-        return self._render_graph("完整依賴關係 (C# → SP → Table)", output_path)
+        return self._render_graph("Database Invocation（C# → SP）", output_path)
     
     def visualize_top_dependencies(self, output_path: str, top_n: int = 20) -> Optional[str]:
         """Top N 依賴關係圖"""
         self.graph.clear()
         
         # 找出呼叫次數最多的 SP
-        sp_counts = Counter(rel.sp_name for rel in self.scan_result.sp_relations)
+        sp_counts = Counter(rel.sp_name for rel in self.formal_sp_calls)
         top_sps = set(sp for sp, _ in sp_counts.most_common(top_n))
         
-        for rel in self.scan_result.sp_relations:
+        for rel in self.formal_sp_calls:
             if rel.sp_name not in top_sps:
                 continue
             
@@ -291,16 +289,13 @@ class DependencyGraphGenerator:
         """資料庫層級摘要圖"""
         # 按資料庫分組
         db_stats = {}
-        for rel in self.scan_result.sp_relations:
+        for rel in self.formal_sp_calls:
             db = rel.sp_database
             if db not in db_stats:
-                db_stats[db] = {'sps': set(), 'files': set(), 'tables': set()}
+                db_stats[db] = {'sps': set(), 'files': set()}
             
             db_stats[db]['sps'].add(rel.sp_name)
             db_stats[db]['files'].add(Path(rel.csharp_file).stem)
-            
-            if rel.sp_info and rel.sp_info.referenced_tables:
-                db_stats[db]['tables'].update(rel.sp_info.referenced_tables)
         
         if not db_stats:
             print("⚠️  沒有資料庫統計資料")
@@ -330,21 +325,13 @@ class DependencyGraphGenerator:
             ax.text(7, db_y + 1, f"{len(stats['files'])}\nFiles", ha='center', va='center',
                    fontsize=10, fontweight='bold', color='white')
             
-            # 資料表數量
-            ax.add_patch(plt.Rectangle((9, db_y), 2, 2,
-                                       facecolor='#f39c12', edgecolor='white', linewidth=2))
-            ax.text(10, db_y + 1, f"{len(stats['tables'])}\nTables", ha='center', va='center',
-                   fontsize=10, fontweight='bold', color='white')
-            
             # 連線
             ax.annotate('', xy=(3, db_y + 1), xytext=(2, db_y + 1),
                        arrowprops=dict(arrowstyle='->', color='gray', lw=2))
             ax.annotate('', xy=(6, db_y + 1), xytext=(5, db_y + 1),
                        arrowprops=dict(arrowstyle='->', color='gray', lw=2))
-            ax.annotate('', xy=(9, db_y + 1), xytext=(8, db_y + 1),
-                       arrowprops=dict(arrowstyle='->', color='gray', lw=2))
         
-        ax.set_xlim(-1, 12)
+        ax.set_xlim(-1, 9)
         ax.set_ylim(-1, len(db_stats) * 3 + 1)
         ax.set_aspect('equal')
         ax.axis('off')
@@ -362,22 +349,16 @@ class DependencyGraphGenerator:
         # 計算影響力
         sp_impact = {}
         
-        for rel in self.scan_result.sp_relations:
+        for rel in self.formal_sp_calls:
             sp = rel.sp_name
             if sp not in sp_impact:
                 sp_impact[sp] = {
                     'call_count': 0,
                     'file_count': set(),
-                    'table_count': 0,
-                    'complexity': 'unknown'
                 }
             
             sp_impact[sp]['call_count'] += 1
             sp_impact[sp]['file_count'].add(rel.csharp_file)
-            
-            if rel.sp_info:
-                sp_impact[sp]['table_count'] = len(rel.sp_info.referenced_tables)
-                sp_impact[sp]['complexity'] = rel.sp_info.estimated_complexity
         
         if not sp_impact:
             print("⚠️  沒有 SP 資料")
@@ -387,8 +368,7 @@ class DependencyGraphGenerator:
         for sp, data in sp_impact.items():
             data['file_count'] = len(data['file_count'])
             data['score'] = (data['call_count'] * 2 + 
-                           data['file_count'] * 3 + 
-                           data['table_count'])
+                           data['file_count'] * 3)
         
         # 排序取 Top N
         top_sps = sorted(sp_impact.items(), key=lambda x: x[1]['score'], reverse=True)[:top_n]
@@ -403,20 +383,10 @@ class DependencyGraphGenerator:
         call_counts = [data['call_count'] for _, data in top_sps]
         file_counts = [data['file_count'] for _, data in top_sps]
         
-        # 複雜度顏色
-        colors = []
-        for _, data in top_sps:
-            if data['complexity'] == '複雜':
-                colors.append('#e74c3c')
-            elif data['complexity'] == '中等':
-                colors.append('#f39c12')
-            else:
-                colors.append('#2ecc71')
-        
         # 氣泡圖
         scatter = ax.scatter(call_counts, file_counts, 
                             s=[max(s * 20, 100) for s in scores],
-                            c=colors, alpha=0.7, edgecolors='white', linewidth=2)
+                            c='#3498db', alpha=0.7, edgecolors='white', linewidth=2)
         
         # 標籤
         for i, sp in enumerate(sps):
@@ -428,14 +398,6 @@ class DependencyGraphGenerator:
         ax.set_ylabel('使用的檔案數', fontsize=12)
         ax.set_title(f'高影響力 SP (Top {len(top_sps)})\n氣泡大小 = 影響力分數', 
                     fontsize=14, fontweight='bold', pad=20)
-        
-        # 圖例
-        legend_elements = [
-            mpatches.Patch(color='#2ecc71', label='簡單'),
-            mpatches.Patch(color='#f39c12', label='中等'),
-            mpatches.Patch(color='#e74c3c', label='複雜'),
-        ]
-        ax.legend(handles=legend_elements, loc='upper right', title='複雜度')
         
         ax.grid(True, alpha=0.3)
         
@@ -529,7 +491,7 @@ class DependencyGraphGenerator:
         edges = []
         node_id_map = {}
         
-        for rel in self.scan_result.sp_relations:
+        for rel in self.formal_sp_calls:
             # C# 節點
             csharp_name = Path(rel.csharp_file).stem
             if csharp_name not in node_id_map:
@@ -545,14 +507,11 @@ class DependencyGraphGenerator:
             sp_name = rel.sp_name
             if sp_name not in node_id_map:
                 node_id_map[sp_name] = len(node_id_map)
-                complexity = rel.sp_info.estimated_complexity if rel.sp_info else 'unknown'
-                tables = list(rel.sp_info.referenced_tables)[:5] if rel.sp_info and rel.sp_info.referenced_tables else []
-                
                 nodes.append({
                     'id': node_id_map[sp_name],
                     'label': sp_name,
                     'group': 'sp',
-                    'title': f"SP: {sp_name}<br>DB: {rel.sp_database}<br>Complexity: {complexity}<br>Tables: {', '.join(tables)}"
+                    'title': f"SP: {sp_name}<br>DB: {rel.sp_database}"
                 })
             
             # 邊
@@ -564,27 +523,6 @@ class DependencyGraphGenerator:
                     'arrows': 'to'
                 })
             
-            # Table 節點
-            if rel.sp_info and rel.sp_info.referenced_tables:
-                for table in rel.sp_info.referenced_tables:
-                    if table not in node_id_map:
-                        node_id_map[table] = len(node_id_map)
-                        nodes.append({
-                            'id': node_id_map[table],
-                            'label': table,
-                            'group': 'table',
-                            'title': f"Table: {table}"
-                        })
-                    
-                    edge_key = (node_id_map[sp_name], node_id_map[table])
-                    if edge_key not in [(e['from'], e['to']) for e in edges]:
-                        edges.append({
-                            'from': node_id_map[sp_name],
-                            'to': node_id_map[table],
-                            'arrows': 'to',
-                            'dashes': True
-                        })
-        
         if not nodes:
             print("⚠️  沒有資料可生成互動式圖表")
             return None
@@ -847,18 +785,13 @@ class DependencyGraphGenerator:
         # 建構圖表
         if len(self.graph.nodes) == 0:
             self.graph.clear()
-            for rel in self.scan_result.sp_relations:
+            for rel in self.formal_sp_calls:
                 csharp_node = Path(rel.csharp_file).stem
                 sp_node = rel.sp_name
                 
                 self.graph.add_node(csharp_node, node_type='csharp')
                 self.graph.add_node(sp_node, node_type='sp', database=rel.sp_database)
                 self.graph.add_edge(csharp_node, sp_node)
-                
-                if rel.sp_info and rel.sp_info.referenced_tables:
-                    for table in rel.sp_info.referenced_tables:
-                        self.graph.add_node(table, node_type='table')
-                        self.graph.add_edge(sp_node, table)
         
         if len(self.graph.nodes) == 0:
             print("⚠️  沒有資料可匯出")
@@ -917,6 +850,7 @@ class StatisticsChartGenerator:
             scan_result: ProjectScanResult 物件
         """
         self.scan_result = scan_result
+        self.formal_sp_calls = _formal_sp_calls(scan_result)
         self._setup_font()
     
     def _setup_font(self):
@@ -952,7 +886,7 @@ class StatisticsChartGenerator:
     
     def _generate_database_chart(self, output_path: str) -> Optional[str]:
         """資料庫分布圖"""
-        db_counts = Counter(rel.sp_database for rel in self.scan_result.sp_relations)
+        db_counts = Counter(rel.sp_database for rel in self.formal_sp_calls)
         
         if not db_counts:
             print("⚠️  沒有資料庫統計資料")
@@ -984,48 +918,12 @@ class StatisticsChartGenerator:
     
     def _generate_complexity_chart(self, output_path: str) -> Optional[str]:
         """複雜度分布圖"""
-        complexity_counts = {'簡單': 0, '中等': 0, '複雜': 0}
-        
-        seen = set()
-        for rel in self.scan_result.sp_relations:
-            if rel.sp_info and rel.sp_name not in seen:
-                seen.add(rel.sp_name)
-                c = rel.sp_info.estimated_complexity
-                if c in complexity_counts:
-                    complexity_counts[c] += 1
-        
-        if sum(complexity_counts.values()) == 0:
-            print("⚠️  沒有複雜度統計資料")
-            return None
-        
-        fig, ax = plt.subplots(figsize=(10, 6))
-        
-        colors = ['#2ecc71', '#f39c12', '#e74c3c']
-        bars = ax.bar(complexity_counts.keys(), complexity_counts.values(), color=colors, edgecolor='white', linewidth=2)
-        
-        # 在柱狀圖上顯示數值
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{int(height)}',
-                   ha='center', va='bottom', fontsize=14, fontweight='bold')
-        
-        ax.set_title('SP 複雜度分布', fontsize=14, fontweight='bold', pad=20)
-        ax.set_ylabel('數量', fontsize=12)
-        ax.set_ylim(0, max(complexity_counts.values()) * 1.2 if max(complexity_counts.values()) > 0 else 1)
-        
-        plt.tight_layout()
-        plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
-        plt.close()
-        
-        print(f"✅ 複雜度分布圖: {output_path}")
-        return output_path
+        print("⚠️  SQL complexity requires SQL Execution Graph metadata")
+        return None
     
     def _generate_file_ranking(self, output_path: str, top_n: int = 15) -> Optional[str]:
         """檔案排名圖"""
-        file_counts = Counter()
-        for r in self.scan_result.csharp_results:
-            file_counts[Path(r.file_path).stem] = len(r.stored_procedure_calls)
+        file_counts = Counter(Path(rel.csharp_file).stem for rel in self.formal_sp_calls)
         
         # 取前 N 名（且有呼叫的）
         top = [(f, c) for f, c in file_counts.most_common(top_n) if c > 0]
@@ -1063,7 +961,7 @@ class StatisticsChartGenerator:
     
     def _generate_sp_frequency(self, output_path: str, top_n: int = 20) -> Optional[str]:
         """SP 頻率圖"""
-        sp_counts = Counter(rel.sp_name for rel in self.scan_result.sp_relations)
+        sp_counts = Counter(rel.sp_name for rel in self.formal_sp_calls)
         top = sp_counts.most_common(top_n)
         
         if not top:
@@ -1162,20 +1060,22 @@ def main():
         result.total_files = len(analysis['file_analyses'])
         
         for sp_call in analysis['sp_calls']:
-            sp_info = analysis['sp_details'].get(
-                (sp_call.database_source or 'unknown', sp_call.procedure_name)
+            if not sp_call.location:
+                continue
+            source_file = sp_call.location.file_path
+            result.db_invocations.setdefault(source_file, []).append(
+                {
+                    "class_name": "",
+                    "method_name": "",
+                    "line_number": sp_call.location.line_number,
+                    "command_type_stored_procedure": True,
+                    "command_text_kind": "literal",
+                    "command_text": sp_call.procedure_name,
+                    "database": sp_call.database_source or "unknown",
+                    "connection_variable": sp_call.connection_variable or "",
+                    "invocation_kind": "legacy_adapter",
+                }
             )
-            
-            rel = CSharpSPRelation(
-                csharp_file=sp_call.location.file_path,
-                class_name="",
-                method_name="",
-                line_number=sp_call.location.line_number,
-                sp_name=sp_call.procedure_name,
-                sp_database=sp_call.database_source or 'unknown',
-                sp_info=sp_info
-            )
-            result.sp_relations.append(rel)
     else:
         print("❌ 無效選項")
         return
@@ -1264,7 +1164,7 @@ print(f"生成了 {len(output['html'])} 個互動式圖表")
 analysis = scanner.analyze_related_files("Customer")
 
 # 建立臨時結果後生成圖表
-from code_analyzer.project_scanner import ProjectScanResult, CSharpSPRelation
+from code_analyzer.project_scanner import ProjectScanResult
 
 temp_result = ProjectScanResult(
     project_root=scanner.project_root,
@@ -1274,8 +1174,19 @@ temp_result = ProjectScanResult(
 temp_result.csharp_results = analysis['file_analyses']
 
 for sp_call in analysis['sp_calls']:
-    rel = CSharpSPRelation(...)
-    temp_result.sp_relations.append(rel)
+    if not sp_call.location:
+        continue
+    temp_result.db_invocations.setdefault(sp_call.location.file_path, []).append({
+        "class_name": "",
+        "method_name": "",
+        "line_number": sp_call.location.line_number,
+        "command_type_stored_procedure": True,
+        "command_text_kind": "literal",
+        "command_text": sp_call.procedure_name,
+        "database": sp_call.database_source or "unknown",
+        "connection_variable": sp_call.connection_variable or "",
+        "invocation_kind": "legacy_adapter",
+    })
 
 graph_gen = DependencyGraphGenerator(temp_result)
 graph_gen.generate_appropriate_graphs()

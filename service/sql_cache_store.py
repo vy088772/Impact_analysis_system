@@ -35,7 +35,9 @@ from config.settings import settings
 # v6：sql_execution_graph 增加 database identity，供跨資料庫 Execution Path join 驗證。
 # v7：sql_execution_graph v2 增加 nested CALL branches、dynamic unresolved nodes、
 # typed View/UDF uses，以及 CTE/temp-table lineage。
-_SQL_CACHE_VERSION = 7
+# v8：formal consumers no longer read legacy dependencies/write_dependencies;
+# rebuild the cache before using graph-backed reverse lookup and path selection.
+_SQL_CACHE_VERSION = 8
 
 # 同 process 內的記憶體快取
 _mem_cache: Dict[str, Dict] = {}

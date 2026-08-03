@@ -632,45 +632,40 @@ class HTMLReportGenerator:
     
     def _get_database_stats(self) -> Dict:
         """取得資料庫統計"""
-        db_counts = Counter(rel.sp_database for rel in self.scan_result.sp_relations)
+        db_counts = Counter(
+            invocation["database"]
+            for invocation in self.scan_result.iter_formal_sp_invocations()
+        )
         return dict(db_counts)
     
     def _get_complexity_stats(self) -> Dict:
-        """取得複雜度統計"""
-        stats = {'簡單': 0, '中等': 0, '複雜': 0}
-        
-        for rel in self.scan_result.sp_relations:
-            if rel.sp_info:
-                complexity = rel.sp_info.estimated_complexity
-                if complexity in stats:
-                    stats[complexity] += 1
-        
-        return stats
+        """Return no complexity rating until SQL graph evidence is joined."""
+        return {}
     
     def _get_sp_list(self) -> List[Dict]:
-        """取得 SP 清單"""
-        # 按 SP 分組
+        """取得 raw Database Invocation 清單，避免猜測 SQL evidence。"""
         sp_groups = {}
         
-        for rel in self.scan_result.sp_relations:
-            key = (rel.sp_database, rel.sp_name)
+        for invocation in self.scan_result.iter_formal_sp_invocations():
+            sp_name = invocation["procedure_name"] or "<dynamic command text>"
+            key = (invocation["database"], sp_name)
             
             if key not in sp_groups:
                 sp_groups[key] = {
-                    'database': rel.sp_database,
-                    'name': rel.sp_name,
-                    'exists': rel.sp_info.exists if rel.sp_info else False,
-                    'complexity': rel.sp_info.estimated_complexity if rel.sp_info else 'unknown',
-                    'tables': list(rel.sp_info.referenced_tables) if rel.sp_info else [],
+                    'database': invocation["database"],
+                    'name': sp_name,
+                    'exists': None,
+                    'complexity': 'unrated',
+                    'tables': [],
                     'call_count': 0,
                     'callers': []
                 }
             
             sp_groups[key]['call_count'] += 1
             sp_groups[key]['callers'].append({
-                'file': Path(rel.csharp_file).name,
-                'method': rel.method_name,
-                'line': rel.line_number
+                'file': Path(invocation["source_file"]).name,
+                'method': invocation["method_name"],
+                'line': invocation["line_number"]
             })
         
         return list(sp_groups.values())
@@ -727,8 +722,12 @@ class HTMLReportGenerator:
         rows = []
         
         for sp in sp_list:
-            status = '✅' if sp['exists'] else '❌'
-            status_class = 'status-ok' if sp['exists'] else 'status-error'
+            if sp['exists'] is True:
+                status, status_class = '✅', 'status-ok'
+            elif sp['exists'] is False:
+                status, status_class = '❌', 'status-error'
+            else:
+                status, status_class = '?', 'status-unknown'
             
             # 複雜度
             complexity_map = {
@@ -820,37 +819,21 @@ class HTMLReportGenerator:
         """生成警告區域"""
         warnings = []
         
-        # 不存在的 SP
-        missing_sps = [rel for rel in self.scan_result.sp_relations 
-                      if rel.sp_info and not rel.sp_info.exists]
-        
-        if missing_sps:
-            sp_names = set(f"{rel.sp_database}.{rel.sp_name}" for rel in missing_sps)
-            warnings.append({
-                'title': f'⚠️ 不存在的預存程序 ({len(sp_names)})',
-                'items': list(sp_names)
-            })
-        
-        # 複雜的 SP
-        complex_sps = [rel for rel in self.scan_result.sp_relations 
-                      if rel.sp_info and rel.sp_info.estimated_complexity == '複雜']
-        
-        if complex_sps:
-            sp_names = set(f"{rel.sp_database}.{rel.sp_name}" for rel in complex_sps)
-            warnings.append({
-                'title': f'🔶 高複雜度預存程序 ({len(sp_names)})',
-                'items': list(sp_names)
-            })
-        
         # 未知資料庫
-        unknown_db = [rel for rel in self.scan_result.sp_relations 
-                     if rel.sp_database == 'unknown']
+        unknown_db = [
+            invocation
+            for invocation in self.scan_result.iter_formal_sp_invocations()
+            if invocation["database"] == "unknown"
+        ]
         
         if unknown_db:
             warnings.append({
                 'title': f'❓ 無法識別資料庫來源的呼叫 ({len(unknown_db)})',
-                'items': [f"{rel.sp_name} in {Path(rel.csharp_file).name}" 
-                         for rel in unknown_db[:10]]
+                'items': [
+                    f"{invocation['procedure_name'] or '<dynamic>'} in "
+                    f"{Path(invocation['source_file']).name}"
+                    for invocation in unknown_db[:10]
+                ]
             })
         
         if not warnings:

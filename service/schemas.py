@@ -97,7 +97,7 @@ class ProgramAnalysis(BaseModel):
     sp_definitions: List[Dict] = Field(default_factory=list)  # SP 完整定義（include_sp_defs=True 時）
     view_definitions: List[Dict] = Field(default_factory=list)  # SQL View 完整定義（include_sp_defs=True 且表名實際為 View 時）
     udf_definitions: List[Dict] = Field(default_factory=list)  # UDF 完整定義（include_sp_defs=True 且程式 SQL 文字實際呼叫到該 UDF 時）
-    dependencies: Dict[str, Dict] = Field(default_factory=dict)  # 物件上下游依賴（sys.sql_expression_dependencies，僅列出 sp_names/tables 中出現者，include_sp_defs=True 時）
+    database_invocations: List[Dict] = Field(default_factory=list)
     related_programs: List[Dict] = Field(default_factory=list)  # 跨程式呼叫展開（expand_depth>0 時）
     view_layer: List[Dict] = Field(default_factory=list)  # View 層資訊（include_view_layer=True 時；aspx/razor/vue 摘要）
     execution_paths: List[Dict] = Field(default_factory=list)
@@ -120,6 +120,9 @@ class RefreshRequest(BaseModel):
 class RefreshResponse(BaseModel):
     source_root: str = ""
     files: int = 0
+    database_invocations: int = 0
+    inline_table_facts: int = 0
+    # Deprecated aliases retained for clients that have not migrated yet.
     sp_relations: int = 0
     table_relations: int = 0
 
@@ -133,6 +136,7 @@ class FindBySPRequest(BaseModel):
     """
     source: AzureSource = Field(default_factory=AzureSource)
     sp_name: str                              # 要反查的 SP 名稱（不分大小寫比對）
+    database: str = ""                        # SQL execution graph cache key，通常是 system_id
     cache_only: bool = True                   # True → repo 未 clone 過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
 
@@ -153,19 +157,17 @@ class FindByTableRequest(BaseModel):
     """POST /find_by_table 請求：反查「哪些程式存取了這張資料表」（純快取比對，不觸發 clone）。
 
     情境：使用者打算異動某張資料表（改欄位、改約束等），需要先知道哪些程式會受影響——
-    這跟 FindBySPRequest 是同一種「反查」需求，只是比對對象從 sp_relations 換成
-    table_relations。cache_only=True（預設）時，若該系統尚未分析過就直接跳過，不觸發
-    clone（供逐系統嘗試反查時使用）。
+    這跟 FindBySPRequest 是同一種「反查」需求；C# inline SQL facts 與 SQL Execution
+    Graph 分別提供直接與 SQL module lineage。cache_only=True（預設）時，若該系統
+    尚未分析過就直接跳過，不觸發 clone（供逐系統嘗試反查時使用）。
     """
     source: AzureSource = Field(default_factory=AzureSource)
     table_name: str                           # 要反查的資料表名稱（可含或不含 schema 前綴，不分大小寫比對）
     cache_only: bool = True                   # True → repo 未 clone/分析過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
     database: str = ""                        # 選填：資料庫快取鍵（通常是 spec-rag 的 system_id）。
-    # 提供時會額外反查該系統已快取的 SP/View 定義本文——table_relations 只收錄
-    # 「C# 程式碼內嵌 SQL 字串」直接出現的表名，若某張表只在被呼叫的 SP/View
-    # 定義內部被引用（C# 端只呼叫 SP 名稱，未內嵌任何原始表名字串），純比對
-    # table_relations 永遠找不到；留空則只做原本的 table_relations 比對。
+    # 提供時會由 SQL Execution Graph 解析 SP/View/Function lineage；C# inline
+    # SQL facts 仍保留直接出現的表名，兩者都會納入結果。
     write_only: bool = False                  # True：只回傳「寫入」這張表的命中（access_type
     # 屬於 WRITE/WRITE_INDIRECT/INSERT/UPDATE/DELETE），濾掉純讀取（READ）與無法判斷（""）
     # 的命中——用於「打算異動這張表，只想知道誰會寫壞」這種比純反查更聚焦的情境。
@@ -174,13 +176,16 @@ class FindByTableRequest(BaseModel):
 class TableMatchProgram(BaseModel):
     program: str = ""                         # 程式基底名（不含副檔名）
     file: str = ""                             # 相對 repo 根目錄的檔案路徑
-    via_sp: bool = False                       # True：這筆是透過「呼叫的 SP/View 定義本文有引用該表」間接找到的，
-    # 不是 C# 程式碼裡直接內嵌該表名的原始命中（見 database 欄位說明）
+    via_sp: bool = False                       # True：這筆是透過 Gateway + SQL Execution Graph path 間接找到的
+    # 不是 C# inline SQL fact 的直接命中
     access_type: str = ""                     # 存取型態：C# 直接命中沿用 CSharpTableRelation.access_type
-    # 既有的 "READ"/"INSERT"/"UPDATE"/"DELETE"；透過 write_dependencies 反查的 SP 命中為
-    # "WRITE"/"READ"（DMF 只有 is_selected/is_updated 二元旗標，做不到動詞細緻度）；
-    # 透過巢狀呼叫展開找到的間接命中為 "WRITE_INDIRECT"；查無資訊仍為 ""（未知，維持
-    # 現行為，不代表「沒有寫入」）。
+    # 直接命中可為 "READ"/"INSERT"/"UPDATE"/"DELETE"；Execution Graph 的巢狀
+    # 呼叫會保留原始 operation_type，間接寫入標示為 "WRITE_INDIRECT"。
+    path_id: str = ""
+    entry_method: str = ""
+    sp_chain: List[str] = Field(default_factory=list)
+    evidence: str = ""
+    operation_type: str = ""
 
 
 class FindByTableResponse(BaseModel):

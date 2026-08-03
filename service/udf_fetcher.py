@@ -2,7 +2,7 @@
 """
 使用者定義函數（UDF）依程式篩選（cache-only，盡力而為）。
 
-靜態程式碼分析目前沒有專門的「UDF 呼叫關聯」偵測（不像 SP 有 sp_relations 那樣
+靜態程式碼分析目前沒有專門的「UDF 呼叫關聯」偵測（不像 database invocation 那樣
 逐一比對呼叫樣式），但 C# 解析本來就會把程式裡內嵌的 SQL 查詢文字整段擷取出來
 （FileAnalysisResult.sql_queries，見 csharp_parser.py）。這支模組改用「比對」而
 非「解析」的方式：從本機 SQL 快取（sql_cache_store.py，由 refresh_sql_cli 落地）

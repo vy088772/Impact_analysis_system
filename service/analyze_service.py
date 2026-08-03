@@ -20,7 +20,13 @@ from typing import Callable, Dict, Iterable, List, Mapping, Tuple
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
-from code_analyzer.csharp_analysis_gateway import CSharpAnalysisGateway, DbInvocation, SpCatalog
+from code_analyzer.csharp_analysis_gateway import (
+    CSharpAnalysisGateway,
+    DbInvocation,
+    InvocationEvidence,
+    SpCatalog,
+    normalize_procedure_name,
+)
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 
 from .schemas import (
@@ -44,8 +50,8 @@ from .fk_resolver import resolve_fk_related
 from .sp_fetcher import fetch_sp_definitions
 from .view_fetcher import fetch_view_definitions
 from .udf_fetcher import fetch_udf_definitions
-from .dependency_fetcher import fetch_dependencies
 from .execution_path_builder import build_compact_execution_path_payload, build_execution_paths
+from .graph_queries import query_table_accesses
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import get_or_scan, has_cache
@@ -162,6 +168,9 @@ def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
         merged.razor_results.extend(s.razor_results)
         merged.vue_results.extend(s.vue_results)
         merged.sp_relations.extend(s.sp_relations)
+        merged.legacy_sp_relations.extend(
+            getattr(s, "legacy_sp_relations", []) or []
+        )
         merged.table_relations.extend(s.table_relations)
     merged.calculate_statistics()
     return merged
@@ -172,12 +181,13 @@ def _execution_path_context(
     scan: ProjectScanResult,
 ) -> Tuple[SpCatalog, Dict, str]:
     """Load the selected SQL graph and build its database-scoped SP catalog."""
-    cached = sql_cache_store.load_cached(req.database, "dbo") if req.database else None
+    database_alias = str(getattr(req, "database", "") or "")
+    cached = sql_cache_store.load_cached(database_alias, "dbo") if database_alias else None
     graph = dict((cached or {}).get("sql_execution_graph") or {})
     graph_database = str(
         graph.get("database")
         or (cached or {}).get("database")
-        or req.database
+        or database_alias
         or ""
     )
     if graph_database and not graph.get("database"):
@@ -197,10 +207,6 @@ def _execution_path_context(
         schema = str(item.get("schema") or "").strip()
         return f"{schema}.{name}" if schema and "." not in name else name
 
-    if cached is None:
-        for relation in scan.sp_relations:
-            add_procedure(relation.sp_database or "", relation.sp_name or "")
-
     for node in graph.get("nodes", []) or []:
         if node.get("type") == "stored_procedure":
             add_procedure(graph_database, qualified_procedure_name(node))
@@ -212,6 +218,22 @@ def _execution_path_context(
     return SpCatalog.from_databases(procedures_by_database, default_schema=schema), graph, graph_database
 
 
+def _require_sql_execution_graph(database: str) -> Tuple[Dict, Dict]:
+    database = str(database or "").strip()
+    if not database:
+        raise ValueError(
+            "database 不可為空；Gateway path analysis 需要指定 SQL execution graph cache。"
+        )
+    cached = sql_cache_store.load_cached(database, "dbo")
+    graph = (cached or {}).get("sql_execution_graph") if cached else None
+    if not cached or not graph:
+        raise ValueError(
+            f"SQL execution graph cache 不存在或版本已失效：{database}。"
+            "請重新執行 refresh_sql_cli <system_id> 或 POST /refresh_sql。"
+        )
+    return cached, dict(graph)
+
+
 def _execution_connection_sources(
     scan: ProjectScanResult,
     file_path: str,
@@ -221,14 +243,6 @@ def _execution_connection_sources(
     """Resolve raw connection expressions for one file into the selected graph scope."""
     file_key = str(Path(file_path).resolve())
     sources = dict(getattr(scan, "connection_sources", {}).get(file_key, {}) or {})
-    if not sources:
-        for relation in scan.sp_relations:
-            if (
-                str(Path(relation.csharp_file).resolve()) == file_key
-                and relation.connection_variable
-                and relation.sp_database
-            ):
-                sources[relation.connection_variable] = relation.sp_database
 
     if not graph_database:
         return sources
@@ -413,7 +427,10 @@ def _rated_execution_invocations(
                 scan,
                 file_result.file_path,
                 graph_database,
-                database_aliases=(req.database, req.db_name),
+                database_aliases=(
+                    getattr(req, "database", ""),
+                    getattr(req, "db_name", ""),
+                ),
             ),
         )
         relative_path = _rel(file_result.file_path, root)
@@ -445,6 +462,27 @@ def _rated_execution_invocations(
     return rated_invocations, graph
 
 
+def _serialize_db_invocation(invocation: DbInvocation) -> Dict:
+    return {
+        "class_name": invocation.class_name,
+        "method_name": invocation.method_name,
+        "database": invocation.database,
+        "procedure_name": invocation.procedure_name,
+        "evidence": invocation.evidence.value,
+        "reason": invocation.reason,
+        "source_span": {
+            "relative_path": invocation.source.relative_path,
+            "start_offset": invocation.source.start_offset,
+            "end_offset": invocation.source.end_offset,
+        },
+        "procedure_schema": invocation.procedure_schema,
+        "method_chain": list(invocation.method_chain),
+        "method_class_chain": list(invocation.method_class_chain),
+        "branch_context": list(invocation.branch_context),
+        "source_snapshot_hash": invocation.source_snapshot_hash,
+    }
+
+
 def _build_program_execution_paths(
     req: AnalyzeRequest,
     scan: ProjectScanResult,
@@ -452,9 +490,19 @@ def _build_program_execution_paths(
     root: Path,
 ) -> Tuple[List[Dict], Dict[str, object]]:
     """Join one program's raw C# facts to the selected SQL execution graph."""
+    if req.database:
+        _require_sql_execution_graph(req.database)
     rated_invocations, graph = _rated_execution_invocations(req, scan, matched_files, root)
 
     paths = build_execution_paths(rated_invocations, graph)
+    if not graph and not req.database:
+        for path in paths:
+            if path.get("unresolved_reason") == "not_in_resolved_catalog":
+                path["unresolved_reason"] = "stored_procedure_not_in_graph"
+                targets = list(path.get("sp_chain") or [])
+                if targets and "." not in targets[0]:
+                    targets[0] = f"dbo.{targets[0]}"
+                path["unresolved_targets"] = targets[:1]
     compact_payload = build_compact_execution_path_payload(paths)
     return paths, compact_payload
 
@@ -825,11 +873,24 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             r for r in scan.csharp_results if _file_matches(r.file_path, program_base)
         ]
 
-        # 2) 比對 SP / Table 關聯
+        # 2) Join C# database facts through the Gateway; legacy relations are not
+        # part of the formal response path.
+        rated_invocations: List[DbInvocation] = []
+        if matched_files:
+            rated_invocations, _ = _rated_execution_invocations(
+                req,
+                scan,
+                matched_files,
+                root,
+            )
         sp_names: List[str] = []
-        for rel in scan.sp_relations:
-            if _file_matches(rel.csharp_file, program_base) and rel.sp_name not in sp_names:
-                sp_names.append(rel.sp_name)
+        for invocation in rated_invocations:
+            if invocation.procedure_name and invocation.procedure_name not in sp_names:
+                sp_names.append(invocation.procedure_name)
+        database_invocations = [
+            _serialize_db_invocation(invocation)
+            for invocation in rated_invocations
+        ]
 
         table_names: List[str] = []
         for rel in scan.table_relations:
@@ -895,7 +956,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             )
 
         # 使用者定義函數（UDF）完整定義（選用）：靜態解析沒有專門的「UDF 呼叫」
-        # 關聯（不像 SP 有 sp_relations），改用「比對」取代「解析」——把該程式自己
+        # 關聯（沒有專門的 database invocation fact），改用「比對」取代「解析」——把該程式自己
         # 內嵌的 SQL 查詢文字（matched_files 的 sql_queries）跟本機 SQL 快取的整庫
         # UDF 名單比對，只有真的以函數呼叫形式出現在這支程式 SQL 裡的 UDF 才會附上
         # 完整定義，做到「依程式篩選相關 UDF」而不是整庫塞給 AI（見 udf_fetcher.py）。
@@ -912,21 +973,6 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                     sql_texts,
                     database_alias=req.database or None,
                 )
-
-        # 物件上下游依賴（選用）：原生依賴關係（sys.sql_expression_dependencies，
-        # 由 refresh_sql_cli 一次落地進本機 SQL 快取）中，只挑出這支程式關心的
-        # 物件（sp_names + table_names + 實際比對出的 UDF 名稱）對應的
-        # depends_on/depended_by，讓 AI 看得到「這個 SP/表/View 上游被誰引用、
-        # 下游依賴誰」，不用整個資料庫的依賴圖都塞進單一程式的分析結果。
-        dependencies: Dict[str, Dict] = {}
-        if req.include_sp_defs and (sp_names or table_names):
-            dep_object_names = list(sp_names) + list(table_names) + [
-                u.get("name", "") for u in udf_definitions if u.get("name")
-            ]
-            dependencies = fetch_dependencies(
-                dep_object_names,
-                database_alias=req.database or None,
-            )
 
         # 跨程式呼叫參照展開（類似 Copilot 跟隨參照）：
         # 找出這支程式呼叫了、但定義在「其他檔案」的方法，帶入相關程式碼片段。
@@ -998,7 +1044,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 sp_definitions=sp_definitions,
                 view_definitions=view_definitions,
                 udf_definitions=udf_definitions,
-                dependencies=dependencies,
+                database_invocations=database_invocations,
                 related_programs=related_programs,
                 view_layer=view_layer,
                 execution_paths=execution_paths,
@@ -1022,8 +1068,48 @@ def _rel(file_path: str, root: Path) -> str:
         return file_path
 
 
+def _source_file_for_span(
+    scan: ProjectScanResult,
+    root: Path,
+    relative_path: str,
+) -> str:
+    """Resolve an Execution Path source span back to its scanned C# file."""
+    normalized = str(relative_path).replace("\\", "/").casefold()
+    for result in scan.csharp_results:
+        candidate = str(Path(_rel(result.file_path, root))).replace("\\", "/").casefold()
+        if candidate == normalized:
+            return result.file_path
+    matches = [
+        result.file_path
+        for result in scan.csharp_results
+        if Path(result.file_path).name.casefold() == Path(relative_path).name.casefold()
+    ]
+    return matches[0] if len(matches) == 1 else ""
+
+
+def _prefer_table_match(
+    matches_by_file: Dict[str, TableMatchProgram],
+    candidate: TableMatchProgram,
+) -> None:
+    """Keep the strongest access fact when one file contributes many paths."""
+    current = matches_by_file.get(candidate.file)
+    if current is None or _table_match_rank(candidate) > _table_match_rank(current):
+        matches_by_file[candidate.file] = candidate
+
+
+def _table_match_rank(match: TableMatchProgram) -> tuple[int, int, int]:
+    access_type = (match.access_type or "").upper()
+    is_write = access_type in {"WRITE", "WRITE_INDIRECT", "INSERT", "UPDATE", "DELETE", "SELECT_INTO"}
+    is_indirect = access_type.endswith("_INDIRECT")
+    return (
+        2 if is_write else 1 if access_type.startswith("READ") else 0,
+        1 if not is_indirect else 0,
+        1 if match.via_sp else 0,
+    )
+
+
 def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
-    """反查「哪些程式呼叫了這支 SP」，純比對已快取的掃描結果（sp_relations），無 AI。
+    """反查「哪些程式呼叫了這支 SP」，使用 Gateway invocation 與 SQL Execution Graph，無 AI。
 
     req.cache_only=True（預設）時，若這個系統實際會掃描到的路徑「還沒有掃描快取」
     就直接跳過（skipped=True），不觸發 Azure clone、也不觸發任何掃描 —— 因為呼叫端
@@ -1070,19 +1156,40 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
     scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
     root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
 
-    sp_lower = sp_name.lower()
+    sp_lower = normalize_procedure_name(sp_name)
     matches: List[SPMatchProgram] = []
     seen_files: set = set()
-    for rel in scan.sp_relations:
-        if rel.sp_name.strip().lower() != sp_lower:
+    if not req.database:
+        raise ValueError(
+            "find_by_sp 需要 database 以載入 SQL execution graph；"
+            "請提供 system_id 並先執行 refresh_sql_cli。"
+        )
+    _cached, _graph = _require_sql_execution_graph(req.database)
+    rated_invocations, _ = _rated_execution_invocations(
+        req,
+        scan,
+        list(scan.csharp_results),
+        root,
+    )
+    for invocation in rated_invocations:
+        if (
+            not invocation.procedure_name
+            or normalize_procedure_name(invocation.procedure_name) != sp_lower
+            or invocation.evidence == InvocationEvidence.UNRESOLVED
+        ):
             continue
-        if rel.csharp_file in seen_files:
+        csharp_file = _source_file_for_span(
+            scan,
+            root,
+            invocation.source.relative_path,
+        )
+        if not csharp_file or csharp_file in seen_files:
             continue
-        seen_files.add(rel.csharp_file)
+        seen_files.add(csharp_file)
         matches.append(
             SPMatchProgram(
-                program=_normalize_program(Path(rel.csharp_file).name),
-                file=_rel(rel.csharp_file, root),
+                program=_normalize_program(Path(csharp_file).name),
+                file=_rel(csharp_file, root),
             )
         )
 
@@ -1090,22 +1197,20 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
 
 
 def _normalize_table(name: str) -> str:
-    """正規化資料表名稱供比對：去除中括號、取 schema 前綴後的最後一段、轉小寫。
+    """正規化資料表名稱供 inline SQL facts 與 SQL graph query 比對。
 
-    例如 `[dbo].[Customers]`／`dbo.Customers`／`Customers` 都會正規化成 `customers`，
-    因為 table_relations 收集自各處程式碼的原始寫法不保證一致（有無 schema 前綴、
-    有無中括號皆有可能）。
+    例如 `[dbo].[Customers]`／`dbo.Customers`／`Customers` 都會正規化成 `customers`。
     """
     cleaned = (name or "").replace("[", "").replace("]", "").strip()
     return cleaned.rsplit(".", 1)[-1].lower()
 
 
 def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
-    """反查「哪些程式存取了這張資料表」，純比對已快取的掃描結果（table_relations），無 AI。
+    """反查「哪些程式存取了這張資料表」，結合 inline SQL facts 與 SQL Execution Graph，無 AI。
 
-    邏輯與 find_by_sp() 完全對稱（cache_only 的 skip 判斷、多子資料夾 source 的處理），
-    差異只在比對對象換成 table_relations／資料表名稱正規化規則。詳見 find_by_sp() 的
-    docstring 說明 cache_only 為何不能只用 repo_manager.is_cloned() 判斷。
+    inline SQL facts 保留直接出現在 C# SQL 文字中的表存取；SP/View/Function
+    lineage 則必須由 Gateway invocation join 到 SQL Execution Graph 取得。詳見
+    find_by_sp() 的 docstring 說明 cache_only 為何不能只用 repo_manager.is_cloned() 判斷。
     """
     table_name = (req.table_name or "").strip()
     if not table_name:
@@ -1132,143 +1237,86 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
 
     table_norm = _normalize_table(table_name)
-    matches: List[TableMatchProgram] = []
-    seen_files: set = set()
+    matches_by_file: Dict[str, TableMatchProgram] = {}
     for rel in scan.table_relations:
         if _normalize_table(rel.table_name) != table_norm:
             continue
-        if rel.csharp_file in seen_files:
-            continue
-        seen_files.add(rel.csharp_file)
-        matches.append(
-            TableMatchProgram(
-                program=_normalize_program(Path(rel.csharp_file).name),
-                file=_rel(rel.csharp_file, root),
-                # 直接沿用既有 CSharpTableRelation.access_type（READ/INSERT/UPDATE/
-                # DELETE，見 project_scanner.py）——這裡原本從未設定過，若不補上，
-                # write_only=True 篩選會把「C# 直接內嵌 SQL 寫入」的合法命中誤濾掉。
-                access_type=rel.access_type,
-            )
+        candidate = TableMatchProgram(
+            program=_normalize_program(Path(rel.csharp_file).name),
+            file=_rel(rel.csharp_file, root),
+            # Inline C# SQL remains a direct source fact; SQL-module relationships
+            # are queried from the Execution Graph below.
+            access_type=rel.access_type,
         )
+        _prefer_table_match(matches_by_file, candidate)
 
-    # 補強：table_relations 只收錄「C# 程式碼內嵌 SQL 字串」裡直接出現的表名。
-    # 若這張表只在被呼叫的 SP/View 定義本文內部被引用（C# 端只呼叫 SP 名稱，
-    # 例如 obj.CreateTable("usp_Xxx", par, "SP")，未內嵌任何原始表名字串），
-    # 上面的比對永遠不會命中——額外反查已快取的 SP/View 定義文字，命中的
-    # SP/View 名稱再透過同一次掃描的 sp_relations 找出呼叫端程式（無需連線 DB；
-    # req.database 未提供或無快取則靜默略過，不影響原本的比對）。
-    #
-    # 讀寫判斷優先順序：write_dependencies（sys.dm_sql_referenced_entities 原生
-    # is_selected/is_updated 旗標，見 sql_analyzer.get_sp_write_info）> regex 對
-    # definition 文字做純 presence 比對（沒有原生紀錄時的 fallback，無法分讀寫，
-    # access_type 留空）。
+    # Stored-procedure access is joined through Gateway invocations and the graph.
+    # Do not fall back to SQL dependency dictionaries or definition-text guesses.
     if req.database:
-        sql_cache = sql_cache_store.load_cached(req.database, "dbo")
-        if sql_cache:
-            write_deps = sql_cache.get("write_dependencies") or {}
-            table_pattern = re.compile(
-                r"(?<!\w)(?:\[?\w+\]?\.)?\[?" + re.escape(table_norm) + r"\]?(?!\w)",
-                re.IGNORECASE,
+        _sql_cache, graph = _require_sql_execution_graph(req.database)
+        rated_invocations, graph = _rated_execution_invocations(
+            req,
+            scan,
+            list(scan.csharp_results),
+            root,
+        )
+        for access_record in query_table_accesses(
+            graph,
+            rated_invocations,
+            table_name,
+            access="all",
+        ):
+            source_span = access_record.get("source_span") or {}
+            relative_path = str(source_span.get("relative_path") or "")
+            csharp_file = _source_file_for_span(scan, root, relative_path)
+            if not csharp_file:
+                continue
+            is_write = bool(access_record.get("is_write"))
+            is_indirect = bool(access_record.get("is_indirect"))
+            operation_type = str(access_record.get("operation_type") or "")
+            access_type = (
+                "WRITE_INDIRECT"
+                if is_write and is_indirect
+                else operation_type
+                if is_write
+                else "READ_INDIRECT"
+                if is_indirect
+                else "READ"
             )
-            # hit_objects：{物件名稱(小寫): access_type}
-            hit_objects: Dict[str, str] = {}
-            for obj in (sql_cache.get("procedures") or []) + (sql_cache.get("views") or []):
-                name = (obj.get("name") or "").strip()
-                if not name:
-                    continue
-                write_info = write_deps.get(name)
-                if write_info is not None:
-                    # 原生讀寫資訊優先：有紀錄就直接判斷 WRITE/READ，不再 fallback
-                    # 回 regex（即使該次沒引用到這張表也是正確結果，不當作命中）。
-                    writes = {_normalize_table(t) for t in write_info.get("writes_tables", [])}
-                    reads = {_normalize_table(t) for t in write_info.get("reads_tables", [])}
-                    if table_norm in writes:
-                        hit_objects[name.lower()] = "WRITE"
-                    elif table_norm in reads:
-                        hit_objects[name.lower()] = "READ"
-                    continue
-                # 沒有原生寫入紀錄（View、或舊版快取沒有 write_dependencies）→
-                # fallback 回 regex 純文字比對，無法分讀寫，access_type 留空。
-                definition = obj.get("definition") or ""
-                if table_pattern.search(definition):
-                    hit_objects[name.lower()] = ""
-
-            if hit_objects:
-                for rel in scan.sp_relations:
-                    sp_key = rel.sp_name.strip().lower()
-                    if sp_key not in hit_objects:
-                        continue
-                    if rel.csharp_file in seen_files:
-                        continue
-                    seen_files.add(rel.csharp_file)
-                    matches.append(
-                        TableMatchProgram(
-                            program=_normalize_program(Path(rel.csharp_file).name),
-                            file=_rel(rel.csharp_file, root),
-                            via_sp=True,
-                            access_type=hit_objects[sp_key],
-                        )
-                    )
-
-            # 巢狀展開：A 呼叫 B、B 才真的寫入這張表時，反查也該把 A 視為「間接
-            # 寫入者」。以上面找到的直接寫入 SP 為起點，沿 dependencies 的
-            # depended_by（誰呼叫了這支 SP，sys.sql_expression_dependencies 原生
-            # 依賴關係，非 scan_store 的 sp_relations）往上找呼叫端，最多展開 3 層
-            # （深度上限先寫死保守值，不開放成 API 參數），用 visited 防循環呼叫
-            # （A→B→A）；候選名稱必須存在於 procedures 名稱集合才繼續往上展開
-            # （型別過濾，depended_by 混雜 SP/View/Function，避免誤把 View 的
-            # 依賴關係當成 SP 呼叫鏈繼續遞迴）。
-            direct_write_sps = {name for name, atype in hit_objects.items() if atype == "WRITE"}
-            if direct_write_sps:
-                dependencies = sql_cache.get("dependencies") or {}
-                deps_lookup = {k.lower(): v for k, v in dependencies.items()}
-                proc_name_set = {
-                    (obj.get("name") or "").strip().lower()
-                    for obj in (sql_cache.get("procedures") or [])
-                }
-
-                indirect_sps: set = set()
-                visited = set(direct_write_sps)
-                frontier = set(direct_write_sps)
-                for _ in range(3):
-                    next_frontier: set = set()
-                    for sp_lower in frontier:
-                        dep_entry = deps_lookup.get(sp_lower)
-                        if not dep_entry:
-                            continue
-                        for caller in dep_entry.get("depended_by", []):
-                            caller_lower = caller.strip().lower()
-                            if caller_lower not in proc_name_set or caller_lower in visited:
-                                continue
-                            visited.add(caller_lower)
-                            indirect_sps.add(caller_lower)
-                            next_frontier.add(caller_lower)
-                    if not next_frontier:
-                        break
-                    frontier = next_frontier
-
-                if indirect_sps:
-                    for rel in scan.sp_relations:
-                        sp_key = rel.sp_name.strip().lower()
-                        if sp_key not in indirect_sps:
-                            continue
-                        if rel.csharp_file in seen_files:
-                            continue
-                        seen_files.add(rel.csharp_file)
-                        matches.append(
-                            TableMatchProgram(
-                                program=_normalize_program(Path(rel.csharp_file).name),
-                                file=_rel(rel.csharp_file, root),
-                                via_sp=True,
-                                access_type="WRITE_INDIRECT",
-                            )
-                        )
+            sp_chain = list(access_record.get("sp_chain") or [])
+            candidate = TableMatchProgram(
+                program=_normalize_program(Path(csharp_file).name),
+                file=_rel(csharp_file, root),
+                via_sp=True,
+                access_type=access_type,
+                path_id=str(access_record.get("path_id") or ""),
+                entry_method=str(access_record.get("entry_method") or ""),
+                sp_chain=sp_chain,
+                evidence=str(access_record.get("evidence") or "unresolved"),
+                operation_type=operation_type,
+            )
+            _prefer_table_match(matches_by_file, candidate)
 
     if req.write_only:
-        write_types = {"WRITE", "WRITE_INDIRECT", "INSERT", "UPDATE", "DELETE"}
-        matches = [m for m in matches if m.access_type in write_types]
+        write_types = {
+            "WRITE",
+            "WRITE_INDIRECT",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "SELECT_INTO",
+        }
+        matches_by_file = {
+            key: match
+            for key, match in matches_by_file.items()
+            if match.access_type in write_types
+        }
 
-    return FindByTableResponse(table_name=table_name, matches=matches, source_root=str(root))
+    return FindByTableResponse(
+        table_name=table_name,
+        matches=sorted(matches_by_file.values(), key=lambda item: (item.program, item.file)),
+        source_root=str(root),
+    )
 
 
 def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
@@ -1303,12 +1351,24 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     db_name = req.db_name or None
 
     if req.direction == "backward":
+        rated_invocations: List[DbInvocation] = []
+        execution_graph: Dict[str, object] = {}
+        if req.database:
+            _cached, execution_graph = _require_sql_execution_graph(req.database)
+            rated_invocations, execution_graph = _rated_execution_invocations(
+                req,
+                scan,
+                list(scan.csharp_results),
+                root,
+            )
         chains = flow_chain_builder.build_backward_chains(
             scan,
             root,
             req.table_name,
             column_name=req.column_name or None,
             database_alias=database_alias,
+            graph=execution_graph,
+            invocations=rated_invocations,
         )
         return FlowChainResponse(direction="backward", backward_chains=chains, source_root=str(root))
 
@@ -1318,9 +1378,20 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     if not matched_files:
         return FlowChainResponse(direction="forward", forward_chain=None, source_root=str(root))
 
+    rated_invocations: List[DbInvocation] = []
+    execution_graph: Dict[str, object] = {}
+    if req.database:
+        _cached, execution_graph = _require_sql_execution_graph(req.database)
+        rated_invocations, execution_graph = _rated_execution_invocations(
+            req,
+            scan,
+            matched_files,
+            root,
+        )
+
     forward = flow_chain_builder.build_forward_chain(
         matched_files,
-        scan.sp_relations,
+        [],
         root,
         req.anchor_method,
         database_alias=database_alias,
@@ -1328,6 +1399,8 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
         db_name=db_name,
         max_sp_depth=req.max_sp_depth,
         fk_depth=req.fk_depth,
+        graph=execution_graph,
+        invocations=rated_invocations,
     )
     return FlowChainResponse(direction="forward", forward_chain=forward, source_root=str(root))
 
@@ -1343,11 +1416,16 @@ def refresh_source(source: dict) -> dict:
     root = roots[0] if len(roots) == 1 else repo_dir(
         (source or {}).get("project", ""), (source or {}).get("repo", "")
     )
+    database_invocation_count = len(scan.iter_formal_sp_invocations())
+    inline_table_fact_count = len(scan.table_relations)
     return {
         "source_root": str(root),
         "files": len(scan.csharp_results),
-        "sp_relations": len(scan.sp_relations),
-        "table_relations": len(scan.table_relations),
+        "database_invocations": database_invocation_count,
+        "inline_table_facts": inline_table_fact_count,
+        # Deprecated aliases retained for existing clients during migration.
+        "sp_relations": database_invocation_count,
+        "table_relations": inline_table_fact_count,
     }
 
 

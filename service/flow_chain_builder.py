@@ -33,11 +33,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+import re
+from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
+from code_analyzer.csharp_analysis_gateway import DbInvocation
 from code_analyzer.models import FileAnalysisResult
 from code_analyzer.sql_analyzer import extract_tables_from_definition
-from .sql_cache_store import load_cached
+from .graph_queries import query_table_accesses
+from .execution_path_builder import build_execution_paths
 from .sp_fetcher import fetch_sp_definitions
 from .sp_call_fetcher import fetch_called_sp_names
 from .fk_resolver import resolve_fk_related
@@ -92,7 +95,7 @@ def _inline_sql_tables(matched_files: List[FileAnalysisResult], reachable_method
 
     有些方法（例如只組 DropDownList 選項的 BindXxx）直接用
     `obj.CreateReader("select ... from Table")` 這種內嵌 SQL 字串查資料，完全
-    沒有呼叫 SP，這種情況下單看 stored_procedures/sp_relations 永遠是空的。
+    沒有 database invocation，這種情況下只看 SQL Execution Graph path 也不會涵蓋它。
     csharp_parser 其實已經把每個方法體內解析到的裸 SQL 文字存進
     `MethodInfo.sql_queries`（純字串清單，見 csharp_parser._extract_sql_in_text），
     這裡只是把「屬於可達方法範圍內」的那些字串挑出來，重用既有的
@@ -218,6 +221,8 @@ def build_forward_chain(
     db_name: Optional[str] = None,
     max_sp_depth: int = 2,
     fk_depth: int = 1,
+    graph: Optional[Mapping[str, object]] = None,
+    invocations: Iterable[DbInvocation] = (),
 ) -> Optional[dict]:
     """從指定的錨點方法出發，組出一條正向鏈。
 
@@ -225,10 +230,9 @@ def build_forward_chain(
     ui_fields 的 events 挑出的候選 handler 方法名稱（見這個模組頂部說明）；這裡
     只管照著這個名稱組鏈，不判斷這個名稱選得準不準。
 
-    sp_relations：scan.sp_relations（List[CSharpSPRelation]，每筆帶
-    csharp_file/method_name/sp_name），不是 FileAnalysisResult.stored_procedure_calls
-    ——後者只有整份檔案層級的 SP 呼叫清單，沒有「是哪個方法呼叫的」這個關鍵資訊，
-    沒辦法拿來對照 reachable_methods（哪些方法在這條呼叫鏈可達範圍內）。
+    sp_relations：只供沒有 SQL Execution Graph 的 legacy compatibility fallback；
+    formal path 由 Gateway invocations 與 graph 產生，不讀這個參數。它保留
+    csharp_file/method_name/sp_name 形狀，是因為舊呼叫端仍可能傳入該資料。
 
     回傳 None 代表在 matched_files 裡完全找不到這個方法名稱（呼叫端應視為此
     錨點無效，換下一個候選）。
@@ -241,37 +245,91 @@ def build_forward_chain(
 
     method_path, reachable_methods = _reachable_from(anchor_method, adj)
 
-    # 直接呼叫的 SP：只比對「屬於這批 matched_files 的方法」呼叫到的 SP，避免
+    # Gateway + graph paths are the formal source for database calls.
+    execution_paths = []
+    if graph:
+        execution_paths = [
+            path
+            for path in build_execution_paths(invocations, graph)
+            if (
+                not path.get("entry_method")
+                or path["entry_method"].rsplit(".", 1)[-1] in reachable_methods
+            )
+        ]
+
+    formal_sp_chain: List[dict] = []
+    all_tables: Set[str] = set()
+    unresolved_paths: List[dict] = []
+    if graph:
+        graph_nodes = {
+            str(node.get("id")): node
+            for node in graph.get("nodes", []) or []
+            if node.get("id")
+        }
+        for path in execution_paths:
+            path_tables = set(path.get("reads", []) or []) | set(path.get("writes", []) or [])
+            all_tables.update(path_tables)
+            if path.get("evidence") == "unresolved":
+                unresolved_paths.append(path)
+            sp_chain = list(path.get("sp_chain", []) or [])
+            for depth, name in enumerate(sp_chain):
+                module_node = next(
+                    (
+                        node
+                        for node in graph_nodes.values()
+                        if node.get("type") == "stored_procedure"
+                        and _normalize_name(node.get("name")) == _normalize_name(name)
+                    ),
+                    None,
+                )
+                formal_sp_chain.append(
+                    {
+                        "name": name,
+                        "exists": module_node is not None,
+                        "tables": sorted(path_tables),
+                        "called_by": sp_chain[depth - 1] if depth else "",
+                        "depth": depth,
+                        "evidence": path.get("evidence", "unresolved"),
+                        "path_id": path.get("path_id", ""),
+                        "conditions": list(path.get("conditions", []) or []),
+                    }
+                )
+
+    # Migration-only fallback for callers without an Execution Graph. The service
+    # passes a graph for formal analysis and never uses these relations as evidence.
+    if graph:
+        root_sps = []
+    else:
+        # 直接呼叫的 SP：只比對「屬於這批 matched_files 的方法」呼叫到的 SP，避免
     # 跨程式同名方法造成誤判（例如另一支完全無關的程式也有一個叫 BindData 的方法）。
-    # 比對用「檔名（不分大小寫）」而非完整路徑字串完全相等——scan.sp_relations
+    # 比對用「檔名（不分大小寫）」而非完整路徑字串完全相等——legacy relation
     # 裡的 csharp_file 與 csharp_results 裡的 file_path 即使指向同一個檔案，實務上
     # 仍可能有大小寫或路徑正規化的差異（這裡曾經因為用 exact set membership 導致
     # 明明存在的 SP 關聯完全比對不到，見 analyze_service.py 的 _file_matches()
     # 早就是用檔名比對而非完整路徑，這裡改成一致的做法）。
-    file_names = {Path(fr.file_path).name.lower() for fr in matched_files}
-    root_sps: List[Tuple[str, str]] = []  # (sp_name, called_by_method)
-    seen_sp: Set[str] = set()
-    for rel in sp_relations:
-        if Path(rel.csharp_file).name.lower() not in file_names:
-            continue
-        if rel.method_name not in reachable_methods or not rel.sp_name:
-            continue
-        key = _normalize_name(rel.sp_name)
-        if key not in seen_sp:
-            seen_sp.add(key)
-            root_sps.append((rel.sp_name, rel.method_name))
+        file_names = {Path(fr.file_path).name.lower() for fr in matched_files}
+        root_sps = []  # (sp_name, called_by_method)
+        seen_sp: Set[str] = set()
+        for rel in sp_relations:
+            if Path(rel.csharp_file).name.lower() not in file_names:
+                continue
+            if rel.method_name not in reachable_methods or not rel.sp_name:
+                continue
+            key = _normalize_name(rel.sp_name)
+            if key not in seen_sp:
+                seen_sp.add(key)
+                root_sps.append((rel.sp_name, rel.method_name))
 
-    sp_chain: List[dict] = []
-    for sp_name, called_by_method in root_sps:
-        expanded = _expand_sp_chain(sp_name, database_alias, db_server, db_name, max_sp_depth)
-        for entry in expanded:
-            if entry["depth"] == 0:
-                entry["called_by_method"] = called_by_method
-        sp_chain.extend(expanded)
-
-    all_tables: Set[str] = set()
-    for entry in sp_chain:
-        all_tables.update(entry.get("tables", []))
+    sp_chain = formal_sp_chain
+    if not graph:
+        for sp_name, called_by_method in root_sps:
+            expanded = _expand_sp_chain(sp_name, database_alias, db_server, db_name, max_sp_depth)
+            for entry in expanded:
+                if entry["depth"] == 0:
+                    entry["called_by_method"] = called_by_method
+            sp_chain.extend(expanded)
+        for entry in sp_chain:
+            all_tables.update(entry.get("tables", []))
 
     # 補上「可達方法自己方法體內裸 SQL」引用的資料表（見 _inline_sql_tables 說明）——
     # 有些方法完全沒呼叫 SP，只靠內嵌 SQL 字串查表，單看 sp_chain 會漏掉這些表。
@@ -295,6 +353,8 @@ def build_forward_chain(
         "method_path": method_path,
         "reachable_methods": sorted(reachable_methods),
         "stored_procedures": sp_chain,
+        "execution_paths": execution_paths,
+        "unresolved_paths": unresolved_paths,
         "tables": sorted(all_tables),
         "inline_sql_tables": sorted(inline_tables),
         "related_tables_fk": related_tables,
@@ -425,11 +485,13 @@ def build_backward_chains(
     table_name: str,
     column_name: Optional[str] = None,
     database_alias: Optional[str] = None,
+    graph: Optional[Mapping[str, object]] = None,
+    invocations: Iterable[DbInvocation] = (),
 ) -> List[dict]:
     """從指定的資料表（可選：欄位）出發，組出反向鏈候選清單。
 
-    scan：ProjectScanResult（已合併好的整包掃描結果，含 csharp_results /
-    aspx_results / sp_relations / table_relations）。
+    scan：ProjectScanResult（已合併好的整包掃描結果，含 csharp_results、
+    aspx_results、raw database invocations 與 inline SQL facts）。
 
     每筆候選鏈：
       {
@@ -468,7 +530,14 @@ def build_backward_chains(
             rev_adj_cache[csharp_file] = _reverse_method_adjacency(same_file)
         return rev_adj_cache[csharp_file]
 
-    def add_chain(csharp_file: str, class_name: str, method_name: str, via: str, sp_name: str = "") -> None:
+    def add_chain(
+        csharp_file: str,
+        class_name: str,
+        method_name: str,
+        via: str,
+        sp_name: str = "",
+        access_record: Optional[Mapping[str, object]] = None,
+    ) -> None:
         key = (csharp_file, method_name)
         if key in seen:
             return
@@ -489,42 +558,84 @@ def build_backward_chains(
             entry["column"] = column_name
         if sp_name:
             entry["sp_name"] = sp_name
+        if access_record:
+            entry.update(
+                {
+                    "access_type": access_record.get("access_type", ""),
+                    "path_id": access_record.get("path_id", ""),
+                    "entry_method": access_record.get("entry_method", ""),
+                    "sp_chain": list(access_record.get("sp_chain", []) or []),
+                    "evidence": access_record.get("evidence", "unresolved"),
+                    "operation_type": access_record.get("operation_type", ""),
+                    "conditions": list(access_record.get("conditions", []) or []),
+                    "written_columns": list(access_record.get("written_columns", []) or []),
+                    "reads": list(access_record.get("reads", []) or []),
+                    "writes": list(access_record.get("writes", []) or []),
+                }
+            )
         chains.append(entry)
 
-    # 1) 直接用 SQL 存取此表的 C# 方法（table_relations，不需要資料庫連線）
+    # 1) SQL-module access comes from the same Gateway + Execution Graph join as
+    # find_by_table(). This preserves nested SP order and explicit read/write type.
+    graph_accesses = (
+        query_table_accesses(graph, invocations, table_name, access="all")
+        if graph
+        else []
+    )
+    for access_record in graph_accesses:
+        if column_name and not _graph_access_matches_column(access_record, column_name):
+            continue
+        source_span = access_record.get("source_span") or {}
+        relative_path = str(source_span.get("relative_path") or "")
+        normalized_path = relative_path.replace("\\", "/").casefold()
+        matching_files = [
+            fr.file_path
+            for fr in scan.csharp_results
+            if _rel(fr.file_path, root).replace("\\", "/").casefold() == normalized_path
+        ]
+        if not matching_files:
+            matching_files = [
+                fr.file_path
+                for fr in scan.csharp_results
+                if Path(fr.file_path).name.casefold() == Path(relative_path).name.casefold()
+            ]
+        if len(matching_files) != 1:
+            continue
+        entry_method = str(access_record.get("entry_method") or "")
+        class_name, separator, method_name = entry_method.rpartition(".")
+        if not separator:
+            class_name, method_name = "", entry_method
+        sp_chain = list(access_record.get("sp_chain") or [])
+        add_chain(
+            matching_files[0],
+            class_name,
+            method_name,
+            via="stored_procedure",
+            sp_name=sp_chain[-1] if sp_chain else "",
+            access_record=access_record,
+        )
+
+    # 2) Inline C# SQL remains a separate direct source fact. It does not infer
+    # stored-procedure relationships and is never used to reconstruct SQL calls.
     table_norm = _normalize_name(table_name)
     for rel in scan.table_relations:
         if _normalize_name(rel.table_name) != table_norm:
             continue
-        add_chain(rel.csharp_file, rel.class_name, rel.method_name, via="direct_sql")
-
-    # 2) 透過 SP 引用此表（優先查快取的原生依賴關係 dependencies，
-    #    見 sql_analyzer.get_all_dependencies；沒有原生紀錄的 SP 才 fallback
-    #    回 regex 對 definition 文字比對。欄位為近似比對，一律用 regex，因為
-    #    原生依賴只到「物件」層級，沒有欄位級資訊）
-    cached = load_cached(database_alias) if database_alias else None
-    sp_hits: List[str] = []
-    if cached:
-        deps_lookup = {_normalize_name(k): v for k, v in (cached.get("dependencies", {}) or {}).items()}
-        table_norm_for_deps = _normalize_name(table_name)
-        for proc in cached.get("procedures", []):
-            proc_name = proc.get("name", "")
-            definition = proc.get("definition", "") or ""
-            dep_entry = deps_lookup.get(_normalize_name(proc_name))
-            if dep_entry is not None:
-                depends_on_norm = {_normalize_name(t) for t in dep_entry.get("depends_on", [])}
-                if table_norm_for_deps not in depends_on_norm:
-                    continue
-            elif not definition or not _table_referenced(definition, table_name):
-                continue
-            if column_name and not _column_referenced(definition, column_name):
-                continue
-            sp_hits.append(proc_name)
-
-    if sp_hits:
-        sp_hits_norm = {_normalize_name(n) for n in sp_hits}
-        for rel in scan.sp_relations:
-            if _normalize_name(rel.sp_name) in sp_hits_norm:
-                add_chain(rel.csharp_file, rel.class_name, rel.method_name, via="stored_procedure", sp_name=rel.sp_name)
+        add_chain(
+            rel.csharp_file,
+            rel.class_name,
+            rel.method_name,
+            via="direct_sql",
+        )
 
     return chains
+
+
+def _graph_access_matches_column(access_record: Mapping[str, object], column_name: str) -> bool:
+    """Apply the existing best-effort column filter to graph path metadata."""
+    haystack = " ".join(
+        str(value)
+        for field in ("written_columns", "conditions", "reads", "writes")
+        for value in (access_record.get(field, []) or [])
+    )
+    return bool(re.search(r"\b" + re.escape(column_name) + r"\b", haystack, re.IGNORECASE))

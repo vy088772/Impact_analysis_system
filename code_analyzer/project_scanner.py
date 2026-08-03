@@ -132,7 +132,10 @@ class ProjectScanResult:
     vue_results: List[FileAnalysisResult] = field(default_factory=list)    # .vue
     
     # 關聯資訊
+    # Formal C# database facts are stored in db_invocations and rated by
+    # CSharpAnalysisGateway at the service boundary.
     sp_relations: List[CSharpSPRelation] = field(default_factory=list)
+    legacy_sp_relations: List[CSharpSPRelation] = field(default_factory=list)
     table_relations: List[CSharpTableRelation] = field(default_factory=list)
     
     # 資料庫統計
@@ -141,13 +144,95 @@ class ProjectScanResult:
     total_sql_queries: int = 0
     unique_sps: Set[str] = field(default_factory=set)
     unique_tables: Set[str] = field(default_factory=set)
+
+    @staticmethod
+    def _is_formal_sp_invocation(record: Dict) -> bool:
+        """Return whether a raw StaticAnalyzerHost record is an SP attempt."""
+        invocation_kind = str(record.get("invocation_kind") or "").casefold()
+        mode = str(
+            record.get("wrapper_mode")
+            or record.get("adapter_mode")
+            or ""
+        ).casefold()
+        return bool(
+            record.get("command_type_stored_procedure") is True
+            or (
+                invocation_kind
+                in {"source_wrapper", "dapper", "entity_framework", "entityframework", "ef"}
+                and mode == "stored_procedure"
+            )
+        )
+
+    def iter_formal_sp_invocations(self) -> List[Dict]:
+        """Return raw SP invocation facts for formal reporting consumers.
+
+        These records are Roslyn facts only. Database catalog evidence, graph
+        joins, and proven/likely/unresolved ratings are added by the Gateway at
+        the service boundary and must not be inferred here.
+        """
+        result: List[Dict] = []
+        for source_file, records in self.db_invocations.items():
+            connection_sources = self.connection_sources.get(source_file, {})
+            for record in records or []:
+                if not self._is_formal_sp_invocation(record):
+                    continue
+                command_text = str(record.get("command_text") or "").strip()
+                procedure_name = (
+                    command_text
+                    if record.get("command_text_kind") == "literal" and command_text
+                    else ""
+                )
+                connection_variable = str(
+                    record.get("connection_expression")
+                    or record.get("connection_variable")
+                    or ""
+                )
+                result.append(
+                    {
+                        "source_file": source_file,
+                        "class_name": str(record.get("class_name") or ""),
+                        "method_name": str(record.get("method_name") or ""),
+                        "line_number": int(record.get("line_number") or 0),
+                        "procedure_name": procedure_name,
+                        "database": str(
+                            record.get("database")
+                            or connection_sources.get(connection_variable)
+                            or "unknown"
+                        ),
+                        "connection_variable": connection_variable,
+                        "invocation_kind": str(record.get("invocation_kind") or "direct_sqlclient"),
+                        "command_text_kind": str(record.get("command_text_kind") or ""),
+                        "start_offset": int(record.get("start_offset") or 0),
+                        "end_offset": int(record.get("end_offset") or 0),
+                    }
+                )
+        return sorted(
+            result,
+            key=lambda item: (
+                item["source_file"],
+                item["start_offset"],
+                item["end_offset"],
+                item["method_name"],
+                item["procedure_name"],
+            ),
+        )
     
     def calculate_statistics(self):
         """計算統計資訊"""
-        self.databases_used = set(rel.sp_database for rel in self.sp_relations)
-        self.total_sp_calls = len(self.sp_relations)
+        self.databases_used = {
+            database
+            for sources in self.connection_sources.values()
+            for database in sources.values()
+            if database
+        }
+        formal_sp_invocations = self.iter_formal_sp_invocations()
+        self.total_sp_calls = len(formal_sp_invocations)
         self.total_sql_queries = sum(len(r.sql_queries) for r in self.csharp_results)
-        self.unique_sps = set(rel.sp_name for rel in self.sp_relations)
+        self.unique_sps = {
+            invocation["procedure_name"].lower()
+            for invocation in formal_sp_invocations
+            if invocation["procedure_name"]
+        }
         self.unique_tables = set(rel.table_name for rel in self.table_relations)
 
     def capture_source_snapshot(self, file_path: str, host_result: Dict) -> None:
@@ -213,6 +298,8 @@ class ProjectScanResult:
                 }
             },
             'sp_relations': [rel.to_dict() for rel in self.sp_relations],
+            'legacy_sp_relations': [rel.to_dict() for rel in self.legacy_sp_relations],
+            'database_invocations': self.db_invocations,
             'table_relations': [rel.to_dict() for rel in self.table_relations]
         }
 
@@ -603,14 +690,14 @@ class ProjectScanner:
         
         # 建立 SP 關聯
         if all_sp_calls:
-            self._build_sp_relations(all_sp_calls, analyze_sp)
+            self._build_legacy_sp_relations(all_sp_calls, analyze_sp)
         
         # 建立資料表關聯
         if all_sql_queries:
             self._build_table_relations(all_sql_queries)
     
-    def _build_sp_relations(self, sp_calls: List[StoredProcedureCall], analyze_sp: bool):
-        """建立 SP 關聯"""
+    def _build_legacy_sp_relations(self, sp_calls: List[StoredProcedureCall], analyze_sp: bool):
+        """Retain legacy regex detections for migration comparison only."""
         print(f"\n   建立 SP 關聯...")
         
         for sp_call in tqdm(sp_calls, desc="   SP 分析"):
@@ -658,7 +745,7 @@ class ProjectScanner:
                         except Exception:
                             continue
             
-            self.scan_result.sp_relations.append(relation)
+            self.scan_result.legacy_sp_relations.append(relation)
     
     def _build_table_relations(self, sql_queries: List[SQLQuery]):
         """建立資料表關聯"""
@@ -699,7 +786,7 @@ class ProjectScanner:
         # 建立資料表 → 資料庫的映射（從 SP 資訊中）
         table_to_db_map = {}
         
-        for sp_rel in self.scan_result.sp_relations:
+        for sp_rel in self.scan_result.legacy_sp_relations:
             if sp_rel.sp_info and sp_rel.sp_info.referenced_tables:
                 for table in sp_rel.sp_info.referenced_tables:
                     table_upper = table.upper()
@@ -950,8 +1037,12 @@ class ProjectScanner:
         print(f"\n🗄️  資料庫統計:")
         print(f"   使用的資料庫: {len(result.databases_used)}")
         if result.databases_used:
+            formal_invocations = result.iter_formal_sp_invocations()
             for db in sorted(result.databases_used):
-                sp_count = sum(1 for r in result.sp_relations if r.sp_database == db)
+                sp_count = sum(
+                    1 for invocation in formal_invocations
+                    if invocation["database"] == db
+                )
                 print(f"      - {db}: {sp_count} 個 SP 呼叫")
         
         # SP 統計
@@ -959,55 +1050,48 @@ class ProjectScanner:
         print(f"   總呼叫次數: {result.total_sp_calls}")
         print(f"   不重複 SP: {len(result.unique_sps)}")
         
-        # 檢查不存在的 SP
-        if any(rel.sp_info for rel in result.sp_relations):
-            missing_sps = [rel for rel in result.sp_relations if rel.sp_info and not rel.sp_info.exists]
-            if missing_sps:
-                print(f"   ⚠️  不存在的 SP: {len(missing_sps)}")
+        dynamic_sp_calls = [
+            invocation
+            for invocation in result.iter_formal_sp_invocations()
+            if not invocation["procedure_name"]
+        ]
+        if dynamic_sp_calls:
+            print(f"   ⚠️  動態 SP 名稱（待 Gateway 判定）: {len(dynamic_sp_calls)}")
         
         # SQL 統計
         print(f"\n📊 SQL 查詢統計:")
         print(f"   總查詢數: {result.total_sql_queries}")
         print(f"   涉及資料表: {len(result.unique_tables)}")
         
-        # 複雜度分析（如果有 SP 資訊）
-        sp_with_info = [rel for rel in result.sp_relations if rel.sp_info]
-        if sp_with_info:
-            print(f"\n⚙️  SP 複雜度分布:")
-            complexity_count = {}
-            for rel in sp_with_info:
-                comp = rel.sp_info.estimated_complexity
-                complexity_count[comp] = complexity_count.get(comp, 0) + 1
-            
-            for comp, count in sorted(complexity_count.items()):
-                print(f"   {comp}: {count}")
+        print("\n⚙️  SP 複雜度分布:")
+        print("   未在 scanner 階段評級（請使用 SQL Execution Graph evidence）")
         
         print("\n" + "=" * 80)
     
     def print_sp_relations(self, limit: int = 20):
-        """輸出 SP 關聯清單"""
+        """輸出 formal Database Invocation 清單。"""
         if not self.scan_result:
             print("❌ 尚未執行掃描")
             return
         
         print("\n" + "=" * 80)
-        print("C# 與 SP 關聯")
+        print("C# Database Invocation（raw facts）")
         print("=" * 80)
         
-        for i, rel in enumerate(self.scan_result.sp_relations[:limit], 1):
-            print(f"\n{i}. {rel}")
-            print(f"   檔案: {Path(rel.csharp_file).name}")
-            print(f"   類別.方法: {rel.class_name}.{rel.method_name}")
-            print(f"   行號: {rel.line_number}")
-            
-            if rel.sp_info:
-                print(f"   SP 複雜度: {rel.sp_info.estimated_complexity}")
-                if rel.sp_info.referenced_tables:
-                    tables = ", ".join(list(rel.sp_info.referenced_tables)[:3])
-                    print(f"   涉及資料表: {tables}")
-        
-        if len(self.scan_result.sp_relations) > limit:
-            print(f"\n... 還有 {len(self.scan_result.sp_relations) - limit} 個關聯")
+        invocations = self.scan_result.iter_formal_sp_invocations()
+        for i, invocation in enumerate(invocations[:limit], 1):
+            procedure_name = invocation["procedure_name"] or "<dynamic command text>"
+            print(f"\n{i}. {procedure_name}")
+            print(f"   檔案: {Path(invocation['source_file']).name}")
+            print(
+                f"   類別.方法: {invocation['class_name']}."
+                f"{invocation['method_name']}"
+            )
+            print(f"   資料庫: {invocation['database']}")
+            print(f"   Invocation kind: {invocation['invocation_kind']}")
+
+        if len(invocations) > limit:
+            print(f"\n... 還有 {len(invocations) - limit} 個 invocation")
     
     def export_to_json(self, output_path: str = None) -> str:
         """匯出為 JSON"""
@@ -1057,30 +1141,25 @@ class ProjectScanner:
             
             pd.DataFrame(summary_data).to_excel(writer, sheet_name='專案摘要', index=False)
             
-            # 2. SP 關聯
-            if self.scan_result.sp_relations:
+            # 2. Database Invocations
+            formal_invocations = self.scan_result.iter_formal_sp_invocations()
+            if formal_invocations:
                 sp_data = []
-                for rel in self.scan_result.sp_relations:
+                for invocation in formal_invocations:
                     row = {
-                        'C# 檔案': Path(rel.csharp_file).name,
-                        '完整路徑': rel.csharp_file,
-                        '類別': rel.class_name,
-                        '方法': rel.method_name,
-                        '行號': rel.line_number,
-                        'SP 名稱': rel.sp_name,
-                        '資料庫': rel.sp_database,
-                        '是否存在': '是' if (rel.sp_info and rel.sp_info.exists) else '否',
-                        '複雜度': rel.sp_info.estimated_complexity if rel.sp_info else '',
-                        '涉及資料表數': len(rel.sp_info.referenced_tables) if rel.sp_info else 0,
-                        '連線變數': rel.connection_variable
+                        'C# 檔案': Path(invocation['source_file']).name,
+                        '完整路徑': invocation['source_file'],
+                        '類別': invocation['class_name'],
+                        '方法': invocation['method_name'],
+                        'SP 名稱': invocation['procedure_name'] or '<dynamic>',
+                        '資料庫': invocation['database'],
+                        'Evidence': 'raw',
+                        '連線變數': invocation['connection_variable'],
+                        'Invocation kind': invocation['invocation_kind'],
                     }
-                    
-                    if rel.sp_info and rel.sp_info.referenced_tables:
-                        row['涉及資料表'] = ', '.join(sorted(rel.sp_info.referenced_tables))
-                    
                     sp_data.append(row)
                 
-                pd.DataFrame(sp_data).to_excel(writer, sheet_name='SP關聯', index=False)
+                pd.DataFrame(sp_data).to_excel(writer, sheet_name='Database Invocations', index=False)
             
             # 3. 資料表關聯
             if self.scan_result.table_relations:

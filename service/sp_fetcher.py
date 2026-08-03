@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from .sql_cache_store import load_cached
-from code_analyzer.sql_analyzer import estimate_complexity_from_definition, extract_tables_from_definition
+from code_analyzer.sql_analyzer import estimate_complexity_from_definition
 
 
 def _normalize(name: str) -> str:
@@ -23,6 +23,56 @@ def _normalize(name: str) -> str:
     if "." in core:
         core = core.rsplit(".", 1)[-1]
     return core.lower()
+
+
+def _qualified_node_name(node: dict) -> str:
+    schema = str(node.get("schema") or "").strip()
+    name = str(node.get("name") or "").strip()
+    return f"{schema}.{name}" if schema and name else name
+
+
+def _graph_tables_for_procedure(cached: dict, procedure_name: str) -> List[str]:
+    graph = cached.get("sql_execution_graph") or {}
+    nodes = {
+        str(node.get("id")): node
+        for node in graph.get("nodes", []) or []
+        if node.get("id")
+    }
+    relationships = graph.get("relationships", []) or []
+    roots = {
+        node_id
+        for node_id, node in nodes.items()
+        if node.get("type") == "stored_procedure"
+        and _normalize(_qualified_node_name(node)) == _normalize(procedure_name)
+    }
+    queue = list(roots)
+    visited: set[str] = set()
+    tables: set[str] = set()
+    while queue:
+        source_id = queue.pop(0)
+        if source_id in visited:
+            continue
+        visited.add(source_id)
+        source = nodes.get(source_id, {})
+        for relationship in relationships:
+            if relationship.get("source") != source_id:
+                continue
+            relationship_type = relationship.get("type")
+            target_id = str(relationship.get("target") or "")
+            target = nodes.get(target_id)
+            if target is None:
+                continue
+            if relationship_type in {"contains", "calls"}:
+                queue.append(target_id)
+            elif relationship_type in {"reads", "writes"}:
+                target_type = target.get("type")
+                if target_type == "table":
+                    tables.add(_qualified_node_name(target))
+                elif target_type in {"view", "function", "dml_operation", "unresolved_dynamic_sql"}:
+                    queue.append(target_id)
+        if source.get("type") in {"view", "function"}:
+            continue
+    return sorted(table for table in tables if table)
 
 
 def _from_cache(sp_names: List[str], database_alias: Optional[str], max_def_chars: int) -> tuple[List[dict], List[str]]:
@@ -37,12 +87,6 @@ def _from_cache(sp_names: List[str], database_alias: Optional[str], max_def_char
         return [], sp_names
 
     lookup = {_normalize(p["name"]): p for p in cached.get("procedures", [])}
-    # 原生依賴關係（sys.sql_expression_dependencies，由 refresh_sql_cli 一次落地，
-    # 見 sql_analyzer.get_all_dependencies）已經跟 procedures/views/functions/tables
-    # 存在同一份快取裡——這裡直接查表即可，不需要再對 definition 文字跑一次 regex
-    # （regex 只在快取本身沒有這支 SP 的原生依賴紀錄時，才當 fallback 用）。
-    deps_lookup = {_normalize(k): v for k, v in (cached.get("dependencies", {}) or {}).items()}
-
     found: List[dict] = []
     missing: List[str] = []
     for raw in sp_names:
@@ -51,23 +95,13 @@ def _from_cache(sp_names: List[str], database_alias: Optional[str], max_def_char
             missing.append(raw)
             continue
         definition = p.get("definition", "") or ""
-        dep_entry = deps_lookup.get(_normalize(raw))
-        if dep_entry is not None:
-            # 原生依賴優先：這支 SP 在快取的 dependencies 裡有紀錄（即使 depends_on
-            # 是空清單，也代表原生查詢當初確實有查到這支 SP，只是它沒有引用其他物件）
-            tables = sorted(dep_entry.get("depends_on", []))
-            dependency_source = "native"
-        else:
-            # dependencies 裡沒有這支 SP 的紀錄（例如舊快取版本、或原生查詢當初
-            # 就查不到），才 fallback 回 regex 對 definition 文字分析
-            tables = sorted(extract_tables_from_definition(definition)) if definition else []
-            dependency_source = "regex"
+        tables = _graph_tables_for_procedure(cached, raw)
         found.append({
             "name": raw,
             "exists": bool(definition),
             "parameters": p.get("parameters", []),
             "tables": tables,
-            "dependency_source": dependency_source,
+            "dependency_source": "execution_graph",
             # 複雜度：純字串靜態分析（見 estimate_complexity_from_definition），
             # 不需要即時連線，可直接對快取的 definition 文字計算，故不再留空。
             "complexity": estimate_complexity_from_definition(definition) if definition else "",
@@ -125,8 +159,8 @@ def _from_live_query(
                 "name": raw,
                 "exists": True,
                 "parameters": list(info.parameters),
-                "tables": list(info.referenced_tables),
-                "dependency_source": getattr(info, "dependency_source", "regex"),
+                "tables": [],
+                "dependency_source": "unavailable_without_execution_graph",
                 "complexity": info.estimated_complexity,
                 "definition": definition[:max_def_chars],
                 "truncated": truncated,
@@ -149,10 +183,9 @@ def fetch_sp_definitions(
     """回傳每個 SP 的定義摘要清單。
 
     每筆：{name, exists, parameters, tables, complexity, definition, truncated}
-    優先讀本機 SQL 快取（快取版不含 complexity/引用資料表，因為那是 quick_analyze_sp
-    才會做的正規表達式分析；如需要可日後從快取的 definition 另外解析）；快取沒有
-    的名稱才即時連線補查（需 db_server/db_name，由 catalog 提供）。無資料庫或全部
-    失敗時回傳空清單。
+    優先讀本機 SQL 快取；快取版的 tables 來自 SQL Execution Graph。快取沒有的
+    名稱才即時連線補查（需 db_server/db_name，由 catalog 提供），即時補查只提供
+    SQL object definition，不宣稱 table lineage。無資料庫或全部失敗時回傳空清單。
     """
     if not sp_names:
         return []

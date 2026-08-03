@@ -3,7 +3,7 @@
 SQL View（檢視表）定義擷取（盡力而為）。
 
 程式碼靜態分析目前不會區分「資料表」與「View」——兩者都以 SELECT/FROM 的方式
-被存取，因此都落在 table_relations（program 的 `tables` 清單）裡。這支模組
+被存取，因此都落在 inline SQL facts（program 的 `tables` 清單）裡。這支模組
 負責：給定一批表名，從本機 SQL 快取（sql_cache_store.py）比對出其中「其實是
 View」的項目，回傳其完整定義（讓 AI 看得到 View 實際查詢邏輯，而不只是表名）。
 

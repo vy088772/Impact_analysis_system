@@ -88,7 +88,9 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 沒有這些欄位，必須重新掃描。
 # v17：StaticAnalyzerHost raw db_invocations 新增 branch_context 與 Dapper/Entity
 # Framework adapter facts；舊快取沒有這些新證據，必須重新掃描。
-_CACHE_VERSION = 17
+# v18：legacy regex SP relations moved to legacy_sp_relations; formal consumers use
+# raw db_invocations plus CSharpAnalysisGateway.
+_CACHE_VERSION = 18
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
@@ -110,8 +112,7 @@ def _paths(root: Path) -> tuple[Path, Path]:
 
 
 def has_cache(root: Path) -> bool:
-    pkl, _ = _paths(root)
-    return pkl.exists()
+    return _load(root) is not None
 
 
 def _git_head_commit(path: Path) -> Optional[str]:
