@@ -14,6 +14,8 @@
     POST /refresh_sql → RefreshSqlResponse（重新連線 SQL Server 撈取 SP/View/
                         Function/資料表 Schema，建立 AST SQL Execution Graph，
                         覆寫本機 SQL 快取）
+    GET  /refresh_sql/status/{job_id} → RefreshSqlProgressResponse（查詢 SQL
+                        refresh 的即時階段與計數）
     POST /find_by_sp  → FindBySPResponse（反查哪些程式呼叫了指定 SP，純比對已
                         快取的掃描結果；cache_only=True 時不觸發 clone）
     POST /find_by_table → FindByTableResponse（反查哪些程式存取了指定資料表，
@@ -35,6 +37,7 @@ from .schemas import (
     RefreshResponse,
     RefreshSqlRequest,
     RefreshSqlResponse,
+    RefreshSqlProgressResponse,
     FindBySPRequest,
     FindBySPResponse,
     FindByTableRequest,
@@ -42,7 +45,7 @@ from .schemas import (
     FlowChainRequest,
     FlowChainResponse,
 )
-from . import analyze_service
+from . import analyze_service, refresh_progress
 
 app = FastAPI(
     title="Impact Analysis Service",
@@ -150,13 +153,40 @@ def refresh_sql(req: RefreshSqlRequest) -> RefreshSqlResponse:
             detail=f"server/db_name 不可為空（收到 server={req.server!r}, db_name={req.db_name!r}）；"
                    f"請在 catalog（spec-rag 端）為此系統設定完整的 database.server/database.name。",
         )
+    job_id = refresh_progress.create_job(req.job_id, req.database)
     try:
-        result = analyze_service.refresh_sql_source(req.database, req.server, req.db_name, req.db_schema)
-        return RefreshSqlResponse(**result)
+        result = analyze_service.refresh_sql_source(
+            req.database,
+            req.server,
+            req.db_name,
+            req.db_schema,
+            progress_callback=lambda stage, current, total, item: refresh_progress.update_job(
+                job_id,
+                status="running",
+                stage=stage,
+                current=current,
+                total=total,
+                item=item,
+                message=f"{stage} {current}/{total}",
+            ),
+        )
+        refresh_progress.complete_job(job_id)
+        return RefreshSqlResponse(job_id=job_id, **result)
     except ValueError as exc:
+        refresh_progress.fail_job(job_id, str(exc))
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
+        refresh_progress.fail_job(job_id, str(exc))
         raise HTTPException(status_code=500, detail=f"SQL 快取更新失敗：{exc}")
+
+
+@app.get("/refresh_sql/status/{job_id}", response_model=RefreshSqlProgressResponse)
+def refresh_sql_status(job_id: str) -> RefreshSqlProgressResponse:
+    """查詢 SQL 快取更新的即時進度。"""
+    snapshot = refresh_progress.get_job(job_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="找不到這個 refresh job")
+    return RefreshSqlProgressResponse(**snapshot)
 
 
 def main() -> None:

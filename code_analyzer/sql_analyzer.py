@@ -6,7 +6,7 @@ SQL 分析器（精簡版）
 
 import re
 import pyodbc
-from typing import List, Dict, Set, Optional, Tuple
+from typing import Callable, List, Dict, Set, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -509,7 +509,11 @@ class SQLAnalyzer:
             })
         return columns
 
-    def dump_all_sql_objects(self, schema: str = 'dbo') -> Dict:
+    def dump_all_sql_objects(
+        self,
+        schema: str = 'dbo',
+        progress_callback: Optional[Callable[[str, int, int, str], None]] = None,
+    ) -> Dict:
         """
         把整個資料庫（指定 schema）的 SP/View/Function 完整定義與資料表欄位 Schema
         一次全部撈出來，供本機落地快取（sql_cache_store.py），避免每次問問題都要
@@ -532,7 +536,10 @@ class SQLAnalyzer:
         procedures: List[Dict] = []
         write_dependencies: Dict[str, Dict] = {}
         proc_names = self.get_all_procedures(schema)
-        for name in tqdm(proc_names, desc="   SP 定義", unit="個"):
+        _report_progress(progress_callback, "procedures", 0, len(proc_names), "")
+        for current, name in enumerate(
+            tqdm(proc_names, desc="   SP 定義", unit="個"), start=1
+        ):
             info = self._get_sp_basic_info(name, schema) or {}
             procedures.append({
                 "name": name,
@@ -548,18 +555,26 @@ class SQLAnalyzer:
                 write_info = {}
             if write_info:
                 write_dependencies[name] = write_info
+            _report_progress(progress_callback, "procedures", current, len(proc_names), name)
 
         views: List[Dict] = []
         view_names = self.get_all_views(schema)
-        for name in tqdm(view_names, desc="   View 定義", unit="個"):
+        _report_progress(progress_callback, "views", 0, len(view_names), "")
+        for current, name in enumerate(
+            tqdm(view_names, desc="   View 定義", unit="個"), start=1
+        ):
             views.append({
                 "name": name,
                 "definition": self.get_object_definition(name, schema),
             })
+            _report_progress(progress_callback, "views", current, len(view_names), name)
 
         functions: List[Dict] = []
         function_names = self.get_all_functions(schema)
-        for name in tqdm(function_names, desc="   Function 定義", unit="個"):
+        _report_progress(progress_callback, "functions", 0, len(function_names), "")
+        for current, name in enumerate(
+            tqdm(function_names, desc="   Function 定義", unit="個"), start=1
+        ):
             parameters, return_type = self.get_function_parameters(name, schema)
             functions.append({
                 "name": name,
@@ -567,24 +582,31 @@ class SQLAnalyzer:
                 "parameters": parameters,
                 "return_type": return_type,
             })
+            _report_progress(progress_callback, "functions", current, len(function_names), name)
 
         tables: List[Dict] = []
         table_names = self.get_all_tables(schema)
-        for name in tqdm(table_names, desc="   資料表 Schema", unit="個"):
+        _report_progress(progress_callback, "tables", 0, len(table_names), "")
+        for current, name in enumerate(
+            tqdm(table_names, desc="   資料表 Schema", unit="個"), start=1
+        ):
             tables.append({
                 "name": name,
                 "columns": self.get_table_columns(name, schema),
                 "primary_keys": self.get_primary_key_columns(name, schema),
             })
+            _report_progress(progress_callback, "tables", current, len(table_names), name)
 
         # 原生依賴關係（sys.sql_expression_dependencies，一次查整個 schema，
         # 取代逐物件 regex 猜測），失敗（權限不足等）不影響其餘資料的落地，
         # 直接落成空 dict，消費端各自 fallback 回 regex 版 referenced_tables
+        _report_progress(progress_callback, "dependencies", 0, 1, "")
         try:
             dependencies = self.get_all_dependencies(schema)
         except Exception as e:
             print(f"   ⚠️ 原生依賴關係查詢失敗（將僅依賴各 SP 自身的 tables 欄位/regex fallback）: {e}")
             dependencies = {}
+        _report_progress(progress_callback, "dependencies", 1, 1, "")
 
         return {
             "database": self.db_config.alias,
@@ -596,7 +618,6 @@ class SQLAnalyzer:
             "dependencies": dependencies,
             "write_dependencies": write_dependencies,
         }
-    
     # ========================================
     # 單一 SP 快速分析
     # ========================================
@@ -1131,6 +1152,21 @@ class SQLAnalyzer:
 # ============================================
 # 純字串靜態分析（不需要資料庫連線）
 # ============================================
+
+def _report_progress(
+    callback: Optional[Callable[[str, int, int, str], None]],
+    stage: str,
+    current: int,
+    total: int,
+    item: str,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(stage, current, total, item)
+    except Exception:
+        pass
+
 
 def estimate_complexity_from_definition(definition: str) -> str:
     """依 SP/View/UDF 的完整定義文字估算複雜度，純字串正規表達式分析，

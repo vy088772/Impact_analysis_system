@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
@@ -682,7 +682,13 @@ def refresh_source(source: dict) -> dict:
     }
 
 
-def refresh_sql_source(database: str, server: str, db_name: str, schema: str = "dbo") -> dict:
+def refresh_sql_source(
+    database: str,
+    server: str,
+    db_name: str,
+    schema: str = "dbo",
+    progress_callback: Callable[[str, int, int, str], None] | None = None,
+) -> dict:
     """更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與
     資料表 Schema，覆寫本機落地快取（data/sql_cache/）。
 
@@ -695,7 +701,14 @@ def refresh_sql_source(database: str, server: str, db_name: str, schema: str = "
     """
     from .sql_cache_store import get_or_dump
 
-    data = get_or_dump(database, schema=schema, refresh=True, server=server, db_name=db_name)
+    data = get_or_dump(
+        database,
+        schema=schema,
+        refresh=True,
+        server=server,
+        db_name=db_name,
+        progress_callback=progress_callback,
+    )
     return {
         "database": data.get("database", database),
         "db_schema": data.get("schema", schema),

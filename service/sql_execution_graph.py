@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 
@@ -22,6 +22,7 @@ def build_sql_execution_graph(
     data: dict[str, Any],
     host: StaticAnalyzerHost | None = None,
     project_root: Path | None = None,
+    progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Analyze refreshed SQL modules and return a deterministic graph payload."""
     schema = str(data.get("schema") or "dbo")
@@ -66,6 +67,7 @@ def build_sql_execution_graph(
         )
 
     parse_errors: list[dict[str, Any]] = []
+    _report_progress(progress_callback, "graph", 0, len(module_specs), "")
     if module_specs:
         analyzer = host or StaticAnalyzerHost.for_project(
             project_root or Path(__file__).resolve().parent.parent
@@ -98,6 +100,7 @@ def build_sql_execution_graph(
                         module_id,
                         schema,
                     )
+                _report_progress(progress_callback, "graph", index, len(module_specs), name)
 
     return {
         "graph_version": GRAPH_VERSION,
@@ -105,6 +108,21 @@ def build_sql_execution_graph(
         "relationships": relationships,
         "parse_errors": parse_errors,
     }
+
+
+def _report_progress(
+    callback: Callable[[str, int, int, str], None] | None,
+    stage: str,
+    current: int,
+    total: int,
+    item: str,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(stage, current, total, item)
+    except Exception:
+        pass
 
 
 def _add_operation(

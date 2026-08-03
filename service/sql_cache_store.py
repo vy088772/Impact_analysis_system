@@ -17,7 +17,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from config.settings import settings
 
@@ -121,6 +121,7 @@ def get_or_dump(
     refresh: bool = False,
     server: str = "",
     db_name: str = "",
+    progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> Dict:
     """
     取得（或建立）SQL 物件快取：優先用記憶體/磁碟快取；refresh=True 則強制重新
@@ -145,13 +146,18 @@ def get_or_dump(
             return cached
 
     print(f"🔍 連線 SQL Server 重新撈取物件定義：{database_alias}.{schema}")
+    _report_progress(progress_callback, "connecting", 0, 1, database_alias)
     from code_analyzer.sql_analyzer import SQLAnalyzer
 
     analyzer = SQLAnalyzer(database_alias, server=server, database_name=db_name)
     if not analyzer.connect():
         raise RuntimeError(f"無法連線資料庫：{database_alias}")
+    _report_progress(progress_callback, "connecting", 1, 1, database_alias)
     try:
-        data = analyzer.dump_all_sql_objects(schema)
+        if progress_callback is None:
+            data = analyzer.dump_all_sql_objects(schema)
+        else:
+            data = analyzer.dump_all_sql_objects(schema, progress_callback=progress_callback)
     finally:
         try:
             analyzer.disconnect()
@@ -160,7 +166,27 @@ def get_or_dump(
 
     from .sql_execution_graph import build_sql_execution_graph
 
-    data["sql_execution_graph"] = build_sql_execution_graph(data)
+    data["sql_execution_graph"] = build_sql_execution_graph(
+        data,
+        progress_callback=progress_callback,
+    )
     _mem_cache[key] = data
+    _report_progress(progress_callback, "saving", 0, 1, "SQL cache")
     _save(database_alias, schema, data)
+    _report_progress(progress_callback, "saving", 1, 1, "SQL cache")
     return data
+
+
+def _report_progress(
+    callback: Callable[[str, int, int, str], None] | None,
+    stage: str,
+    current: int,
+    total: int,
+    item: str,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(stage, current, total, item)
+    except Exception:
+        pass

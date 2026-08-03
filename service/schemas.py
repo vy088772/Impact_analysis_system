@@ -166,15 +166,30 @@ class RefreshSqlRequest(BaseModel):
     server: str                              # 資料庫主機位址，必填
     db_name: str                             # 實際資料庫名稱，必填
     db_schema: str = "dbo"                    # SQL schema（欄位名稱不用 schema，避免與 BaseModel.schema() 名稱衝突）
+    job_id: str = ""                          # 呼叫端提供的進度查詢識別碼，可留空
 
 
 class RefreshSqlResponse(BaseModel):
+    job_id: str = ""
     database: str = ""
     db_schema: str = ""
     procedures: int = 0
     views: int = 0
     functions: int = 0
     tables: int = 0
+
+
+class RefreshSqlProgressResponse(BaseModel):
+    job_id: str = ""
+    database: str = ""
+    status: str = "starting"
+    stage: str = ""
+    current: int = 0
+    total: int = 0
+    item: str = ""
+    message: str = ""
+    error: str = ""
+    updated_at: float = 0.0
 
 
 class FlowChainRequest(BaseModel):
