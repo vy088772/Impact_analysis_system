@@ -1,0 +1,181 @@
+"""Ticket 03 behavior checks for AST-backed SQL execution operations."""
+
+from __future__ import annotations
+
+import sys
+import tempfile
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from code_analyzer.static_analyzer_host import StaticAnalyzerHost
+from code_analyzer import sql_analyzer
+from config.settings import settings
+from service import sql_cache_store
+
+
+def test_sql_host_emits_typed_operations_with_module_and_source_evidence() -> None:
+    """A SQL module keeps ordered DML facts instead of returning an empty operation list."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    sql = """CREATE PROCEDURE [dbo].[usp_SaveOrder]
+AS
+BEGIN
+    SELECT Id FROM dbo.SourceOrder WHERE Id = @Id;
+    INSERT INTO dbo.OrderArchive (Id, OrderNo)
+        SELECT Id, OrderNo FROM dbo.SourceOrder;
+    IF @Mode = 1
+        UPDATE dbo.SOrder SET OrderNo = @OrderNo WHERE Id = @Id;
+    ELSE
+        DELETE FROM dbo.SOrder WHERE Id = @Id;
+    SELECT Id INTO dbo.OrderSnapshot FROM dbo.SOrder;
+END;
+"""
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "usp_SaveOrder.sql"
+        source_path.write_text(sql, encoding="utf-8")
+
+        result = host.analyze_sql(source_path)
+
+    assert result["contract_version"] == 1
+    operations = result["operations"]
+    assert [operation["operation_type"] for operation in operations] == [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "SELECT_INTO",
+    ]
+
+    for sequence, operation in enumerate(operations, start=1):
+        assert operation["sequence"] == sequence
+        assert operation["module"] == {
+            "type": "stored_procedure",
+            "schema": "dbo",
+            "name": "usp_SaveOrder",
+        }
+        assert operation["source"]["start_line"] >= 1
+        assert operation["source"]["start_column"] >= 1
+        assert operation["source"]["length"] > 0
+
+    insert = operations[1]
+    assert insert["write_tables"] == ["dbo.OrderArchive"]
+    assert insert["written_columns"] == ["Id", "OrderNo"]
+    assert insert["read_tables"] == ["dbo.SourceOrder"]
+
+    update = operations[2]
+    assert update["write_tables"] == ["dbo.SOrder"]
+    assert update["written_columns"] == ["OrderNo"]
+    assert update["where"] == "Id = @Id"
+    assert update["branch_path"] == ["IF @Mode = 1"]
+    assert update["conditions"] == ["IF @Mode = 1", "Id = @Id"]
+
+    delete = operations[3]
+    assert delete["write_tables"] == ["dbo.SOrder"]
+    assert delete["where"] == "Id = @Id"
+    assert delete["branch_path"] == ["ELSE (NOT (@Mode = 1))"]
+
+    select_into = operations[4]
+    assert select_into["write_tables"] == ["dbo.OrderSnapshot"]
+    assert select_into["read_tables"] == ["dbo.SOrder"]
+
+
+def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
+    """SQL refresh persists graph nodes and relationships alongside SQL definitions."""
+    class FakeSqlAnalyzer:
+        def __init__(self, alias: str, *, server: str, database_name: str) -> None:
+            self.alias = alias
+
+        def connect(self) -> bool:
+            return True
+
+        def disconnect(self) -> None:
+            return None
+
+        def dump_all_sql_objects(self, schema: str) -> dict:
+            return {
+                "database": self.alias,
+                "schema": schema,
+                "procedures": [
+                    {
+                        "name": "usp_SaveOrder",
+                        "definition": (
+                            "CREATE PROCEDURE dbo.usp_SaveOrder AS "
+                            "UPDATE dbo.SOrder SET OrderNo = @OrderNo WHERE Id = @Id;"
+                        ),
+                        "parameters": [],
+                    }
+                ],
+                "views": [
+                    {
+                        "name": "vOrder",
+                        "definition": "CREATE VIEW dbo.vOrder AS SELECT Id FROM dbo.SOrder;",
+                    }
+                ],
+                "functions": [],
+                "tables": [{"name": "SOrder", "columns": []}],
+            }
+
+    previous_cache_root = settings.SQL_CACHE_ROOT
+    previous_mem_cache = dict(sql_cache_store._mem_cache)
+    with tempfile.TemporaryDirectory() as cache_dir:
+        settings.SQL_CACHE_ROOT = cache_dir
+        sql_cache_store._mem_cache.clear()
+        original_analyzer = sql_analyzer.SQLAnalyzer
+        sql_analyzer.SQLAnalyzer = FakeSqlAnalyzer
+        try:
+            data = sql_cache_store.get_or_dump(
+                "TestDb",
+                schema="dbo",
+                refresh=True,
+                server="server",
+                db_name="database",
+            )
+            graph = data["sql_execution_graph"]
+            nodes_by_id = {node["id"]: node for node in graph["nodes"]}
+            relationships = graph["relationships"]
+
+            procedure = nodes_by_id["stored_procedure:dbo.usp_SaveOrder"]
+            operation = nodes_by_id["dml_operation:stored_procedure:dbo.usp_SaveOrder:1"]
+            view = nodes_by_id["view:dbo.vOrder"]
+            view_operation = nodes_by_id["dml_operation:view:dbo.vOrder:1"]
+            assert procedure["type"] == "stored_procedure"
+            assert operation["operation_type"] == "UPDATE"
+            assert operation["written_columns"] == ["OrderNo"]
+            assert view["type"] == "view"
+            assert {relationship["type"] for relationship in relationships} == {
+                "contains",
+                "writes",
+                "reads",
+            }
+            assert any(
+                relationship["type"] == "writes"
+                and relationship["source"] == operation["id"]
+                and relationship["target"] == "table:dbo.SOrder"
+                for relationship in relationships
+            )
+            assert any(
+                relationship["type"] == "reads"
+                and relationship["source"] == view_operation["id"]
+                and relationship["target"] == "table:dbo.SOrder"
+                for relationship in relationships
+            )
+
+            sql_cache_store._mem_cache.clear()
+            reloaded = sql_cache_store.load_cached("TestDb", "dbo")
+            assert reloaded is not None
+            assert reloaded["sql_execution_graph"] == graph
+        finally:
+            sql_analyzer.SQLAnalyzer = original_analyzer
+            sql_cache_store._mem_cache.clear()
+            sql_cache_store._mem_cache.update(previous_mem_cache)
+            settings.SQL_CACHE_ROOT = previous_cache_root
+
+
+if __name__ == "__main__":
+    test_sql_host_emits_typed_operations_with_module_and_source_evidence()
+    print("SQL execution graph tests passed")

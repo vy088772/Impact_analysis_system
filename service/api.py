@@ -12,7 +12,8 @@
     POST /analyze  → AnalyzeResponse（依 program_names 回傳靜態分析結果）
     POST /refresh  → RefreshResponse（git pull + 重新解析，覆寫快取）
     POST /refresh_sql → RefreshSqlResponse（重新連線 SQL Server 撈取 SP/View/
-                        Function/資料表 Schema，覆寫本機 SQL 快取）
+                        Function/資料表 Schema，建立 AST SQL Execution Graph，
+                        覆寫本機 SQL 快取）
     POST /find_by_sp  → FindBySPResponse（反查哪些程式呼叫了指定 SP，純比對已
                         快取的掃描結果；cache_only=True 時不觸發 clone）
     POST /find_by_table → FindByTableResponse（反查哪些程式存取了指定資料表，
@@ -137,7 +138,8 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
 @app.post("/refresh_sql", response_model=RefreshSqlResponse)
 def refresh_sql(req: RefreshSqlRequest) -> RefreshSqlResponse:
     """更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與
-    資料表 Schema，覆寫本機落地快取（data/sql_cache/）。
+    資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取
+    （data/sql_cache/）。
 
     server/db_name 由呼叫端（catalog）提供，缺一即報錯、不嘗試連線。"""
     if not req.database:

@@ -30,7 +30,9 @@ from config.settings import settings
 #     {sp_name: {"writes_tables":[...], "reads_tables":[...], "writes_columns":{...}}}），
 #     供 find_by_table() 分辨「這支 SP 到底是讀還是寫這張表」（原生依讀寫優先，
 #     regex presence 比對僅作 fallback）
-_SQL_CACHE_VERSION = 4
+# v5：新增 sql_execution_graph（ScriptDom AST 產生的 typed operation nodes 與
+#     reads/writes/contains relationships），舊 cache 必須重新 refresh。
+_SQL_CACHE_VERSION = 5
 
 # 同 process 內的記憶體快取
 _mem_cache: Dict[str, Dict] = {}
@@ -56,8 +58,7 @@ def _paths(database_alias: str, schema: str) -> tuple[Path, Path]:
 
 
 def has_cache(database_alias: str, schema: str = "dbo") -> bool:
-    data_path, _ = _paths(database_alias, schema)
-    return data_path.exists()
+    return _load(database_alias, schema) is not None
 
 
 def _load(database_alias: str, schema: str) -> Optional[Dict]:
@@ -69,7 +70,10 @@ def _load(database_alias: str, schema: str) -> Optional[Dict]:
             info = json.loads(meta_path.read_text(encoding="utf-8"))
             if info.get("cache_version") != _SQL_CACHE_VERSION:
                 return None
-        return json.loads(data_path.read_text(encoding="utf-8"))
+        data = json.loads(data_path.read_text(encoding="utf-8"))
+        if "sql_execution_graph" not in data:
+            return None
+        return data
     except Exception:
         return None
 
@@ -101,7 +105,10 @@ def load_cached(database_alias: str, schema: str = "dbo") -> Optional[Dict]:
     """單純讀取本機快取（不連線、不 dump）；查詢時的快速路徑用這個。"""
     key = _key(database_alias, schema)
     if key in _mem_cache:
-        return _mem_cache[key]
+        cached = _mem_cache[key]
+        if "sql_execution_graph" in cached:
+            return cached
+        _mem_cache.pop(key, None)
     cached = _load(database_alias, schema)
     if cached is not None:
         _mem_cache[key] = cached
@@ -127,7 +134,10 @@ def get_or_dump(
 
     if not refresh:
         if key in _mem_cache:
-            return _mem_cache[key]
+            cached = _mem_cache[key]
+            if "sql_execution_graph" in cached:
+                return cached
+            _mem_cache.pop(key, None)
         cached = _load(database_alias, schema)
         if cached is not None:
             _mem_cache[key] = cached
@@ -148,6 +158,9 @@ def get_or_dump(
         except Exception:
             pass
 
+    from .sql_execution_graph import build_sql_execution_graph
+
+    data["sql_execution_graph"] = build_sql_execution_graph(data)
     _mem_cache[key] = data
     _save(database_alias, schema, data)
     return data

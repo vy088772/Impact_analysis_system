@@ -690,7 +690,8 @@ def refresh_sql_source(database: str, server: str, db_name: str, schema: str = "
     server/db_name：實際連線目標，由呼叫端（catalog）提供；缺一時
     get_or_dump()→SQLAnalyzer 會直接報錯，不嘗試連線。
 
-    回傳 {database, db_schema, procedures, views, functions, tables} 數量摘要。
+    回傳 {database, db_schema, procedures, views, functions, tables} 數量摘要；
+    SQL Execution Graph 會與 object definitions 一起落地到 SQL cache。
     """
     from .sql_cache_store import get_or_dump
 
