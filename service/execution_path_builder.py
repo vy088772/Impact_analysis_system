@@ -106,7 +106,7 @@ def build_execution_paths(
             )
         )
 
-    return sorted(paths, key=lambda path: (path["path_id"], path["entry_method"]))
+    return sorted(paths, key=_path_sort_key)
 
 
 def _paths_from_module(
@@ -406,13 +406,25 @@ def _path_for_operation(
     operation_conditions = list(operation.get("conditions", []) or [])
     if not operation_conditions:
         operation_conditions = list(operation.get("branch_path", []) or [])
+    path_identity_conditions = tuple(
+        _ordered_unique((*call_conditions, *list(operation.get("branch_path", []) or [])))
+    )
 
     return {
-        "path_id": _path_id(invocation, operation_id, "|".join(module_chain), call_conditions),
+        "path_id": _path_id(
+            invocation,
+            operation_id,
+            "|".join(module_chain),
+            path_identity_conditions,
+        ),
+        "source_span": _source_span(invocation),
+        "method_class_chain": list(invocation.method_class_chain),
         "entry_method": _entry_method(invocation),
         "method_chain": _method_chain(invocation),
         "database": invocation.database or "",
         "sp_chain": list(sp_chain or [_qualified_name(module)]),
+        "module_chain_ids": list(module_chain),
+        "terminal_operation_id": operation_id,
         "terminal_operation": operation.get("operation_type", ""),
         "target": writes[0] if writes else "",
         "written_columns": written_columns,
@@ -457,10 +469,14 @@ def _unresolved_path(
             module_id,
             effective_conditions,
         ),
+        "source_span": _source_span(invocation),
+        "method_class_chain": list(invocation.method_class_chain),
         "entry_method": _entry_method(invocation),
         "method_chain": _method_chain(invocation),
         "database": invocation.database or "",
         "sp_chain": sp_chain,
+        "module_chain_ids": list(module_id.split("|") if module_id else []),
+        "terminal_operation_id": operation_id,
         "terminal_operation": None,
         "target": "",
         "written_columns": [],
@@ -520,6 +536,29 @@ def _invocation_sort_key(invocation: DbInvocation) -> tuple[str, int, int, str, 
     )
 
 
+def _path_sort_key(path: Mapping[str, Any]) -> tuple[Any, ...]:
+    source_span = path.get("source_span") or {}
+    return (
+        str(source_span.get("relative_path", "")),
+        int(source_span.get("start_offset", 0) or 0),
+        int(source_span.get("end_offset", 0) or 0),
+        str(path.get("entry_method", "")),
+        tuple(str(value) for value in path.get("sp_chain", []) or []),
+        str(path.get("terminal_operation_id", "")),
+        str(path.get("unresolved_reason", "")),
+        str(path.get("path_id", "")),
+    )
+
+
+def _source_span(invocation: DbInvocation) -> dict[str, Any]:
+    return {
+        "relative_path": invocation.source.relative_path,
+        "start_offset": invocation.source.start_offset,
+        "end_offset": invocation.source.end_offset,
+        "content_hash": invocation.source_snapshot_hash,
+    }
+
+
 def _compact_sort_key(
     path: Mapping[str, Any],
     question_tokens: tuple[str, ...],
@@ -565,13 +604,14 @@ def _path_id(
 ) -> str:
     identity = "\x1f".join(
         (
-            invocation.database or "",
+            _normalize_database(invocation.database),
             invocation.source.relative_path,
             str(invocation.source.start_offset),
             str(invocation.source.end_offset),
             _entry_method(invocation),
-            invocation.procedure_schema or "",
-            invocation.procedure_name or "",
+            _normalize_schema(invocation.procedure_schema),
+            _normalize_name(invocation.procedure_name),
+            invocation.source_snapshot_hash,
             module_id,
             operation_id,
             "\x1e".join(path_conditions),

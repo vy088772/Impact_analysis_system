@@ -45,6 +45,37 @@ class AnalyzeRequest(BaseModel):
     include_execution_paths: bool = True     # 是否組出 C# → SQL Execution Graph paths
 
 
+class PathEvidenceRequest(BaseModel):
+    """POST /path_evidence 請求。"""
+    path_id: str
+    system: str = ""
+    source: AzureSource = Field(default_factory=AzureSource)
+    program_names: List[str] = Field(default_factory=list)
+    database: str = ""
+    db_server: str = ""
+    db_name: str = ""
+    refresh: bool = False
+
+
+class PathEvidenceResponse(BaseModel):
+    """One selected Execution Path expanded into source-backed evidence."""
+    path_id: str
+    entry_method: str = ""
+    method_chain: List[str] = Field(default_factory=list)
+    database: str = ""
+    sp_chain: List[str] = Field(default_factory=list)
+    conditions: List[str] = Field(default_factory=list)
+    risk_flags: List[str] = Field(default_factory=list)
+    evidence: str = "unresolved"
+    unresolved_reason: str = ""
+    unresolved_targets: List[str] = Field(default_factory=list)
+    csharp_methods: List[Dict] = Field(default_factory=list)
+    stored_procedures: List[Dict] = Field(default_factory=list)
+    operations: List[Dict] = Field(default_factory=list)
+    views: List[Dict] = Field(default_factory=list)
+    functions: List[Dict] = Field(default_factory=list)
+
+
 class CodeSnippet(BaseModel):
     file: str
     label: str = ""          # 片段標籤（類別.方法名 或 "file head"）

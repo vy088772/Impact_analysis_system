@@ -24,6 +24,8 @@
                         組裝、無 AI 判斷；forward：錨點方法→呼叫鏈→SP→SP→資料表；
                         backward：資料表（可選欄位）→SP→C#方法→UI控制項事件；
                         cache_only=True 時不觸發 clone）
+    POST /path_evidence → PathEvidenceResponse（依 path_id 還原單一路徑的 C#、SQL
+                         definition 與 terminal operation evidence）
 """
 from __future__ import annotations
 
@@ -44,6 +46,8 @@ from .schemas import (
     FindByTableResponse,
     FlowChainRequest,
     FlowChainResponse,
+    PathEvidenceRequest,
+    PathEvidenceResponse,
 )
 from . import analyze_service, refresh_progress
 
@@ -136,6 +140,28 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"關係鏈組裝失敗：{exc}")
+
+
+@app.post("/path_evidence", response_model=PathEvidenceResponse)
+def path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
+    """依 path_id 取得目前 source/SQL snapshot 對應的精確 evidence。"""
+    if not req.path_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_path_id", "message": "path_id 不可為空"},
+        )
+    try:
+        return analyze_service.get_path_evidence(req)
+    except analyze_service.PathEvidenceError as exc:
+        status_code = 404 if exc.code == "path_not_found" else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Path evidence 取得失敗：{exc}") from exc
 
 
 @app.post("/refresh_sql", response_model=RefreshSqlResponse)

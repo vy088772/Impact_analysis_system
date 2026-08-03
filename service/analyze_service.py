@@ -20,7 +20,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Tuple
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
-from code_analyzer.csharp_analysis_gateway import CSharpAnalysisGateway, SpCatalog
+from code_analyzer.csharp_analysis_gateway import CSharpAnalysisGateway, DbInvocation, SpCatalog
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 
 from .schemas import (
@@ -35,6 +35,8 @@ from .schemas import (
     TableMatchProgram,
     FlowChainRequest,
     FlowChainResponse,
+    PathEvidenceRequest,
+    PathEvidenceResponse,
 )
 from .snippet_extractor import extract_snippets
 from .call_chain_builder import build_call_chains
@@ -49,6 +51,14 @@ from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import get_or_scan, has_cache
 from . import sql_cache_store
 from . import flow_chain_builder
+
+
+class PathEvidenceError(ValueError):
+    """A path cannot be expanded from the current source or SQL snapshots."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 # 以「解析後的本機路徑」為鍵，快取掃描結果，避免同一 repo 重複掃描
 _scan_cache: Dict[str, ProjectScanResult] = {}
@@ -316,13 +326,78 @@ def _merge_method_chains(
     return caller_chain + list(invocation_chain[overlap:])
 
 
-def _build_program_execution_paths(
+def _method_class_chain_for_file(
+    file_result,
+    class_name: str,
+    method_chain: List[str],
+) -> List[str]:
+    """Resolve method names to class hints without changing the public name chain."""
+    methods_by_class: Dict[str, Dict[str, object]] = {
+        class_info.name: {method.name: method for method in class_info.methods}
+        for class_info in file_result.classes
+    }
+    classes_by_method: Dict[str, List[str]] = {}
+    for class_info in file_result.classes:
+        for method in class_info.methods:
+            classes_by_method.setdefault(method.name, []).append(class_info.name)
+
+    result: List[str] = []
+    current_class = class_name
+    for index, method_name in enumerate(method_chain):
+        if index == 0:
+            result.append(current_class)
+            continue
+        if method_name in methods_by_class.get(current_class, {}):
+            result.append(current_class)
+            continue
+        matches = classes_by_method.get(method_name, [])
+        if len(matches) == 1:
+            current_class = matches[0]
+            result.append(current_class)
+            continue
+        result.append("")
+    return result
+
+
+def _overlay_method_class_chain(
+    method_chain: List[str],
+    base_classes: List[str],
+    invocation_chain: Tuple[str, ...],
+    invocation_classes: Tuple[str, ...],
+) -> List[str]:
+    """Overlay gateway-known cross-file classes onto the full caller chain."""
+    if not invocation_chain or not invocation_classes:
+        return base_classes
+    width = len(invocation_chain)
+    start = -1
+    for candidate in range(len(method_chain) - width + 1):
+        if method_chain[candidate : candidate + width] == list(invocation_chain):
+            start = candidate
+    if start < 0:
+        return base_classes
+    result = list(base_classes)
+    if len(invocation_classes) == 2 and width >= 2:
+        caller_class, wrapper_class = invocation_classes
+        if caller_class:
+            for offset in range(width - 1):
+                if start + offset < len(result):
+                    result[start + offset] = caller_class
+        if wrapper_class and start + width - 1 < len(result):
+            result[start + width - 1] = wrapper_class
+        return result
+    for offset, class_hint in enumerate(invocation_classes[:width]):
+        if class_hint and start + offset < len(result):
+            result[start + offset] = class_hint
+    return result
+
+
+def _rated_execution_invocations(
     req: AnalyzeRequest,
     scan: ProjectScanResult,
     matched_files: List,
     root: Path,
-) -> Tuple[List[Dict], Dict[str, object]]:
-    """Join one program's raw C# facts to the selected SQL execution graph."""
+) -> Tuple[List[DbInvocation], Dict[str, object]]:
+    """Rate raw C# facts once so path discovery and evidence use the same join."""
     catalog, graph, graph_database = _execution_path_context(req, scan)
     rated_invocations = []
     raw_by_file = getattr(scan, "db_invocations", {})
@@ -347,11 +422,383 @@ def _build_program_execution_paths(
                 _method_chain_for_file(file_result, invocation.class_name, invocation.method_name),
                 invocation.method_chain,
             )
-            rated_invocations.append(replace(invocation, method_chain=tuple(method_chain)))
+            snapshot = _find_source_snapshot(scan, relative_path)
+            method_class_chain = _overlay_method_class_chain(
+                method_chain,
+                _method_class_chain_for_file(
+                    file_result,
+                    invocation.class_name,
+                    method_chain,
+                ),
+                invocation.method_chain,
+                invocation.method_class_chain,
+            )
+            rated_invocations.append(
+                replace(
+                    invocation,
+                    method_chain=tuple(method_chain),
+                    method_class_chain=tuple(method_class_chain),
+                    source_snapshot_hash=(snapshot.content_hash if snapshot else ""),
+                )
+            )
+
+    return rated_invocations, graph
+
+
+def _build_program_execution_paths(
+    req: AnalyzeRequest,
+    scan: ProjectScanResult,
+    matched_files: List,
+    root: Path,
+) -> Tuple[List[Dict], Dict[str, object]]:
+    """Join one program's raw C# facts to the selected SQL execution graph."""
+    rated_invocations, graph = _rated_execution_invocations(req, scan, matched_files, root)
 
     paths = build_execution_paths(rated_invocations, graph)
     compact_payload = build_compact_execution_path_payload(paths)
     return paths, compact_payload
+
+
+def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
+    """Expand one current Execution Path into source-backed, path-scoped evidence."""
+    path_id = (req.path_id or "").strip()
+    if not path_id:
+        raise PathEvidenceError("invalid_path_id", "path_id 不可為空")
+
+    roots = resolve_source(req)  # type: ignore[arg-type]
+    if not roots:
+        raise PathEvidenceError("source_not_found", "找不到 path evidence 的原始碼來源")
+    scans = [_get_scan(root, refresh=req.refresh) for root in roots]
+    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
+    root = roots[0] if len(roots) == 1 else repo_dir(
+        req.source.project if req.source else "",
+        req.source.repo if req.source else "",
+    )
+
+    cached = sql_cache_store.load_cached(req.database, "dbo") if req.database else None
+    graph = dict((cached or {}).get("sql_execution_graph") or {})
+    if cached is None or not graph:
+        raise PathEvidenceError(
+            "sql_graph_cache_missing",
+            "SQL execution graph cache 尚未建立，無法展開 path evidence",
+        )
+
+    if req.program_names:
+        program_bases = {_normalize_program(name) for name in req.program_names}
+        matched_files = [
+            result
+            for result in scan.csharp_results
+            if any(_file_matches(result.file_path, base) for base in program_bases)
+        ]
+    else:
+        matched_files = list(scan.csharp_results)
+
+    rated_invocations, joined_graph = _rated_execution_invocations(
+        req, scan, matched_files, root  # type: ignore[arg-type]
+    )
+    selected_path: Dict | None = None
+    selected_invocation: DbInvocation | None = None
+    for invocation in rated_invocations:
+        for candidate in build_execution_paths([invocation], joined_graph):
+            if candidate.get("path_id") == path_id:
+                selected_path = candidate
+                selected_invocation = invocation
+                break
+        if selected_path is not None:
+            break
+
+    if selected_path is None or selected_invocation is None:
+        missing_snapshot = any(
+            _find_source_snapshot(scan, invocation.source.relative_path) is None
+            for invocation in rated_invocations
+        )
+        raise PathEvidenceError(
+            "stale_path" if missing_snapshot else "path_not_found",
+            (
+                "path 對應的 C# source snapshot 已不存在"
+                if missing_snapshot
+                else f"目前 source/SQL snapshot 找不到 path_id={path_id}"
+            ),
+        )
+
+    return _materialize_path_evidence(
+        selected_path,
+        selected_invocation,
+        scan,
+        cached,
+        joined_graph,
+    )
+
+
+def _materialize_path_evidence(
+    path: Mapping[str, object],
+    invocation: DbInvocation,
+    scan: ProjectScanResult,
+    cached: Mapping[str, object],
+    graph: Mapping[str, object],
+) -> PathEvidenceResponse:
+    nodes = {
+        str(node.get("id")): node
+        for node in graph.get("nodes", []) or []
+        if node.get("id")
+    }
+    module_ids = [str(value) for value in path.get("module_chain_ids", []) or []]
+
+    module_objects: Dict[str, Dict] = {}
+    stored_procedures: List[Dict] = []
+    seen_stored_procedures: set[str] = set()
+    for module_id in module_ids:
+        node = nodes.get(module_id)
+        if node is None or node.get("type") not in {"stored_procedure", "view", "function"}:
+            raise PathEvidenceError("stale_path", f"SQL module identity 已不存在：{module_id}")
+        sql_object = _cached_sql_object(cached, node)
+        if sql_object is None:
+            raise PathEvidenceError("stale_path", f"SQL module definition 已不存在：{module_id}")
+        module_objects[module_id] = sql_object
+        if node.get("type") == "stored_procedure" and module_id not in seen_stored_procedures:
+            stored_procedures.append(sql_object)
+            seen_stored_procedures.add(module_id)
+
+    operation_id = str(path.get("terminal_operation_id") or "")
+    operation = nodes.get(operation_id)
+    if operation is not None and operation.get("type") not in {
+        "dml_operation",
+        "unresolved_dynamic_sql",
+    }:
+        raise PathEvidenceError("stale_path", f"terminal operation 已不存在：{operation_id}")
+    if operation is None and path.get("evidence") != "unresolved":
+        raise PathEvidenceError("stale_path", f"terminal operation 已不存在：{operation_id}")
+
+    operation_evidence: Dict = {}
+    if operation is not None:
+        operation_evidence = dict(operation)
+        source_location = dict(operation.get("source") or {})
+        operation_module_id = str(operation.get("module_id") or "")
+        operation_module = module_objects.get(operation_module_id)
+        if operation_module is not None and source_location:
+            try:
+                source_text = _slice_utf16(
+                    str(operation_module.get("definition") or ""),
+                    int(source_location.get("start_offset") or 0),
+                    int(source_location.get("length") or 0),
+                )
+            except (TypeError, ValueError) as exc:
+                raise PathEvidenceError(
+                    "stale_path",
+                    f"SQL operation source span 已失效：{exc}",
+                ) from exc
+            if source_text:
+                operation_evidence["source_text"] = source_text
+
+    csharp_methods = _source_methods_for_path(scan, invocation, path)
+    views: List[Dict] = []
+    functions: List[Dict] = []
+    referenced_object_ids: set[str] = set()
+    if operation is not None:
+        for relationship in graph.get("relationships", []) or []:
+            if relationship.get("type") != "reads" or relationship.get("source") != operation_id:
+                continue
+            target_id = str(relationship.get("target") or "")
+            target_node = nodes.get(target_id)
+            if target_node and target_node.get("type") in {"view", "function"}:
+                referenced_object_ids.add(target_id)
+
+        for function_name in operation.get("function_references", []) or []:
+            target_id = _find_graph_object_id(nodes, "function", str(function_name))
+            if target_id:
+                referenced_object_ids.add(target_id)
+
+    for object_id in sorted(referenced_object_ids):
+        object_node = nodes[object_id]
+        sql_object = _cached_sql_object(cached, object_node)
+        if sql_object is None:
+            raise PathEvidenceError(
+                "stale_path",
+                f"directly used SQL object definition 已不存在：{object_id}",
+            )
+        if object_node.get("type") == "view":
+            views.append(sql_object)
+        else:
+            functions.append(sql_object)
+
+    return PathEvidenceResponse(
+        path_id=str(path.get("path_id") or ""),
+        entry_method=str(path.get("entry_method") or ""),
+        method_chain=list(path.get("method_chain", []) or []),
+        database=str(path.get("database") or ""),
+        sp_chain=list(path.get("sp_chain", []) or []),
+        conditions=list(path.get("conditions", []) or []),
+        risk_flags=list(path.get("risk_flags", []) or []),
+        evidence=str(path.get("evidence") or "unresolved"),
+        unresolved_reason=str(path.get("unresolved_reason") or ""),
+        unresolved_targets=list(path.get("unresolved_targets", []) or []),
+        csharp_methods=csharp_methods,
+        stored_procedures=stored_procedures,
+        operations=[operation_evidence] if operation_evidence else [],
+        views=views,
+        functions=functions,
+    )
+
+
+def _source_methods_for_path(
+    scan: ProjectScanResult,
+    invocation: DbInvocation,
+    path: Mapping[str, object],
+) -> List[Dict]:
+    snapshot = _find_source_snapshot(scan, invocation.source.relative_path)
+    if snapshot is None:
+        raise PathEvidenceError(
+            "stale_path",
+            f"C# source snapshot 已不存在：{invocation.source.relative_path}",
+        )
+
+    methods: List[Dict] = []
+    seen_spans: set[tuple[str, str, int, int]] = set()
+    method_names = list(path.get("method_chain", []) or [])
+    if not method_names:
+        method_names = [invocation.method_name]
+    method_classes = list(path.get("method_class_chain", []) or [])
+    for index, method_name in enumerate(method_names):
+        class_hint = method_classes[index] if index < len(method_classes) else ""
+        if not class_hint and index == 0:
+            class_hint = invocation.class_name
+        source_match = _find_method_source(
+            scan,
+            snapshot,
+            method_name,
+            class_hint,
+        )
+        if source_match is None:
+            raise PathEvidenceError(
+                "stale_path",
+                f"C# method span 已不存在或不唯一：{method_name}",
+            )
+        method_snapshot, span = source_match
+        key = (
+            method_snapshot.relative_path,
+            span.class_name,
+            span.start_offset,
+            span.end_offset,
+        )
+        if key in seen_spans:
+            continue
+        try:
+            source = method_snapshot.source_for(span)
+        except ValueError as exc:
+            raise PathEvidenceError("stale_path", str(exc)) from exc
+        seen_spans.add(key)
+        methods.append(
+            {
+                "file": method_snapshot.relative_path,
+                "content_hash": method_snapshot.content_hash,
+                "class": span.class_name,
+                "method": span.method_name,
+                "start_offset": span.start_offset,
+                "end_offset": span.end_offset,
+                "source": source,
+            }
+        )
+    return methods
+
+
+def _find_source_snapshot(scan: ProjectScanResult, relative_path: str):
+    normalized = str(relative_path).replace("\\", "/").casefold()
+    for key, snapshot in getattr(scan, "source_snapshots", {}).items():
+        if str(key).replace("\\", "/").casefold() == normalized:
+            return snapshot
+    return None
+
+
+def _find_method_source(scan, preferred_snapshot, method_name: str, class_hint: str):
+    preferred_matches = [
+        span
+        for span in preferred_snapshot.method_spans
+        if span.method_name == method_name
+        and (not class_hint or span.class_name == class_hint)
+    ]
+    if preferred_matches:
+        return (preferred_snapshot, preferred_matches[0]) if len(preferred_matches) == 1 else None
+
+    matches = [
+        (snapshot, span)
+        for key, snapshot in sorted(
+            getattr(scan, "source_snapshots", {}).items(),
+            key=lambda item: str(item[0]).casefold(),
+        )
+        if snapshot is not preferred_snapshot
+        for span in snapshot.method_spans
+        if span.method_name == method_name
+        and (not class_hint or span.class_name == class_hint)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _cached_sql_object(cached: Mapping[str, object], node: Mapping[str, object]) -> Dict | None:
+    collection = {
+        "stored_procedure": "procedures",
+        "view": "views",
+        "function": "functions",
+    }.get(str(node.get("type") or ""))
+    if collection is None:
+        return None
+    node_schema = str(node.get("schema") or "dbo").casefold()
+    node_name = str(node.get("name") or "").casefold()
+    for item in cached.get(collection, []) or []:
+        item_dict = dict(item)
+        item_schema, item_name = _split_sql_object_name(
+            item_dict.get("name", ""),
+            str(item_dict.get("schema") or node.get("schema") or "dbo"),
+        )
+        if item_schema.casefold() == node_schema and item_name.casefold() == node_name:
+            return item_dict
+    return None
+
+
+def _find_graph_object_id(
+    nodes: Mapping[str, Mapping[str, object]],
+    object_type: str,
+    object_name: str,
+) -> str:
+    schema, name = _split_sql_object_name(object_name, "dbo")
+    for node_id, node in nodes.items():
+        if (
+            node.get("type") == object_type
+            and str(node.get("schema") or "dbo").casefold() == schema.casefold()
+            and str(node.get("name") or "").casefold() == name.casefold()
+        ):
+            return node_id
+    return ""
+
+
+def _split_sql_object_name(value: object, default_schema: str) -> tuple[str, str]:
+    cleaned = str(value or "").replace("[", "").replace("]", "").replace('"', "").strip()
+    parts = [part.strip() for part in cleaned.split(".") if part.strip()]
+    if not parts:
+        return default_schema, ""
+    if len(parts) == 1:
+        return default_schema, parts[0]
+    return parts[-2], parts[-1]
+
+
+def _slice_utf16(text: str, start_offset: int, length: int) -> str:
+    if length <= 0:
+        return ""
+    start = _utf16_index(text, start_offset)
+    end = _utf16_index(text, start_offset + length)
+    return text[start:end]
+
+
+def _utf16_index(text: str, offset: int) -> int:
+    if offset < 0:
+        raise ValueError("negative UTF-16 offset")
+    units = 0
+    for index, character in enumerate(text):
+        if units >= offset:
+            return index
+        units += 2 if ord(character) > 0xFFFF else 1
+    if units == offset:
+        return len(text)
+    raise ValueError("UTF-16 offset outside SQL definition")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

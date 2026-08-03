@@ -255,6 +255,15 @@ def test_analyze_keeps_source_wrapper_method_flow_in_execution_path(monkeypatch,
     assert path["method_chain"] == ["HandleSave", "SaveData", "Execute"]
 
 
+def test_source_wrapper_class_hints_align_with_long_method_chain() -> None:
+    assert analyze_service._overlay_method_class_chain(
+        ["HandleSave", "SaveData", "Execute"],
+        ["OrderPage", "OrderPage", ""],
+        ("HandleSave", "SaveData", "Execute"),
+        ("OrderPage", "DbWrapper"),
+    ) == ["OrderPage", "OrderPage", "DbWrapper"]
+
+
 def test_analyze_keeps_missing_graph_target_as_unresolved(monkeypatch, tmp_path: Path) -> None:
     source_file = tmp_path / "OrderPage.cs"
     source_file.write_text("class OrderPage {}", encoding="utf-8")

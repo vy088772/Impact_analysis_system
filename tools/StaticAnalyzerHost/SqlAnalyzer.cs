@@ -54,6 +54,12 @@ internal sealed class SqlOperationExtractor
         if (fragment is null)
             return;
 
+        if (IsExecute(fragment))
+        {
+            candidates.Add(CreateExecuteCandidate(fragment, module, branchPath));
+            return;
+        }
+
         if (IsDml(fragment))
         {
             candidates.Add(CreateCandidate(fragment, module, branchPath));
@@ -79,6 +85,27 @@ internal sealed class SqlOperationExtractor
             return;
         }
 
+        if (fragment.GetType().Name == "TryCatchStatement")
+        {
+            var tryStatements = GetFragmentProperty(fragment, "TryStatements");
+            var catchStatements = GetFragmentProperty(fragment, "CatchStatements");
+            if (tryStatements is not null)
+                Visit(tryStatements, module, Append(branchPath, "TRY"), candidates);
+            if (catchStatements is not null)
+                Visit(catchStatements, module, Append(branchPath, "CATCH"), candidates);
+            return;
+        }
+
+        if (fragment.GetType().Name == "WhileStatement")
+        {
+            var predicate = GetFragmentProperty(fragment, "Predicate");
+            var statement = GetFragmentProperty(fragment, "Statement");
+            var predicateText = predicate is null ? "" : Text(predicate);
+            if (statement is not null)
+                Visit(statement, module, Append(branchPath, $"WHILE {predicateText}".Trim()), candidates);
+            return;
+        }
+
         foreach (var child in ChildFragments(fragment).OrderBy(child => child.StartOffset))
             Visit(child, module, branchPath, candidates);
     }
@@ -100,6 +127,7 @@ internal sealed class SqlOperationExtractor
         var writeTables = new List<string>();
         var readColumns = new List<string>();
         var writtenColumns = new List<string>();
+        var functionReferences = new List<string>();
         string? where = null;
 
         switch (operationType)
@@ -109,6 +137,11 @@ internal sealed class SqlOperationExtractor
                 var queryExpression = GetFragmentProperty(fragment, "QueryExpression");
                 CollectReferences(queryExpression, readTables);
                 CollectColumns(queryExpression, readColumns);
+                CollectFunctionReferences(queryExpression, functionReferences);
+                var selectCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
+                CollectReferences(selectCtes, readTables);
+                CollectColumns(selectCtes, readColumns);
+                CollectFunctionReferences(selectCtes, functionReferences);
                 var into = GetFragmentProperty(fragment, "Into");
                 if (into is not null)
                 {
@@ -126,8 +159,10 @@ internal sealed class SqlOperationExtractor
                 var source = GetFragmentProperty(specification, "InsertSource");
                 CollectReferences(source, readTables);
                 CollectColumns(source, readColumns);
+                CollectFunctionReferences(source, functionReferences);
                 CollectReferences(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), readTables);
                 CollectColumns(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), readColumns);
+                CollectFunctionReferences(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), functionReferences);
                 break;
             }
             case "UPDATE":
@@ -137,10 +172,17 @@ internal sealed class SqlOperationExtractor
                 var fromClause = GetFragmentProperty(specification, "FromClause");
                 CollectReferences(fromClause, readTables);
                 CollectColumns(fromClause, readColumns);
+                CollectFunctionReferences(fromClause, functionReferences);
                 var whereClause = GetFragmentProperty(specification, "WhereClause");
                 where = ExtractWhereClause(whereClause);
                 CollectColumns(whereClause, readColumns);
+                CollectFunctionReferences(whereClause, functionReferences);
                 CollectColumns(GetPropertyValue(specification, "SetClauses"), readColumns);
+                CollectFunctionReferences(GetPropertyValue(specification, "SetClauses"), functionReferences);
+                var updateCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
+                CollectReferences(updateCtes, readTables);
+                CollectColumns(updateCtes, readColumns);
+                CollectFunctionReferences(updateCtes, functionReferences);
                 CollectWrittenUpdateColumns(GetPropertyValue(specification, "SetClauses"), writtenColumns);
                 RemoveWrittenTables(readTables, writeTables);
                 break;
@@ -152,9 +194,15 @@ internal sealed class SqlOperationExtractor
                 var fromClause = GetFragmentProperty(specification, "FromClause");
                 CollectReferences(fromClause, readTables);
                 CollectColumns(fromClause, readColumns);
+                CollectFunctionReferences(fromClause, functionReferences);
                 var whereClause = GetFragmentProperty(specification, "WhereClause");
                 where = ExtractWhereClause(whereClause);
                 CollectColumns(whereClause, readColumns);
+                CollectFunctionReferences(whereClause, functionReferences);
+                var deleteCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
+                CollectReferences(deleteCtes, readTables);
+                CollectColumns(deleteCtes, readColumns);
+                CollectFunctionReferences(deleteCtes, functionReferences);
                 RemoveWrittenTables(readTables, writeTables);
                 break;
             }
@@ -168,7 +216,38 @@ internal sealed class SqlOperationExtractor
             readTables,
             writeTables,
             readColumns,
-            writtenColumns);
+            writtenColumns,
+            functionReferences: functionReferences);
+    }
+
+    private SqlOperationCandidate CreateExecuteCandidate(
+        TSqlFragment fragment,
+        SqlModuleIdentity module,
+        IReadOnlyList<string> branchPath)
+    {
+        var specification = GetFragmentProperty(fragment, "ExecuteSpecification");
+        var executableEntity = GetFragmentProperty(specification, "ExecutableEntity");
+        var callTargets = new List<string>();
+        if (executableEntity is not null)
+        {
+            var procedureReferenceName = GetFragmentProperty(executableEntity, "ProcedureReference");
+            var procedureReference = GetFragmentProperty(procedureReferenceName, "ProcedureReference")
+                ?? procedureReferenceName;
+            AddObjectName(GetFragmentProperty(procedureReference, "Name"), callTargets);
+        }
+        var dynamicSql = callTargets.Count == 0;
+
+        return new SqlOperationCandidate(
+            fragment,
+            dynamicSql ? "DYNAMIC_SQL" : "CALL",
+            new List<string>(branchPath),
+            null,
+            new List<string>(),
+            new List<string>(),
+            new List<string>(),
+            new List<string>(),
+            callTargets,
+            dynamicSql);
     }
 
     private SqlModuleIdentity? FindModule(TSqlFragment root)
@@ -206,6 +285,9 @@ internal sealed class SqlOperationExtractor
 
     private static bool IsDml(TSqlFragment fragment)
         => fragment.GetType().Name is "SelectStatement" or "InsertStatement" or "UpdateStatement" or "DeleteStatement";
+
+    private static bool IsExecute(TSqlFragment fragment)
+        => fragment.GetType().Name == "ExecuteStatement";
 
     private IEnumerable<TSqlFragment> Descendants(TSqlFragment fragment)
     {
@@ -253,6 +335,24 @@ internal sealed class SqlOperationExtractor
                 var multipart = GetPropertyValue(child, "MultiPartIdentifier");
                 var name = ReadLastIdentifier(multipart);
                 AddUnique(columns, name);
+            }
+        }
+    }
+
+    private void CollectFunctionReferences(object? value, ICollection<string> references)
+    {
+        foreach (var fragment in Fragments(value))
+        {
+            foreach (var child in Descendants(fragment))
+            {
+                if (child.GetType().Name != "FunctionCall")
+                    continue;
+                var functionName = ReadIdentifierText(GetPropertyValue(child, "FunctionName"));
+                var callTarget = GetFragmentProperty(child, "CallTarget");
+                var targetName = ReadLastIdentifier(GetPropertyValue(callTarget, "MultiPartIdentifier"));
+                if (functionName.Length == 0 || targetName.Length == 0)
+                    continue;
+                AddUnique(references, $"{targetName}.{functionName}");
             }
         }
     }
@@ -469,7 +569,10 @@ internal sealed class SqlOperationCandidate
         List<string> readTables,
         List<string> writeTables,
         List<string> readColumns,
-        List<string> writtenColumns)
+        List<string> writtenColumns,
+        List<string>? callTargets = null,
+        bool dynamicSql = false,
+        List<string>? functionReferences = null)
     {
         Fragment = fragment;
         OperationType = operationType;
@@ -479,6 +582,9 @@ internal sealed class SqlOperationCandidate
         WriteTables = writeTables;
         ReadColumns = readColumns;
         WrittenColumns = writtenColumns;
+        CallTargets = callTargets ?? new List<string>();
+        DynamicSql = dynamicSql;
+        FunctionReferences = functionReferences ?? new List<string>();
     }
 
     internal TSqlFragment Fragment { get; }
@@ -489,6 +595,9 @@ internal sealed class SqlOperationCandidate
     private List<string> WriteTables { get; }
     private List<string> ReadColumns { get; }
     private List<string> WrittenColumns { get; }
+    private List<string> CallTargets { get; }
+    private bool DynamicSql { get; }
+    private List<string> FunctionReferences { get; }
 
     internal SqlOperation ToOperation(
         int sequence,
@@ -505,6 +614,9 @@ internal sealed class SqlOperationCandidate
             WriteTables,
             ReadColumns,
             WrittenColumns,
+            FunctionReferences,
+            CallTargets,
+            DynamicSql,
             locationFactory(Fragment));
 
     private List<string> Conditions()
@@ -538,4 +650,7 @@ internal sealed record SqlOperation(
     List<string> WriteTables,
     List<string> ReadColumns,
     List<string> WrittenColumns,
+    List<string> FunctionReferences,
+    List<string> CallTargets,
+    bool DynamicSql,
     SqlSourceLocation Source);

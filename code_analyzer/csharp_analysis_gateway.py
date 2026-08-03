@@ -43,6 +43,8 @@ class DbInvocation:
     procedure_schema: Optional[str] = None
     method_chain: tuple[str, ...] = ()
     branch_context: tuple[str, ...] = ()
+    source_snapshot_hash: str = ""
+    method_class_chain: tuple[str, ...] = ()
 
 
 def normalize_procedure_name(raw_name: str) -> str:
@@ -228,6 +230,11 @@ class CSharpAnalysisGateway:
         class_name = raw["class_name"]
         method_name = raw["method_name"]
         branch_context = self._branch_context(raw)
+        method_class_chain = tuple(
+            value
+            for value in (class_name, raw.get("wrapper_class_name"))
+            if value
+        )
         database = self._resolve_database(raw.get("connection_expression"))
 
         if raw.get("wrapper_source_available") is not True:
@@ -240,6 +247,7 @@ class CSharpAnalysisGateway:
                 source,
                 "wrapper_source_unavailable",
                 method_chain=tuple(raw.get("method_chain") or ()),
+                method_class_chain=method_class_chain,
                 branch_context=branch_context,
             )
         if raw.get("wrapper_reaches_stored_procedure_sink") is not True:
@@ -252,6 +260,7 @@ class CSharpAnalysisGateway:
                 source,
                 "wrapper_sink_unresolved",
                 method_chain=tuple(raw.get("method_chain") or ()),
+                method_class_chain=method_class_chain,
                 branch_context=branch_context,
             )
         if mode != "stored_procedure":
@@ -264,6 +273,7 @@ class CSharpAnalysisGateway:
                 source,
                 "wrapper_mode_unresolved",
                 method_chain=tuple(raw.get("method_chain") or ()),
+                method_class_chain=method_class_chain,
                 branch_context=branch_context,
             )
 
@@ -277,6 +287,7 @@ class CSharpAnalysisGateway:
                 source,
                 "dynamic_command_text",
                 method_chain=tuple(raw.get("method_chain") or ()),
+                method_class_chain=method_class_chain,
                 branch_context=branch_context,
             )
 
@@ -287,6 +298,7 @@ class CSharpAnalysisGateway:
             raw["command_text"],
             source,
             method_chain=tuple(raw.get("method_chain") or ()),
+            method_class_chain=method_class_chain,
             branch_context=branch_context,
         )
 
@@ -299,6 +311,7 @@ class CSharpAnalysisGateway:
         source: InvocationSourceSpan,
         method_chain: tuple[str, ...] = (),
         branch_context: tuple[str, ...] = (),
+        method_class_chain: tuple[str, ...] = (),
     ) -> DbInvocation:
         normalized_name = normalize_procedure_name(command_text)
         procedure_schema = normalize_procedure_schema(command_text)
@@ -315,6 +328,7 @@ class CSharpAnalysisGateway:
                     procedure_schema=procedure_schema,
                     method_chain=method_chain,
                     branch_context=branch_context,
+                    method_class_chain=method_class_chain,
                 )
             return DbInvocation(
                 class_name,
@@ -327,6 +341,7 @@ class CSharpAnalysisGateway:
                 procedure_schema,
                 method_chain,
                 branch_context,
+                method_class_chain=method_class_chain,
             )
 
         matches = self._catalog.databases_containing(normalized_name, procedure_schema)
@@ -342,6 +357,7 @@ class CSharpAnalysisGateway:
                 procedure_schema,
                 method_chain,
                 branch_context,
+                method_class_chain=method_class_chain,
             )
         reason = "unknown_database_source" if len(matches) == 0 else "ambiguous_cross_database"
         return DbInvocation(
@@ -355,6 +371,7 @@ class CSharpAnalysisGateway:
             procedure_schema,
             method_chain,
             branch_context,
+            method_class_chain=method_class_chain,
         )
 
     def _resolve_database(self, connection_expression: object) -> Optional[str]:

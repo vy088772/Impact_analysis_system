@@ -10,7 +10,9 @@ from typing import Any, Callable
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 
 
-GRAPH_VERSION = 1
+# v2: nested CALL branches, unresolved dynamic SQL nodes, typed View/UDF uses,
+# and bounded CTE/temp-table lineage are persisted in the graph payload.
+GRAPH_VERSION = 2
 _MODULE_COLLECTIONS = (
     ("procedures", "stored_procedure"),
     ("views", "view"),
@@ -102,6 +104,8 @@ def build_sql_execution_graph(
                     )
                 _report_progress(progress_callback, "graph", index, len(module_specs), name)
 
+    _expand_temp_table_lineage(nodes, relationships)
+
     return {
         "graph_version": GRAPH_VERSION,
         "database": str(data.get("database") or ""),
@@ -109,6 +113,78 @@ def build_sql_execution_graph(
         "relationships": relationships,
         "parse_errors": parse_errors,
     }
+
+
+def _expand_temp_table_lineage(
+    nodes: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+    max_depth: int = 32,
+) -> None:
+    node_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
+    reads_by_operation: dict[str, list[dict[str, Any]]] = {}
+    writers_by_table: dict[str, list[str]] = {}
+    for relationship in relationships:
+        relationship_type = relationship.get("type")
+        source_id = str(relationship.get("source") or "")
+        target_id = str(relationship.get("target") or "")
+        if relationship_type == "reads":
+            reads_by_operation.setdefault(source_id, []).append(relationship)
+        elif relationship_type == "writes":
+            writers_by_table.setdefault(target_id, []).append(source_id)
+
+    def is_temp_table(node_id: str) -> bool:
+        return str(node_by_id.get(node_id, {}).get("name") or "").startswith("#")
+
+    def resolve_base_targets(
+        table_id: str,
+        visited: frozenset[str] = frozenset(),
+    ) -> set[str]:
+        if not is_temp_table(table_id):
+            return {table_id}
+        if table_id in visited or len(visited) >= max_depth:
+            return set()
+        base_targets: set[str] = set()
+        next_visited = visited | {table_id}
+        for writer_id in sorted(set(writers_by_table.get(table_id, []))):
+            for read_relationship in sorted(
+                reads_by_operation.get(writer_id, []),
+                key=lambda item: str(item.get("target") or ""),
+            ):
+                source_id = str(read_relationship.get("target") or "")
+                base_targets.update(resolve_base_targets(source_id, next_visited))
+        return base_targets
+
+    derived: list[tuple[str, str, dict[str, Any], list[str], list[str]]] = []
+    for relationship in list(relationships):
+        if relationship.get("type") != "reads":
+            continue
+        source_id = str(relationship.get("source") or "")
+        temp_id = str(relationship.get("target") or "")
+        if not is_temp_table(temp_id):
+            continue
+        for base_id in sorted(resolve_base_targets(temp_id)):
+            derived.append(
+                (
+                    source_id,
+                    base_id,
+                    dict(relationship.get("source_location") or {}),
+                    list(relationship.get("branch_path") or []),
+                    [temp_id],
+                )
+            )
+
+    for source_id, target_id, source_location, branch_path, lineage in derived:
+        _add_relationship(
+            relationships,
+            "reads",
+            source_id,
+            target_id,
+            source_location,
+            branch_path,
+            conditions=branch_path,
+            identity_suffix=f"lineage:{lineage[0]}",
+        )
+        relationships[-1]["lineage"] = lineage
 
 
 def _report_progress(
@@ -150,15 +226,38 @@ def _add_operation(
     source["module_id"] = module_id
     operation["source"] = source
     sequence = int(operation.get("sequence") or 0)
-    operation_id = f"dml_operation:{module_id}:{sequence}"
+    operation_type = str(operation.get("operation_type") or "")
+    branch_path = list(operation.get("branch_path") or [])
+
+    if operation_type == "CALL":
+        call_conditions = list(operation.get("conditions") or branch_path)
+        for call_target in operation.get("call_targets", []) or []:
+            target_schema, target_name = _split_object_name(call_target, default_schema)
+            if not target_name:
+                continue
+            _add_relationship(
+                relationships,
+                "calls",
+                module_id,
+                _node_id("stored_procedure", target_schema, target_name),
+                source,
+                branch_path,
+                conditions=call_conditions,
+                identity_suffix=str(sequence),
+            )
+        return
+
+    node_type = "unresolved_dynamic_sql" if (
+        operation_type == "DYNAMIC_SQL" or operation.get("dynamic_sql") is True
+    ) else "dml_operation"
+    operation_id = f"{node_type}:{module_id}:{sequence}"
     operation_node = {
         "id": operation_id,
-        "type": "dml_operation",
+        "type": node_type,
         **operation,
     }
     _add_node(nodes, node_by_key, operation_node)
 
-    branch_path = list(operation.get("branch_path") or [])
     _add_relationship(
         relationships,
         "contains",
@@ -167,6 +266,19 @@ def _add_operation(
         source,
         branch_path,
     )
+
+    if node_type == "unresolved_dynamic_sql":
+        _add_relationship(
+            relationships,
+            "unresolved",
+            module_id,
+            operation_id,
+            source,
+            branch_path,
+            conditions=list(operation.get("conditions") or branch_path),
+            confidence="unresolved",
+        )
+        return
 
     for table_name in operation.get("read_tables", []) or []:
         target_id = _ensure_referenced_node(
@@ -184,6 +296,16 @@ def _add_operation(
             branch_path,
             columns=list(operation.get("read_columns", []) or []),
         )
+        if target_id.split(":", 1)[0] in {"view", "function"}:
+            _add_relationship(
+                relationships,
+                "uses",
+                module_id,
+                target_id,
+                source,
+                branch_path,
+                conditions=list(operation.get("conditions") or branch_path),
+            )
 
     for table_name in operation.get("write_tables", []) or []:
         target_id = _ensure_referenced_node(
@@ -201,6 +323,24 @@ def _add_operation(
             branch_path,
             columns=list(operation.get("written_columns", []) or []),
         )
+
+    for function_name in operation.get("function_references", []) or []:
+        target_id = _known_object_node_id(
+            node_by_key,
+            "function",
+            function_name,
+            default_schema,
+        )
+        if target_id:
+            _add_relationship(
+                relationships,
+                "uses",
+                module_id,
+                target_id,
+                source,
+                branch_path,
+                conditions=list(operation.get("conditions") or branch_path),
+            )
 
 
 def _ensure_referenced_node(
@@ -227,6 +367,17 @@ def _ensure_referenced_node(
     return node["id"]
 
 
+def _known_object_node_id(
+    node_by_key: dict[tuple[str, str, str], dict[str, Any]],
+    object_type: str,
+    object_name: str,
+    default_schema: str,
+) -> str:
+    object_schema, name = _split_object_name(object_name, default_schema)
+    node = node_by_key.get(_node_key(object_type, object_schema, name))
+    return str(node.get("id")) if node else ""
+
+
 def _add_relationship(
     relationships: list[dict[str, Any]],
     relationship_type: str,
@@ -235,18 +386,26 @@ def _add_relationship(
     source_location: dict[str, Any],
     branch_path: list[str],
     columns: list[str] | None = None,
+    conditions: list[str] | None = None,
+    confidence: str = "proven",
+    identity_suffix: str = "",
 ) -> None:
+    relationship_id = f"{relationship_type}:{source_id}:{target_id}"
+    if identity_suffix:
+        relationship_id = f"{relationship_id}:{identity_suffix}"
     relationship = {
-        "id": f"{relationship_type}:{source_id}:{target_id}",
+        "id": relationship_id,
         "type": relationship_type,
         "source": source_id,
         "target": target_id,
-        "confidence": "proven",
+        "confidence": confidence,
         "branch_path": branch_path,
         "source_location": source_location,
     }
     if columns:
         relationship["columns"] = columns
+    if conditions:
+        relationship["conditions"] = conditions
     relationships.append(relationship)
 
 

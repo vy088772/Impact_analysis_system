@@ -668,6 +668,48 @@ def test_call_expansion_depth_limit_is_explicitly_unresolved() -> None:
     assert paths[0]["risk_flags"] == ["call_expansion_truncated"]
 
 
+def test_call_cycle_is_explicitly_unresolved_and_deterministic() -> None:
+    graph = _nested_graph()
+    graph["relationships"].append(
+        {
+            "type": "calls",
+            "source": "stored_procedure:dbo.usp_WriteAudit",
+            "target": "stored_procedure:dbo.usp_SaveOrder",
+            "branch_path": ["IF @Reenter = 1"],
+        }
+    )
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="SaveData",
+        database="OrdersDb",
+        procedure_name="usp_saveorder",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("Ship/OrderPage.aspx", 120, 220),
+    )
+
+    paths = build_execution_paths([invocation], graph)
+    repeated = build_execution_paths([invocation], graph)
+
+    cycle_paths = [path for path in paths if path["unresolved_reason"] == "stored_procedure_call_cycle"]
+    assert len(cycle_paths) == 1
+    assert cycle_paths[0]["evidence"] == "unresolved"
+    assert cycle_paths[0]["sp_chain"] == [
+        "dbo.usp_SaveOrder",
+        "dbo.usp_WriteAudit",
+        "dbo.usp_SaveOrder",
+    ]
+    assert cycle_paths[0]["conditions"] == ["IF @Audit = 1", "IF @Reenter = 1"]
+    assert cycle_paths[0]["module_chain_ids"] == [
+        "stored_procedure:dbo.usp_SaveOrder",
+        "stored_procedure:dbo.usp_WriteAudit",
+        "stored_procedure:dbo.usp_SaveOrder",
+    ]
+    assert cycle_paths[0]["terminal_operation_id"] == ""
+    assert [(path["path_id"], path["unresolved_reason"]) for path in paths] == [
+        (path["path_id"], path["unresolved_reason"]) for path in repeated
+    ]
+
+
 def test_compact_payload_reports_omitted_paths() -> None:
     invocation = DbInvocation(
         class_name="OrderPage",
