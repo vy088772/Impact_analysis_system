@@ -140,6 +140,7 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
                     "command_text": "dbo.usp_SaveOrder",
                     "command_type_stored_procedure": True,
                     "connection_expression": "conn",
+                    "branch_context": ["if (useAlternate)"],
                     "start_offset": 10,
                     "end_offset": 90,
                 }
@@ -174,6 +175,7 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
     assert path["sp_chain"] == ["dbo.usp_SaveOrder"]
     assert path["terminal_operation"] == "UPDATE"
     assert path["target"] == "dbo.SOrder"
+    assert path["conditions"] == ["if (useAlternate)", "Id = @Id"]
     assert path["evidence"] == "proven"
     assert program.compact_execution_paths[0]["path_id"] == path["path_id"]
     assert program.compact_execution_paths_meta == {

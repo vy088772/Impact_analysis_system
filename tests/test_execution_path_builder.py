@@ -154,6 +154,39 @@ def test_direct_invocation_builds_one_path_per_terminal_branch() -> None:
     assert "definition" not in update_path
 
 
+def test_invocation_branch_context_is_preserved_and_part_of_path_identity() -> None:
+    source = InvocationSourceSpan("Ship/OrderPage.aspx.cs", 120, 220)
+    invocations = [
+        DbInvocation(
+            class_name="OrderPage",
+            method_name="SaveData",
+            database="OrdersDb",
+            procedure_name="usp_saveorder",
+            evidence=InvocationEvidence.PROVEN,
+            source=source,
+            branch_context=("if (useAlternate)",),
+        ),
+        DbInvocation(
+            class_name="OrderPage",
+            method_name="SaveData",
+            database="OrdersDb",
+            procedure_name="usp_saveorder",
+            evidence=InvocationEvidence.PROVEN,
+            source=source,
+            branch_context=("else (useAlternate)",),
+        ),
+    ]
+
+    paths = build_execution_paths(invocations, _graph())
+
+    assert len(paths) == 4
+    assert len({path["path_id"] for path in paths}) == 4
+    assert {path["conditions"][0] for path in paths} == {
+        "if (useAlternate)",
+        "else (useAlternate)",
+    }
+
+
 def test_missing_stored_procedure_graph_target_is_explicitly_unresolved() -> None:
     invocation = DbInvocation(
         class_name="OrderPage",
@@ -472,6 +505,23 @@ def test_dynamic_invocation_keeps_gateway_unresolved_reason() -> None:
     assert paths[0]["evidence"] == "unresolved"
     assert paths[0]["unresolved_reason"] == "dynamic_command_text"
     assert paths[0]["risk_flags"] == ["dynamic_command_text"]
+
+
+def test_unresolved_path_preserves_invocation_branch_context() -> None:
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="SaveData",
+        database="OrdersDb",
+        procedure_name=None,
+        evidence=InvocationEvidence.UNRESOLVED,
+        source=InvocationSourceSpan("Ship/OrderPage.aspx.cs", 120, 220),
+        reason="dynamic_command_text",
+        branch_context=("if (useAlternate)",),
+    )
+
+    paths = build_execution_paths([invocation], _graph())
+
+    assert paths[0]["conditions"] == ["if (useAlternate)"]
 
 
 def test_dangling_contains_relationship_returns_unresolved_path_evidence() -> None:

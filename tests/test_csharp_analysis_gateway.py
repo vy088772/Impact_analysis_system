@@ -43,6 +43,16 @@ def test_normalize_procedure_name_strips_schema_and_brackets() -> None:
     assert normalize_procedure_name("[dbo].[usp_SO_Delete]") == "usp_so_delete"
 
 
+def test_catalog_merges_case_variants_of_one_database_identity() -> None:
+    catalog = SpCatalog.from_databases({
+        "OrdersDb": ["usp_SaveOrder"],
+        "ordersdb": ["usp_DeleteOrder"],
+    })
+
+    assert catalog.databases_containing("usp_saveorder") == ["OrdersDb"]
+    assert catalog.contains("ORDERSDB", "usp_deleteorder")
+
+
 def test_explicit_stored_procedure_type_with_catalog_hit_is_proven() -> None:
     """An explicit CommandType.StoredProcedure call matching the resolved database's catalog is proven."""
     catalog = SpCatalog.from_databases({"Y-Docs_TTPUR": ["usp_SO_Delete"]})
@@ -119,6 +129,91 @@ def test_dynamic_command_text_is_unresolved() -> None:
     assert invocations[0].evidence is InvocationEvidence.UNRESOLVED
     assert invocations[0].procedure_name is None
     assert invocations[0].database == "Y-Docs_TTPUR"
+
+
+def test_branch_assigned_procedure_names_keep_separate_contexts() -> None:
+    """Each finite procedure candidate remains tied to the branch that assigns it."""
+    catalog = SpCatalog.from_databases({"Y-Docs_TTPUR": ["usp_Default", "usp_Alternate"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "Y-Docs_TTPUR"})
+
+    raw_invocations = [
+        _raw_invocation(
+            command_text="usp_Default",
+            branch_context=[],
+        ),
+        _raw_invocation(
+            command_text="usp_Alternate",
+            branch_context=["if (useAlternate)"],
+        ),
+    ]
+
+    invocations = gateway.resolve_direct_invocations("f.cs", raw_invocations)
+
+    assert [invocation.procedure_name for invocation in invocations] == [
+        "usp_default",
+        "usp_alternate",
+    ]
+    assert [invocation.branch_context for invocation in invocations] == [
+        (),
+        ("if (useAlternate)",),
+    ]
+    assert all(invocation.evidence is InvocationEvidence.PROVEN for invocation in invocations)
+
+
+def test_adapter_invocations_use_catalog_evidence_and_unknown_mode_stays_unresolved() -> None:
+    """Dapper and EF facts share the same catalog gate without proving unknown modes."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    raw_invocations = [
+        _raw_invocation(
+            command_text="usp_SaveOrder",
+            invocation_kind="dapper",
+            wrapper_mode="stored_procedure",
+        ),
+        _raw_invocation(
+            command_text="usp_SaveOrder",
+            invocation_kind="entity_framework",
+            wrapper_mode="stored_procedure",
+        ),
+        _raw_invocation(
+            command_text="usp_SaveOrder",
+            invocation_kind="dapper",
+            wrapper_mode="unknown",
+            command_type_stored_procedure=False,
+        ),
+    ]
+
+    invocations = gateway.resolve_direct_invocations("f.cs", raw_invocations)
+
+    assert [invocation.evidence for invocation in invocations] == [
+        InvocationEvidence.PROVEN,
+        InvocationEvidence.PROVEN,
+        InvocationEvidence.UNRESOLVED,
+    ]
+    assert invocations[-1].reason == "adapter_mode_unresolved"
+
+
+def test_unknown_adapter_connection_with_cross_database_name_is_unresolved() -> None:
+    catalog = SpCatalog.from_databases({
+        "OrdersDb": ["usp_SaveOrder"],
+        "ArchiveDb": ["usp_SaveOrder"],
+    })
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={})
+
+    invocation = gateway.resolve_direct_invocations(
+        "f.cs",
+        [_raw_invocation(
+            command_text="usp_SaveOrder",
+            invocation_kind="dapper",
+            wrapper_mode="stored_procedure",
+            connection_expression="connection",
+        )],
+    )[0]
+
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "ambiguous_cross_database"
+    assert invocation.database is None
 
 
 def test_resolved_database_without_catalog_hit_is_unresolved_not_guessed() -> None:
@@ -212,6 +307,291 @@ def test_gateway_detects_real_direct_sqlclient_invocation_via_static_analyzer_ho
         assert invocations[0].evidence is InvocationEvidence.PROVEN
         assert invocations[0].procedure_name == "usp_dothing"
         assert invocations[0].database == "MyDb"
+
+
+def test_static_analyzer_host_emits_default_and_conditional_procedure_assignments() -> None:
+    """A command text variable yields one raw fact for every reachable finite assignment."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "BranchFixture.cs"
+        source_path.write_text(
+            "public class BranchFixture {\n"
+            "    private void Run(bool useAlternate) {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        string procedure = \"usp_Default\";\n"
+            "        if (useAlternate)\n"
+            "            procedure = \"usp_Alternate\";\n"
+            "        var cmd = new SqlCommand(procedure, conn);\n"
+            "        cmd.CommandType = CommandType.StoredProcedure;\n"
+            "        cmd.ExecuteNonQuery();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            invocation
+            for invocation in result["db_invocations"]
+            if invocation.get("invocation_kind") == "direct_sqlclient"
+        ]
+
+        assert {invocation["command_text"] for invocation in raw_invocations} == {
+            "usp_Default",
+            "usp_Alternate",
+        }
+        assert any(invocation["branch_context"] == [] for invocation in raw_invocations)
+        assert any(
+            invocation["branch_context"] == ["if (useAlternate)"]
+            for invocation in raw_invocations
+        )
+
+
+def test_static_analyzer_host_drops_unconditionally_overwritten_procedure_values() -> None:
+    """An unconditional later assignment supersedes an earlier finite candidate."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "OverwriteFixture.cs"
+        source_path.write_text(
+            "public class OverwriteFixture {\n"
+            "    private void Run() {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        string procedure = \"usp_Obsolete\";\n"
+            "        procedure = \"usp_Default\";\n"
+            "        var cmd = new SqlCommand(procedure, conn);\n"
+            "        cmd.CommandType = CommandType.StoredProcedure;\n"
+            "        cmd.ExecuteNonQuery();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            invocation
+            for invocation in result["db_invocations"]
+            if invocation.get("invocation_kind") == "direct_sqlclient"
+        ]
+
+        assert [invocation["command_text"] for invocation in raw_invocations] == ["usp_Default"]
+
+
+def test_static_analyzer_host_drops_nested_value_overwritten_by_outer_branch_assignment() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "NestedOverwriteFixture.cs"
+        source_path.write_text(
+            "public class NestedOverwriteFixture {\n"
+            "    private void Run(bool useAlternate, bool useNested) {\n"
+            "        var procedure = \"usp_Default\";\n"
+            "        if (useAlternate) {\n"
+            "            if (useNested)\n"
+            "                procedure = \"usp_Obsolete\";\n"
+            "            procedure = \"usp_Final\";\n"
+            "        }\n"
+            "        var command = new SqlCommand(procedure, conn);\n"
+            "        command.CommandType = CommandType.StoredProcedure;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            invocation
+            for invocation in result["db_invocations"]
+            if invocation.get("invocation_kind") == "direct_sqlclient"
+        ]
+
+        assert {invocation["command_text"] for invocation in raw_invocations} == {
+            "usp_Default",
+            "usp_Final",
+        }
+
+
+def test_static_analyzer_host_preserves_same_text_at_distinct_direct_call_sites() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "DuplicateCallSites.cs"
+        source_path.write_text(
+            "public class DuplicateCallSites {\n"
+            "    private void Run() {\n"
+            "        var first = new SqlCommand(\"usp_SaveOrder\", conn);\n"
+            "        first.CommandType = CommandType.StoredProcedure;\n"
+            "        var second = new SqlCommand(\"usp_SaveOrder\", conn);\n"
+            "        second.CommandType = CommandType.StoredProcedure;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            invocation
+            for invocation in result["db_invocations"]
+            if invocation.get("invocation_kind") == "direct_sqlclient"
+        ]
+
+        assert len(raw_invocations) == 2
+        assert len({invocation["start_offset"] for invocation in raw_invocations}) == 2
+
+
+def test_static_analyzer_host_preserves_constructor_default_with_conditional_command_text() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "CommandTextBranches.cs"
+        source_path.write_text(
+            "public class CommandTextBranches {\n"
+            "    private void Run(bool useAlternate) {\n"
+            "        var command = new SqlCommand(\"usp_Default\", conn);\n"
+            "        if (useAlternate)\n"
+            "            command.CommandText = \"usp_Alternate\";\n"
+            "        command.CommandType = CommandType.StoredProcedure;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            invocation
+            for invocation in result["db_invocations"]
+            if invocation.get("invocation_kind") == "direct_sqlclient"
+        ]
+
+        assert {invocation["command_text"] for invocation in raw_invocations} == {
+            "usp_Default",
+            "usp_Alternate",
+        }
+        assert any(invocation["branch_context"] == [] for invocation in raw_invocations)
+        assert any(
+            invocation["branch_context"] == ["if (useAlternate)"]
+            for invocation in raw_invocations
+        )
+
+
+def test_static_analyzer_host_does_not_promote_unconditional_text_for_conditional_command_type() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "CommandTypeBranch.cs"
+        source_path.write_text(
+            "public class CommandTypeBranch {\n"
+            "    private void Run(bool useAlternate) {\n"
+            "        var command = new SqlCommand(\"usp_Default\", conn);\n"
+            "        if (useAlternate)\n"
+            "            command.CommandType = CommandType.StoredProcedure;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            invocation
+            for invocation in result["db_invocations"]
+            if invocation.get("invocation_kind") == "direct_sqlclient"
+        ]
+
+        assert len(raw_invocations) == 1
+        assert raw_invocations[0]["command_type_stored_procedure"] is False
+
+
+def test_static_analyzer_host_emits_dapper_and_entity_framework_sp_facts() -> None:
+    """Common adapter SP modes feed the same gateway evidence rules as SqlClient."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "AdapterFixture.cs"
+        source_path.write_text(
+            "using System.Data;\n"
+            "public class AdapterFixture {\n"
+            "    private IDbConnection connection;\n"
+            "    private DbContext context;\n"
+            "    private void Dapper(bool useAlternate) {\n"
+            "        var procedure = \"usp_Default\";\n"
+            "        if (useAlternate)\n"
+            "            procedure = \"usp_Alternate\";\n"
+            "        connection.Query<int>(procedure, commandType: CommandType.StoredProcedure);\n"
+            "        connection.Query<int>(\"SELECT 1\");\n"
+            "        connection.Execute(\"usp_Unknown\", commandType: commandType);\n"
+            "        helper.Execute(\"usp_SaveOrder\", commandType: CommandType.StoredProcedure);\n"
+            "    }\n"
+            "    private void DapperOverwritten() {\n"
+            "        var procedure = \"usp_Obsolete\";\n"
+            "        procedure = \"usp_Default\";\n"
+            "        connection.Query<int>(procedure, commandType: CommandType.StoredProcedure);\n"
+            "    }\n"
+            "    private void EntityFramework() {\n"
+            "        context.Database.ExecuteSqlRaw(\"EXEC dbo.usp_SaveOrder @Id\");\n"
+            "        context.Database.ExecuteSqlRaw(\"UPDATE SOrder SET Status = 1\");\n"
+            "    }\n"
+            "    private void OrdinaryHelpers() {\n"
+            "        var conn = new CommandHelper();\n"
+            "        conn.Execute(\"usp_NotDapper\", commandType: CommandType.StoredProcedure);\n"
+            "        var context = new CommandHelper();\n"
+            "        context.ExecuteSqlRaw(\"EXEC dbo.usp_NotEntityFramework\");\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            invocation
+            for invocation in result["db_invocations"]
+            if invocation.get("invocation_kind") in {"dapper", "entity_framework"}
+        ]
+
+        dapper = [item for item in raw_invocations if item["invocation_kind"] == "dapper"]
+        entity_framework = [
+            item for item in raw_invocations
+            if item["invocation_kind"] == "entity_framework"
+        ]
+        assert {item["command_text"] for item in dapper} >= {
+            "usp_Default",
+            "usp_Alternate",
+            "usp_Unknown",
+        }
+        assert all(item["connection_expression"] != "helper" for item in dapper)
+        assert "usp_Obsolete" not in {item["command_text"] for item in dapper}
+        assert "usp_NotDapper" not in {item["command_text"] for item in raw_invocations}
+        assert "usp_NotEntityFramework" not in {item["command_text"] for item in raw_invocations}
+        assert any(item["wrapper_mode"] == "inline_sql" for item in dapper)
+        assert any(
+            item["wrapper_mode"] == "stored_procedure"
+            and item["command_text"] == "dbo.usp_SaveOrder"
+            for item in entity_framework
+        )
+        assert any(item["wrapper_mode"] == "inline_sql" for item in entity_framework)
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_Default", "usp_Alternate", "usp_SaveOrder"]}),
+            connection_sources={"connection": "OrdersDb", "context.Database": "OrdersDb"},
+        )
+        invocations = gateway.resolve_direct_invocations("AdapterFixture.cs", raw_invocations)
+
+        proven = {
+            (invocation.method_name, invocation.procedure_name)
+            for invocation in invocations
+            if invocation.evidence is InvocationEvidence.PROVEN
+        }
+        assert ("Dapper", "usp_default") in proven
+        assert ("Dapper", "usp_alternate") in proven
+        assert ("EntityFramework", "usp_saveorder") in proven
+        assert all(invocation.procedure_name != "usp_unknown" for invocation in invocations)
 
 
 def test_gateway_detects_source_wrapper_sp_mode_but_skips_inline_mode() -> None:

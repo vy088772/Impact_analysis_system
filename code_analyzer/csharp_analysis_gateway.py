@@ -42,6 +42,7 @@ class DbInvocation:
     reason: str = ""
     procedure_schema: Optional[str] = None
     method_chain: tuple[str, ...] = ()
+    branch_context: tuple[str, ...] = ()
 
 
 def normalize_procedure_name(raw_name: str) -> str:
@@ -66,17 +67,21 @@ class SpCatalog:
     ) -> "SpCatalog":
         bare_names: Dict[str, Set[str]] = {}
         qualified_names: Dict[str, Set[str]] = {}
+        canonical_databases: Dict[str, str] = {}
         normalized_default_schema = normalize_schema_name(default_schema or "")
         for database, names in procedures_by_database.items():
-            bare_names[database] = set()
-            qualified_names[database] = set()
+            database_name = str(database).strip()
+            database_key = database_name.casefold()
+            canonical_database = canonical_databases.setdefault(database_key, database_name)
+            bare_names.setdefault(canonical_database, set())
+            qualified_names.setdefault(canonical_database, set())
             for name in names:
                 normalized_name = normalize_procedure_name(name)
-                bare_names[database].add(normalized_name)
+                bare_names[canonical_database].add(normalized_name)
                 schema = normalize_procedure_schema(name)
                 schema = schema or normalized_default_schema
                 if schema:
-                    qualified_names[database].add(f"{schema}.{normalized_name}")
+                    qualified_names[canonical_database].add(f"{schema}.{normalized_name}")
         return cls(bare_names, qualified_names)
 
     def contains(
@@ -85,10 +90,11 @@ class SpCatalog:
         normalized_name: str,
         schema: Optional[str] = None,
     ) -> bool:
-        bare_names = self.procedures_by_database.get(database, set())
+        database_key = self._database_key(database)
+        bare_names = self.procedures_by_database.get(database_key, set())
         if not schema:
             return normalized_name in bare_names
-        qualified_names = self.qualified_procedures_by_database.get(database, set())
+        qualified_names = self.qualified_procedures_by_database.get(database_key, set())
         qualified_identity = f"{schema}.{normalized_name}"
         return qualified_identity in qualified_names
 
@@ -101,6 +107,15 @@ class SpCatalog:
             database
             for database, names in self.procedures_by_database.items()
             if self.contains(database, normalized_name, schema)
+        )
+
+    def _database_key(self, database: str) -> str:
+        if database in self.procedures_by_database:
+            return database
+        folded = database.casefold()
+        return next(
+            (candidate for candidate in self.procedures_by_database if candidate.casefold() == folded),
+            database,
         )
 
 
@@ -121,8 +136,11 @@ class CSharpAnalysisGateway:
         return results
 
     def _resolve_one(self, relative_path: str, raw: dict) -> Optional[DbInvocation]:
-        if raw.get("invocation_kind") == "source_wrapper":
+        invocation_kind = str(raw.get("invocation_kind") or "").casefold()
+        if invocation_kind == "source_wrapper":
             return self._resolve_wrapper_invocation(relative_path, raw)
+        if invocation_kind in {"dapper", "entity_framework", "entityframework", "ef"}:
+            return self._resolve_adapter_invocation(relative_path, raw)
 
         if not raw.get("command_type_stored_procedure"):
             # No explicit StoredProcedure command type: this is plain SQL text, not an SP invocation.
@@ -131,13 +149,21 @@ class CSharpAnalysisGateway:
         source = InvocationSourceSpan(relative_path, raw["start_offset"], raw["end_offset"])
         class_name = raw["class_name"]
         method_name = raw["method_name"]
+        branch_context = self._branch_context(raw)
 
         connection_expression = raw.get("connection_expression")
-        database = self._connection_sources.get(connection_expression) if connection_expression else None
+        database = self._resolve_database(connection_expression)
 
         if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
             return DbInvocation(
-                class_name, method_name, database, None, InvocationEvidence.UNRESOLVED, source, "dynamic_command_text"
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "dynamic_command_text",
+                branch_context=branch_context,
             )
 
         return self._rate_literal_candidate(
@@ -146,6 +172,51 @@ class CSharpAnalysisGateway:
             database,
             raw["command_text"],
             source,
+            branch_context=branch_context,
+        )
+
+    def _resolve_adapter_invocation(self, relative_path: str, raw: dict) -> Optional[DbInvocation]:
+        mode = str(raw.get("adapter_mode") or raw.get("wrapper_mode") or "").casefold()
+        if mode == "inline_sql":
+            return None
+
+        source = InvocationSourceSpan(relative_path, raw["start_offset"], raw["end_offset"])
+        class_name = raw["class_name"]
+        method_name = raw["method_name"]
+        branch_context = self._branch_context(raw)
+        database = self._resolve_database(raw.get("connection_expression"))
+        if mode != "stored_procedure" and raw.get("command_type_stored_procedure") is not True:
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "adapter_mode_unresolved",
+                method_chain=tuple(raw.get("method_chain") or ()),
+                branch_context=branch_context,
+            )
+        if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "dynamic_command_text",
+                method_chain=tuple(raw.get("method_chain") or ()),
+                branch_context=branch_context,
+            )
+        return self._rate_literal_candidate(
+            class_name,
+            method_name,
+            database,
+            raw["command_text"],
+            source,
+            method_chain=tuple(raw.get("method_chain") or ()),
+            branch_context=branch_context,
         )
 
     def _resolve_wrapper_invocation(self, relative_path: str, raw: dict) -> Optional[DbInvocation]:
@@ -156,8 +227,8 @@ class CSharpAnalysisGateway:
         source = InvocationSourceSpan(relative_path, raw["start_offset"], raw["end_offset"])
         class_name = raw["class_name"]
         method_name = raw["method_name"]
-        connection_expression = raw.get("connection_expression")
-        database = self._connection_sources.get(connection_expression) if connection_expression else None
+        branch_context = self._branch_context(raw)
+        database = self._resolve_database(raw.get("connection_expression"))
 
         if raw.get("wrapper_source_available") is not True:
             return DbInvocation(
@@ -169,6 +240,7 @@ class CSharpAnalysisGateway:
                 source,
                 "wrapper_source_unavailable",
                 method_chain=tuple(raw.get("method_chain") or ()),
+                branch_context=branch_context,
             )
         if raw.get("wrapper_reaches_stored_procedure_sink") is not True:
             return DbInvocation(
@@ -180,6 +252,7 @@ class CSharpAnalysisGateway:
                 source,
                 "wrapper_sink_unresolved",
                 method_chain=tuple(raw.get("method_chain") or ()),
+                branch_context=branch_context,
             )
         if mode != "stored_procedure":
             return DbInvocation(
@@ -191,6 +264,7 @@ class CSharpAnalysisGateway:
                 source,
                 "wrapper_mode_unresolved",
                 method_chain=tuple(raw.get("method_chain") or ()),
+                branch_context=branch_context,
             )
 
         if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
@@ -203,6 +277,7 @@ class CSharpAnalysisGateway:
                 source,
                 "dynamic_command_text",
                 method_chain=tuple(raw.get("method_chain") or ()),
+                branch_context=branch_context,
             )
 
         return self._rate_literal_candidate(
@@ -212,6 +287,7 @@ class CSharpAnalysisGateway:
             raw["command_text"],
             source,
             method_chain=tuple(raw.get("method_chain") or ()),
+            branch_context=branch_context,
         )
 
     def _rate_literal_candidate(
@@ -222,6 +298,7 @@ class CSharpAnalysisGateway:
         command_text: str,
         source: InvocationSourceSpan,
         method_chain: tuple[str, ...] = (),
+        branch_context: tuple[str, ...] = (),
     ) -> DbInvocation:
         normalized_name = normalize_procedure_name(command_text)
         procedure_schema = normalize_procedure_schema(command_text)
@@ -237,6 +314,7 @@ class CSharpAnalysisGateway:
                     source,
                     procedure_schema=procedure_schema,
                     method_chain=method_chain,
+                    branch_context=branch_context,
                 )
             return DbInvocation(
                 class_name,
@@ -248,6 +326,7 @@ class CSharpAnalysisGateway:
                 "not_in_resolved_catalog",
                 procedure_schema,
                 method_chain,
+                branch_context,
             )
 
         matches = self._catalog.databases_containing(normalized_name, procedure_schema)
@@ -262,6 +341,7 @@ class CSharpAnalysisGateway:
                 "unique_across_catalogs",
                 procedure_schema,
                 method_chain,
+                branch_context,
             )
         reason = "unknown_database_source" if len(matches) == 0 else "ambiguous_cross_database"
         return DbInvocation(
@@ -274,7 +354,39 @@ class CSharpAnalysisGateway:
             reason,
             procedure_schema,
             method_chain,
+            branch_context,
         )
+
+    def _resolve_database(self, connection_expression: object) -> Optional[str]:
+        if not connection_expression:
+            return None
+        expression = str(connection_expression).strip()
+        if not expression:
+            return None
+        if expression in self._connection_sources:
+            database = self._connection_sources[expression]
+        else:
+            folded = expression.casefold()
+            database = next(
+                (
+                    value
+                    for key, value in self._connection_sources.items()
+                    if str(key).casefold() == folded
+                ),
+                None,
+            )
+        if not database or str(database).strip().casefold() in {"unknown", "unresolved"}:
+            return None
+        return str(database).strip()
+
+    @staticmethod
+    def _branch_context(raw: dict) -> tuple[str, ...]:
+        value = raw.get("branch_context")
+        if value is None:
+            value = raw.get("branch_path")
+        if isinstance(value, str):
+            value = [value]
+        return tuple(str(item) for item in (value or ()) if str(item).strip())
 
 
 def normalize_procedure_schema(raw_name: str) -> Optional[str]:

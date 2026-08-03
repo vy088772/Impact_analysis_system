@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -25,14 +26,16 @@ internal static class CSharpAnalyzer
 
         var dbInvocations = root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>()
             .Where(creation => IsSqlCommandType(creation.Type))
-            .Select(creation => (Creation: creation, Invocation: DirectSqlClientAnalyzer.Analyze(creation)))
-            .Where(item => item.Invocation is not null)
-            .Where(item => !wrapperMethods.Contains((
-                GetTypeIdentity(item.Creation.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault()),
-                item.Invocation!.MethodName)))
-            .Select(item => item.Invocation!)
+            .SelectMany(creation =>
+            {
+                var typeIdentity = GetTypeIdentity(
+                    creation.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault());
+                return DirectSqlClientAnalyzer.Analyze(creation)
+                    .Where(invocation => !wrapperMethods.Contains((typeIdentity, invocation.MethodName)));
+            })
             .ToList();
         dbInvocations.AddRange(WrapperAnalyzer.Analyze(root, sourceRoots));
+        dbInvocations.AddRange(AdapterAnalyzer.Analyze(root, sourceRoots));
 
         return new CSharpAnalysis(
             Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
@@ -90,11 +93,11 @@ internal static class CSharpAnalyzer
 /// <summary>Finds direct `SqlCommand` invocations by name-based statement matching, without a full Compilation.</summary>
 internal static class DirectSqlClientAnalyzer
 {
-    internal static DirectSqlInvocation? Analyze(ObjectCreationExpressionSyntax creation)
+    internal static IReadOnlyList<DirectSqlInvocation> Analyze(ObjectCreationExpressionSyntax creation)
     {
         var method = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
         if (method is null)
-            return null;
+            return Array.Empty<DirectSqlInvocation>();
 
         var className = method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault()?.Identifier.Text ?? "";
         var variableName = ResolveVariableName(creation);
@@ -102,49 +105,66 @@ internal static class DirectSqlClientAnalyzer
         var textArgument = arguments.Count > 0 ? arguments[0].Expression : null;
         var connectionArgument = arguments.Count > 1 ? arguments[1].Expression : null;
 
-        var (commandTextKind, commandText) = ReadCommandText(textArgument);
         var connectionExpression = connectionArgument?.ToString().Trim();
-        var commandTypeStoredProcedure = false;
 
         var relevantStatements = new List<StatementSyntax>();
         var creationStatement = creation.FirstAncestorOrSelf<StatementSyntax>();
         if (creationStatement is not null)
             relevantStatements.Add(creationStatement);
 
+        var propertyAssignments = new List<AssignmentExpressionSyntax>();
         if (variableName is not null)
         {
-            var assignments = method.DescendantNodes().OfType<AssignmentExpressionSyntax>()
+            propertyAssignments = method.DescendantNodes().OfType<AssignmentExpressionSyntax>()
                 .Where(assignment => assignment.Left is MemberAccessExpressionSyntax member
-                    && member.Expression.ToString() == variableName);
+                    && member.Expression.ToString() == variableName)
+                .ToList();
 
-            foreach (var assignment in assignments)
+            foreach (var assignment in propertyAssignments)
             {
                 var propertyName = ((MemberAccessExpressionSyntax)assignment.Left).Name.Identifier.Text;
                 var statement = assignment.FirstAncestorOrSelf<StatementSyntax>();
 
-                if (propertyName == "CommandType")
+                if (propertyName is "CommandType" or "CommandText" or "Connection")
                 {
-                    if (IsStoredProcedureCommandType(assignment.Right))
-                    {
-                        commandTypeStoredProcedure = true;
-                        if (statement is not null)
-                            relevantStatements.Add(statement);
-                    }
-                }
-                else if (propertyName == "CommandText")
-                {
-                    (commandTextKind, commandText) = ReadCommandText(assignment.Right);
                     if (statement is not null)
                         relevantStatements.Add(statement);
                 }
-                else if (propertyName == "Connection")
-                {
+                if (propertyName == "Connection")
                     connectionExpression = assignment.Right.ToString().Trim();
-                    if (statement is not null)
-                        relevantStatements.Add(statement);
-                }
             }
         }
+
+        var commandTextAssignments = propertyAssignments
+            .Where(assignment => ((MemberAccessExpressionSyntax)assignment.Left).Name.Identifier.Text == "CommandText")
+            .Where(assignment => assignment.SpanStart > creation.SpanStart)
+            .ToList();
+        var commandTextSources = commandTextAssignments
+            .Select(assignment => (
+                Assignment: (SyntaxNode)assignment,
+                Value: assignment.Right))
+            .ToList();
+        if (textArgument is not null)
+        {
+            commandTextSources.Add((
+                Assignment: creation,
+                Value: textArgument));
+        }
+
+        var commandTextCandidates = commandTextSources.Count > 0
+            ? SyntaxBranchAnalyzer.RemoveShadowedAssignments(commandTextSources)
+                .SelectMany(item => ReadCommandTextCandidates(
+                    item.Value,
+                    method,
+                    item.Assignment,
+                    item.Assignment.SpanStart))
+                .ToList()
+            : ReadCommandTextCandidates(textArgument, method, creation, creation.SpanStart).ToList();
+
+        var storedProcedureAssignments = propertyAssignments
+            .Where(assignment => ((MemberAccessExpressionSyntax)assignment.Left).Name.Identifier.Text == "CommandType")
+            .Where(assignment => IsStoredProcedureCommandType(assignment.Right))
+            .ToList();
 
         SyntaxNode fallbackSpan = (SyntaxNode?)creation.FirstAncestorOrSelf<StatementSyntax>() ?? creation;
         var startOffset = relevantStatements.Count > 0
@@ -154,16 +174,76 @@ internal static class DirectSqlClientAnalyzer
             ? relevantStatements.Max(statement => statement.Span.End)
             : fallbackSpan.Span.End;
 
-        return new DirectSqlInvocation(
+        var invocations = new List<DirectSqlInvocation>();
+        foreach (var candidate in commandTextCandidates)
+        {
+            var matchingStoredProcedureAssignments = storedProcedureAssignments
+                .Where(assignment => SyntaxBranchAnalyzer.IsCompatible(
+                    candidate.BranchContext,
+                    SyntaxBranchAnalyzer.GetBranchContext(assignment)))
+                .ToList();
+
+            if (matchingStoredProcedureAssignments.Count == 0)
+            {
+                invocations.Add(CreateInvocation(
+                    className,
+                    method.Identifier.Text,
+                    candidate,
+                    false,
+                    connectionExpression,
+                    startOffset,
+                    endOffset));
+                continue;
+            }
+
+            foreach (var assignment in matchingStoredProcedureAssignments)
+            {
+                invocations.Add(CreateInvocation(
+                    className,
+                    method.Identifier.Text,
+                    candidate,
+                    true,
+                    connectionExpression,
+                    startOffset,
+                    endOffset,
+                    SyntaxBranchAnalyzer.Combine(
+                        candidate.BranchContext,
+                        SyntaxBranchAnalyzer.GetBranchContext(assignment))));
+            }
+        }
+
+        return invocations
+            .GroupBy(invocation => (
+                invocation.CommandTextKind,
+                invocation.CommandText,
+                invocation.CommandTypeStoredProcedure,
+                invocation.ConnectionExpression,
+                invocation.StartOffset,
+                invocation.EndOffset,
+                BranchContext: string.Join("\u001f", invocation.BranchContext ?? Array.Empty<string>())))
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    private static DirectSqlInvocation CreateInvocation(
+        string className,
+        string methodName,
+        CommandTextCandidate candidate,
+        bool commandTypeStoredProcedure,
+        string? connectionExpression,
+        int startOffset,
+        int endOffset,
+        IReadOnlyList<string>? branchContext = null)
+        => new(
             className,
-            method.Identifier.Text,
-            commandTextKind,
-            commandText,
+            methodName,
+            candidate.CommandTextKind,
+            candidate.CommandText,
             commandTypeStoredProcedure,
             connectionExpression,
             startOffset,
-            endOffset);
-    }
+            endOffset,
+            BranchContext: branchContext ?? candidate.BranchContext);
 
     private static string? ResolveVariableName(ObjectCreationExpressionSyntax creation)
     {
@@ -184,9 +264,421 @@ internal static class DirectSqlClientAnalyzer
         return ("dynamic", null);
     }
 
+    private static IReadOnlyList<CommandTextCandidate> ReadCommandTextCandidates(
+        ExpressionSyntax? expression,
+        MethodDeclarationSyntax method,
+        SyntaxNode anchor,
+        int position)
+    {
+        if (expression is IdentifierNameSyntax identifier)
+        {
+            var assignments = method.DescendantNodes()
+                .OfType<AssignmentExpressionSyntax>()
+                .Where(assignment => assignment.Left is IdentifierNameSyntax left
+                    && left.Identifier.Text == identifier.Identifier.Text
+                    && assignment.SpanStart < position)
+                .Select(assignment => (
+                    Assignment: (SyntaxNode)assignment,
+                    Value: assignment.Right))
+                .ToList();
+            var declarations = method.DescendantNodes()
+                .OfType<VariableDeclaratorSyntax>()
+                .Where(declaration => declaration.Identifier.Text == identifier.Identifier.Text
+                    && declaration.Initializer is not null
+                    && declaration.SpanStart < position)
+                .Select(declaration => (
+                    Assignment: (SyntaxNode)declaration,
+                    Value: declaration.Initializer!.Value))
+                .ToList();
+
+            var resolved = SyntaxBranchAnalyzer.RemoveShadowedAssignments(
+                assignments.Concat(declarations.Select(item => (item.Assignment, item.Value))))
+                .SelectMany(item => ReadCommandTextCandidates(
+                    item.Value,
+                    method,
+                    item.Assignment,
+                    item.Assignment.SpanStart,
+                    allowVariableLookup: false))
+                .ToList();
+            if (resolved.Count > 0)
+                return resolved;
+        }
+
+        var (kind, text) = ReadCommandText(expression);
+        return new[]
+        {
+            new CommandTextCandidate(
+                kind,
+                text,
+                SyntaxBranchAnalyzer.GetBranchContext(anchor)),
+        };
+    }
+
+    private static IReadOnlyList<CommandTextCandidate> ReadCommandTextCandidates(
+        ExpressionSyntax? expression,
+        MethodDeclarationSyntax method,
+        SyntaxNode anchor,
+        int position,
+        bool allowVariableLookup)
+    {
+        if (allowVariableLookup)
+            return ReadCommandTextCandidates(expression, method, anchor, position);
+
+        var (kind, text) = ReadCommandText(expression);
+        return new[]
+        {
+            new CommandTextCandidate(
+                kind,
+                text,
+                SyntaxBranchAnalyzer.GetBranchContext(anchor)),
+        };
+    }
+
     /// <summary>Matches only an exact `CommandType.StoredProcedure` member access, not any value containing the substring.</summary>
     private static bool IsStoredProcedureCommandType(ExpressionSyntax expression)
         => expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "StoredProcedure" };
+
+    private sealed record CommandTextCandidate(
+        string CommandTextKind,
+        string? CommandText,
+        IReadOnlyList<string> BranchContext);
+}
+
+internal static class AdapterAnalyzer
+{
+    private static readonly HashSet<string> DapperMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Query",
+        "QueryAsync",
+        "QueryFirst",
+        "QueryFirstAsync",
+        "QueryFirstOrDefault",
+        "QueryFirstOrDefaultAsync",
+        "QuerySingle",
+        "QuerySingleAsync",
+        "QuerySingleOrDefault",
+        "QuerySingleOrDefaultAsync",
+        "QueryMultiple",
+        "QueryMultipleAsync",
+        "Execute",
+        "ExecuteAsync",
+        "ExecuteScalar",
+        "ExecuteScalarAsync",
+    };
+
+    private static readonly HashSet<string> EntityFrameworkMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ExecuteSqlCommand",
+        "ExecuteSqlCommandAsync",
+        "ExecuteSqlRaw",
+        "ExecuteSqlRawAsync",
+        "SqlQuery",
+        "SqlQueryRaw",
+        "FromSqlRaw",
+        "FromSqlInterpolated",
+    };
+
+    internal static List<DirectSqlInvocation> Analyze(
+        CompilationUnitSyntax root,
+        IEnumerable<CompilationUnitSyntax> sourceRoots)
+    {
+        var wrapperDefinitions = WrapperAnalyzer.GetDefinitions(sourceRoots);
+        var invocations = new List<DirectSqlInvocation>();
+        foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+        {
+            var className = method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault()?.Identifier.Text ?? "";
+            foreach (var call in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (call.Expression is not MemberAccessExpressionSyntax member)
+                    continue;
+                if (WrapperAnalyzer.IsSourceWrapperInvocation(call, method, wrapperDefinitions))
+                    continue;
+
+                var methodName = member.Name.Identifier.Text;
+                if (DapperMethods.Contains(methodName)
+                    && LooksLikeDapperReceiver(member.Expression, method, call.SpanStart))
+                    invocations.AddRange(AnalyzeDapperCall(call, method, className, member));
+                else if (EntityFrameworkMethods.Contains(methodName)
+                    && LooksLikeEntityFrameworkReceiver(member.Expression, method, call.SpanStart))
+                    invocations.Add(AnalyzeEntityFrameworkCall(call, method, className, member));
+            }
+        }
+        return invocations;
+    }
+
+    private static IReadOnlyList<DirectSqlInvocation> AnalyzeDapperCall(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax method,
+        string className,
+        MemberAccessExpressionSyntax member)
+    {
+        var arguments = call.ArgumentList.Arguments;
+        var commandTextExpression = arguments.ElementAtOrDefault(0)?.Expression;
+        var mode = ResolveDapperMode(arguments, commandTextExpression);
+        var candidates = ReadCommandTextCandidates(commandTextExpression, method, call, call.SpanStart);
+        var callContext = SyntaxBranchAnalyzer.GetBranchContext(call);
+        var connectionExpression = member.Expression.ToString().Trim();
+
+        return candidates.Select(candidate => new DirectSqlInvocation(
+            className,
+            method.Identifier.Text,
+            candidate.CommandTextKind,
+            candidate.CommandText,
+            mode == "stored_procedure",
+            connectionExpression,
+            call.SpanStart,
+            call.Span.End,
+            InvocationKind: "dapper",
+            WrapperMode: mode,
+            MethodChain: new[] { method.Identifier.Text, member.Name.Identifier.Text },
+            BranchContext: SyntaxBranchAnalyzer.Combine(callContext, candidate.BranchContext)))
+            .ToList();
+    }
+
+    private static DirectSqlInvocation AnalyzeEntityFrameworkCall(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax method,
+        string className,
+        MemberAccessExpressionSyntax member)
+    {
+        var expression = call.ArgumentList.Arguments.ElementAtOrDefault(0)?.Expression;
+        var (kind, text, mode) = ReadEntityFrameworkCommandText(expression);
+        return new DirectSqlInvocation(
+            className,
+            method.Identifier.Text,
+            kind,
+            text,
+            mode == "stored_procedure",
+            member.Expression.ToString().Trim(),
+            call.SpanStart,
+            call.Span.End,
+            InvocationKind: "entity_framework",
+            WrapperMode: mode,
+            MethodChain: new[] { method.Identifier.Text, member.Name.Identifier.Text },
+            BranchContext: SyntaxBranchAnalyzer.GetBranchContext(call));
+    }
+
+    private static string ResolveDapperMode(
+        SeparatedSyntaxList<ArgumentSyntax> arguments,
+        ExpressionSyntax? commandTextExpression)
+    {
+        var commandTypeArgument = arguments.FirstOrDefault(argument =>
+            argument.NameColon?.Name.Identifier.Text.Equals("commandType", StringComparison.OrdinalIgnoreCase) == true);
+        if (commandTypeArgument is not null)
+        {
+            if (IsCommandType(commandTypeArgument.Expression, "StoredProcedure"))
+                return "stored_procedure";
+            if (IsCommandType(commandTypeArgument.Expression, "Text"))
+                return "inline_sql";
+            return "unknown";
+        }
+
+        if (commandTextExpression is LiteralExpressionSyntax { Token.Value: string text }
+            && LooksLikeInlineSql(text))
+            return "inline_sql";
+        return "unknown";
+    }
+
+    private static (string Kind, string? Text, string Mode) ReadEntityFrameworkCommandText(
+        ExpressionSyntax? expression)
+    {
+        if (expression is LiteralExpressionSyntax { Token.Value: string text })
+        {
+            var match = Regex.Match(
+                text,
+                @"^\s*EXEC(?:UTE)?\s+(?<name>(?:(?:\[[^\]]+\]|[A-Za-z_][\w$]*)\s*\.)*(?:\[[^\]]+\]|[A-Za-z_][\w$]*))",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (match.Success)
+                return ("literal", match.Groups["name"].Value, "stored_procedure");
+            return ("literal", text, LooksLikeInlineSql(text) ? "inline_sql" : "unknown");
+        }
+
+        return ("dynamic", null, "unknown");
+    }
+
+    private static bool IsCommandType(ExpressionSyntax expression, string memberName)
+        => expression is MemberAccessExpressionSyntax member
+            && member.Name.Identifier.Text.Equals(memberName, StringComparison.Ordinal);
+
+    private static bool LooksLikeDapperReceiver(
+        ExpressionSyntax expression,
+        MethodDeclarationSyntax method,
+        int position)
+    {
+        var receiver = expression.ToString().Trim().Split('.').Last().TrimStart('_');
+        return (receiver.Equals("connection", StringComparison.OrdinalIgnoreCase)
+            || receiver.Equals("conn", StringComparison.OrdinalIgnoreCase)
+            || receiver.Equals("db", StringComparison.OrdinalIgnoreCase)
+            || receiver.Equals("database", StringComparison.OrdinalIgnoreCase)
+            || receiver.EndsWith("connection", StringComparison.OrdinalIgnoreCase)
+            || receiver.EndsWith("database", StringComparison.OrdinalIgnoreCase)
+            || receiver.EndsWith("db", StringComparison.OrdinalIgnoreCase))
+            && GetReceiverTypeNames(expression, method, position).Any(IsDatabaseConnectionType);
+    }
+
+    private static bool LooksLikeEntityFrameworkReceiver(
+        ExpressionSyntax expression,
+        MethodDeclarationSyntax method,
+        int position)
+        => GetReceiverTypeNames(expression, method, position).Any(IsEntityFrameworkContextType);
+
+    private static IReadOnlyList<string> GetReceiverTypeNames(
+        ExpressionSyntax expression,
+        MethodDeclarationSyntax method,
+        int position)
+    {
+        var receiverName = GetReceiverName(expression);
+        if (receiverName is null)
+            return Array.Empty<string>();
+
+        var localTypes = method.DescendantNodes()
+            .OfType<VariableDeclarationSyntax>()
+            .Where(declaration => declaration.SpanStart < position)
+            .SelectMany(declaration => declaration.Variables
+                .Where(variable => variable.Identifier.Text == receiverName)
+                .SelectMany(variable => GetVariableTypeNames(declaration, variable)))
+            .ToList();
+        if (localTypes.Count > 0)
+            return localTypes;
+
+        var parameterTypes = method.ParameterList.Parameters
+            .Where(parameter => parameter.Identifier.Text == receiverName && parameter.Type is not null)
+            .Select(parameter => parameter.Type!.ToString())
+            .ToList();
+        if (parameterTypes.Count > 0)
+            return parameterTypes;
+
+        var classDeclaration = method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+        if (classDeclaration is null)
+            return Array.Empty<string>();
+
+        var fieldTypes = classDeclaration.DescendantNodes()
+            .OfType<FieldDeclarationSyntax>()
+            .Where(field => field.Declaration.Variables.Any(variable => variable.Identifier.Text == receiverName))
+            .Select(field => field.Declaration.Type.ToString())
+            .ToList();
+        if (fieldTypes.Count > 0)
+            return fieldTypes;
+
+        return classDeclaration.DescendantNodes()
+            .OfType<PropertyDeclarationSyntax>()
+            .Where(property => property.Identifier.Text == receiverName)
+            .Select(property => property.Type.ToString())
+            .ToList();
+    }
+
+    private static IEnumerable<string> GetVariableTypeNames(
+        VariableDeclarationSyntax declaration,
+        VariableDeclaratorSyntax variable)
+    {
+        if (!declaration.Type.ToString().Equals("var", StringComparison.Ordinal))
+        {
+            yield return declaration.Type.ToString();
+            yield break;
+        }
+
+        if (variable.Initializer?.Value is ObjectCreationExpressionSyntax creation)
+            yield return creation.Type.ToString();
+    }
+
+    private static string? GetReceiverName(ExpressionSyntax expression)
+    {
+        if (expression is IdentifierNameSyntax identifier)
+            return identifier.Identifier.Text;
+        if (expression is MemberAccessExpressionSyntax member)
+        {
+            if (member.Expression is ThisExpressionSyntax)
+                return member.Name.Identifier.Text;
+            return GetReceiverName(member.Expression);
+        }
+        return null;
+    }
+
+    private static bool IsDatabaseConnectionType(string typeName)
+    {
+        var name = typeName.Trim().TrimEnd('?').Split('.').Last();
+        return name is "IDbConnection"
+            or "DbConnection"
+            or "SqlConnection"
+            or "SqliteConnection"
+            or "NpgsqlConnection"
+            or "MySqlConnection"
+            or "OracleConnection"
+            or "OleDbConnection"
+            or "OdbcConnection";
+    }
+
+    private static bool IsEntityFrameworkContextType(string typeName)
+    {
+        var name = typeName.Trim().TrimEnd('?').Split('.').Last();
+        return name.Equals("DbContext", StringComparison.Ordinal)
+            || name.EndsWith("DbContext", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeInlineSql(string text)
+    {
+        var normalized = text.TrimStart();
+        return normalized.StartsWith("SELECT ", StringComparison.OrdinalIgnoreCase)
+            || normalized.StartsWith("INSERT ", StringComparison.OrdinalIgnoreCase)
+            || normalized.StartsWith("UPDATE ", StringComparison.OrdinalIgnoreCase)
+            || normalized.StartsWith("DELETE ", StringComparison.OrdinalIgnoreCase)
+            || normalized.StartsWith("MERGE ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<AdapterCommandTextCandidate> ReadCommandTextCandidates(
+        ExpressionSyntax? expression,
+        MethodDeclarationSyntax method,
+        SyntaxNode anchor,
+        int position)
+    {
+        if (expression is IdentifierNameSyntax identifier)
+        {
+            var assignments = method.DescendantNodes()
+                .OfType<AssignmentExpressionSyntax>()
+                .Where(assignment => assignment.Left is IdentifierNameSyntax left
+                    && left.Identifier.Text == identifier.Identifier.Text
+                    && assignment.SpanStart < position)
+                .Select(assignment => (
+                    Assignment: (SyntaxNode)assignment,
+                    Value: assignment.Right));
+            var declarations = method.DescendantNodes()
+                .OfType<VariableDeclaratorSyntax>()
+                .Where(declaration => declaration.Identifier.Text == identifier.Identifier.Text
+                    && declaration.Initializer is not null
+                    && declaration.SpanStart < position)
+                .Select(declaration => (
+                    Assignment: (SyntaxNode)declaration,
+                    Value: declaration.Initializer!.Value))
+                .ToList();
+            var resolved = SyntaxBranchAnalyzer.RemoveShadowedAssignments(
+                assignments.Concat(declarations))
+                .Select(item => ReadCommandTextCandidate(
+                    item.Value,
+                    SyntaxBranchAnalyzer.GetBranchContext(item.Assignment)))
+                .ToList();
+            if (resolved.Count > 0)
+                return resolved;
+        }
+
+        return new[]
+        {
+            ReadCommandTextCandidate(expression, SyntaxBranchAnalyzer.GetBranchContext(anchor)),
+        };
+    }
+
+    private static AdapterCommandTextCandidate ReadCommandTextCandidate(
+        ExpressionSyntax? expression,
+        IReadOnlyList<string> branchContext)
+    {
+        if (expression is LiteralExpressionSyntax { Token.Value: string text })
+            return new AdapterCommandTextCandidate("literal", text, branchContext);
+        return new AdapterCommandTextCandidate("dynamic", null, branchContext);
+    }
+
+    private sealed record AdapterCommandTextCandidate(
+        string CommandTextKind,
+        string? CommandText,
+        IReadOnlyList<string> BranchContext);
 }
 
 internal sealed record CSharpAnalysis(string SourceId, List<MethodSourceSpan> Methods, List<DirectSqlInvocation> DbInvocations);
@@ -209,10 +701,89 @@ internal sealed record DirectSqlInvocation(
     bool WrapperSourceAvailable = false,
     bool WrapperReachesStoredProcedureSink = false,
     string WrapperMode = "",
-    IReadOnlyList<string>? MethodChain = null);
+    IReadOnlyList<string>? MethodChain = null,
+    IReadOnlyList<string>? BranchContext = null);
+
+internal static class SyntaxBranchAnalyzer
+{
+    internal static IReadOnlyList<string> GetBranchContext(SyntaxNode node)
+    {
+        var context = new List<string>();
+        foreach (var ancestor in node.Ancestors().Reverse())
+        {
+            if (ancestor is IfStatementSyntax ifStatement)
+            {
+                if (ifStatement.Statement.Span.Contains(node.Span))
+                    context.Add($"if ({ifStatement.Condition})");
+                else if (ifStatement.Else?.Statement.Span.Contains(node.Span) == true)
+                    context.Add($"else ({ifStatement.Condition})");
+            }
+            else if (ancestor is ConditionalExpressionSyntax conditional)
+            {
+                if (conditional.WhenTrue.Span.Contains(node.Span))
+                    context.Add($"when ({conditional.Condition})");
+                else if (conditional.WhenFalse.Span.Contains(node.Span))
+                    context.Add($"else ({conditional.Condition})");
+            }
+            else if (ancestor is SwitchSectionSyntax section)
+            {
+                foreach (var label in section.Labels)
+                    context.Add(label.ToString().Trim());
+            }
+        }
+        return context.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    internal static IReadOnlyList<string> Combine(
+        IEnumerable<string> first,
+        IEnumerable<string> second)
+        => first.Concat(second).Distinct(StringComparer.Ordinal).ToList();
+
+    internal static IReadOnlyList<(SyntaxNode Assignment, ExpressionSyntax Value)> RemoveShadowedAssignments(
+        IEnumerable<(SyntaxNode Assignment, ExpressionSyntax Value)> assignments)
+    {
+        var ordered = assignments
+            .OrderBy(item => item.Assignment.SpanStart)
+            .ToList();
+        return ordered
+            .Where((candidate, index) => !ordered
+                .Skip(index + 1)
+                .Any(later => IsAlwaysOverridden(candidate.Assignment, later.Assignment)))
+            .ToList();
+    }
+
+    internal static bool IsCompatible(
+        IReadOnlyList<string> candidateContext,
+        IReadOnlyList<string> assignmentContext)
+    {
+        if (assignmentContext.Count == 0)
+            return true;
+        return IsPrefix(assignmentContext, candidateContext);
+    }
+
+    private static bool IsPrefix(IReadOnlyList<string> prefix, IReadOnlyList<string> value)
+        => prefix.Count <= value.Count && prefix.SequenceEqual(value.Take(prefix.Count));
+
+    private static bool IsAlwaysOverridden(SyntaxNode candidate, SyntaxNode later)
+    {
+        var candidateContext = GetBranchContext(candidate);
+        var laterContext = GetBranchContext(later);
+        return laterContext.Count == 0 || IsPrefix(laterContext, candidateContext);
+    }
+}
 
 internal static class WrapperAnalyzer
 {
+    internal static bool IsSourceWrapperInvocation(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax caller,
+        IReadOnlyList<WrapperDefinition> wrappers)
+    {
+        var callerTypeIdentity = CSharpAnalyzer.GetTypeIdentity(
+            caller.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault());
+        return ResolveDefinition(call, caller, callerTypeIdentity, wrappers) is not null;
+    }
+
     internal static IReadOnlySet<(string ClassName, string MethodName)> FindUsedWrapperMethods(
         IEnumerable<CompilationUnitSyntax> sourceRoots)
     {
@@ -283,7 +854,7 @@ internal static class WrapperAnalyzer
         return invocations;
     }
 
-    private static List<WrapperDefinition> GetDefinitions(
+    internal static List<WrapperDefinition> GetDefinitions(
         IEnumerable<CompilationUnitSyntax> sourceRoots)
         => sourceRoots.SelectMany(sourceRoot => sourceRoot.DescendantNodes()
             .OfType<MethodDeclarationSyntax>()
@@ -693,7 +1264,7 @@ internal static class WrapperAnalyzer
     private static string LastTypeSegment(string typeName)
         => typeName.Split('.').Last().Trim();
 
-    private sealed record WrapperDefinition(
+    internal sealed record WrapperDefinition(
         string TypeIdentity,
         string ClassName,
         string MethodName,

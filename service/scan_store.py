@@ -86,7 +86,9 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # v16：ProjectScanResult 新增 StaticAnalyzerHost 的 raw db_invocations 與每檔案
 # connection_sources，供 Execution Path 在 /analyze 時直接接上 SQL graph；舊快取
 # 沒有這些欄位，必須重新掃描。
-_CACHE_VERSION = 16
+# v17：StaticAnalyzerHost raw db_invocations 新增 branch_context 與 Dapper/Entity
+# Framework adapter facts；舊快取沒有這些新證據，必須重新掃描。
+_CACHE_VERSION = 17
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

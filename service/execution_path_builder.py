@@ -101,6 +101,7 @@ def build_execution_paths(
                 relationships,
                 nodes,
                 graph,
+                call_conditions=tuple(invocation.branch_context or ()),
                 max_call_depth=max_call_depth,
             )
         )
@@ -441,6 +442,9 @@ def _unresolved_path(
     path_identity: str = "",
     unresolved_targets: Optional[list[str]] = None,
 ) -> dict[str, Any]:
+    effective_conditions = tuple(
+        _ordered_unique((*invocation.branch_context, *path_conditions))
+    )
     procedure_name = invocation.procedure_name or ""
     sp_chain = sp_chain_override or (
         [_qualified_name(module)] if module else ([procedure_name] if procedure_name else [])
@@ -451,7 +455,7 @@ def _unresolved_path(
             invocation,
             operation_id or f"unresolved:{reason}",
             module_id,
-            path_conditions,
+            effective_conditions,
         ),
         "entry_method": _entry_method(invocation),
         "method_chain": _method_chain(invocation),
@@ -460,7 +464,7 @@ def _unresolved_path(
         "terminal_operation": None,
         "target": "",
         "written_columns": [],
-        "conditions": list(path_conditions),
+        "conditions": list(effective_conditions),
         "reads": [],
         "writes": [],
         "risk_flags": [reason],
