@@ -42,14 +42,14 @@ internal static class Program
         if (analyses.Count == 1)
         {
             var analysis = analyses[0];
-            Write(new { contract_version = ContractVersion, source_id = analysis.SourceId, methods = analysis.Methods });
+            Write(new { contract_version = ContractVersion, source_id = analysis.SourceId, methods = analysis.Methods, db_invocations = analysis.DbInvocations });
         }
         else
         {
             Write(new
             {
                 contract_version = ContractVersion,
-                sources = analyses.Select(analysis => new { source_id = analysis.SourceId, methods = analysis.Methods }),
+                sources = analyses.Select(analysis => new { source_id = analysis.SourceId, methods = analysis.Methods, db_invocations = analysis.DbInvocations }),
             });
         }
         return 0;
