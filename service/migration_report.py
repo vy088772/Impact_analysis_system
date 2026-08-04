@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
@@ -19,8 +20,10 @@ from code_analyzer.project_scanner import CSharpSPRelation, ProjectScanResult
 def build_scan_migration_report(
     scan: ProjectScanResult,
     gateway_records: Iterable[DbInvocation],
+    *,
+    legacy_records: Optional[Iterable[object]] = None,
 ) -> dict[str, Any]:
-    """Compare one persisted scan's legacy relations with Gateway output."""
+    """Compare one scan's transient legacy facts with Gateway output."""
     source_kinds: dict[tuple[str, int, int], str] = {}
     root = Path(scan.project_root)
     for file_path, raw_records in (getattr(scan, "db_invocations", {}) or {}).items():
@@ -30,7 +33,11 @@ def build_scan_migration_report(
             end_offset = int(raw.get("end_offset") or 0)
             source_kinds[(relative_path, start_offset, end_offset)] = _raw_source_kind(raw)
     return compare_legacy_gateway(
-        getattr(scan, "legacy_sp_relations", []) or [],
+        (
+            legacy_records
+            if legacy_records is not None
+            else getattr(scan, "legacy_sp_relations", []) or []
+        ),
         gateway_records,
         source_root=root,
         source_kinds=source_kinds,
@@ -160,22 +167,53 @@ def render_migration_report_markdown(report: Mapping[str, Any]) -> str:
     ):
         lines.append(f"| {label} | {summary.get(key, 0)} |")
 
-    lines.extend(["", "| Category | Caller | Database | Procedure | Reason |", "|---|---|---|---|---|"])
+    lines.extend(
+        [
+            "",
+            "| Category | Caller | Source | Source kind | Evidence | Database | Procedure | Reason |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+    )
     for difference in report.get("differences", []) or []:
         record = difference.get("gateway") or difference.get("legacy") or {}
         caller = record.get("caller", {})
         lines.append(
-            "| {category} | {file}::{class_name}.{method} | {database} | {procedure} | {reason} |".format(
+            "| {category} | {file}::{class_name}.{method} | {source} | {source_kind} | {evidence} | {database} | {procedure} | {reason} |".format(
                 category=difference.get("category", ""),
                 file=caller.get("file", ""),
                 class_name=caller.get("class", ""),
                 method=caller.get("method", ""),
+                source=_markdown_source(record.get("source", {})),
+                source_kind=record.get("source_kind", ""),
+                evidence=record.get("evidence", ""),
                 database=record.get("database", ""),
                 procedure=record.get("procedure", ""),
                 reason=difference.get("reason", ""),
             )
         )
     return "\n".join(lines) + "\n"
+
+
+def save_migration_report(
+    report: Mapping[str, Any],
+    path: str | Path,
+    *,
+    format: Optional[str] = None,
+) -> Path:
+    """Save a comparison report as a review-only JSON or Markdown artifact."""
+    destination = Path(path)
+    selected_format = (format or destination.suffix.lstrip(".") or "json").casefold()
+    if selected_format == "md":
+        selected_format = "markdown"
+    if selected_format == "json":
+        content = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    elif selected_format == "markdown":
+        content = render_migration_report_markdown(report)
+    else:
+        raise ValueError("migration report format must be json or markdown")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(content, encoding="utf-8")
+    return destination
 
 
 def _legacy_record(record: object, *, source_root: Optional[str | Path]) -> dict[str, Any]:
@@ -241,7 +279,18 @@ def _gateway_record(
             "start_offset": source.start_offset,
             "end_offset": source.end_offset,
             "branch_context": list(record.branch_context),
+            "method_chain": list(record.method_chain),
+            "method_class_chain": list(record.method_class_chain),
+            "source_snapshot_hash": record.source_snapshot_hash,
         },
+        database_candidates=record.database_candidates,
+        database_attribution=(
+            "resolved"
+            if record.database
+            else "candidate"
+            if record.database_candidates
+            else "unresolved"
+        ),
     )
 
 
@@ -257,6 +306,8 @@ def _record(
     source_kind: str,
     source: Mapping[str, Any],
     source_root: Optional[str | Path] = None,
+    database_candidates: Iterable[str] = (),
+    database_attribution: str = "",
 ) -> dict[str, Any]:
     normalized_file = _normalize_path(file_path, source_root=source_root)
     normalized_procedure = _normalize_procedure(procedure)
@@ -276,6 +327,10 @@ def _record(
             "method": method_name,
         },
         "database": normalized_database,
+        "database_candidates": [str(value) for value in database_candidates if str(value)],
+        "database_attribution": database_attribution or (
+            "resolved" if normalized_database != "<unknown>" else "unresolved"
+        ),
         "procedure": normalized_procedure,
         "evidence": evidence,
         "reason": reason,
@@ -308,20 +363,47 @@ def _difference(
     }
 
 
-def _record_sort_key(record: Mapping[str, Any]) -> tuple[str, str, str, str]:
+def _record_sort_key(
+    record: Mapping[str, Any],
+) -> tuple[str, str, str, str, int, int, int, str, str, str, tuple[str, ...]]:
     caller = record.get("caller", {})
+    source = record.get("source", {})
     return (
         str(caller.get("file", "")),
         str(caller.get("class", "")),
         str(caller.get("method", "")),
         str(record.get("procedure", "")),
+        _source_position(source, "line"),
+        _source_position(source, "start_offset"),
+        _source_position(source, "end_offset"),
+        str(record.get("source_kind", "")),
+        str(record.get("evidence", "")),
+        str(record.get("reason", "")),
+        tuple(str(value) for value in record.get("database_candidates", []) or []),
     )
 
 
-def _difference_sort_key(difference: Mapping[str, Any]) -> tuple[str, str, str, str]:
+def _difference_sort_key(
+    difference: Mapping[str, Any],
+) -> tuple[str, str, str, str, int, int, int, str, str, str, tuple[str, ...]]:
     return _record_sort_key(
         difference.get("gateway") or difference.get("legacy") or {}
     )
+
+
+def _source_position(source: Mapping[str, Any], key: str) -> int:
+    try:
+        return int(source.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _markdown_source(source: Mapping[str, Any]) -> str:
+    if source.get("line"):
+        return f"line {source['line']}"
+    start = source.get("start_offset", "")
+    end = source.get("end_offset", "")
+    return f"offset {start}-{end}" if start != "" or end != "" else ""
 
 
 def _normalize_path(path: str, *, source_root: Optional[str | Path] = None) -> str:

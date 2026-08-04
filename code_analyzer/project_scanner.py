@@ -145,6 +145,15 @@ class ProjectScanResult:
     unique_sps: Set[str] = field(default_factory=set)
     unique_tables: Set[str] = field(default_factory=set)
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop("legacy_sp_relations", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.legacy_sp_relations = []
+
     @staticmethod
     def _is_formal_sp_invocation(record: Dict) -> bool:
         """Return whether a raw StaticAnalyzerHost record is an SP attempt."""
@@ -298,7 +307,6 @@ class ProjectScanResult:
                 }
             },
             'sp_relations': [rel.to_dict() for rel in self.sp_relations],
-            'legacy_sp_relations': [rel.to_dict() for rel in self.legacy_sp_relations],
             'database_invocations': self.db_invocations,
             'table_relations': [rel.to_dict() for rel in self.table_relations]
         }
@@ -660,10 +668,6 @@ class ProjectScanner:
         print(f"\n🔗 建立關聯...")
         self._build_relations(analyze_sp)
         
-        # 🆕 4.5 智慧推斷 unknown 資料庫
-        if analyze_sp and self.sql_analyzers:
-            self._infer_unknown_databases()
-        
         # 5. 計算統計
         self.scan_result.calculate_statistics()
         
@@ -775,40 +779,6 @@ class ProjectScanner:
                 )
                 
                 self.scan_result.table_relations.append(relation)
-    
-    def _infer_unknown_databases(self):
-        """
-        智慧推斷 unknown 資料庫
-        基於已知的 SP 資料表資訊來推斷
-        """
-        print(f"\n   🔍 智慧推斷 unknown 資料庫...")
-        
-        # 建立資料表 → 資料庫的映射（從 SP 資訊中）
-        table_to_db_map = {}
-        
-        for sp_rel in self.scan_result.legacy_sp_relations:
-            if sp_rel.sp_info and sp_rel.sp_info.referenced_tables:
-                for table in sp_rel.sp_info.referenced_tables:
-                    table_upper = table.upper()
-                    # 如果這個資料表還沒有記錄，或者記錄的是 unknown，就更新
-                    if table_upper not in table_to_db_map or table_to_db_map[table_upper] == 'unknown':
-                        table_to_db_map[table_upper] = sp_rel.sp_database
-        
-        # 使用映射來更新 unknown 的資料表關聯
-        updated_count = 0
-        for relation in self.scan_result.table_relations:
-            if relation.database == 'unknown':
-                table_upper = relation.table_name.upper()
-                if table_upper in table_to_db_map and table_to_db_map[table_upper] != 'unknown':
-                    old_db = relation.database
-                    relation.database = table_to_db_map[table_upper]
-                    updated_count += 1
-                    print(f"      ✓ {relation.table_name:20s} : unknown → {relation.database}")
-        
-        if updated_count > 0:
-            print(f"   ✅ 已更新 {updated_count} 個資料表的資料庫來源")
-        else:
-            print(f"   ℹ️  沒有可推斷的 unknown 資料庫")
     
     def _find_class_and_method(
         self, 

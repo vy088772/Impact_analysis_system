@@ -117,6 +117,23 @@ def test_inline_sql_without_stored_procedure_type_is_not_reported() -> None:
     assert invocations == []
 
 
+def test_ordinary_method_without_database_invocation_fact_is_not_reported() -> None:
+    catalog = SpCatalog.from_databases({"Y-Docs_TTPUR": ["usp_SO_Delete"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "Y-Docs_TTPUR"})
+
+    raw = {
+        "class_name": "PUR_SOMaintain",
+        "method_name": "FormatOrderNumber",
+        "command_text_kind": "none",
+        "command_text": None,
+        "command_type_stored_procedure": False,
+        "start_offset": 200,
+        "end_offset": 230,
+    }
+
+    assert gateway.resolve_direct_invocations("f.cs", [raw]) == []
+
+
 def test_dynamic_command_text_is_unresolved() -> None:
     """A variable-built command text cannot be identified statically, so it stays unresolved."""
     catalog = SpCatalog.from_databases({"Y-Docs_TTPUR": ["usp_SO_Delete"]})

@@ -90,7 +90,10 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # Framework adapter facts；舊快取沒有這些新證據，必須重新掃描。
 # v18：legacy regex SP relations moved to legacy_sp_relations; formal consumers use
 # raw db_invocations plus CSharpAnalysisGateway.
-_CACHE_VERSION = 18
+# v19：legacy_sp_relations are transient comparison input and are excluded from
+# ProjectScanResult serialization; cached scans must not retain a second relation source.
+# v20：remove legacy SP-based database inference from formal table facts.
+_CACHE_VERSION = 20
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
