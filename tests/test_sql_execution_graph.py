@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -16,6 +17,32 @@ from code_analyzer import sql_analyzer
 from code_analyzer.sql_analyzer import SQLAnalyzer
 from config.settings import settings
 from service import sql_cache_store
+
+
+def _write_sql_cache_fixture(
+    cache_dir: str,
+    database: str,
+    payload: dict,
+    cache_version: int | None = None,
+) -> None:
+    cache_root = Path(cache_dir)
+    (cache_root / f"{database}__dbo.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    (cache_root / f"{database}__dbo.meta.json").write_text(
+        json.dumps(
+            {
+                "cache_version": (
+                    sql_cache_store._SQL_CACHE_VERSION
+                    if cache_version is None
+                    else cache_version
+                ),
+                "database": database,
+                "schema": "dbo",
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_dump_all_sql_objects_keeps_sp_helpers_on_sql_analyzer() -> None:
@@ -42,6 +69,111 @@ def test_dump_all_sql_objects_keeps_sp_helpers_on_sql_analyzer() -> None:
     data = analyzer.dump_all_sql_objects("dbo")
 
     assert [procedure["name"] for procedure in data["procedures"]] == ["usp_Repro"]
+    assert "dependencies" not in data
+    assert "write_dependencies" not in data
+
+
+def test_sql_cache_rejects_graphless_payload() -> None:
+    previous_cache_root = settings.SQL_CACHE_ROOT
+    previous_mem_cache = dict(sql_cache_store._mem_cache)
+    with tempfile.TemporaryDirectory() as cache_dir:
+        settings.SQL_CACHE_ROOT = cache_dir
+        sql_cache_store._mem_cache.clear()
+        _write_sql_cache_fixture(
+            cache_dir,
+            "TestDb",
+            {"database": "TestDb", "schema": "dbo", "procedures": []},
+        )
+
+        assert sql_cache_store.load_cached("TestDb", "dbo") is None
+    sql_cache_store._mem_cache.clear()
+    sql_cache_store._mem_cache.update(previous_mem_cache)
+    settings.SQL_CACHE_ROOT = previous_cache_root
+
+
+def test_sql_cache_rejects_database_mismatch_from_memory_and_disk() -> None:
+    previous_cache_root = settings.SQL_CACHE_ROOT
+    previous_mem_cache = dict(sql_cache_store._mem_cache)
+    mismatched_payload = {
+        "database": "OtherDb",
+        "schema": "dbo",
+        "sql_execution_graph": {
+            "graph_version": 2,
+            "database": "OtherDb",
+            "nodes": [],
+            "relationships": [],
+            "parse_errors": [],
+        },
+    }
+    with tempfile.TemporaryDirectory() as cache_dir:
+        settings.SQL_CACHE_ROOT = cache_dir
+        sql_cache_store._mem_cache.clear()
+        _write_sql_cache_fixture(cache_dir, "TestDb", mismatched_payload)
+
+        assert sql_cache_store.load_cached("TestDb", "dbo") is None
+
+        sql_cache_store._mem_cache["TestDb__dbo"] = mismatched_payload
+        assert sql_cache_store.load_cached("TestDb", "dbo") is None
+    sql_cache_store._mem_cache.clear()
+    sql_cache_store._mem_cache.update(previous_mem_cache)
+    settings.SQL_CACHE_ROOT = previous_cache_root
+
+
+def test_sql_cache_rejects_stale_payload_version() -> None:
+    previous_cache_root = settings.SQL_CACHE_ROOT
+    previous_mem_cache = dict(sql_cache_store._mem_cache)
+    with tempfile.TemporaryDirectory() as cache_dir:
+        settings.SQL_CACHE_ROOT = cache_dir
+        sql_cache_store._mem_cache.clear()
+        _write_sql_cache_fixture(
+            cache_dir,
+            "TestDb",
+            {
+                "database": "TestDb",
+                "schema": "dbo",
+                "sql_execution_graph": {
+                    "graph_version": 2,
+                    "database": "TestDb",
+                    "nodes": [],
+                    "relationships": [],
+                    "parse_errors": [],
+                },
+            },
+            cache_version=sql_cache_store._SQL_CACHE_VERSION - 1,
+        )
+
+        assert sql_cache_store.load_cached("TestDb", "dbo") is None
+    sql_cache_store._mem_cache.clear()
+    sql_cache_store._mem_cache.update(previous_mem_cache)
+    settings.SQL_CACHE_ROOT = previous_cache_root
+
+
+def test_sql_cache_rejects_stale_graph_version() -> None:
+    previous_cache_root = settings.SQL_CACHE_ROOT
+    previous_mem_cache = dict(sql_cache_store._mem_cache)
+    with tempfile.TemporaryDirectory() as cache_dir:
+        settings.SQL_CACHE_ROOT = cache_dir
+        sql_cache_store._mem_cache.clear()
+        _write_sql_cache_fixture(
+            cache_dir,
+            "TestDb",
+            {
+                "database": "TestDb",
+                "schema": "dbo",
+                "sql_execution_graph": {
+                    "graph_version": 1,
+                    "database": "TestDb",
+                    "nodes": [],
+                    "relationships": [],
+                    "parse_errors": [],
+                },
+            },
+        )
+
+        assert sql_cache_store.load_cached("TestDb", "dbo") is None
+    sql_cache_store._mem_cache.clear()
+    sql_cache_store._mem_cache.update(previous_mem_cache)
+    settings.SQL_CACHE_ROOT = previous_cache_root
 
 
 def test_sql_host_emits_typed_operations_with_module_and_source_evidence() -> None:
@@ -146,6 +278,12 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
                 ],
                 "functions": [],
                 "tables": [{"name": "SOrder", "columns": []}],
+                "dependencies": {
+                    "legacy": {"depends_on": ["old"], "depended_by": []}
+                },
+                "write_dependencies": {
+                    "usp_SaveOrder": {"writes_tables": ["dbo.SOrder"]}
+                },
             }
 
     previous_cache_root = settings.SQL_CACHE_ROOT
@@ -163,6 +301,8 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
                 server="server",
                 db_name="database",
             )
+            assert "dependencies" not in data
+            assert "write_dependencies" not in data
             graph = data["sql_execution_graph"]
             nodes_by_id = {node["id"]: node for node in graph["nodes"]}
             relationships = graph["relationships"]
@@ -197,6 +337,8 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             reloaded = sql_cache_store.load_cached("TestDb", "dbo")
             assert reloaded is not None
             assert reloaded["sql_execution_graph"] == graph
+            assert "dependencies" not in reloaded
+            assert "write_dependencies" not in reloaded
         finally:
             sql_analyzer.SQLAnalyzer = original_analyzer
             sql_cache_store._mem_cache.clear()

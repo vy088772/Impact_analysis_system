@@ -37,7 +37,8 @@ from config.settings import settings
 # typed View/UDF uses，以及 CTE/temp-table lineage。
 # v8：formal consumers no longer read legacy dependencies/write_dependencies;
 # rebuild the cache before using graph-backed reverse lookup and path selection.
-_SQL_CACHE_VERSION = 8
+# v9：legacy dependency dictionaries are no longer persisted in refreshed caches.
+_SQL_CACHE_VERSION = 9
 
 # 同 process 內的記憶體快取
 _mem_cache: Dict[str, Dict] = {}
@@ -62,6 +63,39 @@ def _paths(database_alias: str, schema: str) -> tuple[Path, Path]:
     return _cache_root() / f"{k}.json", _cache_root() / f"{k}.meta.json"
 
 
+def _same_scope(actual: object, expected: str) -> bool:
+    return str(actual or "").strip().casefold() == str(expected or "").strip().casefold()
+
+
+def _is_valid_cache(data: object, database_alias: str, schema: str) -> bool:
+    if not isinstance(data, dict):
+        return False
+    graph = data.get("sql_execution_graph")
+    if not isinstance(graph, dict):
+        return False
+    from .sql_execution_graph import GRAPH_VERSION
+
+    if graph.get("graph_version") != GRAPH_VERSION:
+        return False
+    if any(
+        not isinstance(graph.get(field), list)
+        for field in ("nodes", "relationships", "parse_errors")
+    ):
+        return False
+    if not _same_scope(data.get("database"), database_alias):
+        return False
+    if not _same_scope(data.get("schema"), schema):
+        return False
+    return _same_scope(graph.get("database"), database_alias)
+
+
+def _without_legacy_dependency_fields(data: Dict) -> Dict:
+    sanitized = dict(data)
+    sanitized.pop("dependencies", None)
+    sanitized.pop("write_dependencies", None)
+    return sanitized
+
+
 def has_cache(database_alias: str, schema: str = "dbo") -> bool:
     return _load(database_alias, schema) is not None
 
@@ -71,12 +105,17 @@ def _load(database_alias: str, schema: str) -> Optional[Dict]:
     if not data_path.exists():
         return None
     try:
-        if meta_path.exists():
-            info = json.loads(meta_path.read_text(encoding="utf-8"))
-            if info.get("cache_version") != _SQL_CACHE_VERSION:
-                return None
+        if not meta_path.exists():
+            return None
+        info = json.loads(meta_path.read_text(encoding="utf-8"))
+        if info.get("cache_version") != _SQL_CACHE_VERSION:
+            return None
+        if not _same_scope(info.get("database"), database_alias):
+            return None
+        if not _same_scope(info.get("schema"), schema):
+            return None
         data = json.loads(data_path.read_text(encoding="utf-8"))
-        if "sql_execution_graph" not in data:
+        if not _is_valid_cache(data, database_alias, schema):
             return None
         return data
     except Exception:
@@ -111,7 +150,7 @@ def load_cached(database_alias: str, schema: str = "dbo") -> Optional[Dict]:
     key = _key(database_alias, schema)
     if key in _mem_cache:
         cached = _mem_cache[key]
-        if "sql_execution_graph" in cached:
+        if _is_valid_cache(cached, database_alias, schema):
             return cached
         _mem_cache.pop(key, None)
     cached = _load(database_alias, schema)
@@ -141,7 +180,7 @@ def get_or_dump(
     if not refresh:
         if key in _mem_cache:
             cached = _mem_cache[key]
-            if "sql_execution_graph" in cached:
+            if _is_valid_cache(cached, database_alias, schema):
                 return cached
             _mem_cache.pop(key, None)
         cached = _load(database_alias, schema)
@@ -171,10 +210,15 @@ def get_or_dump(
 
     from .sql_execution_graph import build_sql_execution_graph
 
+    data = _without_legacy_dependency_fields(data)
     data["sql_execution_graph"] = build_sql_execution_graph(
         data,
         progress_callback=progress_callback,
     )
+    if not _is_valid_cache(data, database_alias, schema):
+        raise ValueError(
+            f"SQL cache payload database identity mismatch: {database_alias}.{schema}"
+        )
     _mem_cache[key] = data
     _report_progress(progress_callback, "saving", 0, 1, "SQL cache")
     _save(database_alias, schema, data)

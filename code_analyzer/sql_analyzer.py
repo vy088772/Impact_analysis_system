@@ -534,7 +534,6 @@ class SQLAnalyzer:
         from tqdm import tqdm
 
         procedures: List[Dict] = []
-        write_dependencies: Dict[str, Dict] = {}
         proc_names = self.get_all_procedures(schema)
         _report_progress(progress_callback, "procedures", 0, len(proc_names), "")
         for current, name in enumerate(
@@ -546,15 +545,6 @@ class SQLAnalyzer:
                 "definition": info.get("definition", ""),
                 "parameters": info.get("parameters", []),
             })
-            # SP 讀寫資訊（sys.dm_sql_referenced_entities，見 get_sp_write_info），
-            # 失敗（權限不足、動態 SQL 等）不影響這支 SP 本身定義的落地，只是
-            # 沒有寫入資訊記錄，find_by_table 端會 fallback 回 regex 文字比對
-            try:
-                write_info = self.get_sp_write_info(name, schema)
-            except Exception:
-                write_info = {}
-            if write_info:
-                write_dependencies[name] = write_info
             _report_progress(progress_callback, "procedures", current, len(proc_names), name)
 
         views: List[Dict] = []
@@ -597,17 +587,6 @@ class SQLAnalyzer:
             })
             _report_progress(progress_callback, "tables", current, len(table_names), name)
 
-        # 原生依賴關係（sys.sql_expression_dependencies，一次查整個 schema，
-        # 取代逐物件 regex 猜測），失敗（權限不足等）不影響其餘資料的落地，
-        # 直接落成空 dict，消費端各自 fallback 回 regex 版 referenced_tables
-        _report_progress(progress_callback, "dependencies", 0, 1, "")
-        try:
-            dependencies = self.get_all_dependencies(schema)
-        except Exception as e:
-            print(f"   ⚠️ 原生依賴關係查詢失敗（將僅依賴各 SP 自身的 tables 欄位/regex fallback）: {e}")
-            dependencies = {}
-        _report_progress(progress_callback, "dependencies", 1, 1, "")
-
         return {
             "database": self.db_config.alias,
             "schema": schema,
@@ -615,8 +594,6 @@ class SQLAnalyzer:
             "views": views,
             "functions": functions,
             "tables": tables,
-            "dependencies": dependencies,
-            "write_dependencies": write_dependencies,
         }
     # ========================================
     # 單一 SP 快速分析
