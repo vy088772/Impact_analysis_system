@@ -11,8 +11,10 @@ from code_analyzer.models import ClassInfo, FileAnalysisResult, FrameworkType, M
 from code_analyzer.project_scanner import CSharpSPRelation, ProjectScanResult
 from config.settings import settings
 from service import analyze_service
+from service import flow_chain_builder
 from service import scan_store
 from service.schemas import AnalyzeRequest
+from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
 
 
 def _cached_sql_graph() -> dict:
@@ -326,6 +328,122 @@ def test_analyze_keeps_missing_graph_target_as_unresolved(monkeypatch, tmp_path:
     assert paths[0]["unresolved_reason"] == "stored_procedure_not_in_graph"
     assert paths[0]["unresolved_targets"] == ["dbo.usp_saveorder"]
     assert compact_payload["total_paths"] == 1
+
+
+def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_path: Path) -> None:
+    source_file = tmp_path / "OrderPage.cs"
+    file_result = FileAnalysisResult(
+        file_path=str(source_file),
+        file_type=FileType.CSHARP,
+        framework=FrameworkType.WEBFORMS,
+        classes=[
+            ClassInfo(
+                name="OrderPage",
+                namespace="",
+                file_path=str(source_file),
+                methods=[MethodInfo(name="SaveData", access_modifier="private", return_type="void")],
+            )
+        ],
+    )
+    graph = {
+        "graph_version": 2,
+        "database": "OrdersDb",
+        "nodes": [
+            {
+                "id": "stored_procedure:dbo.usp_Dynamic",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_Dynamic",
+            },
+            {
+                "id": "unresolved_dynamic_sql:stored_procedure:dbo.usp_Dynamic:1",
+                "type": "unresolved_dynamic_sql",
+                "module_id": "stored_procedure:dbo.usp_Dynamic",
+                "sequence": 1,
+                "operation_type": "EXECUTE",
+            },
+        ],
+        "relationships": [
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_Dynamic",
+                "target": "unresolved_dynamic_sql:stored_procedure:dbo.usp_Dynamic:1",
+            }
+        ],
+        "parse_errors": [],
+    }
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="SaveData",
+        database="OrdersDb",
+        procedure_name="usp_Dynamic",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("OrderPage.cs", 10, 80),
+    )
+
+    response = flow_chain_builder.build_forward_chain(
+        [file_result],
+        [],
+        tmp_path,
+        "SaveData",
+        graph=graph,
+        invocations=[invocation],
+    )
+
+    assert response["stored_procedures"] == []
+    assert response["execution_paths"][0]["evidence"] == "unresolved"
+    assert response["diagnostics"][0]["sp_chain"] == ["dbo.usp_Dynamic"]
+
+
+def test_forward_chain_without_graph_keeps_inline_sql_but_ignores_legacy_sp_relation(
+    tmp_path: Path,
+) -> None:
+    source_file = tmp_path / "OrderPage.cs"
+    file_result = FileAnalysisResult(
+        file_path=str(source_file),
+        file_type=FileType.CSHARP,
+        framework=FrameworkType.WEBFORMS,
+        classes=[
+            ClassInfo(
+                name="OrderPage",
+                namespace="",
+                file_path=str(source_file),
+                methods=[
+                    MethodInfo(
+                        name="SaveData",
+                        access_modifier="private",
+                        return_type="void",
+                        sql_queries=["SELECT * FROM dbo.SOrder"],
+                    )
+                ],
+            )
+        ],
+    )
+    legacy_relation = CSharpSPRelation(
+        csharp_file=str(source_file),
+        class_name="OrderPage",
+        method_name="SaveData",
+        line_number=1,
+        sp_name="usp_LegacyOnly",
+        sp_database="OrdersDb",
+        connection_variable="conn",
+    )
+
+    response = flow_chain_builder.build_forward_chain(
+        [file_result],
+        [legacy_relation],
+        tmp_path,
+        "SaveData",
+        fk_depth=0,
+        graph=None,
+        invocations=[],
+    )
+
+    assert response["stored_procedures"] == []
+    assert response["execution_paths"] == []
+    assert response["diagnostics"] == []
+    assert response["inline_sql_tables"] == ["SOrder"]
+    assert response["tables"] == ["SOrder"]
 
 
 def test_analyze_keeps_multiple_connection_labels_database_scoped(monkeypatch, tmp_path: Path) -> None:

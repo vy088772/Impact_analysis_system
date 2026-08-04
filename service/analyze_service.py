@@ -66,6 +66,30 @@ class PathEvidenceError(ValueError):
         super().__init__(message)
         self.code = code
 
+
+class SqlExecutionGraphRequiredError(ValueError):
+    """A formal SQL relationship requires a ready, database-scoped graph."""
+
+    code = "sql_execution_graph_required"
+    rebuild_action = "POST /refresh_sql"
+
+    def __init__(
+        self,
+        database: str,
+        reason: str = "missing_or_invalid",
+        message: str = "",
+    ) -> None:
+        self.database = str(database or "").strip()
+        self.reason = reason or "missing_or_invalid"
+        super().__init__(
+            message
+            or (
+                f"SQL execution graph cache 不可用：{self.database}。"
+                "請重新執行 POST /refresh_sql。"
+            )
+        )
+
+
 # 以「解析後的本機路徑」為鍵，快取掃描結果，避免同一 repo 重複掃描
 _scan_cache: Dict[str, ProjectScanResult] = {}
 
@@ -227,9 +251,13 @@ def _require_sql_execution_graph(database: str) -> Tuple[Dict, Dict]:
     cached = sql_cache_store.load_cached(database, "dbo")
     graph = (cached or {}).get("sql_execution_graph") if cached else None
     if not cached or not graph:
-        raise ValueError(
-            f"SQL execution graph cache 不存在或版本已失效：{database}。"
-            "請重新執行 refresh_sql_cli <system_id> 或 POST /refresh_sql。"
+        raise SqlExecutionGraphRequiredError(
+            database,
+            reason="missing_or_invalid",
+            message=(
+                f"SQL execution graph cache 不存在或版本已失效：{database}。"
+                "請重新執行 refresh_sql_cli <system_id> 或 POST /refresh_sql。"
+            ),
         )
     return cached, dict(graph)
 
@@ -463,24 +491,78 @@ def _rated_execution_invocations(
 
 
 def _serialize_db_invocation(invocation: DbInvocation) -> Dict:
+    caller_method = (
+        invocation.method_chain[0]
+        if invocation.method_chain
+        else invocation.method_name
+    )
+    caller = (
+        f"{invocation.class_name}.{caller_method}"
+        if invocation.class_name
+        else caller_method
+    )
     return {
         "class_name": invocation.class_name,
         "method_name": invocation.method_name,
         "database": invocation.database,
+        "database_candidates": list(invocation.database_candidates),
+        "database_attribution": (
+            "resolved"
+            if invocation.database
+            else "candidate"
+            if invocation.database_candidates
+            else "unresolved"
+        ),
         "procedure_name": invocation.procedure_name,
+        "procedure_schema": invocation.procedure_schema,
         "evidence": invocation.evidence.value,
         "reason": invocation.reason,
+        "caller": caller,
+        "caller_class": invocation.class_name,
+        "caller_method": invocation.method_name,
         "source_span": {
             "relative_path": invocation.source.relative_path,
             "start_offset": invocation.source.start_offset,
             "end_offset": invocation.source.end_offset,
+            "content_hash": invocation.source_snapshot_hash,
         },
-        "procedure_schema": invocation.procedure_schema,
         "method_chain": list(invocation.method_chain),
         "method_class_chain": list(invocation.method_class_chain),
         "branch_context": list(invocation.branch_context),
         "source_snapshot_hash": invocation.source_snapshot_hash,
     }
+
+
+def _invocation_response_fields(invocation: DbInvocation) -> Dict:
+    serialized = _serialize_db_invocation(invocation)
+    return {
+        key: serialized[key]
+        for key in (
+            "evidence",
+            "reason",
+            "database",
+            "database_candidates",
+            "database_attribution",
+            "caller",
+            "caller_class",
+            "caller_method",
+            "procedure_name",
+            "procedure_schema",
+            "branch_context",
+            "source_span",
+            "source_snapshot_hash",
+        )
+    }
+
+
+def _invocation_diagnostic(
+    invocation: DbInvocation,
+    **context: object,
+) -> Dict:
+    diagnostic = _serialize_db_invocation(invocation)
+    diagnostic["diagnostic"] = True
+    diagnostic.update(context)
+    return diagnostic
 
 
 def _build_program_execution_paths(
@@ -513,6 +595,8 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
     if not path_id:
         raise PathEvidenceError("invalid_path_id", "path_id 不可為空")
 
+    cached, graph = _require_sql_execution_graph(req.database)
+
     roots = resolve_source(req)  # type: ignore[arg-type]
     if not roots:
         raise PathEvidenceError("source_not_found", "找不到 path evidence 的原始碼來源")
@@ -522,14 +606,6 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
         req.source.project if req.source else "",
         req.source.repo if req.source else "",
     )
-
-    cached = sql_cache_store.load_cached(req.database, "dbo") if req.database else None
-    graph = dict((cached or {}).get("sql_execution_graph") or {})
-    if cached is None or not graph:
-        raise PathEvidenceError(
-            "sql_graph_cache_missing",
-            "SQL execution graph cache 尚未建立，無法展開 path evidence",
-        )
 
     if req.program_names:
         program_bases = {_normalize_program(name) for name in req.program_names}
@@ -614,7 +690,7 @@ def _materialize_path_evidence(
         "unresolved_dynamic_sql",
     }:
         raise PathEvidenceError("stale_path", f"terminal operation 已不存在：{operation_id}")
-    if operation is None and path.get("evidence") != "unresolved":
+    if operation is None and path.get("evidence") not in {"unresolved", "likely"}:
         raise PathEvidenceError("stale_path", f"terminal operation 已不存在：{operation_id}")
 
     operation_evidence: Dict = {}
@@ -674,10 +750,26 @@ def _materialize_path_evidence(
         entry_method=str(path.get("entry_method") or ""),
         method_chain=list(path.get("method_chain", []) or []),
         database=str(path.get("database") or ""),
+        database_candidates=list(path.get("database_candidates", []) or []),
+        database_attribution=str(
+            path.get("database_attribution") or "unresolved"
+        ),
+        caller=str(path.get("caller") or ""),
+        caller_class=str(path.get("caller_class") or ""),
+        caller_method=str(path.get("caller_method") or ""),
+        procedure_name=str(path.get("procedure_name") or ""),
+        procedure_schema=str(path.get("procedure_schema") or ""),
+        branch_context=list(path.get("branch_context", []) or []),
+        source_span=dict(path.get("source_span", {}) or {}),
+        source_snapshot_hash=str(
+            (path.get("source_span", {}) or {}).get("content_hash") or ""
+        ),
         sp_chain=list(path.get("sp_chain", []) or []),
         conditions=list(path.get("conditions", []) or []),
         risk_flags=list(path.get("risk_flags", []) or []),
         evidence=str(path.get("evidence") or "unresolved"),
+        confirmed=bool(path.get("confirmed", False)),
+        reason=str(path.get("reason") or ""),
         unresolved_reason=str(path.get("unresolved_reason") or ""),
         unresolved_targets=list(path.get("unresolved_targets", []) or []),
         csharp_methods=csharp_methods,
@@ -885,11 +977,20 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             )
         sp_names: List[str] = []
         for invocation in rated_invocations:
-            if invocation.procedure_name and invocation.procedure_name not in sp_names:
+            if (
+                invocation.evidence is InvocationEvidence.PROVEN
+                and invocation.procedure_name
+                and invocation.procedure_name not in sp_names
+            ):
                 sp_names.append(invocation.procedure_name)
         database_invocations = [
             _serialize_db_invocation(invocation)
             for invocation in rated_invocations
+        ]
+        diagnostics = [
+            _invocation_diagnostic(invocation)
+            for invocation in rated_invocations
+            if invocation.evidence is not InvocationEvidence.PROVEN
         ]
 
         table_names: List[str] = []
@@ -1045,6 +1146,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 view_definitions=view_definitions,
                 udf_definitions=udf_definitions,
                 database_invocations=database_invocations,
+                diagnostics=diagnostics,
                 related_programs=related_programs,
                 view_layer=view_layer,
                 execution_paths=execution_paths,
@@ -1158,7 +1260,8 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
 
     sp_lower = normalize_procedure_name(sp_name)
     matches: List[SPMatchProgram] = []
-    seen_files: set = set()
+    diagnostics: List[Dict] = []
+    seen_invocations: set[tuple[str, int, int]] = set()
     if not req.database:
         raise ValueError(
             "find_by_sp 需要 database 以載入 SQL execution graph；"
@@ -1175,7 +1278,6 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         if (
             not invocation.procedure_name
             or normalize_procedure_name(invocation.procedure_name) != sp_lower
-            or invocation.evidence == InvocationEvidence.UNRESOLVED
         ):
             continue
         csharp_file = _source_file_for_span(
@@ -1183,17 +1285,39 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
             root,
             invocation.source.relative_path,
         )
-        if not csharp_file or csharp_file in seen_files:
-            continue
-        seen_files.add(csharp_file)
-        matches.append(
-            SPMatchProgram(
-                program=_normalize_program(Path(csharp_file).name),
-                file=_rel(csharp_file, root),
-            )
+        identity = (
+            csharp_file or invocation.source.relative_path,
+            invocation.source.start_offset,
+            invocation.source.end_offset,
         )
+        if identity in seen_invocations:
+            continue
+        seen_invocations.add(identity)
+        if invocation.evidence is not InvocationEvidence.PROVEN:
+            diagnostics.append(
+                _invocation_diagnostic(
+                    invocation,
+                    requested_sp=sp_name,
+                )
+            )
+            continue
+        if not csharp_file:
+            continue
+        match_fields = _invocation_response_fields(invocation)
+        match_fields.update(
+            {
+                "program": _normalize_program(Path(csharp_file).name),
+                "file": _rel(csharp_file, root),
+            }
+        )
+        matches.append(SPMatchProgram(**match_fields))
 
-    return FindBySPResponse(sp_name=sp_name, matches=matches, source_root=str(root))
+    return FindBySPResponse(
+        sp_name=sp_name,
+        matches=matches,
+        diagnostics=diagnostics,
+        source_root=str(root),
+    )
 
 
 def _normalize_table(name: str) -> str:
@@ -1238,15 +1362,29 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
 
     table_norm = _normalize_table(table_name)
     matches_by_file: Dict[str, TableMatchProgram] = {}
+    diagnostics: List[Dict] = []
     for rel in scan.table_relations:
         if _normalize_table(rel.table_name) != table_norm:
             continue
+        database = str(getattr(rel, "database", "") or "")
+        caller_class = str(getattr(rel, "class_name", "") or "")
+        caller_method = str(getattr(rel, "method_name", "") or "")
         candidate = TableMatchProgram(
             program=_normalize_program(Path(rel.csharp_file).name),
             file=_rel(rel.csharp_file, root),
             # Inline C# SQL remains a direct source fact; SQL-module relationships
             # are queried from the Execution Graph below.
             access_type=rel.access_type,
+            reason="inline_sql_source_fact",
+            database=database,
+            database_attribution="resolved" if database else "unresolved",
+            caller=(
+                f"{caller_class}.{caller_method}"
+                if caller_class
+                else caller_method
+            ),
+            caller_class=caller_class,
+            caller_method=caller_method,
         )
         _prefer_table_match(matches_by_file, candidate)
 
@@ -1259,6 +1397,11 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             scan,
             list(scan.csharp_results),
             root,
+        )
+        diagnostics.extend(
+            _invocation_diagnostic(invocation, requested_table=table_name)
+            for invocation in rated_invocations
+            if invocation.evidence is not InvocationEvidence.PROVEN
         )
         for access_record in query_table_accesses(
             graph,
@@ -1293,6 +1436,20 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
                 entry_method=str(access_record.get("entry_method") or ""),
                 sp_chain=sp_chain,
                 evidence=str(access_record.get("evidence") or "unresolved"),
+                reason=str(access_record.get("reason") or ""),
+                database=str(access_record.get("database") or ""),
+                database_candidates=list(access_record.get("database_candidates") or []),
+                database_attribution=str(
+                    access_record.get("database_attribution") or "unresolved"
+                ),
+                caller=str(access_record.get("caller") or ""),
+                caller_class=str(access_record.get("caller_class") or ""),
+                caller_method=str(access_record.get("caller_method") or ""),
+                procedure_name=str(access_record.get("procedure_name") or ""),
+                procedure_schema=str(access_record.get("procedure_schema") or ""),
+                branch_context=list(access_record.get("branch_context") or []),
+                source_span=dict(source_span),
+                source_snapshot_hash=str(source_span.get("content_hash") or ""),
                 operation_type=operation_type,
             )
             _prefer_table_match(matches_by_file, candidate)
@@ -1315,6 +1472,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     return FindByTableResponse(
         table_name=table_name,
         matches=sorted(matches_by_file.values(), key=lambda item: (item.program, item.file)),
+        diagnostics=diagnostics,
         source_root=str(root),
     )
 
@@ -1361,6 +1519,11 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
                 list(scan.csharp_results),
                 root,
             )
+        diagnostics = [
+            _invocation_diagnostic(invocation, requested_table=req.table_name)
+            for invocation in rated_invocations
+            if invocation.evidence is not InvocationEvidence.PROVEN
+        ]
         chains = flow_chain_builder.build_backward_chains(
             scan,
             root,
@@ -1370,7 +1533,12 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
             graph=execution_graph,
             invocations=rated_invocations,
         )
-        return FlowChainResponse(direction="backward", backward_chains=chains, source_root=str(root))
+        return FlowChainResponse(
+            direction="backward",
+            backward_chains=chains,
+            diagnostics=diagnostics,
+            source_root=str(root),
+        )
 
     # direction == "forward"（預設）
     program_base = _normalize_program(req.program_name)
@@ -1402,7 +1570,12 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
         graph=execution_graph,
         invocations=rated_invocations,
     )
-    return FlowChainResponse(direction="forward", forward_chain=forward, source_root=str(root))
+    return FlowChainResponse(
+        direction="forward",
+        forward_chain=forward,
+        diagnostics=list((forward or {}).get("diagnostics", []) or []),
+        source_root=str(root),
+    )
 
 
 def refresh_source(source: dict) -> dict:

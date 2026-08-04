@@ -207,6 +207,14 @@ def test_path_evidence_returns_only_selected_branch_and_source_methods(monkeypat
     )
 
     assert evidence.path_id == path_id
+    assert evidence.database == "OrdersDb"
+    assert evidence.caller == "OrderPage.Save"
+    assert evidence.caller_class == "OrderPage"
+    assert evidence.caller_method == "Save"
+    assert evidence.procedure_name == "usp_saveorder"
+    assert evidence.procedure_schema == "dbo"
+    assert evidence.source_span["relative_path"] == "OrderPage.cs"
+    assert evidence.source_snapshot_hash
     assert [method["method"] for method in evidence.csharp_methods] == ["Save"]
     assert "public void Save()" in evidence.csharp_methods[0]["source"]
     assert [procedure["name"] for procedure in evidence.stored_procedures] == [

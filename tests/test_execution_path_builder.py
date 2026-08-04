@@ -209,6 +209,31 @@ def test_missing_stored_procedure_graph_target_is_explicitly_unresolved() -> Non
     assert path["unresolved_targets"] == ["usp_missing"]
 
 
+def test_likely_invocation_remains_diagnostic_and_cannot_create_relationships() -> None:
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="SaveData",
+        database=None,
+        database_candidates=("OrdersDb",),
+        procedure_name="usp_saveorder",
+        evidence=InvocationEvidence.LIKELY,
+        source=InvocationSourceSpan("Ship/OrderPage.aspx.cs", 120, 220),
+        reason="unique_across_catalogs",
+    )
+
+    paths = build_execution_paths([invocation], _graph())
+
+    assert len(paths) == 1
+    path = paths[0]
+    assert path["evidence"] == "likely"
+    assert path["reason"] == "unique_across_catalogs"
+    assert path["database"] == ""
+    assert path["database_candidates"] == ["OrdersDb"]
+    assert path["reads"] == []
+    assert path["writes"] == []
+    assert path["confirmed"] is False
+
+
 def test_graph_database_mismatch_is_explicitly_unresolved() -> None:
     graph = _graph()
     graph["database"] = "OtherDb"

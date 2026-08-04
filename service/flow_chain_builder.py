@@ -230,9 +230,8 @@ def build_forward_chain(
     ui_fields 的 events 挑出的候選 handler 方法名稱（見這個模組頂部說明）；這裡
     只管照著這個名稱組鏈，不判斷這個名稱選得準不準。
 
-    sp_relations：只供沒有 SQL Execution Graph 的 legacy compatibility fallback；
-    formal path 由 Gateway invocations 與 graph 產生，不讀這個參數。它保留
-    csharp_file/method_name/sp_name 形狀，是因為舊呼叫端仍可能傳入該資料。
+    sp_relations：保留這個參數是為了相容舊呼叫端，但正式 SP chain 不再從
+    legacy relations 推導；沒有 graph 時只回傳 source-only method/inline SQL facts。
 
     回傳 None 代表在 matched_files 裡完全找不到這個方法名稱（呼叫端應視為此
     錨點無效，換下一個候選）。
@@ -268,9 +267,10 @@ def build_forward_chain(
         }
         for path in execution_paths:
             path_tables = set(path.get("reads", []) or []) | set(path.get("writes", []) or [])
-            all_tables.update(path_tables)
-            if path.get("evidence") == "unresolved":
+            if path.get("evidence") != "proven":
                 unresolved_paths.append(path)
+                continue
+            all_tables.update(path_tables)
             sp_chain = list(path.get("sp_chain", []) or [])
             for depth, name in enumerate(sp_chain):
                 module_node = next(
@@ -295,41 +295,7 @@ def build_forward_chain(
                     }
                 )
 
-    # Migration-only fallback for callers without an Execution Graph. The service
-    # passes a graph for formal analysis and never uses these relations as evidence.
-    if graph:
-        root_sps = []
-    else:
-        # 直接呼叫的 SP：只比對「屬於這批 matched_files 的方法」呼叫到的 SP，避免
-    # 跨程式同名方法造成誤判（例如另一支完全無關的程式也有一個叫 BindData 的方法）。
-    # 比對用「檔名（不分大小寫）」而非完整路徑字串完全相等——legacy relation
-    # 裡的 csharp_file 與 csharp_results 裡的 file_path 即使指向同一個檔案，實務上
-    # 仍可能有大小寫或路徑正規化的差異（這裡曾經因為用 exact set membership 導致
-    # 明明存在的 SP 關聯完全比對不到，見 analyze_service.py 的 _file_matches()
-    # 早就是用檔名比對而非完整路徑，這裡改成一致的做法）。
-        file_names = {Path(fr.file_path).name.lower() for fr in matched_files}
-        root_sps = []  # (sp_name, called_by_method)
-        seen_sp: Set[str] = set()
-        for rel in sp_relations:
-            if Path(rel.csharp_file).name.lower() not in file_names:
-                continue
-            if rel.method_name not in reachable_methods or not rel.sp_name:
-                continue
-            key = _normalize_name(rel.sp_name)
-            if key not in seen_sp:
-                seen_sp.add(key)
-                root_sps.append((rel.sp_name, rel.method_name))
-
     sp_chain = formal_sp_chain
-    if not graph:
-        for sp_name, called_by_method in root_sps:
-            expanded = _expand_sp_chain(sp_name, database_alias, db_server, db_name, max_sp_depth)
-            for entry in expanded:
-                if entry["depth"] == 0:
-                    entry["called_by_method"] = called_by_method
-            sp_chain.extend(expanded)
-        for entry in sp_chain:
-            all_tables.update(entry.get("tables", []))
 
     # 補上「可達方法自己方法體內裸 SQL」引用的資料表（見 _inline_sql_tables 說明）——
     # 有些方法完全沒呼叫 SP，只靠內嵌 SQL 字串查表，單看 sp_chain 會漏掉這些表。
@@ -354,6 +320,9 @@ def build_forward_chain(
         "reachable_methods": sorted(reachable_methods),
         "stored_procedures": sp_chain,
         "execution_paths": execution_paths,
+        "diagnostics": [
+            path for path in execution_paths if path.get("evidence") != "proven"
+        ],
         "unresolved_paths": unresolved_paths,
         "tables": sorted(all_tables),
         "inline_sql_tables": sorted(inline_tables),
@@ -566,6 +535,29 @@ def build_backward_chains(
                     "entry_method": access_record.get("entry_method", ""),
                     "sp_chain": list(access_record.get("sp_chain", []) or []),
                     "evidence": access_record.get("evidence", "unresolved"),
+                    "reason": access_record.get("reason", ""),
+                    "database": access_record.get("database", ""),
+                    "database_candidates": list(
+                        access_record.get("database_candidates", []) or []
+                    ),
+                    "database_attribution": access_record.get(
+                        "database_attribution", "unresolved"
+                    ),
+                    "caller": access_record.get("caller", ""),
+                    "caller_class": access_record.get("caller_class", ""),
+                    "caller_method": access_record.get("caller_method", ""),
+                    "procedure_name": access_record.get("procedure_name", ""),
+                    "procedure_schema": access_record.get("procedure_schema", ""),
+                    "branch_context": list(
+                        access_record.get("branch_context", []) or []
+                    ),
+                    "source_span": dict(access_record.get("source_span", {}) or {}),
+                    "source_snapshot_hash": str(
+                        (access_record.get("source_span", {}) or {}).get(
+                            "content_hash", ""
+                        )
+                    ),
+                    "confirmed": access_record.get("confirmed", False),
                     "operation_type": access_record.get("operation_type", ""),
                     "conditions": list(access_record.get("conditions", []) or []),
                     "written_columns": list(access_record.get("written_columns", []) or []),

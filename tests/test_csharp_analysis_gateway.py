@@ -239,7 +239,8 @@ def test_unknown_connection_source_unique_across_catalogs_is_likely() -> None:
     invocations = gateway.resolve_direct_invocations("f.cs", [_raw_invocation()])
 
     assert invocations[0].evidence is InvocationEvidence.LIKELY
-    assert invocations[0].database == "Y-Docs_TTPUR"
+    assert invocations[0].database is None
+    assert invocations[0].database_candidates == ("Y-Docs_TTPUR",)
     assert invocations[0].procedure_name == "usp_so_delete"
 
 

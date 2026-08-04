@@ -63,10 +63,22 @@ class PathEvidenceResponse(BaseModel):
     entry_method: str = ""
     method_chain: List[str] = Field(default_factory=list)
     database: str = ""
+    database_candidates: List[str] = Field(default_factory=list)
+    database_attribution: str = "unresolved"
+    caller: str = ""
+    caller_class: str = ""
+    caller_method: str = ""
+    procedure_name: str = ""
+    procedure_schema: str = ""
+    branch_context: List[str] = Field(default_factory=list)
+    source_span: Dict = Field(default_factory=dict)
+    source_snapshot_hash: str = ""
     sp_chain: List[str] = Field(default_factory=list)
     conditions: List[str] = Field(default_factory=list)
     risk_flags: List[str] = Field(default_factory=list)
     evidence: str = "unresolved"
+    confirmed: bool = False
+    reason: str = ""
     unresolved_reason: str = ""
     unresolved_targets: List[str] = Field(default_factory=list)
     csharp_methods: List[Dict] = Field(default_factory=list)
@@ -98,6 +110,7 @@ class ProgramAnalysis(BaseModel):
     view_definitions: List[Dict] = Field(default_factory=list)  # SQL View 完整定義（include_sp_defs=True 且表名實際為 View 時）
     udf_definitions: List[Dict] = Field(default_factory=list)  # UDF 完整定義（include_sp_defs=True 且程式 SQL 文字實際呼叫到該 UDF 時）
     database_invocations: List[Dict] = Field(default_factory=list)
+    diagnostics: List[Dict] = Field(default_factory=list)
     related_programs: List[Dict] = Field(default_factory=list)  # 跨程式呼叫展開（expand_depth>0 時）
     view_layer: List[Dict] = Field(default_factory=list)  # View 層資訊（include_view_layer=True 時；aspx/razor/vue 摘要）
     execution_paths: List[Dict] = Field(default_factory=list)
@@ -144,11 +157,25 @@ class FindBySPRequest(BaseModel):
 class SPMatchProgram(BaseModel):
     program: str = ""                         # 程式基底名（不含副檔名）
     file: str = ""                            # 相對 repo 根目錄的檔案路徑
+    evidence: str = "proven"
+    reason: str = ""
+    database: str = ""
+    database_candidates: List[str] = Field(default_factory=list)
+    database_attribution: str = "unresolved"
+    caller: str = ""
+    caller_class: str = ""
+    caller_method: str = ""
+    procedure_name: str = ""
+    procedure_schema: str = ""
+    branch_context: List[str] = Field(default_factory=list)
+    source_span: Dict = Field(default_factory=dict)
+    source_snapshot_hash: str = ""
 
 
 class FindBySPResponse(BaseModel):
     sp_name: str = ""
     matches: List[SPMatchProgram] = Field(default_factory=list)
+    diagnostics: List[Dict] = Field(default_factory=list)
     skipped: bool = False                     # True：該 repo 尚未 clone/分析過，本次未比對
     source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）
 
@@ -184,13 +211,26 @@ class TableMatchProgram(BaseModel):
     path_id: str = ""
     entry_method: str = ""
     sp_chain: List[str] = Field(default_factory=list)
-    evidence: str = ""
+    evidence: str = "proven"
+    reason: str = ""
+    database: str = ""
+    database_candidates: List[str] = Field(default_factory=list)
+    database_attribution: str = "unresolved"
+    caller: str = ""
+    caller_class: str = ""
+    caller_method: str = ""
+    procedure_name: str = ""
+    procedure_schema: str = ""
+    branch_context: List[str] = Field(default_factory=list)
+    source_span: Dict = Field(default_factory=dict)
+    source_snapshot_hash: str = ""
     operation_type: str = ""
 
 
 class FindByTableResponse(BaseModel):
     table_name: str = ""
     matches: List[TableMatchProgram] = Field(default_factory=list)
+    diagnostics: List[Dict] = Field(default_factory=list)
     skipped: bool = False                     # True：該 repo 尚未 clone/分析過，本次未比對
     source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）
 
@@ -267,5 +307,6 @@ class FlowChainResponse(BaseModel):
     direction: str = ""
     forward_chain: Union[Dict, None] = None   # direction=forward 時的結果（None 代表找不到錨點方法）
     backward_chains: List[Dict] = Field(default_factory=list)  # direction=backward 時的候選清單
+    diagnostics: List[Dict] = Field(default_factory=list)
     skipped: bool = False                     # True：該系統尚未 clone/分析過，本次未組鏈
     source_root: str = ""

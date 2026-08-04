@@ -58,6 +58,19 @@ app = FastAPI(
 )
 
 
+def _graph_readiness_http_error(exc: analyze_service.SqlExecutionGraphRequiredError) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": exc.code,
+            "database": exc.database,
+            "reason": exc.reason,
+            "rebuild_action": exc.rebuild_action,
+            "message": str(exc),
+        },
+    )
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -69,6 +82,8 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         raise HTTPException(status_code=400, detail="program_names 不可為空")
     try:
         return analyze_service.analyze(req)
+    except analyze_service.SqlExecutionGraphRequiredError as exc:
+        raise _graph_readiness_http_error(exc) from exc
     except ValueError as exc:
         # 來源解析 / 設定問題 → 400
         raise HTTPException(status_code=400, detail=str(exc))
@@ -102,6 +117,8 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         raise HTTPException(status_code=400, detail="sp_name 不可為空")
     try:
         return analyze_service.find_by_sp(req)
+    except analyze_service.SqlExecutionGraphRequiredError as exc:
+        raise _graph_readiness_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -115,6 +132,8 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         raise HTTPException(status_code=400, detail="table_name 不可為空")
     try:
         return analyze_service.find_by_table(req)
+    except analyze_service.SqlExecutionGraphRequiredError as exc:
+        raise _graph_readiness_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -136,6 +155,8 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
         raise HTTPException(status_code=400, detail="direction=backward 時 table_name 不可為空")
     try:
         return analyze_service.flow_chain(req)
+    except analyze_service.SqlExecutionGraphRequiredError as exc:
+        raise _graph_readiness_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -152,6 +173,8 @@ def path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
         )
     try:
         return analyze_service.get_path_evidence(req)
+    except analyze_service.SqlExecutionGraphRequiredError as exc:
+        raise _graph_readiness_http_error(exc) from exc
     except analyze_service.PathEvidenceError as exc:
         status_code = 404 if exc.code == "path_not_found" else 409
         raise HTTPException(

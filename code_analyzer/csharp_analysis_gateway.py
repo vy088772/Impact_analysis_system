@@ -45,6 +45,7 @@ class DbInvocation:
     branch_context: tuple[str, ...] = ()
     source_snapshot_hash: str = ""
     method_class_chain: tuple[str, ...] = ()
+    database_candidates: tuple[str, ...] = ()
 
 
 def normalize_procedure_name(raw_name: str) -> str:
@@ -349,7 +350,7 @@ class CSharpAnalysisGateway:
             return DbInvocation(
                 class_name,
                 method_name,
-                matches[0],
+                None,
                 normalized_name,
                 InvocationEvidence.LIKELY,
                 source,
@@ -358,6 +359,7 @@ class CSharpAnalysisGateway:
                 method_chain,
                 branch_context,
                 method_class_chain=method_class_chain,
+                database_candidates=tuple(matches),
             )
         reason = "unknown_database_source" if len(matches) == 0 else "ambiguous_cross_database"
         return DbInvocation(
@@ -372,6 +374,7 @@ class CSharpAnalysisGateway:
             method_chain,
             branch_context,
             method_class_chain=method_class_chain,
+            database_candidates=tuple(matches),
         )
 
     def _resolve_database(self, connection_expression: object) -> Optional[str]:

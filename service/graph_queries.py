@@ -36,13 +36,13 @@ def query_table_accesses(
         writes = _matching_names(path.get("writes", []), target_name)
         reads = _matching_names(path.get("reads", []), target_name)
         is_dynamic = "dynamic_sql" in set(path.get("risk_flags", []) or [])
-        is_confirmed = path.get("evidence") != "unresolved" and not is_dynamic
+        is_confirmed = path.get("evidence") == "proven" and not is_dynamic
 
         if writes and access in {"all", "write"} and is_confirmed:
             accesses.append(_access_record(path, writes[0], is_write=True))
             continue
 
-        if access in {"all", "read"}:
+        if access in {"all", "read"} and is_confirmed:
             if reads:
                 accesses.append(_access_record(path, reads[0], is_write=False))
                 continue
@@ -81,6 +81,15 @@ def _access_record(
         "via": "stored_procedure",
         "path_id": path.get("path_id", ""),
         "source_span": dict(path.get("source_span", {}) or {}),
+        "database": path.get("database", ""),
+        "database_candidates": list(path.get("database_candidates", []) or []),
+        "database_attribution": path.get("database_attribution", "unresolved"),
+        "caller": path.get("caller", ""),
+        "caller_class": path.get("caller_class", ""),
+        "caller_method": path.get("caller_method", ""),
+        "procedure_name": path.get("procedure_name", ""),
+        "procedure_schema": path.get("procedure_schema", ""),
+        "branch_context": list(path.get("branch_context", []) or []),
         "entry_method": path.get("entry_method", ""),
         "method_chain": list(path.get("method_chain", []) or []),
         "sp_chain": sp_chain,
@@ -92,6 +101,8 @@ def _access_record(
         "reads": list(path.get("reads", []) or []),
         "writes": list(path.get("writes", []) or []),
         "evidence": path.get("evidence", "unresolved"),
+        "reason": path.get("reason", ""),
+        "confirmed": path.get("confirmed", False),
         "risk_flags": list(path.get("risk_flags", []) or []),
         "unresolved_reason": path.get("unresolved_reason", ""),
         "unresolved_targets": list(path.get("unresolved_targets", []) or []),

@@ -50,8 +50,22 @@ def build_execution_paths(
 
     for invocation in sorted(invocations, key=_invocation_sort_key):
         evidence = _evidence_value(invocation.evidence)
-        if evidence == InvocationEvidence.UNRESOLVED.value:
-            paths.append(_unresolved_path(invocation, invocation.reason or "unresolved_invocation"))
+        if evidence != InvocationEvidence.PROVEN.value:
+            diagnostic_evidence = (
+                evidence
+                if evidence in {
+                    InvocationEvidence.LIKELY.value,
+                    InvocationEvidence.UNRESOLVED.value,
+                }
+                else InvocationEvidence.UNRESOLVED.value
+            )
+            paths.append(
+                _unresolved_path(
+                    invocation,
+                    invocation.reason or "unresolved_invocation",
+                    evidence=diagnostic_evidence,
+                )
+            )
             continue
         if not invocation.procedure_name:
             paths.append(_unresolved_path(invocation, "missing_procedure_name"))
@@ -422,6 +436,14 @@ def _path_for_operation(
         "entry_method": _entry_method(invocation),
         "method_chain": _method_chain(invocation),
         "database": invocation.database or "",
+        "database_candidates": list(invocation.database_candidates),
+        "database_attribution": _database_attribution(invocation),
+        "caller": _entry_method(invocation),
+        "caller_class": invocation.class_name,
+        "caller_method": invocation.method_name,
+        "procedure_name": invocation.procedure_name or "",
+        "procedure_schema": invocation.procedure_schema or "",
+        "branch_context": list(invocation.branch_context),
         "sp_chain": list(sp_chain or [_qualified_name(module)]),
         "module_chain_ids": list(module_chain),
         "terminal_operation_id": operation_id,
@@ -433,6 +455,16 @@ def _path_for_operation(
         "writes": writes,
         "risk_flags": _ordered_unique(risk_flags),
         "evidence": evidence,
+        "reason": (
+            invocation.reason
+            or "missing_graph_target"
+            if missing_targets
+            else invocation.reason
+            or "unresolved_dynamic_sql"
+            if is_dynamic_operation
+            else invocation.reason
+        ),
+        "confirmed": evidence == InvocationEvidence.PROVEN.value,
         "unresolved_reason": (
             "missing_graph_target"
             if missing_targets
@@ -453,6 +485,7 @@ def _unresolved_path(
     path_conditions: tuple[str, ...] = (),
     path_identity: str = "",
     unresolved_targets: Optional[list[str]] = None,
+    evidence: str = InvocationEvidence.UNRESOLVED.value,
 ) -> dict[str, Any]:
     effective_conditions = tuple(
         _ordered_unique((*invocation.branch_context, *path_conditions))
@@ -474,6 +507,14 @@ def _unresolved_path(
         "entry_method": _entry_method(invocation),
         "method_chain": _method_chain(invocation),
         "database": invocation.database or "",
+        "database_candidates": list(invocation.database_candidates),
+        "database_attribution": _database_attribution(invocation),
+        "caller": _entry_method(invocation),
+        "caller_class": invocation.class_name,
+        "caller_method": invocation.method_name,
+        "procedure_name": invocation.procedure_name or "",
+        "procedure_schema": invocation.procedure_schema or "",
+        "branch_context": list(invocation.branch_context),
         "sp_chain": sp_chain,
         "module_chain_ids": list(module_id.split("|") if module_id else []),
         "terminal_operation_id": operation_id,
@@ -484,7 +525,9 @@ def _unresolved_path(
         "reads": [],
         "writes": [],
         "risk_flags": [reason],
-        "evidence": InvocationEvidence.UNRESOLVED.value,
+        "evidence": evidence,
+        "reason": reason,
+        "confirmed": evidence == InvocationEvidence.PROVEN.value,
         "unresolved_reason": reason,
         "unresolved_targets": list(unresolved_targets or []),
     }
@@ -557,6 +600,14 @@ def _source_span(invocation: DbInvocation) -> dict[str, Any]:
         "end_offset": invocation.source.end_offset,
         "content_hash": invocation.source_snapshot_hash,
     }
+
+
+def _database_attribution(invocation: DbInvocation) -> str:
+    if invocation.database:
+        return "resolved"
+    if invocation.database_candidates:
+        return "candidate"
+    return "unresolved"
 
 
 def _compact_sort_key(
