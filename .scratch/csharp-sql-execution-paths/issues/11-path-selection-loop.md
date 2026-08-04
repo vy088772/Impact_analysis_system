@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] 兩種模式使用同一 coordinator 與結構化 decision contract。
-- [ ] expand 最多三輪，重複 path 不重抓 evidence 且不消耗輪次。
-- [ ] invalid ID 只允許一次修正，第二次失敗轉為 clarify。
-- [ ] 最終 context 只包含 selected Path Evidence，並區分 verified facts 與 unresolved uncertainty。
+- [x] 兩種模式使用同一 coordinator 與結構化 decision contract。
+- [x] expand 最多三輪，重複 path 不重抓 evidence 且不消耗輪次。
+- [x] invalid ID 只允許一次修正，第二次失敗轉為 clarify。
+- [x] 最終 context 只包含 selected Path Evidence，並區分 verified facts 與 unresolved uncertainty。

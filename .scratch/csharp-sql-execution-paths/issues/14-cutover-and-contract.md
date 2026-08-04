@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] formal output 不再讀寫 dependencies、depends_on、depended_by 或 write_dependencies。
-- [ ] legacy regex detector 不再產生正式 SP relationships。
-- [ ] 舊 scan/SQL caches 被版本檢查拒絕並提示重新執行對應 refresh。
-- [ ] 完整 refresh、direct analysis、path selection、table lookup 與 backward flow smoke tests 通過。
+- [x] formal output 不再讀寫 dependencies、depends_on、depended_by 或 write_dependencies。
+- [x] legacy regex detector 不再產生正式 SP relationships。
+- [x] 舊 scan/SQL caches 被版本檢查拒絕並提示重新執行對應 refresh。
+- [x] 完整 refresh、direct analysis、path selection、table lookup 與 backward flow smoke tests 通過。

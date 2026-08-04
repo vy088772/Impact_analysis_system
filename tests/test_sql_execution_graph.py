@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+from types import SimpleNamespace
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -12,8 +13,35 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 from code_analyzer import sql_analyzer
+from code_analyzer.sql_analyzer import SQLAnalyzer
 from config.settings import settings
 from service import sql_cache_store
+
+
+def test_dump_all_sql_objects_keeps_sp_helpers_on_sql_analyzer() -> None:
+    """Progress reporting must not move later SQLAnalyzer methods out of the class."""
+    class FakeCursor:
+        def execute(self, *args: object) -> None:
+            return None
+
+        def fetchone(self) -> tuple[str, None, None]:
+            return ("CREATE PROCEDURE dbo.usp_Repro AS SELECT 1", None, None)
+
+        def fetchall(self) -> list[object]:
+            return []
+
+    analyzer = SQLAnalyzer.__new__(SQLAnalyzer)
+    analyzer.db_config = SimpleNamespace(alias="TestDb")
+    analyzer.cursor = FakeCursor()
+    analyzer.get_all_procedures = lambda schema: ["usp_Repro"]
+    analyzer.get_all_views = lambda schema: []
+    analyzer.get_all_functions = lambda schema: []
+    analyzer.get_all_tables = lambda schema: []
+    analyzer.get_all_dependencies = lambda schema: {}
+
+    data = analyzer.dump_all_sql_objects("dbo")
+
+    assert [procedure["name"] for procedure in data["procedures"]] == ["usp_Repro"]
 
 
 def test_sql_host_emits_typed_operations_with_module_and_source_evidence() -> None:

@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] table lookup 能區分 direct/indirect read 與 write relationships。
-- [ ] write-only lookup 能找到 direct DML 與 nested SP writers。
-- [ ] backward flow 能從 Table 追到 SP、C# method 與 ASPX/UI entry。
-- [ ] View、Function 與 unresolved evidence 不會被錯當成 confirmed writer。
+- [x] table lookup 能區分 direct/indirect read 與 write relationships。
+- [x] write-only lookup 能找到 direct DML 與 nested SP writers。
+- [x] backward flow 能從 Table 追到 SP、C# method 與 ASPX/UI entry。
+- [x] View、Function 與 unresolved evidence 不會被錯當成 confirmed writer。

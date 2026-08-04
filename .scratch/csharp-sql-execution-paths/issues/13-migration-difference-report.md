@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] 報告依 caller/database/SP identity 對齊新舊結果並分類差異。
-- [ ] legacy 命中若未成為新 formal relation，必須有 unresolved reason 或 dropped 記錄。
-- [ ] 報告能辨識新 Gateway 發現的 direct SqlClient、wrapper 或 branch invocation。
-- [ ] 至少 2 至 3 個 data-access 風格不同的代表性系統可重複產生報告。
+- [x] 報告依 caller/database/SP identity 對齊新舊結果並分類差異。
+- [x] legacy 命中若未成為新 formal relation，必須有 unresolved reason 或 dropped 記錄。
+- [x] 報告能辨識新 Gateway 發現的 direct SqlClient、wrapper 或 branch invocation。
+- [x] 至少 2 至 3 個 data-access 風格不同的代表性系統可重複產生報告。
