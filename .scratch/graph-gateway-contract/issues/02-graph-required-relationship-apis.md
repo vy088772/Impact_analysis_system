@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] Path construction and evidence, SP reverse lookup, graph-backed table lookup, and forward/backward flow all reject missing, stale, invalid, or mismatched graphs through one machine-readable readiness contract.
-- [ ] Source-only C# method Flow, raw invocation facts, source spans, and direct inline-SQL facts remain available without a graph and do not claim formal SQL relationships.
-- [ ] API tests distinguish invalid requests, unavailable graphs, source-scan skips, and genuine domain not-found results.
+- [x] Path construction and evidence, SP reverse lookup, graph-backed table lookup, and forward/backward flow all reject missing, stale, invalid, or mismatched graphs through one machine-readable readiness contract.
+- [x] Source-only C# method Flow, raw invocation facts, source spans, and direct inline-SQL facts remain available without a graph and do not claim formal SQL relationships.
+- [x] API tests distinguish invalid requests, unavailable graphs, source-scan skips, and genuine domain not-found results.

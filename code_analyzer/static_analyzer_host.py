@@ -6,11 +6,12 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 CONTRACT_VERSION = 1
 _MAX_HOST_COMMAND_CHARS = 24_000
+_MAX_HOST_FILES_PER_BATCH = 10
 
 
 class StaticAnalyzerHostError(RuntimeError):
@@ -69,31 +70,40 @@ class StaticAnalyzerHost:
         self,
         input_paths: list[Path],
         source_roots: list[Path] | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> list[dict[str, Any]]:
         if not input_paths:
             return []
         source_roots = source_roots or []
         results: list[dict[str, Any]] = []
         batch: list[Path] = []
-        command_length = len("csharp") + sum(
+        base_command_length = len("csharp") + sum(
             len(" --source-root ") + len(str(source_root))
             for source_root in source_roots
         )
+        command_length = base_command_length
+        completed = 0
 
         for input_path in input_paths:
             input_length = len(str(input_path)) + len(" --input ")
-            if batch and command_length + input_length > _MAX_HOST_COMMAND_CHARS:
+            if batch and (
+                len(batch) >= _MAX_HOST_FILES_PER_BATCH
+                or command_length + input_length > _MAX_HOST_COMMAND_CHARS
+            ):
                 results.extend(self._analyze_csharp_batch(batch, source_roots))
+                completed += len(batch)
+                if progress_callback is not None:
+                    progress_callback(completed, len(input_paths), str(batch[-1]))
                 batch = []
-                command_length = len("csharp") + sum(
-                    len(" --source-root ") + len(str(source_root))
-                    for source_root in source_roots
-                )
+                command_length = base_command_length
             batch.append(input_path)
             command_length += input_length
 
         if batch:
             results.extend(self._analyze_csharp_batch(batch, source_roots))
+            completed += len(batch)
+            if progress_callback is not None:
+                progress_callback(completed, len(input_paths), str(batch[-1]))
         return results
 
     def analyze_sql(self, input_path: Path) -> dict[str, Any]:

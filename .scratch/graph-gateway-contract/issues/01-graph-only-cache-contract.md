@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] A refreshed cache persists the SQL Execution Graph and required SQL object data, but no formal legacy dependency structures.
-- [ ] A graph-less, stale, or database-mismatched cache is rejected consistently rather than read through legacy relationship data.
-- [ ] Tests prove legacy-shaped comparison data cannot produce a formal relationship result after persistence.
+- [x] A refreshed cache persists the SQL Execution Graph and required SQL object data, but no formal legacy dependency structures.
+- [x] A graph-less, stale, or database-mismatched cache is rejected consistently rather than read through legacy relationship data.
+- [x] Tests prove legacy-shaped comparison data cannot produce a formal relationship result after persistence.

@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] The comparison report exposes deterministic `dropped`, `new`, `confidence_changed`, and `unresolved` categories with caller/source, evidence, reason, and source-kind context.
-- [ ] Comparison output can be rendered or saved as a review artifact but is never persisted as formal SQL relationships or used by graph, path, lookup, or flow consumers.
-- [ ] Representative fixtures demonstrate confirmed Gateway parity or explicit unresolved reasons, and prevent false `proven` detections for inline SQL and ordinary methods.
+- [x] The comparison report exposes deterministic `dropped`, `new`, `confidence_changed`, and `unresolved` categories with caller/source, evidence, reason, and source-kind context.
+- [x] Comparison output can be rendered or saved as a review artifact but is never persisted as formal SQL relationships or used by graph, path, lookup, or flow consumers.
+- [x] Representative fixtures demonstrate confirmed Gateway parity or explicit unresolved reasons, and prevent false `proven` detections for inline SQL and ordinary methods.

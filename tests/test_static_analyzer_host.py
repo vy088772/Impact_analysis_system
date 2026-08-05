@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -17,6 +18,35 @@ from service import scan_store
 
 
 HOST_PROJECT = PROJECT_ROOT / "tools" / "StaticAnalyzerHost" / "StaticAnalyzerHost.csproj"
+
+
+def test_analyze_csharp_files_reports_completed_batches() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        paths = [Path(temp_dir) / f"File{index}.cs" for index in range(3)]
+        events: list[tuple[int, int, str]] = []
+
+        def fake_batch(
+            _host: StaticAnalyzerHost,
+            batch: list[Path],
+            source_roots: list[Path],
+        ) -> list[dict]:
+            return [{"source_id": str(path)} for path in batch]
+
+        with (
+            patch("code_analyzer.static_analyzer_host._MAX_HOST_COMMAND_CHARS", 100_000),
+            patch("code_analyzer.static_analyzer_host._MAX_HOST_FILES_PER_BATCH", 2),
+            patch.object(StaticAnalyzerHost, "_analyze_csharp_batch", new=fake_batch),
+        ):
+            results = host.analyze_csharp_files(
+                paths,
+                progress_callback=lambda current, total, item: events.append(
+                    (current, total, item)
+                ),
+            )
+
+    assert len(results) == 3
+    assert [(current, total) for current, total, _ in events] == [(2, 3), (3, 3)]
 
 
 def test_static_analyzer_host_contract() -> None:

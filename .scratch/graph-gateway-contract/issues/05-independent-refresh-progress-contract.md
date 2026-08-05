@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] SQL refresh creates, updates, completes, and fails bounded progress jobs that the status interface exposes consistently.
-- [ ] Progress lifecycle and status API tests are independent from Graph/Gateway evidence and cache-readiness acceptance tests.
-- [ ] Operational documentation and acceptance criteria state that progress completion is not proof of formal graph readiness and is not a Graph/Gateway migration release gate.
+- [x] SQL refresh creates, updates, completes, and fails bounded progress jobs that the status interface exposes consistently.
+- [x] Progress lifecycle and status API tests are independent from Graph/Gateway evidence and cache-readiness acceptance tests.
+- [x] Operational documentation and acceptance criteria state that progress completion is not proof of formal graph readiness and is not a Graph/Gateway migration release gate.

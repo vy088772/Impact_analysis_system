@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] Gateway and downstream response records preserve evidence, stable reason, caller/source identity, procedure identity, branch context, and explicit database attribution semantics.
-- [ ] A catalog-unique but connection-unresolved invocation stays `likely`; its database candidate is not represented as a trusted resolved database.
-- [ ] Only `proven` records enter formal calls, reads, writes, confirmed SP matches, table access matches, and confirmed Execution Paths.
-- [ ] Candidate and unresolved records remain visibly queryable as diagnostics without changing confirmed relationship counts.
+- [x] Gateway and downstream response records preserve evidence, stable reason, caller/source identity, procedure identity, branch context, and explicit database attribution semantics.
+- [x] A catalog-unique but connection-unresolved invocation stays `likely`; its database candidate is not represented as a trusted resolved database.
+- [x] Only `proven` records enter formal calls, reads, writes, confirmed SP matches, table access matches, and confirmed Execution Paths.
+- [x] Candidate and unresolved records remain visibly queryable as diagnostics without changing confirmed relationship counts.

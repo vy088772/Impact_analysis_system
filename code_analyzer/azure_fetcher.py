@@ -118,7 +118,10 @@ class AzureDevOpsFetcher:
     def _git_clone(self, target: Path):
         """執行 git clone"""
         cmd = [
-            'git', 'clone',
+            'git', '-c', 'credential.helper=',  # 繞過本機 Git Credential Manager，
+            # 避免它攔截 dev.azure.com 認證、要求 credential.useHttpPath 設定，
+            # 直接使用 URL 內嵌的 PAT 做 Basic Auth
+            'clone',
             '--branch', self.branch,
             '--single-branch',
             '--depth', '1',          # shallow clone，加速下載
@@ -129,7 +132,11 @@ class AzureDevOpsFetcher:
 
     def _git_pull(self, target: Path):
         """在現有目錄執行 git pull"""
-        cmd = ['git', '-C', str(target), 'pull', '--ff-only']
+        # 既有 clone 的 origin URL 可能沒有內嵌憑證（或內嵌的 PAT 已過期），
+        # 先用目前設定重新寫入 origin URL，pull 時才不必依賴本機 Git Credential
+        # Manager（避免它攔截 dev.azure.com 認證、要求 credential.useHttpPath 設定）
+        self._run(['git', '-C', str(target), 'remote', 'set-url', 'origin', self._build_clone_url()])
+        cmd = ['git', '-c', 'credential.helper=', '-C', str(target), 'pull', '--ff-only']
         self._run(cmd)
         print("✅ git pull 完成")
 

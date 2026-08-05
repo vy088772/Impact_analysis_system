@@ -604,12 +604,21 @@ class ProjectScanner:
         print(f"\n📝 解析 C# 檔案...")
         if csharp_files:
             self.static_analyzer_host.ensure_ready()
+            print(f"   C# analyzer 批次進度：0/{len(csharp_files)}", flush=True)
             host_results = self.static_analyzer_host.analyze_csharp_files(
                 [Path(file_path) for file_path in csharp_files],
                 source_roots=[Path(self.project_root)],
+                progress_callback=lambda current, total, item: print(
+                    f"   C# analyzer 批次進度：{current}/{total}（{Path(item).name}）",
+                    flush=True,
+                ),
             )
 
-            for file_path, host_result in tqdm(zip(csharp_files, host_results), total=len(csharp_files), desc="解析進度"):
+            for file_path, host_result in tqdm(
+                zip(csharp_files, host_results),
+                total=len(csharp_files),
+                desc="整理 C# 解析結果",
+            ):
                 try:
                     self.scan_result.capture_source_snapshot(file_path, host_result)
                     file_key = str(Path(file_path).resolve())
