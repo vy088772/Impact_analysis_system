@@ -1,0 +1,36 @@
+{
+  "contracts": {
+    "sqlobject": {
+      "auto_select": true,
+      "receiver_types": [
+        "SQLObject"
+      ],
+      "methods": {
+        "ExeProcNon": {
+          "mode": "stored_procedure",
+          "sink": "ExecuteNonQuery"
+        },
+        "ExeProcRead": {
+          "mode": "stored_procedure",
+          "sink": "ExecuteReader"
+        },
+        "CreateReader": {
+          "mode": "inline_sql",
+          "sink": "ExecuteReader"
+        },
+        "GetFirstValue": {
+          "mode": "inline_sql",
+          "sink": "ExecuteScalar"
+        },
+        "CreateTable": {
+          "mode": "call_site",
+          "sink": "ExecuteReader"
+        },
+        "CreateDataSet": {
+          "mode": "call_site",
+          "sink": "ExecuteReader"
+        }
+      }
+    }
+  }
+}

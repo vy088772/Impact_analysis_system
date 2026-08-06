@@ -686,6 +686,147 @@ class ProjectScanner:
         
         print(f"\n✅ 掃描完成")
         return self.scan_result
+
+    def refresh_csharp_files(
+        self,
+        scan_result: ProjectScanResult,
+        csharp_files: List[str],
+        removed_files: Optional[List[str]] = None,
+    ) -> ProjectScanResult:
+        """Replace selected C# records in an existing scan result."""
+        self.scan_result = scan_result
+        current_files = self._unique_project_files(csharp_files)
+        stale_files = self._unique_project_files(removed_files or [])
+        affected_files = self._unique_project_files([*current_files, *stale_files])
+
+        for file_path in affected_files:
+            self._remove_csharp_records(file_path)
+
+        refreshed_results: List[FileAnalysisResult] = []
+        if current_files:
+            self.static_analyzer_host.ensure_ready()
+            host_results = self.static_analyzer_host.analyze_csharp_files(
+                [Path(file_path) for file_path in current_files],
+                source_roots=[Path(self.project_root)],
+            )
+            for file_path, host_result in zip(current_files, host_results):
+                self.scan_result.capture_source_snapshot(file_path, host_result)
+                file_key = str(Path(file_path).resolve())
+                self.scan_result.db_invocations[file_key] = [
+                    dict(invocation)
+                    for invocation in host_result.get("db_invocations", []) or []
+                ]
+                result = self.csharp_parser.parse_file(file_path)
+                self.scan_result.connection_sources[file_key] = {
+                    name: info.database_name
+                    for name, info in self.csharp_parser.db_tracker.connections.items()
+                    if info.database_name
+                }
+                self.scan_result.csharp_results.append(result)
+                refreshed_results.append(result)
+
+        self.scan_result.csharp_results.sort(
+            key=lambda result: str(Path(result.file_path).resolve())
+        )
+        for result in refreshed_results:
+            self._build_table_relations(result.sql_queries)
+        self.scan_result.calculate_statistics()
+        return self.scan_result
+
+    def refresh_view_files(
+        self,
+        scan_result: ProjectScanResult,
+        view_files: List[str],
+        removed_files: Optional[List[str]] = None,
+    ) -> ProjectScanResult:
+        """Replace selected ASPX, Razor, and Vue records in an existing scan."""
+        self.scan_result = scan_result
+        current_files = self._unique_project_files(view_files)
+        stale_files = self._unique_project_files(removed_files or [])
+        affected_files = self._unique_project_files([*current_files, *stale_files])
+
+        for file_path in affected_files:
+            parser_key, result_attribute = self._view_parser_for(file_path)
+            if not parser_key:
+                continue
+            results = getattr(self.scan_result, result_attribute)
+            results[:] = [
+                result
+                for result in results
+                if not self._same_project_file(result.file_path, file_path)
+            ]
+
+        for file_path in current_files:
+            parser_key, result_attribute = self._view_parser_for(file_path)
+            parser = self.parsers.get(parser_key) if parser_key else None
+            if parser is None:
+                continue
+            result = parser.parse_file(file_path)
+            getattr(self.scan_result, result_attribute).append(result)
+
+        for result_attribute in ("aspx_results", "razor_results", "vue_results"):
+            getattr(self.scan_result, result_attribute).sort(
+                key=lambda result: str(Path(result.file_path).resolve())
+            )
+        return self.scan_result
+
+    def _remove_csharp_records(self, file_path: str) -> None:
+        self.scan_result.csharp_results[:] = [
+            result
+            for result in self.scan_result.csharp_results
+            if not self._same_project_file(result.file_path, file_path)
+        ]
+        for records in (
+            self.scan_result.db_invocations,
+            self.scan_result.connection_sources,
+        ):
+            for key in list(records):
+                if self._same_project_file(key, file_path):
+                    records.pop(key, None)
+
+        root = Path(self.project_root).resolve()
+        try:
+            relative_path = Path(file_path).resolve().relative_to(root).as_posix()
+        except ValueError:
+            relative_path = Path(file_path).name
+        for key in list(self.scan_result.source_snapshots):
+            snapshot_path = root / str(key).replace("/", os.sep)
+            if snapshot_path.resolve() == (root / relative_path).resolve():
+                self.scan_result.source_snapshots.pop(key, None)
+
+        for relation_attribute in ("sp_relations", "legacy_sp_relations", "table_relations"):
+            relations = getattr(self.scan_result, relation_attribute, [])
+            relations[:] = [
+                relation
+                for relation in relations
+                if not self._same_project_file(relation.csharp_file, file_path)
+            ]
+
+    def _unique_project_files(self, file_paths: List[str]) -> List[str]:
+        unique: Dict[str, str] = {}
+        for file_path in file_paths:
+            path = str(Path(file_path).resolve())
+            unique.setdefault(path.casefold(), path)
+        return list(unique.values())
+
+    def _same_project_file(self, left: str, right: str) -> bool:
+        def resolve(path: str) -> Path:
+            candidate = Path(path)
+            if not candidate.is_absolute():
+                candidate = Path(self.project_root) / candidate
+            return candidate.resolve()
+
+        return resolve(left) == resolve(right)
+
+    @staticmethod
+    def _view_parser_for(file_path: str) -> Tuple[str, str]:
+        suffix = Path(file_path).suffix.casefold()
+        return {
+            ".aspx": ("aspx", "aspx_results"),
+            ".ascx": ("aspx", "aspx_results"),
+            ".cshtml": ("razor", "razor_results"),
+            ".vue": ("vue", "vue_results"),
+        }.get(suffix, ("", ""))
     
     def _build_relations(self, analyze_sp: bool):
         """建立 C# 與資料庫的關聯"""

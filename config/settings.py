@@ -1,6 +1,7 @@
 # config/settings.py
 
 import os
+import sys
 from pathlib import Path
 from typing import List, Optional, Dict
 from dotenv import load_dotenv
@@ -9,9 +10,9 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent.parent / '.env'
 if env_path.exists():
     load_dotenv(env_path)
-    print(f"✅ 已載入環境設定: {env_path}")
+    print(f"✅ 已載入環境設定: {env_path}", file=sys.stderr)
 else:
-    print(f"⚠️ 找不到 .env 檔案: {env_path}")
+    print(f"⚠️ 找不到 .env 檔案: {env_path}", file=sys.stderr)
     load_dotenv()
 
 

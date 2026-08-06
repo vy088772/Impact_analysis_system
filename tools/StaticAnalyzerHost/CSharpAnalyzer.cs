@@ -702,7 +702,8 @@ internal sealed record DirectSqlInvocation(
     bool WrapperReachesStoredProcedureSink = false,
     string WrapperMode = "",
     IReadOnlyList<string>? MethodChain = null,
-    IReadOnlyList<string>? BranchContext = null);
+    IReadOnlyList<string>? BranchContext = null,
+    string? WrapperReceiverType = null);
 
 internal static class SyntaxBranchAnalyzer
 {
@@ -872,22 +873,71 @@ internal static class WrapperAnalyzer
             return null;
 
         var commandText = call.ArgumentList.Arguments.ElementAtOrDefault(0)?.Expression;
-        if (commandText is not LiteralExpressionSyntax { Token.Value: string text }
-            || LooksLikeInlineSql(text))
+        var mode = ResolveExternalSqlObjectMode(call);
+        if (mode == "inline_sql")
             return null;
 
-        var mode = ResolveUnknownCallMode(call);
-        if (mode == "inline_sql")
+        if (mode == "stored_procedure")
+        {
+            if (commandText is LiteralExpressionSyntax { Token.Value: string literalText })
+            {
+                if (LooksLikeInlineSql(literalText))
+                    return null;
+
+                return CreateUnavailableInvocation(
+                    caller,
+                    callerClass,
+                    member,
+                    "literal",
+                    literalText,
+                    true,
+                    mode,
+                    call);
+            }
+
+            return CreateUnavailableInvocation(
+                caller,
+                callerClass,
+                member,
+                "dynamic",
+                null,
+                true,
+                mode,
+                call);
+        }
+
+        if (commandText is not LiteralExpressionSyntax { Token.Value: string text }
+            || LooksLikeInlineSql(text))
             return null;
         if (mode == "unknown" && !LooksLikeProcedureName(text))
             return null;
 
-        return new DirectSqlInvocation(
+        return CreateUnavailableInvocation(
+            caller,
             callerClass,
-            caller.Identifier.Text,
+            member,
             "literal",
             text,
-            mode == "stored_procedure",
+            false,
+            mode,
+            call);
+    }
+
+    private static DirectSqlInvocation CreateUnavailableInvocation(
+        MethodDeclarationSyntax caller,
+        string callerClass,
+        MemberAccessExpressionSyntax member,
+        string commandTextKind,
+        string? commandText,
+        bool commandTypeStoredProcedure,
+        string mode,
+        InvocationExpressionSyntax call)
+        => new(
+            callerClass,
+            caller.Identifier.Text,
+            commandTextKind,
+            commandText,
+            commandTypeStoredProcedure,
             member.Expression.ToString().Trim(),
             call.SpanStart,
             call.Span.End,
@@ -897,7 +947,70 @@ internal static class WrapperAnalyzer
             false,
             false,
             mode,
-            new[] { caller.Identifier.Text, member.Name.Identifier.Text });
+            new[] { caller.Identifier.Text, member.Name.Identifier.Text },
+            WrapperReceiverType: ResolveExternalReceiverType(call, caller));
+
+    private static string? ResolveExternalReceiverType(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax caller)
+    {
+        if (call.Expression is not MemberAccessExpressionSyntax member)
+            return null;
+
+        var receiverName = member.Expression switch
+        {
+            IdentifierNameSyntax identifier => identifier.Identifier.Text,
+            MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax, Name: var name } => name.Identifier.Text,
+            _ => null,
+        };
+        if (string.IsNullOrEmpty(receiverName))
+            return null;
+
+        foreach (var declaration in caller.DescendantNodes().OfType<VariableDeclarationSyntax>())
+        {
+            var variable = declaration.Variables.FirstOrDefault(item => item.Identifier.Text == receiverName);
+            if (variable is null)
+                continue;
+            if (!declaration.Type.ToString().Equals("var", StringComparison.Ordinal))
+                return declaration.Type.ToString();
+            if (variable.Initializer?.Value is ObjectCreationExpressionSyntax creation)
+                return creation.Type.ToString();
+        }
+
+        var parameter = caller.ParameterList.Parameters
+            .FirstOrDefault(item => item.Identifier.Text == receiverName);
+        if (parameter?.Type is not null)
+            return parameter.Type.ToString();
+
+        var containingClass = caller.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+        if (containingClass is null)
+            return null;
+
+        var field = containingClass.DescendantNodes()
+            .OfType<FieldDeclarationSyntax>()
+            .FirstOrDefault(item => item.Declaration.Variables.Any(variable => variable.Identifier.Text == receiverName));
+        if (field is not null)
+            return field.Declaration.Type.ToString();
+
+        return containingClass.DescendantNodes()
+            .OfType<PropertyDeclarationSyntax>()
+            .FirstOrDefault(item => item.Identifier.Text == receiverName)
+            ?.Type.ToString();
+    }
+
+    private static string ResolveExternalSqlObjectMode(InvocationExpressionSyntax call)
+    {
+        if (call.Expression is not MemberAccessExpressionSyntax member)
+            return "unknown";
+
+        var methodName = member.Name.Identifier.Text;
+        if (methodName.Equals("ExeProcRead", StringComparison.OrdinalIgnoreCase)
+            || methodName.Equals("ExeProcNon", StringComparison.OrdinalIgnoreCase))
+            return "stored_procedure";
+        if (methodName.Equals("CreateReader", StringComparison.OrdinalIgnoreCase)
+            || methodName.Equals("GetFirstValue", StringComparison.OrdinalIgnoreCase))
+            return "inline_sql";
+        return ResolveUnknownCallMode(call);
     }
 
     private static string ResolveUnknownCallMode(InvocationExpressionSyntax call)

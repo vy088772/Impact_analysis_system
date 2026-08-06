@@ -30,6 +30,7 @@ class AzureSource(BaseModel):
 class AnalyzeRequest(BaseModel):
     """POST /analyze 請求。"""
     system: str = ""                         # RAG 命中的系統 id（僅供記錄/快取鍵）
+    wrapper_contract: str = ""                # 選用的外部 wrapper contract 名稱
     source: AzureSource = Field(default_factory=AzureSource)
     program_names: List[str]                 # 要分析的程式名清單
     include_snippets: bool = True            # 是否回傳程式碼片段（S2b 實作）
@@ -49,6 +50,7 @@ class PathEvidenceRequest(BaseModel):
     """POST /path_evidence 請求。"""
     path_id: str
     system: str = ""
+    wrapper_contract: str = ""
     source: AzureSource = Field(default_factory=AzureSource)
     program_names: List[str] = Field(default_factory=list)
     database: str = ""
@@ -68,6 +70,11 @@ class PathEvidenceResponse(BaseModel):
     caller: str = ""
     caller_class: str = ""
     caller_method: str = ""
+    external_wrapper_method: str = ""
+    wrapper_contract: str = ""
+    wrapper_contract_source: str = ""
+    wrapper_receiver_type: str = ""
+    wrapper_contract_candidates: List[str] = Field(default_factory=list)
     procedure_name: str = ""
     procedure_schema: str = ""
     branch_context: List[str] = Field(default_factory=list)
@@ -82,6 +89,7 @@ class PathEvidenceResponse(BaseModel):
     unresolved_reason: str = ""
     unresolved_targets: List[str] = Field(default_factory=list)
     csharp_methods: List[Dict] = Field(default_factory=list)
+    literal_sp_candidates: List[Dict] = Field(default_factory=list)
     stored_procedures: List[Dict] = Field(default_factory=list)
     operations: List[Dict] = Field(default_factory=list)
     views: List[Dict] = Field(default_factory=list)
@@ -128,6 +136,7 @@ class RefreshRequest(BaseModel):
     """POST /refresh 請求：更新某系統的程式碼並重新解析。"""
     system: str = ""
     source: AzureSource = Field(default_factory=AzureSource)
+    program_names: List[str] = Field(default_factory=list)
 
 
 class RefreshResponse(BaseModel):
@@ -135,6 +144,13 @@ class RefreshResponse(BaseModel):
     files: int = 0
     database_invocations: int = 0
     inline_table_facts: int = 0
+    scope: str = "system"
+    partial: bool = False
+    requested_programs: List[str] = Field(default_factory=list)
+    updated_programs: List[str] = Field(default_factory=list)
+    not_found: List[str] = Field(default_factory=list)
+    updated_files: List[str] = Field(default_factory=list)
+    removed_files: List[str] = Field(default_factory=list)
     # Deprecated aliases retained for clients that have not migrated yet.
     sp_relations: int = 0
     table_relations: int = 0

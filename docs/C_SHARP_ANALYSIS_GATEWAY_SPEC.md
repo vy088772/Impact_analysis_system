@@ -24,21 +24,23 @@ The gateway automatically recognizes direct SqlClient use and source-available w
 3. As a system analyst, I want a direct SqlClient stored procedure call to be recognized automatically, so that I do not need to register each call pattern manually.
 4. As a system analyst, I want source-available database wrappers to be recognized automatically, so that custom APIs such as `CreateTable` and `ExeProcRead` do not require a permanent allowlist.
 5. As a system analyst, I want wrapper calls to distinguish SP mode from plain SQL mode, so that `CreateTable("SELECT ...")` is not confused with a stored procedure invocation.
-6. As a system analyst, I want candidate procedure names checked against an SP Catalog for the correct database, so that a name-shaped string is not accepted without evidence.
-7. As a system analyst, I want branch-assigned procedure names to produce separate candidate invocations, so that default and conditional business paths are both visible.
-8. As a system analyst, I want Dapper and Entity Framework procedure patterns handled by the same invocation model, so that data-access libraries do not fragment the analysis.
-9. As a system analyst, I want each Database Invocation to expose its evidence level, so that I can distinguish proven facts from candidates and unknowns.
-10. As a system analyst, I want unresolved dynamic SQL to remain explicit, so that no table or stored procedure is fabricated by static analysis.
-11. As a system analyst, I want same-name stored procedures in different databases to remain unresolved when connection identity is unknown, so that analysis never attributes an action to the wrong database.
-12. As a developer, I want one gateway to own Method Flow and Database Invocation production, so that Roslyn, regex, wrapper rules, and catalog matching do not create competing sources of truth.
-13. As a developer, I want the gateway output to integrate with the SQL Execution Graph, so that C# entry methods can form Execution Paths to terminal DML operations.
-14. As a developer, I want Database Invocation records to reference complete source snapshots by identity and span, so that a selected Execution Path can retrieve actual source code.
-15. As a developer, I want source code stored once per file snapshot, so that many paths can share evidence without duplicating large C# bodies.
-16. As an operator, I want source snapshots to retain only the latest scan state, so that storage remains bounded and Git remains the history system.
-17. As an operator, I want C# scan refresh to regenerate Flow and invocation evidence, so that cached analysis follows current source code.
-18. As a maintainer, I want a legacy-versus-gateway difference report during migration, so that review focuses on real disagreement rather than every call site.
-19. As a maintainer, I want representative systems to demonstrate parity before legacy detection is removed, so that migration does not silently regress working results.
-20. As a final-answer LLM, I want selected Execution Paths to expose only the related C# source spans, so that reasoning uses grounded evidence without unrelated code.
+6. As a system analyst, I want reusable receiver-typed contracts for external wrappers, so that a method such as `ExeProcNon` is trusted only when one declared contract identifies its semantics.
+7. As a system analyst, I want candidate procedure names checked against an SP Catalog for the correct database, so that a name-shaped string is not accepted without evidence.
+8. As a system analyst, I want branch-assigned procedure names to produce separate candidate invocations, so that default and conditional business paths are both visible.
+9. As a system analyst, I want Dapper and Entity Framework procedure patterns handled by the same invocation model, so that data-access libraries do not fragment the analysis.
+10. As a system analyst, I want each Database Invocation to expose its evidence level, so that I can distinguish proven facts from candidates and unknowns.
+11. As a system analyst, I want unresolved dynamic SQL to remain explicit, so that no table or stored procedure is fabricated by static analysis.
+12. As a system analyst, I want same-name stored procedures in different databases to remain unresolved when connection identity is unknown, so that analysis never attributes an action to the wrong database.
+13. As a developer, I want one gateway to own Method Flow and Database Invocation production, so that Roslyn, regex, wrapper rules, and catalog matching do not create competing sources of truth.
+14. As a developer, I want the gateway output to integrate with the SQL Execution Graph, so that C# entry methods can form Execution Paths to terminal DML operations.
+15. As a developer, I want Database Invocation records to reference complete source snapshots by identity and span, so that a selected Execution Path can retrieve actual source code.
+16. As a developer, I want external wrapper boundaries omitted from local source materialization, so that path evidence contains real caller methods without fabricated DLL source.
+17. As a developer, I want source code stored once per file snapshot, so that many paths can share evidence without duplicating large C# bodies.
+18. As an operator, I want source snapshots to retain only the latest scan state, so that storage remains bounded and Git remains the history system.
+19. As an operator, I want C# scan refresh to regenerate Flow and invocation evidence, so that cached analysis follows current source code.
+20. As a maintainer, I want a legacy-versus-gateway difference report during migration, so that review focuses on real disagreement rather than every call site.
+21. As a maintainer, I want representative systems to demonstrate parity before legacy detection is removed, so that migration does not silently regress working results.
+22. As a final-answer LLM, I want selected Execution Paths to expose only the related C# source spans, so that reasoning uses grounded evidence without unrelated code.
 
 ## Implementation Decisions
 
@@ -49,11 +51,17 @@ The gateway automatically recognizes direct SqlClient use and source-available w
 - The SP Catalog is generated from the refreshed SQL cache and uses normalized database, schema, and procedure identity.
 - A direct SqlCommand invocation is `proven` when it explicitly sets `CommandType.StoredProcedure` and its procedure exists in the resolved database Catalog.
 - A source-available wrapper invocation is `proven` when its reachable implementation establishes an ADO.NET stored-procedure sink and its call-site mode selects stored-procedure execution.
+- An external wrapper invocation may use an explicitly selected contract, or a registry contract auto-selected by a unique receiver type. In both cases the wrapper method and receiver type must match the contract. The contract supplies sink semantics; the literal procedure name must still match the resolved database-scoped SP Catalog.
+- Automatic selection requires `auto_select: true` and exactly one matching receiver-typed contract. Zero matches remain unresolved; multiple matches remain unresolved with the candidate contract names retained as provenance.
+- A contract method with `inline_sql` mode, such as `SQLObject.CreateReader` or `GetFirstValue`, is omitted from stored procedure invocations. A `call_site` method, such as `CreateTable` or `CreateDataSet`, is trusted only when the call site explicitly selects stored-procedure mode.
+- `ExecuteReader` in a contract is a sink label for a wrapper's downstream ADO.NET operation, not an implicitly recognized wrapper method. A library that genuinely exposes an external `ExecuteReader` helper must declare that method explicitly in the registry contract.
 - A literal candidate that matches the resolved Catalog but lacks a complete sink chain is `likely`.
-- Dynamic SQL, unresolved variables, unavailable wrapper source, and ambiguous cross-database names are `unresolved`. The gateway preserves source evidence but does not invent a target.
+- Dynamic SQL, unresolved variables, unavailable wrapper source without a matching contract, and ambiguous cross-database names are `unresolved`. The gateway preserves source evidence but does not invent a target.
 - Database-source resolution scopes Catalog matching. If no source can be resolved, a candidate is accepted only when unique across known Catalogs; same-name results in multiple databases stay unresolved.
 - A branch assigning multiple finite procedure names creates separate Database Invocations with the relevant branch context.
 - Complete C# source is stored once per current file snapshot, addressed by a content identity. Methods and invocations retain start/end source spans; Execution Paths only reference these records.
+- External wrapper methods are retained as invocation metadata (`external_wrapper_method`, `wrapper_contract`, `wrapper_contract_source`, `wrapper_receiver_type`, and `wrapper_contract_candidates`) but are not required to have a local C# method span. Path evidence materializes only source methods that exist in the local snapshot.
+- Wrapper onboarding is read-only and cache-driven: `python -m tools.discover_external_wrappers` walks catalog systems, groups observed receiver/method pairs, and reports source wrappers, unique auto-selected contracts, ambiguous contracts, unknown receiver types, and methods missing from a matched contract. It includes source file, line, and span locations in JSON output. It never clones, pulls, or creates a scan cache; stale or missing caches are reported so the normal refresh command remains the single source of scan updates.
 - The current scan root retains only its latest source snapshot. Refresh replaces the snapshot; historical code comparison belongs to Git.
 - Existing regex detection runs only as migration comparison output. It must not be merged with Gateway output as a second formal relationship source.
 - The migration cutover gate requires representative systems and fixtures to show existing direct detections as Gateway results or explicit unresolved cases, without false `proven` detections for inline SQL or ordinary methods.
@@ -63,6 +71,7 @@ The gateway automatically recognizes direct SqlClient use and source-available w
 - Tests assert externally observable Method Flow, Database Invocation evidence, database attribution, source retrieval by span, and migration difference reports. They do not assert internal visitor traversal order or regex implementation details.
 - The CSharpAnalysisGateway is the single highest testing seam. Tests provide a source snapshot, event bindings, and a synthetic SP Catalog, then assert returned records.
 - Fixtures cover direct SqlClient with explicit CommandType, a source-available wrapper with stored-procedure mode, a wrapper with inline SQL mode, branch-assigned procedure names, Dapper, Entity Framework, dynamic SQL, unavailable wrapper source, and cross-database same-name procedures.
+- Fixtures cover a reusable external contract, explicit and receiver-auto selection, ambiguous receiver matches, `call_site` SP mode, contract-scoped inline SQL exclusion, and typed receiver extraction from the StaticAnalyzerHost.
 - Tests verify that direct SqlClient and confirmed wrapper calls are `proven` only when their resolved Catalog contains the named procedure.
 - Tests verify that unique unknown-database candidates are `likely`, while ambiguous names across multiple Catalogs are `unresolved`.
 - Tests verify that selected source references recover the complete containing method from a file snapshot without storing a duplicate copy per invocation or Execution Path.
@@ -81,5 +90,6 @@ The gateway automatically recognizes direct SqlClient use and source-available w
 ## Further Notes
 
 - This specification builds on the SQL Execution Graph and Execution Path decisions. The gateway provides the C# side of those paths; SQL analysis remains deterministic and independent.
+- For a system-wide onboarding report in Windows PowerShell, run `$env:PYTHONIOENCODING='utf-8'; python -m tools.discover_external_wrappers` from the Impact project root. Use `--system <system_id>` for selected catalog systems, `--root <scan_root>` when catalog resolution is unavailable, and `--format json --output <path>` for machine-readable review. Only genuinely new or ambiguous external APIs require contract review.
 - Existing wrapper configuration may remain temporarily as a migration aid for unavailable source, but it is not the long-term primary discovery mechanism.
 - The available workspace does not expose an issue-tracker integration. This local specification is marked `ready-for-agent` for handoff until tracker publishing is available.

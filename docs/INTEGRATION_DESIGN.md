@@ -218,7 +218,29 @@ Content-Type: application/json
 }
 
 GET  /health   → {"status": "ok"}
-POST /refresh  → {source_root, files, sp_relations, table_relations}   # git pull + 重新解析
+POST /refresh  → {source_root, files, scope, partial, updated_files, removed_files, ...}
+                  # body 可帶 program_names；空清單為 full system refresh
+
+局部更新範例：
+```json
+{
+  "system": "Y-Docs_TTPUR",
+  "source": {"project": "System Dept 1", "repo": "Y-DOCs", "path": "TTPUR"},
+  "program_names": ["Evaluate/PUR_MasterEdit.aspx"]
+}
+```
+
+`program_names` 有值時，Impact 只替換對應 C#／view records 與該檔案的衍生 facts；
+所有 scan roots 都必須已有目前版本的 cache；若 cache 過期、遺失或無法載入，
+會回 HTTP 400 `program_refresh_requires_current_cache`，不會靜默回退為 full refresh。
+請先不帶 `program_names` 執行一次完整 refresh，再重試局部更新。
+SQL cache refresh 仍由 `/refresh_sql` 獨立處理。
+
+CLI：
+```powershell
+python -m impact_orch.refresh_cli Y-Docs_TTPUR --program PUR_MasterEdit
+python -m impact_orch.refresh_cli Y-Docs_TTPUR --program PUR_MasterEdit --program PUR_SOQry
+```
 ```
 
 **spec-rag 端呼叫（impact_orch/rag_client.py）：**

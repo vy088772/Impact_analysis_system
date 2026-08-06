@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from dataclasses import replace
 from pathlib import Path
 import pytest
 
@@ -26,7 +27,11 @@ from service.execution_path_builder import build_execution_paths
 from service.schemas import PathEvidenceRequest
 
 
-def _cached_path_fixture(tmp_path: Path) -> tuple[ProjectScanResult, dict, str]:
+def _cached_path_fixture(
+    tmp_path: Path,
+    *,
+    path_id_relative_path: str | None = None,
+) -> tuple[ProjectScanResult, dict, str]:
     source_file = tmp_path / "OrderPage.cs"
     content = """class OrderPage
 {
@@ -184,7 +189,15 @@ def _cached_path_fixture(tmp_path: Path) -> tuple[ProjectScanResult, dict, str]:
         },
         connection_sources={str(source_file.resolve()): {"conn": "OrdersDb"}},
     )
-    path_id = build_execution_paths([invocation], graph)[0]["path_id"]
+    path_invocation = (
+        invocation
+        if path_id_relative_path is None
+        else replace(
+            invocation,
+            source=InvocationSourceSpan(path_id_relative_path, 0, 10),
+        )
+    )
+    path_id = build_execution_paths([path_invocation], graph)[0]["path_id"]
     return scan, cached, path_id
 
 
@@ -224,6 +237,54 @@ def test_path_evidence_returns_only_selected_branch_and_source_methods(monkeypat
     assert evidence.operations[0]["where"] == "Id = @Id"
     assert evidence.views == []
     assert evidence.functions == []
+
+
+def test_multi_root_path_evidence_uses_repo_relative_source_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    child_root = tmp_path / "TTPUR"
+    sibling_root = tmp_path / "ATV"
+    child_root.mkdir()
+    sibling_root.mkdir()
+    scan, cached, path_id = _cached_path_fixture(
+        child_root,
+        path_id_relative_path="TTPUR/OrderPage.cs",
+    )
+    sibling_scan = ProjectScanResult(
+        project_root=str(sibling_root),
+        project_name="orders",
+        scan_time=datetime.now(),
+    )
+
+    monkeypatch.setattr(
+        analyze_service,
+        "resolve_source",
+        lambda req: [child_root, sibling_root],
+    )
+    monkeypatch.setattr(
+        analyze_service,
+        "_get_scan",
+        lambda root, refresh=False: scan if root == child_root else sibling_scan,
+    )
+    monkeypatch.setattr(analyze_service, "repo_dir", lambda project, repo: tmp_path)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema: cached,
+    )
+
+    evidence = analyze_service.get_path_evidence(
+        PathEvidenceRequest(
+            path_id=path_id,
+            database="OrdersDb",
+            program_names=["OrderPage"],
+        )
+    )
+
+    assert evidence.source_span["relative_path"] == "TTPUR/OrderPage.cs"
+    assert evidence.csharp_methods[0]["file"] == "TTPUR/OrderPage.cs"
+    assert "public void Save()" in evidence.csharp_methods[0]["source"]
 
 
 def test_path_evidence_rejects_stale_source_snapshot(monkeypatch, tmp_path: Path) -> None:
@@ -335,4 +396,70 @@ def test_path_evidence_materializes_unresolved_cycle_without_terminal_dml(tmp_pa
     assert [item["name"] for item in evidence.stored_procedures] == [
         "dbo.usp_SaveOrder",
         "dbo.usp_WriteAudit",
+    ]
+
+
+def test_path_evidence_retains_unverified_literal_sp_candidate(tmp_path: Path) -> None:
+    scan, cached, _ = _cached_path_fixture(tmp_path)
+    graph = cached["sql_execution_graph"]
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="Save",
+        database="OrdersDb",
+        procedure_name="usp_saveorder",
+        evidence=InvocationEvidence.UNRESOLVED,
+        source=InvocationSourceSpan("OrderPage.cs", 0, 10),
+        reason="wrapper_source_unavailable",
+        procedure_schema="dbo",
+        method_chain=("Save",),
+        raw_command_text="[dbo].[usp_SaveOrder]",
+    )
+    path = build_execution_paths([invocation], graph)[0]
+
+    evidence = analyze_service._materialize_path_evidence(
+        path,
+        invocation,
+        scan,
+        cached,
+        graph,
+    )
+
+    assert evidence.evidence == "unresolved"
+    assert evidence.confirmed is False
+    assert len(evidence.literal_sp_candidates) == 1
+    candidate = evidence.literal_sp_candidates[0]
+    assert candidate["procedure_name"] == "usp_saveorder"
+    assert candidate["raw_command_text"] == "[dbo].[usp_SaveOrder]"
+    assert candidate["reason"] == "wrapper_source_unavailable"
+
+
+def test_path_evidence_skips_external_wrapper_method_span(tmp_path: Path) -> None:
+    scan, cached, _ = _cached_path_fixture(tmp_path)
+    graph = cached["sql_execution_graph"]
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="Save",
+        database="OrdersDb",
+        procedure_name="usp_saveorder",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("OrderPage.cs", 0, 10),
+        procedure_schema="dbo",
+        method_chain=("Save", "ExeProcNon"),
+        method_class_chain=("OrderPage", "SQLObject"),
+        external_wrapper_method="ExeProcNon",
+        source_snapshot_hash="snapshot-hash",
+    )
+    path = build_execution_paths([invocation], graph)[0]
+
+    evidence = analyze_service._materialize_path_evidence(
+        path,
+        invocation,
+        scan,
+        cached,
+        graph,
+    )
+
+    assert [method["method"] for method in evidence.csharp_methods] == ["Save"]
+    assert [procedure["name"] for procedure in evidence.stored_procedures] == [
+        "dbo.usp_SaveOrder"
     ]

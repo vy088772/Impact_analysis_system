@@ -19,6 +19,7 @@ from code_analyzer.csharp_analysis_gateway import (
 )
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 import code_analyzer.static_analyzer_host as static_analyzer_host_module
+import code_analyzer.csharp_analysis_gateway as gateway_module
 
 
 def _raw_invocation(**overrides) -> dict:
@@ -34,6 +35,20 @@ def _raw_invocation(**overrides) -> dict:
     }
     base.update(overrides)
     return base
+
+
+def _sqlobject_wrapper_contract() -> dict:
+    return {
+        "name": "sqlobject",
+        "receiver_types": ["SQLObject"],
+        "methods": {
+            "ExeProcNon": {"mode": "stored_procedure", "sink": "ExecuteNonQuery"},
+            "ExeProcRead": {"mode": "stored_procedure", "sink": "ExecuteReader"},
+            "CreateReader": {"mode": "inline_sql", "sink": "ExecuteReader"},
+            "CreateTable": {"mode": "call_site", "sink": "ExecuteReader"},
+            "CreateDataSet": {"mode": "call_site", "sink": "ExecuteReader"},
+        },
+    }
 
 
 def test_normalize_procedure_name_strips_schema_and_brackets() -> None:
@@ -997,8 +1012,8 @@ def test_source_wrapper_tracks_command_properties_assigned_after_creation() -> N
         assert invocations[0].evidence is InvocationEvidence.PROVEN
 
 
-def test_unavailable_wrapper_source_is_unresolved_instead_of_proven() -> None:
-    """A wrapper-shaped fact without its implementation cannot become catalog-proven."""
+def test_unavailable_wrapper_source_retains_literal_candidate_as_unresolved() -> None:
+    """A missing wrapper implementation retains its literal target without proving the call."""
     catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
     gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
 
@@ -1016,6 +1031,260 @@ def test_unavailable_wrapper_source_is_unresolved_instead_of_proven() -> None:
     assert len(invocations) == 1
     assert invocations[0].evidence is InvocationEvidence.UNRESOLVED
     assert invocations[0].reason == "wrapper_source_unavailable"
+    assert invocations[0].procedure_name == "usp_saveorder"
+    assert invocations[0].raw_command_text == "usp_SaveOrder"
+
+
+def test_external_wrapper_contract_proves_sqlobject_sp_mode_but_skips_inline_mode() -> None:
+    """A trusted external contract supplies sink proof without requiring local wrapper source."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(
+        catalog,
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contract=_sqlobject_wrapper_contract(),
+    )
+
+    sp_invocation = gateway.resolve_direct_invocations(
+        "SqlObjectPage.cs",
+        [
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                command_text="usp_SaveOrder",
+                wrapper_method_name="ExeProcNon",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="stored_procedure",
+                connection_expression="conn",
+            )
+        ],
+    )
+    inline_invocation = gateway.resolve_direct_invocations(
+        "SqlObjectPage.cs",
+        [
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                command_text="SELECT * FROM SOrder",
+                wrapper_method_name="CreateReader",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="inline_sql",
+                command_type_stored_procedure=False,
+                connection_expression="conn",
+            )
+        ],
+    )
+
+    assert len(sp_invocation) == 1
+    assert sp_invocation[0].evidence is InvocationEvidence.PROVEN
+    assert sp_invocation[0].procedure_name == "usp_saveorder"
+    assert sp_invocation[0].external_wrapper_method == "ExeProcNon"
+    assert inline_invocation == []
+
+
+def test_external_wrapper_contract_auto_selects_unique_receiver_type() -> None:
+    """A unique receiver-backed contract should not require system catalog wiring."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocations = gateway.resolve_direct_invocations(
+        "SqlObjectPage.cs",
+        [
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                command_text="usp_SaveOrder",
+                wrapper_method_name="ExeProcNon",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="stored_procedure",
+                connection_expression="conn",
+            )
+        ],
+    )
+
+    assert len(invocations) == 1
+    assert invocations[0].evidence is InvocationEvidence.PROVEN
+    assert invocations[0].wrapper_contract == "sqlobject"
+    assert invocations[0].wrapper_contract_source == "auto_receiver_type"
+    assert invocations[0].wrapper_receiver_type == "SQLObject"
+    assert invocations[0].wrapper_contract_candidates == ("sqlobject",)
+
+
+def test_external_wrapper_contract_ambiguity_stays_unresolved(monkeypatch) -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    monkeypatch.setattr(
+        gateway_module,
+        "external_wrapper_contract_candidates",
+        lambda _receiver_type: [
+            {"name": "sqlobject-v1", "receiver_types": ["SQLObject"]},
+            {"name": "sqlobject-v2", "receiver_types": ["SQLObject"]},
+        ],
+    )
+
+    invocations = gateway.resolve_direct_invocations(
+        "SqlObjectPage.cs",
+        [
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                command_text="usp_SaveOrder",
+                wrapper_method_name="ExeProcNon",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="stored_procedure",
+                connection_expression="conn",
+            )
+        ],
+    )
+
+    assert len(invocations) == 1
+    assert invocations[0].evidence is InvocationEvidence.UNRESOLVED
+    assert invocations[0].wrapper_contract == ""
+    assert invocations[0].wrapper_contract_source == "ambiguous_receiver_type"
+    assert invocations[0].wrapper_contract_candidates == (
+        "sqlobject-v1",
+        "sqlobject-v2",
+    )
+
+
+def test_external_wrapper_contract_does_not_apply_to_other_receiver_type() -> None:
+    """A contract scoped to SQLObject must not prove an unrelated wrapper with the same method name."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(
+        catalog,
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contract=_sqlobject_wrapper_contract(),
+    )
+
+    invocations = gateway.resolve_direct_invocations(
+        "OtherPage.cs",
+        [
+            _raw_invocation(
+                command_text="usp_SaveOrder",
+                invocation_kind="source_wrapper",
+                wrapper_method_name="ExeProcNon",
+                wrapper_receiver_type="OtherDbObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="stored_procedure",
+                connection_expression="conn",
+            )
+        ],
+    )
+
+    assert len(invocations) == 1
+    assert invocations[0].evidence is InvocationEvidence.UNRESOLVED
+    assert invocations[0].reason == "wrapper_source_unavailable"
+
+
+def test_external_wrapper_call_site_contract_requires_stored_procedure_mode() -> None:
+    """A call-site wrapper is proven only when its invocation selects SP mode."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(
+        catalog,
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contract=_sqlobject_wrapper_contract(),
+    )
+
+    invocations = gateway.resolve_direct_invocations(
+        "SqlObjectPage.cs",
+        [
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                command_text="usp_SaveOrder",
+                wrapper_method_name="CreateTable",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="stored_procedure",
+                connection_expression="conn",
+            ),
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                command_text="usp_SaveOrder",
+                wrapper_method_name="CreateTable",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="inline_sql",
+                command_type_stored_procedure=False,
+                connection_expression="conn",
+            ),
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                command_text="usp_SaveOrder",
+                wrapper_method_name="CreateTable",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="unknown",
+                connection_expression="conn",
+            ),
+        ],
+    )
+
+    assert len(invocations) == 2
+    assert invocations[0].evidence is InvocationEvidence.PROVEN
+    assert invocations[0].wrapper_contract == "sqlobject"
+    assert invocations[1].evidence is InvocationEvidence.UNRESOLVED
+    assert invocations[1].reason == "wrapper_mode_unresolved"
+
+
+def test_external_wrapper_create_dataset_call_site_contract_handles_all_modes() -> None:
+    """CreateDataSet uses its call-site mode to distinguish SP and inline SQL."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(
+        catalog,
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contract=_sqlobject_wrapper_contract(),
+    )
+
+    invocations = gateway.resolve_direct_invocations(
+        "SqlObjectPage.cs",
+        [
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                command_text="usp_SaveOrder",
+                wrapper_method_name="CreateDataSet",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="stored_procedure",
+                connection_expression="conn",
+            ),
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                command_text="SELECT * FROM SOrder",
+                wrapper_method_name="CreateDataSet",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="inline_sql",
+                command_type_stored_procedure=False,
+                connection_expression="conn",
+            ),
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                command_text="usp_SaveOrder",
+                wrapper_method_name="CreateDataSet",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_reaches_stored_procedure_sink=False,
+                wrapper_mode="unknown",
+                connection_expression="conn",
+            ),
+        ],
+    )
+
+    assert len(invocations) == 2
+    assert invocations[0].evidence is InvocationEvidence.PROVEN
+    assert invocations[0].external_wrapper_method == "CreateDataSet"
+    assert invocations[0].wrapper_contract == "sqlobject"
+    assert invocations[1].evidence is InvocationEvidence.UNRESOLVED
+    assert invocations[1].reason == "wrapper_mode_unresolved"
 
 
 def test_inline_wrapper_mode_is_not_a_stored_procedure_invocation() -> None:
@@ -1074,6 +1343,65 @@ def test_static_analyzer_host_preserves_unavailable_wrapper_candidate() -> None:
         assert len(invocations) == 1
         assert invocations[0].evidence is InvocationEvidence.UNRESOLVED
         assert invocations[0].reason == "wrapper_source_unavailable"
+        assert invocations[0].procedure_name == "usp_saveorder"
+        assert invocations[0].raw_command_text == "usp_SaveOrder"
+
+
+def test_static_analyzer_host_applies_external_sqlobject_wrapper_contract() -> None:
+    """Known external SQLObject methods distinguish SP, inline SQL, and dynamic calls."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "SqlObjectPage.cs"
+        source_path.write_text(
+            "public class SqlObjectPage {\n"
+            "    private void EnableData() {\n"
+            "        SQLObject obj = GetExternalSqlObject();\n"
+            "        obj.ExeProcNon(\"[dbo].[usp_Enable]\", null);\n"
+            "    }\n"
+            "    private void SaveData() {\n"
+            "        SQLObject obj = GetExternalSqlObject();\n"
+            "        obj.CreateTable(\"[dbo].[usp_Save]\", null, \"table\", \"SP\");\n"
+            "    }\n"
+            "    private void PreviewData() {\n"
+            "        SQLObject obj = GetExternalSqlObject();\n"
+            "        obj.CreateReader(\"SELECT * FROM SOrder\");\n"
+            "    }\n"
+            "    private void DynamicData(string procedure) {\n"
+            "        SQLObject obj = GetExternalSqlObject();\n"
+            "        obj.ExeProcRead(procedure, null);\n"
+            "    }\n"
+            "    private object GetExternalSqlObject() { return null; }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            invocation
+            for invocation in result["db_invocations"]
+            if invocation.get("invocation_kind") == "source_wrapper"
+        ]
+
+        assert {invocation["method_name"] for invocation in raw_invocations} == {
+            "EnableData",
+            "SaveData",
+            "DynamicData",
+        }
+        by_method = {invocation["method_name"]: invocation for invocation in raw_invocations}
+        assert by_method["EnableData"]["wrapper_mode"] == "stored_procedure"
+        assert by_method["EnableData"]["command_type_stored_procedure"] is True
+        assert by_method["SaveData"]["wrapper_mode"] == "stored_procedure"
+        assert by_method["SaveData"]["command_type_stored_procedure"] is True
+        assert by_method["DynamicData"]["wrapper_mode"] == "stored_procedure"
+        assert by_method["DynamicData"]["command_type_stored_procedure"] is True
+        assert by_method["DynamicData"]["command_text_kind"] == "dynamic"
+        assert by_method["DynamicData"]["command_text"] is None
+        assert {
+            invocation["wrapper_receiver_type"]
+            for invocation in raw_invocations
+        } == {"SQLObject"}
 
 
 if __name__ == "__main__":

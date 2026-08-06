@@ -93,7 +93,8 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # v19：legacy_sp_relations are transient comparison input and are excluded from
 # ProjectScanResult serialization; cached scans must not retain a second relation source.
 # v20：remove legacy SP-based database inference from formal table facts.
-_CACHE_VERSION = 20
+# v21：external wrapper raw facts include receiver type metadata.
+_CACHE_VERSION = 21
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
@@ -116,6 +117,20 @@ def _paths(root: Path) -> tuple[Path, Path]:
 
 def has_cache(root: Path) -> bool:
     return _load(root) is not None
+
+
+def cache_status(root: Path) -> str:
+    """Return whether a scan cache is current, stale, missing, or invalid."""
+    pkl, meta = _paths(root)
+    if not pkl.exists() or not meta.exists():
+        return "missing"
+    try:
+        info = json.loads(meta.read_text(encoding="utf-8"))
+    except Exception:
+        return "invalid"
+    if info.get("cache_version") != _CACHE_VERSION:
+        return "stale"
+    return "current" if _load(root) is not None else "invalid"
 
 
 def _git_head_commit(path: Path) -> Optional[str]:
@@ -203,6 +218,12 @@ def _save(root: Path, result: ProjectScanResult) -> None:
         )
     except Exception as exc:  # 寫檔失敗不致命
         print(f"⚠️  掃描快取寫出失敗（非致命）：{exc}")
+
+
+def save_scan(root: Path, result: ProjectScanResult) -> None:
+    """Persist an already-mutated scan result and update the process cache."""
+    _mem_cache[str(root.resolve())] = result
+    _save(root, result)
 
 
 def get_or_scan(root: Path, refresh: bool = False) -> ProjectScanResult:

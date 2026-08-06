@@ -13,7 +13,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import replace
+import os
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, Tuple
@@ -25,6 +26,7 @@ from code_analyzer.csharp_analysis_gateway import (
     DbInvocation,
     InvocationEvidence,
     SpCatalog,
+    load_external_wrapper_contract,
     normalize_procedure_name,
 )
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
@@ -54,7 +56,7 @@ from .execution_path_builder import build_compact_execution_path_payload, build_
 from .graph_queries import query_table_accesses
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
-from .scan_store import get_or_scan, has_cache
+from .scan_store import cache_status, get_or_scan, has_cache, save_scan
 from . import sql_cache_store
 from . import flow_chain_builder
 
@@ -88,6 +90,38 @@ class SqlExecutionGraphRequiredError(ValueError):
                 "請重新執行 POST /refresh_sql。"
             )
         )
+
+
+@dataclass
+class ProgramRefreshResult:
+    """Result of replacing only the files belonging to requested programs."""
+
+    scan: ProjectScanResult
+    updated_files: List[str] = field(default_factory=list)
+    removed_files: List[str] = field(default_factory=list)
+    matched_programs: List[str] = field(default_factory=list)
+    not_found: List[str] = field(default_factory=list)
+    full_refresh: bool = False
+
+
+class ProgramRefreshCacheError(ValueError):
+    """A program refresh cannot safely proceed without a current scan cache."""
+
+    code = "program_refresh_requires_current_cache"
+
+    def __init__(self, root: Path, status: str):
+        self.root = root
+        self.status = status
+        super().__init__(
+            "指定 program 更新需要目前版本的 scan cache，不能靜默改成完整 system refresh："
+            f"{root}（狀態：{status}）。請先執行不帶 --program 的完整 refresh。"
+        )
+
+
+def _require_current_program_cache(root: Path) -> None:
+    status = cache_status(root)
+    if status != "current":
+        raise ProgramRefreshCacheError(root, status)
 
 
 # 以「解析後的本機路徑」為鍵，快取掃描結果，避免同一 repo 重複掃描
@@ -180,12 +214,28 @@ def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
         project_name=scans[0].project_name if scans else "",
         scan_time=max((s.scan_time for s in scans), default=datetime.now()),
     )
+    scan_roots = [str(Path(s.project_root).resolve()) for s in scans if s.project_root]
+    try:
+        canonical_root = Path(os.path.commonpath(scan_roots)).resolve()
+    except (ValueError, IndexError):
+        canonical_root = None
     for s in scans:
         merged.total_files += s.total_files
         merged.scanned_files += s.scanned_files
         merged.failed_files += s.failed_files
         merged.csharp_results.extend(s.csharp_results)
-        merged.source_snapshots.update(getattr(s, "source_snapshots", {}))
+        for key, snapshot in getattr(s, "source_snapshots", {}).items():
+            relative_path = str(snapshot.relative_path or key).replace("\\", "/")
+            if canonical_root is not None:
+                source_path = Path(s.project_root) / relative_path
+                try:
+                    relative_path = source_path.resolve().relative_to(canonical_root).as_posix()
+                except ValueError:
+                    pass
+            merged.source_snapshots[relative_path] = replace(
+                snapshot,
+                relative_path=relative_path,
+            )
         merged.db_invocations.update(getattr(s, "db_invocations", {}))
         merged.connection_sources.update(getattr(s, "connection_sources", {}))
         merged.aspx_results.extend(s.aspx_results)
@@ -443,6 +493,9 @@ def _rated_execution_invocations(
     catalog, graph, graph_database = _execution_path_context(req, scan)
     rated_invocations = []
     raw_by_file = getattr(scan, "db_invocations", {})
+    external_wrapper_contract = load_external_wrapper_contract(
+        getattr(req, "wrapper_contract", "")
+    )
 
     for file_result in matched_files:
         file_key = str(Path(file_result.file_path).resolve())
@@ -460,6 +513,7 @@ def _rated_execution_invocations(
                     getattr(req, "db_name", ""),
                 ),
             ),
+            external_wrapper_contract=external_wrapper_contract,
         )
         relative_path = _rel(file_result.file_path, root)
         for invocation in gateway.resolve_direct_invocations(relative_path, raw_invocations):
@@ -515,6 +569,7 @@ def _serialize_db_invocation(invocation: DbInvocation) -> Dict:
         ),
         "procedure_name": invocation.procedure_name,
         "procedure_schema": invocation.procedure_schema,
+        "raw_command_text": invocation.raw_command_text,
         "evidence": invocation.evidence.value,
         "reason": invocation.reason,
         "caller": caller,
@@ -528,6 +583,11 @@ def _serialize_db_invocation(invocation: DbInvocation) -> Dict:
         },
         "method_chain": list(invocation.method_chain),
         "method_class_chain": list(invocation.method_class_chain),
+        "external_wrapper_method": invocation.external_wrapper_method,
+        "wrapper_contract": invocation.wrapper_contract,
+        "wrapper_contract_source": invocation.wrapper_contract_source,
+        "wrapper_receiver_type": invocation.wrapper_receiver_type,
+        "wrapper_contract_candidates": list(invocation.wrapper_contract_candidates),
         "branch_context": list(invocation.branch_context),
         "source_snapshot_hash": invocation.source_snapshot_hash,
     }
@@ -546,8 +606,14 @@ def _invocation_response_fields(invocation: DbInvocation) -> Dict:
             "caller",
             "caller_class",
             "caller_method",
+            "external_wrapper_method",
+            "wrapper_contract",
+            "wrapper_contract_source",
+            "wrapper_receiver_type",
+            "wrapper_contract_candidates",
             "procedure_name",
             "procedure_schema",
+            "raw_command_text",
             "branch_context",
             "source_span",
             "source_snapshot_hash",
@@ -715,6 +781,13 @@ def _materialize_path_evidence(
                 operation_evidence["source_text"] = source_text
 
     csharp_methods = _source_methods_for_path(scan, invocation, path)
+    literal_sp_candidates = []
+    if (
+        invocation.evidence is not InvocationEvidence.PROVEN
+        and invocation.procedure_name
+        and invocation.raw_command_text is not None
+    ):
+        literal_sp_candidates.append(_serialize_db_invocation(invocation))
     views: List[Dict] = []
     functions: List[Dict] = []
     referenced_object_ids: set[str] = set()
@@ -757,6 +830,11 @@ def _materialize_path_evidence(
         caller=str(path.get("caller") or ""),
         caller_class=str(path.get("caller_class") or ""),
         caller_method=str(path.get("caller_method") or ""),
+        external_wrapper_method=str(path.get("external_wrapper_method") or ""),
+        wrapper_contract=str(path.get("wrapper_contract") or ""),
+        wrapper_contract_source=str(path.get("wrapper_contract_source") or ""),
+        wrapper_receiver_type=str(path.get("wrapper_receiver_type") or ""),
+        wrapper_contract_candidates=list(path.get("wrapper_contract_candidates", []) or []),
         procedure_name=str(path.get("procedure_name") or ""),
         procedure_schema=str(path.get("procedure_schema") or ""),
         branch_context=list(path.get("branch_context", []) or []),
@@ -773,6 +851,7 @@ def _materialize_path_evidence(
         unresolved_reason=str(path.get("unresolved_reason") or ""),
         unresolved_targets=list(path.get("unresolved_targets", []) or []),
         csharp_methods=csharp_methods,
+        literal_sp_candidates=literal_sp_candidates,
         stored_procedures=stored_procedures,
         operations=[operation_evidence] if operation_evidence else [],
         views=views,
@@ -797,6 +876,7 @@ def _source_methods_for_path(
     method_names = list(path.get("method_chain", []) or [])
     if not method_names:
         method_names = [invocation.method_name]
+    external_wrapper_method = str(path.get("external_wrapper_method") or "").casefold()
     method_classes = list(path.get("method_class_chain", []) or [])
     for index, method_name in enumerate(method_names):
         class_hint = method_classes[index] if index < len(method_classes) else ""
@@ -809,6 +889,8 @@ def _source_methods_for_path(
             class_hint,
         )
         if source_match is None:
+            if external_wrapper_method and method_name.casefold() == external_wrapper_method:
+                continue
             raise PathEvidenceError(
                 "stale_path",
                 f"C# method span 已不存在或不唯一：{method_name}",
@@ -1165,9 +1247,9 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 def _rel(file_path: str, root: Path) -> str:
     """盡量回傳相對 root 的路徑，失敗則回傳原路徑。"""
     try:
-        return str(Path(file_path).resolve().relative_to(root.resolve()))
+        return Path(file_path).resolve().relative_to(root.resolve()).as_posix()
     except Exception:
-        return file_path
+        return str(file_path).replace("\\", "/")
 
 
 def _source_file_for_span(
@@ -1578,17 +1660,207 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     )
 
 
-def refresh_source(source: dict) -> dict:
-    """更新指令：git pull 取得最新程式碼並重新解析，覆寫快取。
+def _normalize_refresh_program_path(name: str) -> str:
+    normalized = str(name or "").strip().replace("\\", "/").casefold()
+    normalized = re.sub(r"/+", "/", normalized).lstrip("./")
+    for suffix in _KNOWN_SUFFIXES:
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    return normalized.strip("/")
 
-    回傳 {source_root, files} 摘要。
-    """
+
+def _refresh_file_matches(file_path: str, root: Path, program_name: str) -> bool:
+    try:
+        relative_path = Path(file_path).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        relative_path = Path(file_path).name
+    candidate = _normalize_refresh_program_path(relative_path)
+    requested = _normalize_refresh_program_path(program_name)
+    if not candidate or not requested:
+        return False
+    if "/" in requested:
+        return candidate == requested or candidate.endswith(f"/{requested}")
+    return candidate.rsplit("/", 1)[-1] == requested
+
+
+def _unique_refresh_paths(file_paths: Iterable[str]) -> List[str]:
+    unique: Dict[str, str] = {}
+    for file_path in file_paths:
+        resolved = str(Path(file_path).resolve())
+        unique.setdefault(resolved.casefold(), resolved)
+    return list(unique.values())
+
+
+def _relative_refresh_path(file_path: str, root: Path) -> str:
+    try:
+        return Path(file_path).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(Path(file_path).resolve())
+
+
+def _select_refresh_files(
+    file_paths: Iterable[str],
+    root: Path,
+    program_names: List[str],
+) -> List[str]:
+    return _unique_refresh_paths(
+        file_path
+        for file_path in file_paths
+        if any(_refresh_file_matches(file_path, root, name) for name in program_names)
+    )
+
+
+def _view_extensions(scanner: ProjectScanner) -> set[str]:
+    extensions: set[str] = set()
+    if "aspx" in scanner.parsers:
+        extensions.update({".aspx", ".ascx"})
+    if "razor" in scanner.parsers:
+        extensions.add(".cshtml")
+    if "vue" in scanner.parsers:
+        extensions.add(".vue")
+    return extensions
+
+
+def refresh_programs(root: Path, program_names: List[str]) -> ProgramRefreshResult:
+    """Refresh only files matching the requested programs in one scan root."""
+    requested = list(dict.fromkeys(name.strip() for name in program_names if name.strip()))
+    _require_current_program_cache(root)
+    scan = get_or_scan(root, refresh=False)
+
+    scanner = ProjectScanner(project_root=str(root))
+    current_csharp_files = _unique_refresh_paths(scanner.find_csharp_files())
+    cached_csharp_files = _unique_refresh_paths(
+        result.file_path for result in scan.csharp_results
+    )
+    current_targets = _select_refresh_files(current_csharp_files, root, requested)
+    cached_targets = _select_refresh_files(cached_csharp_files, root, requested)
+    current_keys = {path.casefold() for path in current_targets}
+    removed_csharp_files = [
+        path for path in cached_targets if path.casefold() not in current_keys
+    ]
+
+    view_extensions = _view_extensions(scanner)
+    current_view_files = _unique_refresh_paths(
+        scanner._find_files_by_extensions(view_extensions)
+        if view_extensions
+        else []
+    )
+    cached_view_files = _unique_refresh_paths(
+        result.file_path
+        for results in (
+            scan.aspx_results,
+            scan.razor_results,
+            scan.vue_results,
+        )
+        for result in results
+    )
+    current_view_targets = _select_refresh_files(current_view_files, root, requested)
+    cached_view_targets = _select_refresh_files(cached_view_files, root, requested)
+    current_view_keys = {path.casefold() for path in current_view_targets}
+    removed_view_files = [
+        path for path in cached_view_targets if path.casefold() not in current_view_keys
+    ]
+
+    matched_programs = [
+        name
+        for name in requested
+        if any(
+            _refresh_file_matches(file_path, root, name)
+            for file_path in [
+                *current_targets,
+                *removed_csharp_files,
+                *current_view_targets,
+                *removed_view_files,
+            ]
+        )
+    ]
+    not_found = [name for name in requested if name not in matched_programs]
+    if not matched_programs:
+        return ProgramRefreshResult(scan=scan, not_found=not_found)
+
+    previous_csharp_count = len(cached_targets)
+    scanner.refresh_csharp_files(scan, current_targets, removed_csharp_files)
+    if current_view_targets or removed_view_files:
+        scanner.refresh_view_files(scan, current_view_targets, removed_view_files)
+
+    scan.total_files = max(
+        0,
+        scan.total_files - previous_csharp_count + len(current_targets),
+    )
+    scan.scanned_files = max(
+        0,
+        scan.scanned_files - previous_csharp_count + len(current_targets),
+    )
+    scan.failed_files = max(0, scan.total_files - scan.scanned_files)
+    scan.scan_time = datetime.now()
+    scan.calculate_statistics()
+    save_scan(root, scan)
+
+    updated_files = [
+        _relative_refresh_path(file_path, root)
+        for file_path in [*current_targets, *current_view_targets]
+    ]
+    removed_files = [
+        _relative_refresh_path(file_path, root)
+        for file_path in [*removed_csharp_files, *removed_view_files]
+    ]
+    return ProgramRefreshResult(
+        scan=scan,
+        updated_files=updated_files,
+        removed_files=removed_files,
+        matched_programs=matched_programs,
+        not_found=not_found,
+    )
+
+
+def refresh_source(source: dict, program_names: List[str] | None = None) -> dict:
+    """Pull source and refresh either the whole system or selected programs."""
     roots = resolve_scan_roots(source, refresh=True)
-    scans = [get_or_scan(r, refresh=True) for r in roots]
-    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
+    requested = list(
+        dict.fromkeys(name.strip() for name in (program_names or []) if name.strip())
+    )
     root = roots[0] if len(roots) == 1 else repo_dir(
         (source or {}).get("project", ""), (source or {}).get("repo", "")
     )
+
+    if not requested:
+        scans = [get_or_scan(r, refresh=True) for r in roots]
+        scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
+        scope = "system"
+        partial = False
+        updated_files: List[str] = []
+        removed_files: List[str] = []
+        matched_programs: List[str] = []
+        not_found: List[str] = []
+    else:
+        for refresh_root in roots:
+            _require_current_program_cache(refresh_root)
+        partial_results = [refresh_programs(r, requested) for r in roots]
+        scans = []
+        updated_files = []
+        removed_files = []
+        matched_programs = []
+        not_found = list(requested)
+        full_fallback = False
+        for result in partial_results:
+            if isinstance(result, ProgramRefreshResult):
+                scans.append(result.scan)
+                updated_files.extend(result.updated_files)
+                removed_files.extend(result.removed_files)
+                matched_programs.extend(result.matched_programs)
+                not_found = [name for name in not_found if name in result.not_found]
+                full_fallback = full_fallback or result.full_refresh
+            else:
+                scans.append(result)
+                matched_programs.extend(requested)
+                not_found = []
+        scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
+        scope = "system" if full_fallback else "program"
+        partial = not full_fallback
+        matched_programs = list(dict.fromkeys(matched_programs))
+        not_found = [name for name in requested if name not in matched_programs]
+
     database_invocation_count = len(scan.iter_formal_sp_invocations())
     inline_table_fact_count = len(scan.table_relations)
     return {
@@ -1596,6 +1868,13 @@ def refresh_source(source: dict) -> dict:
         "files": len(scan.csharp_results),
         "database_invocations": database_invocation_count,
         "inline_table_facts": inline_table_fact_count,
+        "scope": scope,
+        "partial": partial,
+        "requested_programs": requested,
+        "updated_programs": matched_programs,
+        "not_found": not_found,
+        "updated_files": list(dict.fromkeys(updated_files)),
+        "removed_files": list(dict.fromkeys(removed_files)),
         # Deprecated aliases retained for existing clients during migration.
         "sp_relations": database_invocation_count,
         "table_relations": inline_table_fact_count,

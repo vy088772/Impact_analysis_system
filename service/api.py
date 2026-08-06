@@ -102,7 +102,7 @@ def refresh(req: RefreshRequest) -> RefreshResponse:
         "path": req.source.path,
     }
     try:
-        result = analyze_service.refresh_source(source)
+        result = analyze_service.refresh_source(source, program_names=req.program_names)
         return RefreshResponse(**result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
