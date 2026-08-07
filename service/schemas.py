@@ -158,6 +158,36 @@ class RefreshResponse(BaseModel):
     table_relations: int = 0
 
 
+class WrapperContractAcceptanceRequest(BaseModel):
+    """Explicit preview/apply request for a reviewed external-wrapper proposal."""
+
+    proposal: Dict[str, Any] = Field(default_factory=dict)
+    operation: str = "preview"
+    apply: bool = False
+    system_id: str = ""
+    requested_selector: str = ""
+    scan_roots: List[str] = Field(default_factory=list)
+
+
+class WrapperContractAcceptanceResponse(BaseModel):
+    status: str = "preview"
+    valid: bool = False
+    contract: str = ""
+    reused: bool = False
+    reuse_reason: str = ""
+    registry_diff: Dict[str, Any] = Field(default_factory=dict)
+    catalog_diff: Dict[str, Any] = Field(default_factory=dict)
+    reclassification: Dict[str, Any] = Field(default_factory=dict)
+    applied: bool = False
+    written_files: List[str] = Field(default_factory=list)
+    git_commit: bool = False
+
+
+# Compatibility aliases for callers that use the longer resource name.
+ExternalWrapperContractAcceptanceRequest = WrapperContractAcceptanceRequest
+ExternalWrapperContractAcceptanceResponse = WrapperContractAcceptanceResponse
+
+
 class FindBySPRequest(BaseModel):
     """POST /find_by_sp 請求：反查「哪些程式呼叫了這支 SP」（純快取比對，不觸發 clone）。
 

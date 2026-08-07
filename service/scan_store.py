@@ -119,6 +119,17 @@ def has_cache(root: Path) -> bool:
     return _load(root) is not None
 
 
+def load_cached(root: Path) -> Optional[ProjectScanResult]:
+    """Load a current scan cache without ever starting a new scan."""
+    key = str(root.resolve())
+    if key in _mem_cache:
+        return _mem_cache[key]
+    cached = _load(root)
+    if cached is not None:
+        _mem_cache[key] = cached
+    return cached
+
+
 def cache_status(root: Path) -> str:
     """Return whether a scan cache is current, stale, missing, or invalid."""
     pkl, meta = _paths(root)

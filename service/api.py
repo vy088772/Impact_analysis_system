@@ -16,6 +16,8 @@
                         覆寫本機 SQL 快取）
     GET  /refresh_sql/status/{job_id} → RefreshSqlProgressResponse（查詢 SQL
                         refresh 的即時階段與計數）
+    POST /wrapper_contracts/accept → WrapperContractAcceptanceResponse（reviewed
+                         proposal 的 preview 或明確 apply）
     POST /find_by_sp  → FindBySPResponse（反查哪些程式呼叫了指定 SP，純比對已
                         快取的掃描結果；cache_only=True 時不觸發 clone）
     POST /find_by_table → FindByTableResponse（反查哪些程式存取了指定資料表，
@@ -37,6 +39,8 @@ from .schemas import (
     AnalyzeResponse,
     RefreshRequest,
     RefreshResponse,
+    WrapperContractAcceptanceRequest,
+    WrapperContractAcceptanceResponse,
     RefreshSqlRequest,
     RefreshSqlResponse,
     RefreshSqlProgressResponse,
@@ -49,7 +53,7 @@ from .schemas import (
     PathEvidenceRequest,
     PathEvidenceResponse,
 )
-from . import analyze_service, refresh_progress
+from . import analyze_service, contract_acceptance, refresh_progress
 
 app = FastAPI(
     title="Impact Analysis Service",
@@ -111,6 +115,47 @@ def refresh(req: RefreshRequest) -> RefreshResponse:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"更新失敗：{exc}")
+
+
+
+@app.post(
+    "/wrapper_contracts/accept",
+    response_model=WrapperContractAcceptanceResponse,
+)
+def accept_wrapper_contract(
+    req: WrapperContractAcceptanceRequest,
+) -> WrapperContractAcceptanceResponse:
+    """Preview or explicitly apply one reviewed external-wrapper proposal."""
+    operation = req.operation.strip().casefold() or "preview"
+    if operation not in {"preview", "apply"}:
+        raise HTTPException(status_code=400, detail="operation 必須是 preview 或 apply")
+    if req.apply and operation != "apply":
+        raise HTTPException(
+            status_code=400,
+            detail="apply=true 必須搭配 operation=apply",
+        )
+    apply = operation == "apply"
+    kwargs = {
+        "system_id": req.system_id,
+        "requested_selector": req.requested_selector,
+        "scan_roots": req.scan_roots,
+        "apply": apply,
+    }
+    try:
+        result = contract_acceptance.accept_external_wrapper_contract(
+            req.proposal,
+            **kwargs,
+        )
+        return WrapperContractAcceptanceResponse(**result)
+    except contract_acceptance.ContractAcceptanceError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": str(exc), "details": list(exc.details)},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"contract acceptance 失敗：{exc}") from exc
 
 
 @app.post("/find_by_sp", response_model=FindBySPResponse)

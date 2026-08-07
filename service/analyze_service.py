@@ -17,7 +17,7 @@ import os
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
@@ -1788,6 +1788,7 @@ def reconcile_refresh_wrappers(
     scans: Iterable[ProjectScanResult],
     *,
     explicit_contract: str = "",
+    contract_registry: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, object]:
     """Reconcile raw wrapper facts from already completed source scans.
 
@@ -1803,7 +1804,11 @@ def reconcile_refresh_wrappers(
     for scan in scans:
         root = Path(scan.project_root)
         catalog = SpCatalog.from_databases({})
-        external_wrapper_contract = load_external_wrapper_contract(normalized_contract)
+        external_wrapper_contract = (
+            load_external_wrapper_contract(normalized_contract)
+            if contract_registry is None
+            else None
+        )
         wrapper_calls = 0
         root_observation_keys: set[tuple] = set()
         raw_by_file = getattr(scan, "db_invocations", {}) or {}
@@ -1818,6 +1823,7 @@ def reconcile_refresh_wrappers(
                     "",
                 ),
                 external_wrapper_contract=external_wrapper_contract,
+                external_wrapper_contracts=contract_registry,
             )
             records = raw_by_file.get(source_file, []) or []
             for record in records:

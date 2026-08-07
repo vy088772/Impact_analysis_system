@@ -134,7 +134,13 @@ def _load_external_wrapper_contracts() -> Dict[str, Dict[str, Any]]:
     except (OSError, json.JSONDecodeError):
         return {}
 
-    contracts = payload.get("contracts", {})
+    return _normalize_external_wrapper_contract_registry(payload)
+
+
+def _normalize_external_wrapper_contract_registry(
+    registry: Mapping[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    contracts = registry.get("contracts", registry)
     if not isinstance(contracts, dict):
         return {}
     loaded_contracts: Dict[str, Dict[str, Any]] = {}
@@ -317,11 +323,49 @@ class CSharpAnalysisGateway:
         catalog: SpCatalog,
         connection_sources: Optional[Dict[str, str]] = None,
         external_wrapper_contract: Optional[Mapping[str, Any]] = None,
+        external_wrapper_contracts: Optional[Mapping[str, Any]] = None,
     ):
         self._catalog = catalog
         self._connection_sources = connection_sources or {}
         self._external_wrapper_contract = dict(external_wrapper_contract or {})
         self._wrapper_contract_name = str(self._external_wrapper_contract.get("name") or "")
+        self._external_wrapper_contracts = (
+            None
+            if external_wrapper_contracts is None
+            else _normalize_external_wrapper_contract_registry(external_wrapper_contracts)
+        )
+
+    def _load_contract(self, contract_name: str) -> Optional[Dict[str, Any]]:
+        if self._external_wrapper_contracts is None:
+            return load_external_wrapper_contract(contract_name)
+        normalized_name = str(contract_name or "").strip().casefold()
+        if not normalized_name:
+            return None
+        return next(
+            (
+                contract
+                for name, contract in self._external_wrapper_contracts.items()
+                if name.casefold() == normalized_name
+            ),
+            None,
+        )
+
+    def _contract_candidates(self, receiver_type: str) -> List[Dict[str, Any]]:
+        if self._external_wrapper_contracts is None:
+            return external_wrapper_contract_candidates(receiver_type)
+        normalized_receiver = str(receiver_type or "").strip().split(".")[-1].casefold()
+        if not normalized_receiver:
+            return []
+        return [
+            contract
+            for contract in self._external_wrapper_contracts.values()
+            if contract.get("auto_select") is True
+            and isinstance(contract.get("receiver_types", []), list)
+            and any(
+                normalized_receiver == str(candidate).split(".")[-1].casefold()
+                for candidate in contract.get("receiver_types", [])
+            )
+        ]
 
     def reconcile_wrapper(
         self,
@@ -417,7 +461,7 @@ class CSharpAnalysisGateway:
         elif isinstance(explicit_contract, str):
             explicit_name = explicit_contract.strip()
             explicit_selected = bool(explicit_name)
-            selected_contract = load_external_wrapper_contract(explicit_name)
+            selected_contract = self._load_contract(explicit_name)
         elif isinstance(explicit_contract, Mapping):
             selected_contract = explicit_contract
             explicit_name = str(explicit_contract.get("name") or "").strip()
@@ -444,7 +488,7 @@ class CSharpAnalysisGateway:
             ]
             selection_source = "explicit"
         elif receiver_type_contract_candidates is None:
-            candidates = list(external_wrapper_contract_candidates(receiver_type))
+            candidates = list(self._contract_candidates(receiver_type))
             selection_source = "auto_receiver_type"
         else:
             candidates = [
