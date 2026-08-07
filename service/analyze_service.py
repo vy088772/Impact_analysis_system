@@ -1696,6 +1696,25 @@ def _unique_refresh_paths(file_paths: Iterable[str]) -> List[str]:
     return list(unique.values())
 
 
+def _cached_csharp_files(scan: ProjectScanResult, root: Path) -> List[str]:
+    """Return every C# path represented by the current cache snapshot.
+
+    Raw analyzer facts can outlive a failed parser result, so stale-file
+    reconciliation must not rely on ``csharp_results`` alone.
+    """
+    cached_paths: List[str] = [
+        result.file_path
+        for result in scan.csharp_results
+    ]
+    cached_paths.extend(str(path) for path in getattr(scan, "db_invocations", {}))
+    cached_paths.extend(str(path) for path in getattr(scan, "connection_sources", {}))
+    cached_paths.extend(
+        str(Path(root) / str(snapshot.relative_path).replace("/", os.sep))
+        for snapshot in getattr(scan, "source_snapshots", {}).values()
+    )
+    return _unique_refresh_paths(cached_paths)
+
+
 def _relative_refresh_path(file_path: str, root: Path) -> str:
     try:
         return Path(file_path).resolve().relative_to(root.resolve()).as_posix()
@@ -2066,9 +2085,7 @@ def refresh_programs(root: Path, program_names: List[str]) -> ProgramRefreshResu
 
     scanner = ProjectScanner(project_root=str(root))
     current_csharp_files = _unique_refresh_paths(scanner.find_csharp_files())
-    cached_csharp_files = _unique_refresh_paths(
-        result.file_path for result in scan.csharp_results
-    )
+    cached_csharp_files = _cached_csharp_files(scan, root)
     current_targets = _select_refresh_files(current_csharp_files, root, requested)
     cached_targets = _select_refresh_files(cached_csharp_files, root, requested)
     current_keys = {path.casefold() for path in current_targets}

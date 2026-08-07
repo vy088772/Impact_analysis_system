@@ -87,6 +87,41 @@ def test_refresh_source_rejects_stale_root_before_partial_updates(monkeypatch, t
     assert refresh_calls == []
 
 
+def test_refresh_source_rejects_missing_root_before_partial_updates(monkeypatch, tmp_path) -> None:
+    roots = [tmp_path / "TTPUR", tmp_path / "ATV"]
+    refresh_calls: list[Path] = []
+
+    monkeypatch.setattr(
+        analyze_service,
+        "resolve_scan_roots",
+        lambda source, refresh=False: roots,
+    )
+    monkeypatch.setattr(
+        analyze_service,
+        "cache_status",
+        lambda root: "current" if root == roots[0] else "missing",
+    )
+    monkeypatch.setattr(
+        analyze_service,
+        "refresh_programs",
+        lambda root, program_names: refresh_calls.append(root),
+    )
+
+    try:
+        analyze_service.refresh_source(
+            {"project": "p", "repo": "r", "path": ["TTPUR", "ATV"]},
+            program_names=["PUR_MasterEdit"],
+        )
+    except analyze_service.ProgramRefreshCacheError as exc:
+        assert exc.root == roots[1]
+        assert exc.status == "missing"
+        assert exc.code == "program_refresh_requires_current_cache"
+    else:
+        raise AssertionError("missing roots must be rejected before partial updates")
+
+    assert refresh_calls == []
+
+
 def test_refresh_programs_replaces_selected_cache_records_only(monkeypatch, tmp_path) -> None:
     root = tmp_path / "TTPUR"
     selected_file = root / "Evaluate" / "PUR_MasterEdit.aspx.cs"
@@ -153,6 +188,52 @@ def test_refresh_programs_replaces_selected_cache_records_only(monkeypatch, tmp_
     assert replacement_calls == [([str(selected_file.resolve())], [])]
     assert scan.csharp_results == [selected_result, untouched_result]
     assert save_calls == [scan]
+
+
+def test_refresh_programs_removes_deleted_orphaned_wrapper_facts(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "TTPUR"
+    untouched_file = root / "Evaluate" / "PUR_SOQry.aspx.cs"
+    deleted_file = root / "Evaluate" / "PUR_MasterEdit.aspx.cs"
+    untouched_file.parent.mkdir(parents=True)
+    untouched_file.write_text("class Untouched {}", encoding="utf-8")
+
+    untouched_result = FileAnalysisResult(
+        file_path=str(untouched_file),
+        file_type=FileType.CSHARP,
+        framework=FrameworkType.WEBFORMS,
+    )
+    scan = ProjectScanResult(
+        project_root=str(root),
+        project_name="TTPUR",
+        scan_time=datetime.now(),
+        total_files=2,
+        scanned_files=2,
+        csharp_results=[untouched_result],
+        db_invocations={str(deleted_file.resolve()): [{"old": True}]},
+        connection_sources={str(deleted_file.resolve()): {"conn": "OldDb"}},
+    )
+    class FakeScanner(analyze_service.ProjectScanner):
+        def __init__(self, project_root: str):
+            assert Path(project_root) == root
+            self.project_root = str(root)
+            self.parsers = {}
+
+        def find_csharp_files(self) -> list[str]:
+            return [str(untouched_file)]
+
+        def _find_files_by_extensions(self, extensions: set[str]) -> list[str]:
+            return []
+
+    monkeypatch.setattr(analyze_service, "cache_status", lambda scan_root: "current")
+    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "ProjectScanner", FakeScanner)
+    monkeypatch.setattr(analyze_service, "save_scan", lambda scan_root, result: None)
+
+    result = analyze_service.refresh_programs(root, ["Evaluate/PUR_MasterEdit.aspx"])
+
+    assert result.removed_files == ["Evaluate/PUR_MasterEdit.aspx.cs"]
+    assert str(deleted_file.resolve()) not in scan.db_invocations
+    assert str(deleted_file.resolve()) not in scan.connection_sources
 
 
 def test_program_refresh_does_not_full_scan_when_cache_version_is_stale(
@@ -238,8 +319,14 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
         project_name="TTPUR",
         scan_time=datetime.now(),
         csharp_results=[old_selected, untouched],
-        db_invocations={str(selected_file.resolve()): [{"old": True}]},
-        connection_sources={str(selected_file.resolve()): {"conn": "OldDb"}},
+        db_invocations={
+            str(selected_file.resolve()): [{"old": True}],
+            str(untouched_file.resolve()): [{"untouched": True}],
+        },
+        connection_sources={
+            str(selected_file.resolve()): {"conn": "OldDb"},
+            str(untouched_file.resolve()): {"conn": "UntouchedDb"},
+        },
     )
 
     class FakeHost:
@@ -248,6 +335,7 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
 
         def analyze_csharp_files(self, input_paths, source_roots):
             assert input_paths == [selected_file]
+            assert source_roots == [root]
             return [
                 {
                     "source_id": hashlib.sha256(selected_file.read_bytes()).hexdigest(),
@@ -282,6 +370,8 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
     ]
     assert scan.db_invocations[str(selected_file.resolve())] == [{"new": True}]
     assert scan.connection_sources[str(selected_file.resolve())] == {"conn": "NewDb"}
+    assert scan.db_invocations[str(untouched_file.resolve())] == [{"untouched": True}]
+    assert scan.connection_sources[str(untouched_file.resolve())] == {"conn": "UntouchedDb"}
     assert scan.source_snapshots["PUR_MasterEdit.aspx.cs"].content == "class Selected { }"
     assert scan.source_snapshots.get("PUR_SOQry.aspx.cs") is None
 
@@ -473,6 +563,51 @@ def test_full_refresh_reconciles_raw_wrappers_once_without_sql(monkeypatch, tmp_
     assert observation["locations"][0]["database"] == "OrdersDb"
 
 
+def test_refresh_selector_does_not_prove_database_evidence(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "TTPUR"
+    source_file = root / "OrderPage.aspx.cs"
+    root.mkdir()
+    scan = ProjectScanResult(
+        project_root=str(root),
+        project_name="TTPUR",
+        scan_time=datetime.now(),
+        db_invocations={
+            str(source_file): [
+                {
+                    "invocation_kind": "source_wrapper",
+                    "class_name": "OrderPage",
+                    "method_name": "Save",
+                    "wrapper_method_name": "ExeProcNon",
+                    "wrapper_receiver_type": "SQLObject",
+                    "wrapper_source_available": False,
+                    "wrapper_mode": "stored_procedure",
+                    "command_text_kind": "literal",
+                    "command_text": "usp_SaveOrder",
+                    "connection_expression": "conn",
+                }
+            ]
+        },
+        connection_sources={str(source_file): {"conn": "OrdersDb"}},
+    )
+
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
+    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+
+    result = analyze_service.refresh_source(
+        {"project": "p", "repo": "r"},
+        wrapper_contract="sqlobject",
+    )
+
+    summary = result["wrapper_summary"]
+    observation = summary["observations"][0]
+    assert observation["status"] == "explicit_selected"
+    assert observation["selected_contract"] == "sqlobject"
+    assert observation["evidence_status"] == "unresolved"
+    assert observation["evidence_reason"] == "not_in_resolved_catalog"
+    assert summary["selected_contracts"] == ["sqlobject"]
+    assert summary["totals"]["evidence_unresolved"] == 1
+
+
 def test_refresh_reconciles_multi_root_wrappers_with_root_provenance(monkeypatch, tmp_path) -> None:
     roots = [tmp_path / "TTPUR", tmp_path / "ATV"]
     scans = {}
@@ -574,6 +709,112 @@ def test_partial_refresh_reconciles_selected_cache_without_full_scan(monkeypatch
     assert result["partial"] is True
     assert result["wrapper_summary"]["totals"]["wrapper_calls"] == 1
     assert result["wrapper_summary"]["observations"][0]["status"] == "unresolved_contract"
+
+
+def test_partial_refresh_keeps_wrapper_source_lookup_inside_each_root(monkeypatch, tmp_path) -> None:
+    roots = [tmp_path / "TTPUR", tmp_path / "ATV"]
+    scans: dict[Path, ProjectScanResult] = {}
+    scanners: dict[Path, object] = {}
+    analyzer_calls: list[tuple[Path, list[Path]]] = []
+
+    class FakeParser:
+        db_tracker = SimpleNamespace(connections={})
+
+        def parse_file(self, file_path: str) -> FileAnalysisResult:
+            return FileAnalysisResult(
+                file_path=file_path,
+                file_type=FileType.CSHARP,
+                framework=FrameworkType.WEBFORMS,
+            )
+
+    for index, root in enumerate(roots):
+        root.mkdir()
+        caller_file = root / "PUR_MasterEdit.aspx.cs"
+        caller_file.write_text("class Caller {}", encoding="utf-8")
+        if index == 0:
+            (root / "DbWrapper.cs").write_text("class DbWrapper {}", encoding="utf-8")
+
+        scan = ProjectScanResult(
+            project_root=str(root),
+            project_name=root.name,
+            scan_time=datetime.now(),
+            total_files=1,
+            scanned_files=1,
+            csharp_results=[
+                FileAnalysisResult(
+                    file_path=str(caller_file),
+                    file_type=FileType.CSHARP,
+                    framework=FrameworkType.WEBFORMS,
+                )
+            ],
+        )
+        scans[root] = scan
+
+        class FakeHost:
+            def ensure_ready(self) -> None:
+                return None
+
+            def analyze_csharp_files(
+                self,
+                input_paths,
+                source_roots,
+                selected_root=root,
+                selected_caller=caller_file,
+            ):
+                analyzer_calls.append((selected_root, list(source_roots)))
+                assert input_paths == [selected_caller]
+                assert source_roots == [selected_root]
+                has_local_wrapper = (selected_root / "DbWrapper.cs").exists()
+                return [
+                    {
+                        "source_id": hashlib.sha256(selected_caller.read_bytes()).hexdigest(),
+                        "methods": [],
+                        "db_invocations": [
+                            {
+                                "invocation_kind": "source_wrapper",
+                                "class_name": "Caller",
+                                "method_name": "Save",
+                                "wrapper_method_name": "Execute",
+                                "wrapper_receiver_type": "DbWrapper",
+                                "wrapper_source_available": has_local_wrapper,
+                                "wrapper_mode": "stored_procedure",
+                                "command_text_kind": "literal",
+                                "command_text": "usp_SaveOrder",
+                                "connection_expression": "conn",
+                                "line_number": 1,
+                                "start_offset": 0,
+                                "end_offset": 10,
+                            }
+                        ],
+                    }
+                ]
+
+        scanner = object.__new__(analyze_service.ProjectScanner)
+        scanner.project_root = str(root)
+        scanner.scan_result = None
+        scanner.csharp_parser = FakeParser()
+        scanner.static_analyzer_host = FakeHost()
+        scanner.parsers = {}
+        scanners[root] = scanner
+
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: roots)
+    monkeypatch.setattr(analyze_service, "cache_status", lambda scan_root: "current")
+    monkeypatch.setattr(analyze_service, "get_or_scan", lambda root, refresh=False: scans[root])
+    monkeypatch.setattr(analyze_service, "ProjectScanner", lambda project_root: scanners[Path(project_root)])
+    monkeypatch.setattr(analyze_service, "save_scan", lambda scan_root, result: None)
+
+    result = analyze_service.refresh_source(
+        {"project": "p", "repo": "r", "path": ["TTPUR", "ATV"]},
+        program_names=["PUR_MasterEdit.aspx"],
+    )
+
+    assert analyzer_calls == [(roots[0], [roots[0]]), (roots[1], [roots[1]])]
+    observations = {
+        observation["scan_root"]: observation
+        for observation in result["wrapper_summary"]["observations"]
+    }
+    assert observations[str(roots[0])]["status"] == "source_wrapper"
+    assert observations[str(roots[1])]["status"] == "unresolved_contract"
 
 
 def test_refresh_does_not_write_wrapper_registry_or_system_catalog(monkeypatch, tmp_path) -> None:
