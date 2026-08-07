@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from typing import List, Dict, Union
+from typing import Any, List, Dict, Union
 from pydantic import BaseModel, Field
 
 
@@ -135,6 +135,7 @@ class AnalyzeResponse(BaseModel):
 class RefreshRequest(BaseModel):
     """POST /refresh 請求：更新某系統的程式碼並重新解析。"""
     system: str = ""
+    wrapper_contract: str = ""                # 選用的外部 wrapper contract selector
     source: AzureSource = Field(default_factory=AzureSource)
     program_names: List[str] = Field(default_factory=list)
 
@@ -151,6 +152,7 @@ class RefreshResponse(BaseModel):
     not_found: List[str] = Field(default_factory=list)
     updated_files: List[str] = Field(default_factory=list)
     removed_files: List[str] = Field(default_factory=list)
+    wrapper_summary: Dict[str, Any] = Field(default_factory=dict)
     # Deprecated aliases retained for clients that have not migrated yet.
     sp_relations: int = 0
     table_relations: int = 0

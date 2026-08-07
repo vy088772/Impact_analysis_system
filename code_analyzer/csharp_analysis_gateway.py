@@ -542,11 +542,17 @@ class CSharpAnalysisGateway:
         raw_invocations: List[dict],
         *,
         scan_root: str = "",
+        explicit_contract: Optional[Mapping[str, Any] | str] = None,
     ) -> List[DbInvocation]:
         """Turn raw Roslyn direct-SqlClient facts into evidence-rated Database Invocations."""
         results: List[DbInvocation] = []
         for raw in raw_invocations:
-            invocation = self._resolve_one(relative_path, raw, scan_root=scan_root)
+            invocation = self._resolve_one(
+                relative_path,
+                raw,
+                scan_root=scan_root,
+                explicit_contract=explicit_contract,
+            )
             if invocation is not None:
                 results.append(invocation)
         return results
@@ -557,10 +563,16 @@ class CSharpAnalysisGateway:
         raw: dict,
         *,
         scan_root: str = "",
+        explicit_contract: Optional[Mapping[str, Any] | str] = None,
     ) -> Optional[DbInvocation]:
         invocation_kind = str(raw.get("invocation_kind") or "").casefold()
         if invocation_kind == "source_wrapper":
-            return self._resolve_wrapper_invocation(relative_path, raw, scan_root=scan_root)
+            return self._resolve_wrapper_invocation(
+                relative_path,
+                raw,
+                scan_root=scan_root,
+                explicit_contract=explicit_contract,
+            )
         if invocation_kind in {"dapper", "entity_framework", "entityframework", "ef"}:
             return self._resolve_adapter_invocation(relative_path, raw)
 
@@ -647,11 +659,13 @@ class CSharpAnalysisGateway:
         raw: dict,
         *,
         scan_root: str = "",
+        explicit_contract: Optional[Mapping[str, Any] | str] = None,
     ) -> Optional[DbInvocation]:
         reconciliation = self.reconcile_wrapper(
             relative_path,
             raw,
             scan_root=scan_root,
+            explicit_contract=explicit_contract,
         )
         mode = str(raw.get("wrapper_mode") or "").casefold()
         if mode == "inline_sql" or reconciliation.mode_reason == "inline_sql":

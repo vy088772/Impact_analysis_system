@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] The reconciliation boundary accepts raw invocation facts, source-wrapper availability, an optional explicit contract, receiver-type contract candidates, and the database-scoped SP Catalog.
-- [ ] Source-backed wrappers are classified separately from external wrappers and do not require an external contract when their implementation is available within the current scan root.
-- [ ] An explicit contract takes precedence over receiver-type auto-selection; unique auto-selection, ambiguous selection, unknown receiver types, missing methods, and receiver mismatches have distinct machine-readable statuses.
-- [ ] `inline_sql` methods are excluded from stored-procedure classification, and `call_site` methods require explicit stored-procedure mode at the call site.
-- [ ] Literal stored-procedure candidates retain the existing database Catalog validation and `proven`/`likely`/`unresolved` Evidence Status rules.
-- [ ] Every unresolved or ambiguous result retains receiver type, wrapper method, source span, scan root, candidate contracts, and an actionable unresolved reason.
-- [ ] `discover_external_wrappers` consumes the shared reconciliation boundary and produces equivalent classifications without defining duplicate matching logic.
-- [ ] Gateway-level tests cover the classification matrix through the highest existing analysis seam.
+- [x] The reconciliation boundary accepts raw invocation facts, source-wrapper availability, an optional explicit contract, receiver-type contract candidates, and the database-scoped SP Catalog.
+- [x] Source-backed wrappers are classified separately from external wrappers and do not require an external contract when their implementation is available within the current scan root.
+- [x] An explicit contract takes precedence over receiver-type auto-selection; unique auto-selection, ambiguous selection, unknown receiver types, missing methods, and receiver mismatches have distinct machine-readable statuses.
+- [x] `inline_sql` methods are excluded from stored-procedure classification, and `call_site` methods require explicit stored-procedure mode at the call site.
+- [x] Literal stored-procedure candidates retain the existing database Catalog validation and `proven`/`likely`/`unresolved` Evidence Status rules.
+- [x] Every unresolved or ambiguous result retains receiver type, wrapper method, source span, scan root, candidate contracts, and an actionable unresolved reason.
+- [x] `discover_external_wrappers` consumes the shared reconciliation boundary and produces equivalent classifications without defining duplicate matching logic.
+- [x] Gateway-level tests cover the classification matrix through the highest existing analysis seam.

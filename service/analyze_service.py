@@ -17,7 +17,7 @@ import os
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Mapping, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
@@ -516,7 +516,11 @@ def _rated_execution_invocations(
             external_wrapper_contract=external_wrapper_contract,
         )
         relative_path = _rel(file_result.file_path, root)
-        for invocation in gateway.resolve_direct_invocations(relative_path, raw_invocations):
+        for invocation in gateway.resolve_direct_invocations(
+            relative_path,
+            raw_invocations,
+            explicit_contract=getattr(req, "wrapper_contract", "") or None,
+        ):
             method_chain = _merge_method_chains(
                 _method_chain_for_file(file_result, invocation.class_name, invocation.method_name),
                 invocation.method_chain,
@@ -1699,6 +1703,338 @@ def _relative_refresh_path(file_path: str, root: Path) -> str:
         return str(Path(file_path).resolve())
 
 
+def _is_refresh_wrapper_record(record: Mapping[str, object]) -> bool:
+    """Return whether a raw scan fact describes a wrapper observation."""
+    invocation_kind = str(record.get("invocation_kind") or "").casefold()
+    return invocation_kind == "source_wrapper" or bool(
+        str(record.get("wrapper_method_name") or "").strip()
+        or str(record.get("wrapper_receiver_type") or "").strip()
+    )
+
+
+def _refresh_wrapper_snapshot_hash(
+    scan: ProjectScanResult,
+    relative_path: str,
+) -> str:
+    normalized = str(relative_path).replace("\\", "/").casefold()
+    for path, snapshot in getattr(scan, "source_snapshots", {}).items():
+        if str(path).replace("\\", "/").casefold() == normalized:
+            return str(getattr(snapshot, "content_hash", "") or "")
+    return ""
+
+
+def _refresh_wrapper_location(
+    record: Mapping[str, object],
+    source_file: str,
+    relative_path: str,
+    snapshot_hash: str,
+    evidence: Optional[DbInvocation] = None,
+) -> Dict[str, object]:
+    command_text = record.get("command_text")
+    location: Dict[str, object] = {
+        "file": relative_path,
+        "line": int(record.get("line_number") or 0),
+        "start_offset": int(record.get("start_offset") or 0),
+        "end_offset": int(record.get("end_offset") or 0),
+        "command_text_kind": str(record.get("command_text_kind") or ""),
+        "command_text": str(command_text) if command_text is not None else "",
+        "wrapper_mode": str(record.get("wrapper_mode") or ""),
+        "source_file": str(source_file),
+        "source_snapshot_hash": snapshot_hash,
+    }
+    if evidence is None:
+        location.update(
+            {
+                "evidence_status": "not_applicable",
+                "evidence_reason": "inline_sql",
+                "procedure_name": "",
+                "database": "",
+                "database_candidates": [],
+            }
+        )
+    else:
+        location.update(
+            {
+                "evidence_status": evidence.evidence.value,
+                "evidence_reason": evidence.reason,
+                "procedure_name": evidence.procedure_name or "",
+                "database": evidence.database or "",
+                "database_candidates": list(evidence.database_candidates),
+            }
+        )
+    return location
+
+
+def reconcile_refresh_wrappers(
+    scans: Iterable[ProjectScanResult],
+    *,
+    explicit_contract: str = "",
+) -> Dict[str, object]:
+    """Reconcile raw wrapper facts from already completed source scans.
+
+    This function is intentionally source-only.  The wrapper boundary can report
+    contract classification and review gaps without loading a SQL cache or
+    opening a database connection.
+    """
+    observations_by_key: Dict[tuple, Dict[str, object]] = {}
+    scan_summaries: List[Dict[str, object]] = []
+    total_wrapper_calls = 0
+    normalized_contract = str(explicit_contract or "").strip()
+
+    for scan in scans:
+        root = Path(scan.project_root)
+        catalog = SpCatalog.from_databases({})
+        external_wrapper_contract = load_external_wrapper_contract(normalized_contract)
+        wrapper_calls = 0
+        root_observation_keys: set[tuple] = set()
+        raw_by_file = getattr(scan, "db_invocations", {}) or {}
+        for source_file in sorted(raw_by_file, key=lambda item: str(item).casefold()):
+            relative_path = _rel(str(source_file), root)
+            snapshot_hash = _refresh_wrapper_snapshot_hash(scan, relative_path)
+            gateway = CSharpAnalysisGateway(
+                catalog,
+                connection_sources=_execution_connection_sources(
+                    scan,
+                    str(source_file),
+                    "",
+                ),
+                external_wrapper_contract=external_wrapper_contract,
+            )
+            records = raw_by_file.get(source_file, []) or []
+            for record in records:
+                if not isinstance(record, Mapping) or not _is_refresh_wrapper_record(record):
+                    continue
+                wrapper_calls += 1
+                classification = gateway.reconcile_wrapper(
+                    relative_path,
+                    record,
+                    scan_root=str(root),
+                    explicit_contract=normalized_contract or None,
+                ).to_dict()
+                evidence_invocations = gateway.resolve_direct_invocations(
+                    relative_path,
+                    [dict(record)],
+                    scan_root=str(root),
+                    explicit_contract=normalized_contract or None,
+                )
+                evidence_invocation = evidence_invocations[0] if evidence_invocations else None
+                if evidence_invocation is not None:
+                    evidence_status = evidence_invocation.evidence.value
+                    evidence_reason = evidence_invocation.reason
+                else:
+                    evidence_status = "not_applicable"
+                    evidence_reason = "inline_sql"
+                wrapper_class = str(record.get("wrapper_class_name") or "").strip()
+                receiver_type = str(record.get("wrapper_receiver_type") or "").strip()
+                method_name = str(record.get("wrapper_method_name") or "").strip()
+                group_key = (
+                    classification["scan_root"],
+                    wrapper_class,
+                    receiver_type,
+                    method_name,
+                    classification["wrapper_kind"],
+                    classification["status"],
+                    classification["contract"],
+                    classification["selection_source"],
+                    classification["reason"],
+                    evidence_status,
+                    evidence_reason,
+                )
+                root_observation_keys.add(group_key)
+                group = observations_by_key.get(group_key)
+                if group is None:
+                    reason = str(classification["reason"] or "")
+                    group = {
+                        "wrapper_class": wrapper_class,
+                        "receiver_type": receiver_type,
+                        "wrapper_method": method_name,
+                        "observed_methods": [method_name] if method_name else [],
+                        "methods": [method_name] if method_name else [],
+                        "wrapper_kind": classification["wrapper_kind"],
+                        "status": classification["status"],
+                        "classification_status": classification["status"],
+                        "evidence_status": evidence_status,
+                        "evidence_reason": evidence_reason,
+                        "contract": classification["contract"],
+                        "selected_contract": classification["contract"],
+                        "contract_mode": classification["contract_mode"],
+                        "contract_sink": classification["contract_sink"],
+                        "selection_source": classification["selection_source"],
+                        "candidate_contracts": classification["candidate_contracts"],
+                        "candidate_contract_names": classification["candidate_contracts"],
+                        "source_available": classification["source_available"],
+                        "source_provenance": {
+                            "selection_source": classification["selection_source"],
+                            "source_available": classification["source_available"],
+                            "scan_root": classification["scan_root"],
+                            "source_span": classification["source_span"],
+                            "source_snapshot_hash": snapshot_hash,
+                        },
+                        "scan_root": classification["scan_root"],
+                        "source_span": classification["source_span"],
+                        "reason": reason,
+                        "review_candidate": classification["review_candidate"],
+                        "review_reasons": [reason] if reason else [],
+                        "stored_procedure_mode": classification["stored_procedure_mode"],
+                        "mode_reason": classification["mode_reason"],
+                        "calls": 0,
+                        "locations": [],
+                    }
+                    observations_by_key[group_key] = group
+                group["calls"] = int(group["calls"]) + 1
+                locations = group["locations"]
+                assert isinstance(locations, list)
+                locations.append(
+                    _refresh_wrapper_location(
+                        record,
+                        str(source_file),
+                        relative_path,
+                        snapshot_hash,
+                        evidence_invocation,
+                    )
+                )
+
+        total_wrapper_calls += wrapper_calls
+        scan_summaries.append(
+            {
+                "root": str(root),
+                "cache": True,
+                "wrapper_calls": wrapper_calls,
+                "observation_groups": len(root_observation_keys),
+                "groups": len(root_observation_keys),
+            }
+        )
+
+    observations = sorted(
+        observations_by_key.values(),
+        key=lambda item: (
+            str(item["scan_root"]).casefold(),
+            str(item["receiver_type"]).casefold(),
+            str(item["wrapper_method"]).casefold(),
+            str(item["status"]),
+        ),
+    )
+    observed_receiver_types = sorted(
+        {
+            str(item["receiver_type"])
+            for item in observations
+            if str(item["receiver_type"])
+        },
+        key=str.casefold,
+    )
+    observed_methods = sorted(
+        {
+            str(method)
+            for item in observations
+            for method in item["observed_methods"]
+            if str(method)
+        },
+        key=str.casefold,
+    )
+    selected_contracts = sorted(
+        {
+            str(item["selected_contract"])
+            for item in observations
+            if str(item["selected_contract"])
+        },
+        key=str.casefold,
+    )
+    selection_sources = sorted(
+        {
+            str(item["selection_source"])
+            for item in observations
+            if str(item["selection_source"])
+        },
+        key=str.casefold,
+    )
+    candidate_contracts = sorted(
+        {
+            str(candidate)
+            for item in observations
+            for candidate in item["candidate_contracts"]
+            if str(candidate)
+        },
+        key=str.casefold,
+    )
+    review_items = [item for item in observations if item["review_candidate"]]
+    review_reasons = sorted(
+        {
+            str(reason)
+            for item in observations
+            for reason in item["review_reasons"]
+            if str(reason)
+        },
+        key=str.casefold,
+    )
+    statuses = sorted(
+        {str(item["status"]) for item in observations if str(item["status"])},
+        key=str.casefold,
+    )
+    unresolved_statuses = {
+        "ambiguous_contract",
+        "unresolved_contract",
+        "unresolved_method",
+        "receiver_mismatch",
+    }
+    return {
+        "source_scan_count": len(scan_summaries),
+        "scans": scan_summaries,
+        "observed_receiver_types": observed_receiver_types,
+        "observed_methods": observed_methods,
+        "classification_statuses": statuses,
+        "evidence_statuses": sorted(
+            {
+                str(item["evidence_status"])
+                for item in observations
+                if str(item["evidence_status"])
+            },
+            key=str.casefold,
+        ),
+        "selected_contracts": selected_contracts,
+        "selection_sources": selection_sources,
+        "candidate_contracts": candidate_contracts,
+        "observations": observations,
+        "review_items": review_items,
+        "review_reasons": review_reasons,
+        "totals": {
+            "wrapper_calls": total_wrapper_calls,
+            "observation_groups": len(observations),
+            "source_wrappers": sum(
+                item["wrapper_kind"] == "source_wrapper" for item in observations
+            ),
+            "external_wrappers": sum(
+                item["wrapper_kind"] == "external_wrapper" for item in observations
+            ),
+            "auto_selected": sum(
+                item["status"] == "auto_selected" for item in observations
+            ),
+            "explicit_selected": sum(
+                item["status"] == "explicit_selected" for item in observations
+            ),
+            "unresolved": sum(
+                item["status"] in unresolved_statuses for item in observations
+            ),
+            "evidence_proven": sum(
+                item["evidence_status"] == InvocationEvidence.PROVEN.value
+                for item in observations
+            ),
+            "evidence_likely": sum(
+                item["evidence_status"] == InvocationEvidence.LIKELY.value
+                for item in observations
+            ),
+            "evidence_unresolved": sum(
+                item["evidence_status"] == InvocationEvidence.UNRESOLVED.value
+                for item in observations
+            ),
+            "evidence_not_applicable": sum(
+                item["evidence_status"] == "not_applicable"
+                for item in observations
+            ),
+            "review_candidates": len(review_items),
+        },
+    }
+
+
 def _select_refresh_files(
     file_paths: Iterable[str],
     root: Path,
@@ -1814,7 +2150,11 @@ def refresh_programs(root: Path, program_names: List[str]) -> ProgramRefreshResu
     )
 
 
-def refresh_source(source: dict, program_names: List[str] | None = None) -> dict:
+def refresh_source(
+    source: dict,
+    program_names: List[str] | None = None,
+    wrapper_contract: str = "",
+) -> dict:
     """Pull source and refresh either the whole system or selected programs."""
     roots = resolve_scan_roots(source, refresh=True)
     requested = list(
@@ -1861,6 +2201,10 @@ def refresh_source(source: dict, program_names: List[str] | None = None) -> dict
         matched_programs = list(dict.fromkeys(matched_programs))
         not_found = [name for name in requested if name not in matched_programs]
 
+    wrapper_summary = reconcile_refresh_wrappers(
+        scans,
+        explicit_contract=wrapper_contract,
+    )
     database_invocation_count = len(scan.iter_formal_sp_invocations())
     inline_table_fact_count = len(scan.table_relations)
     return {
@@ -1875,6 +2219,7 @@ def refresh_source(source: dict, program_names: List[str] | None = None) -> dict
         "not_found": not_found,
         "updated_files": list(dict.fromkeys(updated_files)),
         "removed_files": list(dict.fromkeys(removed_files)),
+        "wrapper_summary": wrapper_summary,
         # Deprecated aliases retained for existing clients during migration.
         "sp_relations": database_invocation_count,
         "table_relations": inline_table_fact_count,

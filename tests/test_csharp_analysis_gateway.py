@@ -225,6 +225,31 @@ def test_wrapper_reconciliation_boundary_keeps_ambiguity_and_mode_rules_machine_
     assert call_site.mode_reason == "call_site_requires_explicit_stored_procedure_mode"
 
 
+def test_direct_invocation_evidence_honors_explicit_contract_selector() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        wrapper_method_name="ExeProcNon",
+        wrapper_receiver_type="SQLObject",
+        wrapper_source_available=False,
+        wrapper_mode="stored_procedure",
+    )
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [raw],
+        explicit_contract="missing-contract",
+    )[0]
+
+    assert invocation.wrapper_status == "unresolved_contract"
+    assert invocation.wrapper_unresolved_reason == "configured_contract_not_found"
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "wrapper_source_unavailable"
+
+
 def test_resolved_invocation_retains_wrapper_reconciliation_provenance(tmp_path: Path) -> None:
     catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
     gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
