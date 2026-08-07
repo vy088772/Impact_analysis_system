@@ -1858,6 +1858,14 @@ def reconcile_refresh_wrappers(
                     classification["reason"],
                     evidence_status,
                     evidence_reason,
+                    (
+                        classification["source_span"]["relative_path"],
+                        classification["source_span"]["start_offset"],
+                        classification["source_span"]["end_offset"],
+                        snapshot_hash,
+                    )
+                    if classification["review_candidate"]
+                    else (),
                 )
                 root_observation_keys.add(group_key)
                 group = observations_by_key.get(group_key)
@@ -1867,6 +1875,7 @@ def reconcile_refresh_wrappers(
                         "wrapper_class": wrapper_class,
                         "receiver_type": receiver_type,
                         "wrapper_method": method_name,
+                        "observed_method": method_name,
                         "observed_methods": [method_name] if method_name else [],
                         "methods": [method_name] if method_name else [],
                         "wrapper_kind": classification["wrapper_kind"],
@@ -1888,11 +1897,16 @@ def reconcile_refresh_wrappers(
                             "scan_root": classification["scan_root"],
                             "source_span": classification["source_span"],
                             "source_snapshot_hash": snapshot_hash,
+                            "source_snapshot_identity": snapshot_hash,
                         },
                         "scan_root": classification["scan_root"],
                         "source_span": classification["source_span"],
+                        "source_snapshot_hash": snapshot_hash,
+                        "source_snapshot_identity": snapshot_hash,
                         "reason": reason,
+                        "unresolved_reason": reason,
                         "review_candidate": classification["review_candidate"],
+                        "active_contract": classification["active_contract"],
                         "review_reasons": [reason] if reason else [],
                         "stored_procedure_mode": classification["stored_procedure_mode"],
                         "mode_reason": classification["mode_reason"],

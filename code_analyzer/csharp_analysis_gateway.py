@@ -52,6 +52,11 @@ class WrapperReconciliation:
     stored_procedure_mode: bool = False
     mode_reason: str = ""
 
+    @property
+    def active_contract(self) -> bool:
+        """Whether this observation has approved contract semantics to use."""
+        return bool(self.contract and not self.review_candidate)
+
     def to_dict(self) -> Dict[str, Any]:
         """Return the machine-readable boundary shape used by audit consumers."""
         return {
@@ -64,6 +69,7 @@ class WrapperReconciliation:
             "candidate_contracts": list(self.candidate_contracts),
             "receiver_type": self.receiver_type,
             "wrapper_method": self.wrapper_method,
+            "observed_method": self.wrapper_method,
             "source_available": self.source_available,
             "scan_root": self.scan_root,
             "source_span": {
@@ -72,7 +78,9 @@ class WrapperReconciliation:
                 "end_offset": self.source_span.end_offset,
             },
             "reason": self.reason,
+            "unresolved_reason": self.reason,
             "review_candidate": self.review_candidate,
+            "active_contract": self.active_contract,
             "stored_procedure_mode": self.stored_procedure_mode,
             "mode_reason": self.mode_reason,
         }

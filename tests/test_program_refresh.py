@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from code_analyzer.models import FileAnalysisResult, FileType, FrameworkType
+from code_analyzer.models import FileAnalysisResult, FileType, FrameworkType, SourceSnapshot
 from code_analyzer.project_scanner import ProjectScanResult
 from service import analyze_service
 from service import scan_store
@@ -561,6 +561,89 @@ def test_full_refresh_reconciles_raw_wrappers_once_without_sql(monkeypatch, tmp_
     assert observation["locations"][0]["evidence_reason"] == "wrapper_source_unavailable"
     assert observation["locations"][0]["procedure_name"] == "usp_saveorder"
     assert observation["locations"][0]["database"] == "OrdersDb"
+
+
+def test_review_candidates_keep_each_source_snapshot_identity(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "TTPUR"
+    first_file = root / "FirstPage.aspx.cs"
+    second_file = root / "SecondPage.aspx.cs"
+    root.mkdir()
+    scan = ProjectScanResult(
+        project_root=str(root),
+        project_name="TTPUR",
+        scan_time=datetime.now(),
+        db_invocations={
+            str(first_file): [
+                {
+                    "invocation_kind": "source_wrapper",
+                    "class_name": "Page",
+                    "method_name": "Save",
+                    "wrapper_method_name": "Execute",
+                    "wrapper_receiver_type": "UnknownDbHelper",
+                    "wrapper_source_available": False,
+                    "wrapper_mode": "stored_procedure",
+                    "command_text_kind": "literal",
+                    "command_text": "usp_SaveOrder",
+                    "start_offset": 10,
+                    "end_offset": 20,
+                }
+            ],
+            str(second_file): [
+                {
+                    "invocation_kind": "source_wrapper",
+                    "class_name": "Page",
+                    "method_name": "Save",
+                    "wrapper_method_name": "Execute",
+                    "wrapper_receiver_type": "UnknownDbHelper",
+                    "wrapper_source_available": False,
+                    "wrapper_mode": "stored_procedure",
+                    "command_text_kind": "literal",
+                    "command_text": "usp_SaveOrder",
+                    "start_offset": 30,
+                    "end_offset": 40,
+                }
+            ],
+        },
+        source_snapshots={
+            "FirstPage.aspx.cs": SourceSnapshot(
+                relative_path="FirstPage.aspx.cs",
+                content_hash="snapshot-first",
+                content="class FirstPage {}",
+            ),
+            "SecondPage.aspx.cs": SourceSnapshot(
+                relative_path="SecondPage.aspx.cs",
+                content_hash="snapshot-second",
+                content="class SecondPage {}",
+            ),
+        },
+    )
+
+    monkeypatch.setattr(
+        analyze_service,
+        "resolve_scan_roots",
+        lambda source, refresh=False: [root],
+    )
+    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+
+    result = analyze_service.refresh_source({"project": "p", "repo": "r"})
+
+    review_items = result["wrapper_summary"]["review_items"]
+    assert len(review_items) == 2
+    by_path = {
+        item["source_span"]["relative_path"]: item
+        for item in review_items
+    }
+    assert by_path["FirstPage.aspx.cs"]["observed_method"] == "Execute"
+    assert by_path["FirstPage.aspx.cs"]["source_snapshot_hash"] == "snapshot-first"
+    assert by_path["FirstPage.aspx.cs"]["source_snapshot_identity"] == "snapshot-first"
+    assert by_path["FirstPage.aspx.cs"]["active_contract"] is False
+    assert by_path["FirstPage.aspx.cs"]["source_provenance"]["source_snapshot_hash"] == (
+        "snapshot-first"
+    )
+    assert by_path["SecondPage.aspx.cs"]["source_provenance"]["source_snapshot_hash"] == (
+        "snapshot-second"
+    )
+    assert all(item["unresolved_reason"] == "no_contract_matches_receiver_type" for item in review_items)
 
 
 def test_refresh_selector_does_not_prove_database_evidence(monkeypatch, tmp_path) -> None:

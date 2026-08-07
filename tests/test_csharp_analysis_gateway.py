@@ -72,6 +72,8 @@ def test_wrapper_reconciliation_boundary_classifies_contract_sources_and_review_
     assert source.status == "source_wrapper"
     assert source.selection_source == "source_code"
     assert source.contract == ""
+    assert source.review_candidate is False
+    assert source.active_contract is False
     assert source.stored_procedure_mode is True
     assert source.scan_root == source_root
     assert source.source_span.relative_path == "OrderPage.cs"
@@ -124,6 +126,7 @@ def test_wrapper_reconciliation_boundary_classifies_contract_sources_and_review_
     assert missing_method.status == "unresolved_method"
     assert missing_method.contract == "sqlobject"
     assert missing_method.review_candidate is True
+    assert missing_method.active_contract is False
     assert missing_method.reason == "method_not_in_contract"
 
     unknown_receiver = gateway.reconcile_wrapper(
@@ -142,6 +145,10 @@ def test_wrapper_reconciliation_boundary_classifies_contract_sources_and_review_
     assert unknown_receiver.receiver_type == "UnknownDbHelper"
     assert unknown_receiver.wrapper_method == "ExeProcNon"
     assert unknown_receiver.review_candidate is True
+    assert unknown_receiver.active_contract is False
+    unknown_payload = unknown_receiver.to_dict()
+    assert unknown_payload["observed_method"] == "ExeProcNon"
+    assert unknown_payload["unresolved_reason"] == "no_contract_matches_receiver_type"
 
     mismatched = gateway.reconcile_wrapper(
         "OrderPage.cs",
@@ -187,6 +194,7 @@ def test_wrapper_reconciliation_boundary_keeps_ambiguity_and_mode_rules_machine_
     assert ambiguous.status == "ambiguous_contract"
     assert ambiguous.candidate_contracts == ("sqlobject-v1", "sqlobject-v2")
     assert ambiguous.review_candidate is True
+    assert ambiguous.active_contract is False
     assert ambiguous.reason == "multiple_contracts_match_receiver_type"
 
     contract = _sqlobject_wrapper_contract()
@@ -223,6 +231,24 @@ def test_wrapper_reconciliation_boundary_keeps_ambiguity_and_mode_rules_machine_
     assert call_site.contract_mode == "call_site"
     assert call_site.stored_procedure_mode is False
     assert call_site.mode_reason == "call_site_requires_explicit_stored_procedure_mode"
+
+    ambiguous_invocation = gateway.resolve_direct_invocations(
+        "SqlObjectPage.cs",
+        [
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                wrapper_method_name="ExeProcNon",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_mode="stored_procedure",
+            )
+        ],
+    )[0]
+    assert ambiguous_invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert ambiguous_invocation.wrapper_review_candidate is True
+    assert ambiguous_invocation.wrapper_unresolved_reason == (
+        "multiple_contracts_match_receiver_type"
+    )
 
 
 def test_direct_invocation_evidence_honors_explicit_contract_selector() -> None:
