@@ -1,7 +1,6 @@
 """Focused tests for explicit external-wrapper contract acceptance."""
 
 from __future__ import annotations
-
 import json
 import sys
 from datetime import datetime
@@ -217,6 +216,15 @@ def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, 
             AssertionError("contract-only acceptance must not rescan C#")
         ),
     )
+    monkeypatch.setattr(
+        contract_acceptance_module.analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema: {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "procedures": [{"name": "dbo.usp_SaveOrder"}],
+        },
+    )
 
     result = reclassify_cached_scans(
         [root],
@@ -230,8 +238,9 @@ def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, 
                         "sink": "ExecuteReader",
                     }
                 },
-            }
+            },
         },
+        database="OrdersDb",
     )
 
     assert result["analyzer_calls"] == 0
@@ -241,7 +250,78 @@ def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, 
     observation = result["wrapper_summary"]["observations"][0]
     assert observation["status"] == "auto_selected"
     assert observation["contract"] == "orderhelper"
+    assert observation["evidence_status"] == "proven"
     assert scan.db_invocations[str(source_file)] == [raw]
+
+
+def test_registry_only_acceptance_keeps_database_evidence_unresolved(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "Orders"
+    source_file = root / "OrderPage.aspx.cs"
+    registry_path = tmp_path / "external_wrapper_contracts.json"
+    catalog_path = tmp_path / "system_catalog.json"
+    root.mkdir()
+    registry_path.write_text(json.dumps({"contracts": {}}), encoding="utf-8")
+    raw = {
+        "invocation_kind": "source_wrapper",
+        "class_name": "OrderPage",
+        "method_name": "Save",
+        "wrapper_method_name": "RunProc",
+        "wrapper_receiver_type": "OrderHelper",
+        "wrapper_source_available": False,
+        "wrapper_mode": "stored_procedure",
+        "command_text_kind": "literal",
+        "command_text": "usp_SaveOrder",
+        "connection_expression": "conn",
+        "start_offset": 10,
+        "end_offset": 30,
+    }
+    scan = ProjectScanResult(
+        project_root=str(root),
+        project_name="Orders",
+        scan_time=datetime.now(),
+        db_invocations={str(source_file): [raw]},
+        connection_sources={str(source_file): {"conn": "OrdersDb"}},
+    )
+    monkeypatch.setattr(scan_store_module, "cache_status", lambda _: "current")
+    monkeypatch.setattr(scan_store_module, "load_cached", lambda _: scan)
+    monkeypatch.setattr(
+        scan_store_module,
+        "get_or_scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("registry-only acceptance must not rescan C#")
+        ),
+    )
+    monkeypatch.setattr(
+        contract_acceptance_module.analyze_service.sql_cache_store,
+        "load_cached",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("registry-only acceptance has no database cache scope")
+        ),
+    )
+
+    result = accept_external_wrapper_contract(
+        {
+            "name": "orderhelper",
+            "receiver_types": ["OrderHelper"],
+            "methods": {
+                "RunProc": {
+                    "mode": "stored_procedure",
+                    "sink": "ExecuteReader",
+                }
+            },
+        },
+        registry_path=registry_path,
+        catalog_path=catalog_path,
+        scan_roots=[root],
+    )
+
+    assert result["status"] == "preview"
+    assert result["reclassification"]["analyzer_calls"] == 0
+    observation = result["reclassification"]["wrapper_summary"]["observations"][0]
+    assert observation["status"] == "auto_selected"
+    assert observation["evidence_status"] == "unresolved"
+    assert observation["evidence_reason"] == "not_in_resolved_catalog"
+    assert result["written_files"] == []
 
 
 def test_apply_writes_registry_and_requested_system_selector_without_commit(tmp_path) -> None:

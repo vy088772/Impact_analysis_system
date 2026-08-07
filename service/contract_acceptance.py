@@ -462,8 +462,14 @@ def reclassify_cached_scans(
     contract_registry: Mapping[str, Any],
     *,
     explicit_contract: str = "",
+    database: str = "",
 ) -> dict[str, Any]:
-    """Classify current cached raw facts without invoking a scanner."""
+    """Classify current cached raw facts without invoking a scanner.
+
+    ``database`` is the local SQL-cache key.  Registry-only acceptance may
+    omit it; that deliberately keeps database evidence unresolved rather than
+    selecting an unknown catalog.
+    """
     unique_roots: list[Path] = []
     seen: set[str] = set()
     for raw_root in scan_roots:
@@ -499,6 +505,7 @@ def reclassify_cached_scans(
         scans,
         explicit_contract=explicit_contract,
         contract_registry=contract_registry,
+        database=database,
     )
     after_identities = {
         str(scan.project_root): _scan_identity(scan)
@@ -572,6 +579,7 @@ def accept_external_wrapper_contract(
         scan_roots,
         after_registry["contracts"],
         explicit_contract=selector_contract_name,
+        database=normalized_system_id,
     )
 
     written_files: list[str] = []

@@ -252,12 +252,9 @@ def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
     return merged
 
 
-def _execution_path_context(
-    req: AnalyzeRequest,
-    scan: ProjectScanResult,
-) -> Tuple[SpCatalog, Dict, str]:
-    """Load the selected SQL graph and build its database-scoped SP catalog."""
-    database_alias = str(getattr(req, "database", "") or "")
+def _execution_sql_context(database_alias: str) -> Tuple[SpCatalog, Dict, str]:
+    """Load one SQL cache scope and build its graph-backed SP catalog."""
+    database_alias = str(database_alias or "").strip()
     cached = sql_cache_store.load_cached(database_alias, "dbo") if database_alias else None
     graph = dict((cached or {}).get("sql_execution_graph") or {})
     graph_database = str(
@@ -292,6 +289,12 @@ def _execution_path_context(
 
     schema = str((cached or {}).get("schema") or "dbo")
     return SpCatalog.from_databases(procedures_by_database, default_schema=schema), graph, graph_database
+
+
+def load_sp_catalog(database: str = "") -> SpCatalog:
+    """Return the read-only stored-procedure catalog for a SQL cache scope."""
+    catalog, _, _ = _execution_sql_context(database)
+    return catalog
 
 
 def _require_sql_execution_graph(database: str) -> Tuple[Dict, Dict]:
@@ -492,7 +495,9 @@ def _rated_execution_invocations(
     root: Path,
 ) -> Tuple[List[DbInvocation], Dict[str, object]]:
     """Rate raw C# facts once so path discovery and evidence use the same join."""
-    catalog, graph, graph_database = _execution_path_context(req, scan)
+    catalog, graph, graph_database = _execution_sql_context(
+        str(getattr(req, "database", "") or "")
+    )
     rated_invocations = []
     raw_by_file = getattr(scan, "db_invocations", {})
     external_wrapper_contract = load_external_wrapper_contract(
@@ -1828,21 +1833,23 @@ def reconcile_refresh_wrappers(
     *,
     explicit_contract: str = "",
     contract_registry: Optional[Mapping[str, Any]] = None,
+    database: str = "",
 ) -> Dict[str, object]:
     """Reconcile raw wrapper facts from already completed source scans.
 
-    This function is intentionally source-only.  The wrapper boundary can report
-    contract classification and review gaps without loading a SQL cache or
-    opening a database connection.
+    The wrapper boundary can report contract classification and review gaps
+    without opening a database connection.  When ``database`` identifies a
+    local SQL cache, its stored-procedure catalog is used for evidence rating;
+    an empty or unavailable scope keeps source-only evidence semantics.
     """
     observations_by_key: Dict[tuple, Dict[str, object]] = {}
     scan_summaries: List[Dict[str, object]] = []
     total_wrapper_calls = 0
     normalized_contract = str(explicit_contract or "").strip()
+    catalog = load_sp_catalog(database)
 
     for scan in scans:
         root = Path(scan.project_root)
-        catalog = SpCatalog.from_databases({})
         external_wrapper_contract = (
             load_external_wrapper_contract(normalized_contract)
             if contract_registry is None
@@ -2194,6 +2201,7 @@ def refresh_source(
     source: dict,
     program_names: List[str] | None = None,
     wrapper_contract: str = "",
+    database: str = "",
 ) -> dict:
     """Pull source and refresh either the whole system or selected programs."""
     roots = resolve_scan_roots(source, refresh=True)
@@ -2244,6 +2252,7 @@ def refresh_source(
     wrapper_summary = reconcile_refresh_wrappers(
         scans,
         explicit_contract=wrapper_contract,
+        database=database,
     )
     database_invocation_count = len(scan.iter_formal_sp_invocations())
     inline_table_fact_count = len(scan.table_relations)

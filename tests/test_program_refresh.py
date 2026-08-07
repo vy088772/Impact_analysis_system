@@ -382,9 +382,14 @@ def test_refresh_api_forwards_program_names(monkeypatch) -> None:
 
     observed: dict[str, object] = {}
 
-    def fake_refresh_source(source: dict, program_names: list[str]) -> dict:
+    def fake_refresh_source(
+        source: dict,
+        program_names: list[str],
+        database: str,
+    ) -> dict:
         observed["source"] = source
         observed["program_names"] = program_names
+        observed["database"] = database
         return {
             "scope": "program",
             "partial": True,
@@ -404,6 +409,7 @@ def test_refresh_api_forwards_program_names(monkeypatch) -> None:
     assert observed == {
         "source": {"project": "p", "repo": "r", "branch": "", "path": "TTPUR"},
         "program_names": ["PUR_MasterEdit"],
+        "database": "SYS",
     }
     assert response.scope == "program"
     assert response.partial is True
@@ -442,10 +448,12 @@ def test_refresh_api_forwards_wrapper_contract_and_serializes_summary(monkeypatc
         source: dict,
         program_names: list[str],
         wrapper_contract: str,
+        database: str,
     ) -> dict:
         observed["source"] = source
         observed["program_names"] = program_names
         observed["wrapper_contract"] = wrapper_contract
+        observed["database"] = database
         return {"scope": "system", "wrapper_summary": summary}
 
     monkeypatch.setattr(api.analyze_service, "refresh_source", fake_refresh_source)
@@ -459,6 +467,7 @@ def test_refresh_api_forwards_wrapper_contract_and_serializes_summary(monkeypatc
     )
 
     assert observed["wrapper_contract"] == "sqlobject"
+    assert observed["database"] == "SYS"
     assert response.wrapper_summary["observations"][0]["status"] == "unresolved_contract"
     assert response.wrapper_summary["observations"][0]["source_provenance"] == {
         "scan_root": "C:/scan/TTPUR"
@@ -918,3 +927,58 @@ def test_refresh_does_not_write_wrapper_registry_or_system_catalog(monkeypatch, 
     analyze_service.refresh_source({"project": "p", "repo": "r"})
 
     assert {path: path.read_bytes() for path in before} == before
+
+
+def test_refresh_reconciliation_uses_database_scoped_sp_catalog(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "Orders"
+    source_file = root / "OrderPage.aspx.cs"
+    root.mkdir()
+    scan = ProjectScanResult(
+        project_root=str(root),
+        project_name="Orders",
+        scan_time=datetime.now(),
+        total_files=1,
+        scanned_files=1,
+        db_invocations={
+            str(source_file): [
+                {
+                    "invocation_kind": "source_wrapper",
+                    "class_name": "OrderPage",
+                    "method_name": "Save",
+                    "wrapper_method_name": "ExeProcNon",
+                    "wrapper_receiver_type": "SQLObject",
+                    "wrapper_source_available": False,
+                    "wrapper_mode": "stored_procedure",
+                    "command_text_kind": "literal",
+                    "command_text": "usp_SaveOrder",
+                    "connection_expression": "conn",
+                    "line_number": 42,
+                    "start_offset": 100,
+                    "end_offset": 180,
+                }
+            ]
+        },
+        connection_sources={str(source_file): {"conn": "OrdersDb"}},
+    )
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
+    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema: {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "procedures": [{"name": "dbo.usp_SaveOrder"}],
+        },
+    )
+
+    result = analyze_service.refresh_source(
+        {"project": "p", "repo": "r"},
+        wrapper_contract="sqlobject",
+        database="OrdersDb",
+    )
+
+    observation = result["wrapper_summary"]["observations"][0]
+    assert observation["evidence_status"] == "proven"
+    assert observation["database"] == "OrdersDb"
+    assert observation["procedure_name"] == "usp_saveorder"

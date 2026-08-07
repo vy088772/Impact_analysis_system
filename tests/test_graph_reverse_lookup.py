@@ -247,6 +247,7 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
             program_names=["DirectPage"],
             include_snippets=False,
             fk_depth=0,
+            wrapper_contract="sqlobject",
         )
     )
     invocation = analyze_response.programs[0].database_invocations[0]
@@ -258,6 +259,7 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
             sp_name="dbo.usp_Direct",
             database="OrdersDb",
             cache_only=False,
+            wrapper_contract="sqlobject",
         )
     )
     table_response = analyze_service.find_by_table(
@@ -267,6 +269,7 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
             database="OrdersDb",
             cache_only=False,
             write_only=True,
+            wrapper_contract="sqlobject",
         )
     )
     flow_response = analyze_service.flow_chain(
@@ -276,6 +279,7 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
             table_name="dbo.SOrder",
             database="OrdersDb",
             cache_only=False,
+            wrapper_contract="sqlobject",
         )
     )
 

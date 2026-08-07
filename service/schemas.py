@@ -232,6 +232,7 @@ class FindBySPRequest(BaseModel):
     """
     source: AzureSource = Field(default_factory=AzureSource)
     sp_name: str                              # 要反查的 SP 名稱（不分大小寫比對）
+    wrapper_contract: str = ""                # 選用的外部 wrapper contract 名稱
     database: str = ""                        # SQL execution graph cache key，通常是 system_id
     cache_only: bool = True                   # True → repo 未 clone 過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
@@ -313,6 +314,7 @@ class FindByTableRequest(BaseModel):
     """
     source: AzureSource = Field(default_factory=AzureSource)
     table_name: str                           # 要反查的資料表名稱（可含或不含 schema 前綴，不分大小寫比對）
+    wrapper_contract: str = ""                # 選用的外部 wrapper contract 名稱
     cache_only: bool = True                   # True → repo 未 clone/分析過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
     database: str = ""                        # 選填：資料庫快取鍵（通常是 spec-rag 的 system_id）。
@@ -452,6 +454,7 @@ class FlowChainRequest(BaseModel):
     嘗試呼叫），不觸發 Azure clone。
     """
     source: AzureSource = Field(default_factory=AzureSource)
+    wrapper_contract: str = ""                # 選用的外部 wrapper contract 名稱
     direction: str = "forward"                # "forward" | "backward"
     program_name: str = ""                    # forward 用：要分析的程式名
     anchor_method: str = ""                   # forward 用：錨點方法名稱

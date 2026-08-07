@@ -29,7 +29,7 @@ from code_analyzer.csharp_analysis_gateway import (  # noqa: E402
     SpCatalog,
 )
 from config.settings import settings  # noqa: E402
-from service import repo_manager, scan_store  # noqa: E402
+from service import analyze_service, repo_manager, scan_store  # noqa: E402
 
 
 def _default_spec_rag_root() -> Path:
@@ -137,8 +137,9 @@ def _classify_wrapper(
     source_file: str = "",
     project_root: str = "",
     gateway: Optional[CSharpAnalysisGateway] = None,
+    database: str = "",
 ) -> Dict[str, Any]:
-    boundary = gateway or CSharpAnalysisGateway(SpCatalog.from_databases({}))
+    boundary = gateway or CSharpAnalysisGateway(analyze_service.load_sp_catalog(database))
     relative_path = _relative_path(source_file, project_root) if source_file else ""
     return boundary.reconcile_wrapper(
         relative_path,
@@ -220,6 +221,7 @@ def _scan_report(
     scan = scan_store.get_or_scan(root, refresh=False)
     groups: OrderedDict[tuple, Dict[str, Any]] = OrderedDict()
     wrapper_calls = 0
+    catalog = analyze_service.load_sp_catalog(system_id)
     connection_sources_by_file = getattr(scan, "connection_sources", {}) or {}
     source_snapshots = getattr(scan, "source_snapshots", {}) or {}
     for source_file, records in getattr(scan, "db_invocations", {}).items():
@@ -230,7 +232,7 @@ def _scan_report(
             or {}
         )
         gateway = CSharpAnalysisGateway(
-            SpCatalog.from_databases({}),
+            catalog,
             connection_sources=connection_sources,
         )
         for record in records or []:
