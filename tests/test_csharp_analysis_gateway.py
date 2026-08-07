@@ -51,6 +51,233 @@ def _sqlobject_wrapper_contract() -> dict:
     }
 
 
+def test_wrapper_reconciliation_boundary_classifies_contract_sources_and_review_gaps(tmp_path: Path) -> None:
+    """One gateway boundary exposes deterministic wrapper selection provenance."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    source_root = str(tmp_path)
+
+    source = gateway.reconcile_wrapper(
+        "OrderPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="Execute",
+            wrapper_receiver_type="LocalWrapper",
+            wrapper_source_available=True,
+            wrapper_mode="stored_procedure",
+        ),
+        scan_root=source_root,
+    )
+    assert source.wrapper_kind == "source_wrapper"
+    assert source.status == "source_wrapper"
+    assert source.selection_source == "source_code"
+    assert source.contract == ""
+    assert source.stored_procedure_mode is True
+    assert source.scan_root == source_root
+    assert source.source_span.relative_path == "OrderPage.cs"
+
+    explicit = gateway.reconcile_wrapper(
+        "OrderPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="ExeProcNon",
+            wrapper_receiver_type="SQLObject",
+            wrapper_source_available=False,
+            wrapper_mode="stored_procedure",
+        ),
+        scan_root=source_root,
+        explicit_contract=_sqlobject_wrapper_contract(),
+    )
+    assert explicit.status == "explicit_selected"
+    assert explicit.selection_source == "explicit"
+    assert explicit.contract == "sqlobject"
+    assert explicit.contract_mode == "stored_procedure"
+    assert explicit.contract_sink == "ExecuteNonQuery"
+    assert explicit.candidate_contracts == ("sqlobject",)
+
+    auto = gateway.reconcile_wrapper(
+        "OrderPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="ExeProcNon",
+            wrapper_receiver_type="SQLObject",
+            wrapper_source_available=False,
+            wrapper_mode="stored_procedure",
+        ),
+        scan_root=source_root,
+    )
+    assert auto.status == "auto_selected"
+    assert auto.selection_source == "auto_receiver_type"
+    assert auto.contract == "sqlobject"
+
+    missing_method = gateway.reconcile_wrapper(
+        "OrderPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="NewMethod",
+            wrapper_receiver_type="SQLObject",
+            wrapper_source_available=False,
+            wrapper_mode="stored_procedure",
+        ),
+        scan_root=source_root,
+    )
+    assert missing_method.status == "unresolved_method"
+    assert missing_method.contract == "sqlobject"
+    assert missing_method.review_candidate is True
+    assert missing_method.reason == "method_not_in_contract"
+
+    unknown_receiver = gateway.reconcile_wrapper(
+        "OrderPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="ExeProcNon",
+            wrapper_receiver_type="UnknownDbHelper",
+            wrapper_source_available=False,
+            wrapper_mode="stored_procedure",
+        ),
+        scan_root=source_root,
+    )
+    assert unknown_receiver.status == "unresolved_contract"
+    assert unknown_receiver.reason == "no_contract_matches_receiver_type"
+    assert unknown_receiver.receiver_type == "UnknownDbHelper"
+    assert unknown_receiver.wrapper_method == "ExeProcNon"
+    assert unknown_receiver.review_candidate is True
+
+    mismatched = gateway.reconcile_wrapper(
+        "OrderPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="ExeProcNon",
+            wrapper_receiver_type="OtherDbObject",
+            wrapper_source_available=False,
+            wrapper_mode="stored_procedure",
+        ),
+        scan_root=source_root,
+        explicit_contract=_sqlobject_wrapper_contract(),
+    )
+    assert mismatched.status == "receiver_mismatch"
+    assert mismatched.reason == "receiver_type_does_not_match_contract"
+    assert mismatched.candidate_contracts == ("sqlobject",)
+
+
+def test_wrapper_reconciliation_boundary_keeps_ambiguity_and_mode_rules_machine_readable(
+    monkeypatch,
+) -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    monkeypatch.setattr(
+        gateway_module,
+        "external_wrapper_contract_candidates",
+        lambda _receiver_type: [
+            {"name": "sqlobject-v1", "receiver_types": ["SQLObject"]},
+            {"name": "sqlobject-v2", "receiver_types": ["SQLObject"]},
+        ],
+    )
+
+    ambiguous = gateway.reconcile_wrapper(
+        "SqlObjectPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="ExeProcNon",
+            wrapper_receiver_type="SQLObject",
+            wrapper_source_available=False,
+            wrapper_mode="stored_procedure",
+        ),
+    )
+    assert ambiguous.status == "ambiguous_contract"
+    assert ambiguous.candidate_contracts == ("sqlobject-v1", "sqlobject-v2")
+    assert ambiguous.review_candidate is True
+    assert ambiguous.reason == "multiple_contracts_match_receiver_type"
+
+    contract = _sqlobject_wrapper_contract()
+    inline = gateway.reconcile_wrapper(
+        "SqlObjectPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="CreateReader",
+            wrapper_receiver_type="SQLObject",
+            wrapper_source_available=False,
+            wrapper_mode="inline_sql",
+            command_type_stored_procedure=False,
+            command_text="SELECT * FROM SOrder",
+        ),
+        explicit_contract=contract,
+    )
+    assert inline.status == "explicit_selected"
+    assert inline.contract_mode == "inline_sql"
+    assert inline.stored_procedure_mode is False
+    assert inline.mode_reason == "inline_sql"
+
+    call_site = gateway.reconcile_wrapper(
+        "SqlObjectPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="CreateTable",
+            wrapper_receiver_type="SQLObject",
+            wrapper_source_available=False,
+            wrapper_mode="unknown",
+        ),
+        explicit_contract=contract,
+    )
+    assert call_site.status == "explicit_selected"
+    assert call_site.contract_mode == "call_site"
+    assert call_site.stored_procedure_mode is False
+    assert call_site.mode_reason == "call_site_requires_explicit_stored_procedure_mode"
+
+
+def test_resolved_invocation_retains_wrapper_reconciliation_provenance(tmp_path: Path) -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    proven = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                wrapper_method_name="ExeProcNon",
+                wrapper_receiver_type="SQLObject",
+                wrapper_source_available=False,
+                wrapper_mode="stored_procedure",
+                command_text="usp_SaveOrder",
+            )
+        ],
+        scan_root=str(tmp_path),
+    )[0]
+    assert proven.evidence is InvocationEvidence.PROVEN
+    assert proven.wrapper_kind == "external_wrapper"
+    assert proven.wrapper_status == "auto_selected"
+    assert proven.wrapper_classification_status == "auto_selected"
+    assert proven.wrapper_selection_source == "auto_receiver_type"
+    assert proven.wrapper_contract == "sqlobject"
+    assert proven.wrapper_contract_mode == "stored_procedure"
+    assert proven.wrapper_contract_sink == "ExecuteNonQuery"
+    assert proven.wrapper_scan_root == str(tmp_path)
+    assert proven.wrapper_receiver_type == "SQLObject"
+    assert proven.wrapper_method == "ExeProcNon"
+    assert proven.external_wrapper_method == "ExeProcNon"
+
+    unresolved = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                invocation_kind="source_wrapper",
+                wrapper_method_name="ExeProcNon",
+                wrapper_receiver_type="UnknownDbHelper",
+                wrapper_source_available=False,
+                wrapper_mode="stored_procedure",
+            )
+        ],
+        scan_root=str(tmp_path),
+    )[0]
+    assert unresolved.evidence is InvocationEvidence.UNRESOLVED
+    assert unresolved.wrapper_status == "unresolved_contract"
+    assert unresolved.wrapper_unresolved_reason == "no_contract_matches_receiver_type"
+    assert unresolved.wrapper_scan_root == str(tmp_path)
+    assert unresolved.wrapper_receiver_type == "UnknownDbHelper"
+    assert unresolved.wrapper_method == "ExeProcNon"
+    assert unresolved.external_wrapper_method == "ExeProcNon"
+
+
 def test_normalize_procedure_name_strips_schema_and_brackets() -> None:
     """Only the bare, case-insensitive procedure name is used for catalog matching."""
     assert normalize_procedure_name("usp_SO_Delete") == "usp_so_delete"

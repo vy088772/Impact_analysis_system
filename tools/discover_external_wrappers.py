@@ -25,8 +25,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from code_analyzer.csharp_analysis_gateway import (  # noqa: E402
-    external_wrapper_contract_candidates,
-    load_external_wrapper_contract,
+    CSharpAnalysisGateway,
+    SpCatalog,
 )
 from config.settings import settings  # noqa: E402
 from service import repo_manager, scan_store  # noqa: E402
@@ -130,134 +130,22 @@ def _relative_path(source_file: str, project_root: str) -> str:
         return path.as_posix()
 
 
-def _method_contract(
-    contract: Optional[Mapping[str, Any]],
-    method_name: str,
-) -> Optional[Mapping[str, Any]]:
-    if contract is None:
-        return None
-    methods = contract.get("methods", {})
-    if not isinstance(methods, Mapping):
-        return None
-    folded_name = method_name.casefold()
-    for name, value in methods.items():
-        if str(name).casefold() == folded_name and isinstance(value, Mapping):
-            return value
-    return None
-
-
-def _receiver_matches(contract: Mapping[str, Any], receiver_type: str) -> bool:
-    receiver_types = contract.get("receiver_types", [])
-    if not receiver_type or not isinstance(receiver_types, list):
-        return True
-    normalized = receiver_type.split(".")[-1].casefold()
-    return any(
-        normalized == str(candidate).split(".")[-1].casefold()
-        for candidate in receiver_types
-    )
-
-
 def _classify_wrapper(
     record: Mapping[str, Any],
     configured_contract_name: str = "",
+    *,
+    source_file: str = "",
+    project_root: str = "",
+    gateway: Optional[CSharpAnalysisGateway] = None,
 ) -> Dict[str, Any]:
-    method_name = str(record.get("wrapper_method_name") or "").strip()
-    receiver_type = str(record.get("wrapper_receiver_type") or "").strip()
-    source_available = record.get("wrapper_source_available") is True
-
-    if source_available:
-        return {
-            "wrapper_kind": "source_wrapper",
-            "status": "source_wrapper",
-            "selection_source": "source_code",
-            "contract": "",
-            "contract_mode": str(record.get("wrapper_mode") or ""),
-            "contract_sink": "",
-            "candidate_contracts": [],
-            "reason": "",
-        }
-
-    configured_name = str(configured_contract_name or "").strip()
-    if configured_name:
-        configured = load_external_wrapper_contract(configured_name)
-        candidates = [configured] if configured is not None else []
-        selection_source = "system_catalog"
-        if configured is None:
-            return {
-                "wrapper_kind": "external_wrapper",
-                "status": "unresolved_contract",
-                "selection_source": selection_source,
-                "contract": "",
-                "contract_mode": "",
-                "contract_sink": "",
-                "candidate_contracts": [configured_name],
-                "reason": "configured_contract_not_found",
-            }
-    else:
-        candidates = external_wrapper_contract_candidates(receiver_type)
-        selection_source = "auto_receiver_type"
-
-    candidate_names = [str(contract.get("name") or "") for contract in candidates]
-    if len(candidates) > 1:
-        return {
-            "wrapper_kind": "external_wrapper",
-            "status": "ambiguous_contract",
-            "selection_source": "ambiguous_receiver_type",
-            "contract": "",
-            "contract_mode": "",
-            "contract_sink": "",
-            "candidate_contracts": candidate_names,
-            "reason": "multiple_contracts_match_receiver_type",
-        }
-    if not candidates:
-        return {
-            "wrapper_kind": "external_wrapper",
-            "status": "unresolved_contract",
-            "selection_source": "unresolved_receiver_type",
-            "contract": "",
-            "contract_mode": "",
-            "contract_sink": "",
-            "candidate_contracts": [],
-            "reason": "receiver_type_missing" if not receiver_type else "no_contract_matches_receiver_type",
-        }
-
-    contract = candidates[0]
-    contract_name = str(contract.get("name") or configured_name)
-    if not _receiver_matches(contract, receiver_type):
-        return {
-            "wrapper_kind": "external_wrapper",
-            "status": "receiver_mismatch",
-            "selection_source": selection_source,
-            "contract": contract_name,
-            "contract_mode": "",
-            "contract_sink": "",
-            "candidate_contracts": candidate_names,
-            "reason": "receiver_type_does_not_match_contract",
-        }
-
-    method_contract = _method_contract(contract, method_name)
-    if method_contract is None:
-        return {
-            "wrapper_kind": "external_wrapper",
-            "status": "unresolved_method",
-            "selection_source": selection_source,
-            "contract": contract_name,
-            "contract_mode": "",
-            "contract_sink": "",
-            "candidate_contracts": candidate_names,
-            "reason": "method_not_in_contract",
-        }
-
-    return {
-        "wrapper_kind": "external_wrapper",
-        "status": "explicit_selected" if configured_name else "auto_selected",
-        "selection_source": "system_catalog" if configured_name else selection_source,
-        "contract": contract_name,
-        "contract_mode": str(method_contract.get("mode") or ""),
-        "contract_sink": str(method_contract.get("sink") or ""),
-        "candidate_contracts": candidate_names,
-        "reason": "",
-    }
+    boundary = gateway or CSharpAnalysisGateway(SpCatalog.from_databases({}))
+    relative_path = _relative_path(source_file, project_root) if source_file else ""
+    return boundary.reconcile_wrapper(
+        relative_path,
+        record,
+        scan_root=str(project_root or ""),
+        explicit_contract=str(configured_contract_name or "").strip() or None,
+    ).to_dict()
 
 
 def _is_wrapper_record(record: Mapping[str, Any]) -> bool:
@@ -323,13 +211,20 @@ def _scan_report(
 
     scan = scan_store.get_or_scan(root, refresh=False)
     groups: OrderedDict[tuple, Dict[str, Any]] = OrderedDict()
+    gateway = CSharpAnalysisGateway(SpCatalog.from_databases({}))
     wrapper_calls = 0
     for source_file, records in getattr(scan, "db_invocations", {}).items():
         for record in records or []:
             if not isinstance(record, Mapping) or not _is_wrapper_record(record):
                 continue
             wrapper_calls += 1
-            classification = _classify_wrapper(record, configured_contract_name)
+            classification = _classify_wrapper(
+                record,
+                configured_contract_name,
+                source_file=source_file,
+                project_root=str(root),
+                gateway=gateway,
+            )
             wrapper_class = str(record.get("wrapper_class_name") or "").strip()
             receiver_type = str(record.get("wrapper_receiver_type") or "").strip()
             method_name = str(record.get("wrapper_method_name") or "").strip()

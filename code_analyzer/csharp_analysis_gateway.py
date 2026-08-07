@@ -32,6 +32,53 @@ class InvocationSourceSpan:
 
 
 @dataclass(frozen=True)
+class WrapperReconciliation:
+    """Deterministic classification of one raw wrapper invocation fact."""
+
+    wrapper_kind: str
+    status: str
+    selection_source: str
+    contract: str
+    contract_mode: str
+    contract_sink: str
+    candidate_contracts: tuple[str, ...]
+    receiver_type: str
+    wrapper_method: str
+    source_span: InvocationSourceSpan
+    source_available: bool
+    scan_root: str = ""
+    reason: str = ""
+    review_candidate: bool = False
+    stored_procedure_mode: bool = False
+    mode_reason: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return the machine-readable boundary shape used by audit consumers."""
+        return {
+            "wrapper_kind": self.wrapper_kind,
+            "status": self.status,
+            "selection_source": self.selection_source,
+            "contract": self.contract,
+            "contract_mode": self.contract_mode,
+            "contract_sink": self.contract_sink,
+            "candidate_contracts": list(self.candidate_contracts),
+            "receiver_type": self.receiver_type,
+            "wrapper_method": self.wrapper_method,
+            "source_available": self.source_available,
+            "scan_root": self.scan_root,
+            "source_span": {
+                "relative_path": self.source_span.relative_path,
+                "start_offset": self.source_span.start_offset,
+                "end_offset": self.source_span.end_offset,
+            },
+            "reason": self.reason,
+            "review_candidate": self.review_candidate,
+            "stored_procedure_mode": self.stored_procedure_mode,
+            "mode_reason": self.mode_reason,
+        }
+
+
+@dataclass(frozen=True)
 class DbInvocation:
     """One evidence-rated Database Invocation produced by the gateway."""
 
@@ -54,6 +101,21 @@ class DbInvocation:
     wrapper_contract_source: str = ""
     wrapper_receiver_type: str = ""
     wrapper_contract_candidates: tuple[str, ...] = ()
+    wrapper_kind: str = ""
+    wrapper_status: str = ""
+    wrapper_selection_source: str = ""
+    wrapper_contract_mode: str = ""
+    wrapper_contract_sink: str = ""
+    wrapper_scan_root: str = ""
+    wrapper_review_candidate: bool = False
+    wrapper_unresolved_reason: str = ""
+    wrapper_mode_reason: str = ""
+    wrapper_method: str = ""
+
+    @property
+    def wrapper_classification_status(self) -> str:
+        """Compatibility alias for consumers that use the longer field name."""
+        return self.wrapper_status
 
 
 def _load_external_wrapper_contracts() -> Dict[str, Dict[str, Any]]:
@@ -125,6 +187,44 @@ def load_external_wrapper_contract_for_receiver(
     """
     candidates = external_wrapper_contract_candidates(receiver_type)
     return candidates[0] if len(candidates) == 1 else None
+
+
+def _wrapper_contract_method(
+    contract: Optional[Mapping[str, Any]],
+    method_name: str,
+) -> Optional[Mapping[str, Any]]:
+    if contract is None:
+        return None
+    methods = contract.get("methods", {})
+    if not isinstance(methods, Mapping):
+        return None
+    folded_name = str(method_name or "").casefold()
+    if not folded_name:
+        return None
+    return next(
+        (
+            value
+            for name, value in methods.items()
+            if str(name).casefold() == folded_name and isinstance(value, Mapping)
+        ),
+        None,
+    )
+
+
+def _wrapper_contract_receiver_matches(
+    contract: Mapping[str, Any],
+    receiver_type: str,
+) -> bool:
+    receiver_types = contract.get("receiver_types", [])
+    if not receiver_type or not receiver_types:
+        return True
+    if not isinstance(receiver_types, (list, tuple, set)):
+        return False
+    normalized_receiver = receiver_type.split(".")[-1].casefold()
+    return any(
+        normalized_receiver == str(candidate).split(".")[-1].casefold()
+        for candidate in receiver_types
+    )
 
 
 def normalize_procedure_name(raw_name: str) -> str:
@@ -215,19 +315,252 @@ class CSharpAnalysisGateway:
         self._external_wrapper_contract = dict(external_wrapper_contract or {})
         self._wrapper_contract_name = str(self._external_wrapper_contract.get("name") or "")
 
-    def resolve_direct_invocations(self, relative_path: str, raw_invocations: List[dict]) -> List[DbInvocation]:
+    def reconcile_wrapper(
+        self,
+        relative_path: str,
+        raw: Mapping[str, Any],
+        *,
+        scan_root: str = "",
+        source_wrapper_available: Optional[bool] = None,
+        explicit_contract: Optional[Mapping[str, Any] | str] = None,
+        receiver_type_contract_candidates: Optional[Iterable[Mapping[str, Any]]] = None,
+    ) -> WrapperReconciliation:
+        """Classify one raw wrapper fact before rating its database evidence.
+
+        This is the single contract/source boundary shared by Gateway consumers.
+        Contract selection is deliberately separate from the later SP Catalog
+        check: a selected contract does not by itself prove a procedure exists.
+        """
+        receiver_type = str(raw.get("wrapper_receiver_type") or "").strip()
+        wrapper_method = str(raw.get("wrapper_method_name") or "").strip()
+        source_available = (
+            raw.get("wrapper_source_available") is True
+            if source_wrapper_available is None
+            else bool(source_wrapper_available)
+        )
+        source = InvocationSourceSpan(
+            str(relative_path or raw.get("relative_path") or raw.get("source_file") or ""),
+            int(raw.get("start_offset") or 0),
+            int(raw.get("end_offset") or 0),
+        )
+        raw_mode = str(raw.get("wrapper_mode") or "").strip().casefold()
+        root = str(scan_root or "")
+
+        def result(
+            *,
+            wrapper_kind: str,
+            status: str,
+            selection_source: str,
+            contract: str = "",
+            contract_mode: str = "",
+            contract_sink: str = "",
+            candidate_contracts: Iterable[str] = (),
+            reason: str = "",
+            review_candidate: bool = False,
+            stored_procedure_mode: bool = False,
+            mode_reason: str = "",
+        ) -> WrapperReconciliation:
+            return WrapperReconciliation(
+                wrapper_kind=wrapper_kind,
+                status=status,
+                selection_source=selection_source,
+                contract=contract,
+                contract_mode=contract_mode,
+                contract_sink=contract_sink,
+                candidate_contracts=tuple(
+                    name for name in (str(item).strip() for item in candidate_contracts) if name
+                ),
+                receiver_type=receiver_type,
+                wrapper_method=wrapper_method,
+                source_span=source,
+                source_available=source_available,
+                scan_root=root,
+                reason=reason,
+                review_candidate=review_candidate,
+                stored_procedure_mode=stored_procedure_mode,
+                mode_reason=mode_reason,
+            )
+
+        def source_mode() -> tuple[bool, str]:
+            if raw_mode == "inline_sql":
+                return False, "inline_sql"
+            if raw_mode == "stored_procedure":
+                return True, ""
+            return False, "wrapper_mode_unresolved"
+
+        if source_available:
+            stored_procedure_mode, mode_reason = source_mode()
+            return result(
+                wrapper_kind="source_wrapper",
+                status="source_wrapper",
+                selection_source="source_code",
+                contract_mode=str(raw.get("wrapper_mode") or ""),
+                stored_procedure_mode=stored_procedure_mode,
+                mode_reason=mode_reason,
+            )
+
+        explicit_name = ""
+        explicit_selected = False
+        selected_contract: Optional[Mapping[str, Any]] = None
+        if explicit_contract is None:
+            selected_contract = self._external_wrapper_contract or None
+            explicit_name = self._wrapper_contract_name
+            explicit_selected = selected_contract is not None
+        elif isinstance(explicit_contract, str):
+            explicit_name = explicit_contract.strip()
+            explicit_selected = bool(explicit_name)
+            selected_contract = load_external_wrapper_contract(explicit_name)
+        elif isinstance(explicit_contract, Mapping):
+            selected_contract = explicit_contract
+            explicit_name = str(explicit_contract.get("name") or "").strip()
+            explicit_selected = True
+
+        attempted_sp_mode = raw_mode == "stored_procedure"
+        if explicit_selected and selected_contract is None:
+            return result(
+                wrapper_kind="external_wrapper",
+                status="unresolved_contract",
+                selection_source="explicit",
+                candidate_contracts=(explicit_name,),
+                reason="configured_contract_not_found",
+                review_candidate=True,
+                stored_procedure_mode=attempted_sp_mode,
+                mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
+            )
+
+        if explicit_selected:
+            candidates = [
+                candidate
+                for candidate in (selected_contract,)
+                if candidate is not None
+            ]
+            selection_source = "explicit"
+        elif receiver_type_contract_candidates is None:
+            candidates = list(external_wrapper_contract_candidates(receiver_type))
+            selection_source = "auto_receiver_type"
+        else:
+            candidates = [
+                candidate
+                for candidate in receiver_type_contract_candidates
+                if isinstance(candidate, Mapping)
+            ]
+            selection_source = "auto_receiver_type"
+
+        candidate_names = tuple(
+            str(candidate.get("name") or "").strip()
+            for candidate in candidates
+            if str(candidate.get("name") or "").strip()
+        )
+        if len(candidates) > 1:
+            return result(
+                wrapper_kind="external_wrapper",
+                status="ambiguous_contract",
+                selection_source="ambiguous_receiver_type",
+                candidate_contracts=candidate_names,
+                reason="multiple_contracts_match_receiver_type",
+                review_candidate=True,
+                stored_procedure_mode=attempted_sp_mode,
+                mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
+            )
+        if not candidates:
+            return result(
+                wrapper_kind="external_wrapper",
+                status="unresolved_contract",
+                selection_source="unresolved_receiver_type",
+                reason=(
+                    "receiver_type_missing"
+                    if not receiver_type
+                    else "no_contract_matches_receiver_type"
+                ),
+                review_candidate=True,
+                stored_procedure_mode=attempted_sp_mode,
+                mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
+            )
+
+        contract = candidates[0]
+        contract_name = str(contract.get("name") or explicit_name).strip()
+        if not _wrapper_contract_receiver_matches(contract, receiver_type):
+            return result(
+                wrapper_kind="external_wrapper",
+                status="receiver_mismatch",
+                selection_source=selection_source,
+                contract=contract_name,
+                candidate_contracts=candidate_names,
+                reason="receiver_type_does_not_match_contract",
+                review_candidate=True,
+                stored_procedure_mode=attempted_sp_mode,
+                mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
+            )
+
+        method_contract = _wrapper_contract_method(contract, wrapper_method)
+        if method_contract is None:
+            return result(
+                wrapper_kind="external_wrapper",
+                status="unresolved_method",
+                selection_source=selection_source,
+                contract=contract_name,
+                candidate_contracts=candidate_names,
+                reason="method_not_in_contract",
+                review_candidate=True,
+                stored_procedure_mode=attempted_sp_mode,
+                mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
+            )
+
+        contract_mode = str(method_contract.get("mode") or "")
+        contract_mode_key = contract_mode.casefold()
+        if raw_mode == "inline_sql" or contract_mode_key == "inline_sql":
+            stored_procedure_mode = False
+            mode_reason = "inline_sql"
+        elif contract_mode_key == "stored_procedure":
+            stored_procedure_mode = True
+            mode_reason = ""
+        elif contract_mode_key == "call_site" and raw_mode == "stored_procedure":
+            stored_procedure_mode = True
+            mode_reason = ""
+        elif contract_mode_key == "call_site":
+            stored_procedure_mode = False
+            mode_reason = "call_site_requires_explicit_stored_procedure_mode"
+        else:
+            stored_procedure_mode = False
+            mode_reason = "wrapper_mode_unresolved"
+
+        return result(
+            wrapper_kind="external_wrapper",
+            status="explicit_selected" if explicit_selected else "auto_selected",
+            selection_source=selection_source,
+            contract=contract_name,
+            contract_mode=contract_mode,
+            contract_sink=str(method_contract.get("sink") or ""),
+            candidate_contracts=candidate_names,
+            stored_procedure_mode=stored_procedure_mode,
+            mode_reason=mode_reason,
+        )
+
+    def resolve_direct_invocations(
+        self,
+        relative_path: str,
+        raw_invocations: List[dict],
+        *,
+        scan_root: str = "",
+    ) -> List[DbInvocation]:
         """Turn raw Roslyn direct-SqlClient facts into evidence-rated Database Invocations."""
         results: List[DbInvocation] = []
         for raw in raw_invocations:
-            invocation = self._resolve_one(relative_path, raw)
+            invocation = self._resolve_one(relative_path, raw, scan_root=scan_root)
             if invocation is not None:
                 results.append(invocation)
         return results
 
-    def _resolve_one(self, relative_path: str, raw: dict) -> Optional[DbInvocation]:
+    def _resolve_one(
+        self,
+        relative_path: str,
+        raw: dict,
+        *,
+        scan_root: str = "",
+    ) -> Optional[DbInvocation]:
         invocation_kind = str(raw.get("invocation_kind") or "").casefold()
         if invocation_kind == "source_wrapper":
-            return self._resolve_wrapper_invocation(relative_path, raw)
+            return self._resolve_wrapper_invocation(relative_path, raw, scan_root=scan_root)
         if invocation_kind in {"dapper", "entity_framework", "entityframework", "ef"}:
             return self._resolve_adapter_invocation(relative_path, raw)
 
@@ -308,12 +641,23 @@ class CSharpAnalysisGateway:
             branch_context=branch_context,
         )
 
-    def _resolve_wrapper_invocation(self, relative_path: str, raw: dict) -> Optional[DbInvocation]:
+    def _resolve_wrapper_invocation(
+        self,
+        relative_path: str,
+        raw: dict,
+        *,
+        scan_root: str = "",
+    ) -> Optional[DbInvocation]:
+        reconciliation = self.reconcile_wrapper(
+            relative_path,
+            raw,
+            scan_root=scan_root,
+        )
         mode = str(raw.get("wrapper_mode") or "").casefold()
-        if mode == "inline_sql":
+        if mode == "inline_sql" or reconciliation.mode_reason == "inline_sql":
             return None
 
-        source = InvocationSourceSpan(relative_path, raw["start_offset"], raw["end_offset"])
+        source = reconciliation.source_span
         class_name = raw["class_name"]
         method_name = raw["method_name"]
         branch_context = self._branch_context(raw)
@@ -323,63 +667,42 @@ class CSharpAnalysisGateway:
             if value
         )
         database = self._resolve_database(raw.get("connection_expression"))
-        (
-            external_contract,
-            wrapper_contract_source,
-            wrapper_contract_candidates,
-        ) = self._external_wrapper_resolution_for_raw(raw)
-        if raw.get("wrapper_source_available") is True:
-            wrapper_contract_source = ""
-            wrapper_contract_candidates = ()
-        contract_method = self._external_wrapper_method_contract(raw, external_contract)
-        wrapper_receiver_type = str(raw.get("wrapper_receiver_type") or "")
+        source_available = reconciliation.source_available
+        external_wrapper_method = (
+            reconciliation.wrapper_method if not source_available else ""
+        )
 
         def annotate(invocation: DbInvocation) -> DbInvocation:
             return replace(
                 invocation,
-                wrapper_contract_source=wrapper_contract_source,
-                wrapper_receiver_type=wrapper_receiver_type,
-                wrapper_contract_candidates=wrapper_contract_candidates,
+                wrapper_kind=reconciliation.wrapper_kind,
+                wrapper_status=reconciliation.status,
+                wrapper_selection_source=reconciliation.selection_source,
+                wrapper_contract=reconciliation.contract,
+                wrapper_contract_source=(
+                    "" if source_available else reconciliation.selection_source
+                ),
+                wrapper_contract_mode=reconciliation.contract_mode,
+                wrapper_contract_sink=reconciliation.contract_sink,
+                wrapper_receiver_type=reconciliation.receiver_type,
+                wrapper_contract_candidates=reconciliation.candidate_contracts,
+                wrapper_scan_root=reconciliation.scan_root,
+                wrapper_review_candidate=reconciliation.review_candidate,
+                wrapper_unresolved_reason=reconciliation.reason,
+                wrapper_mode_reason=reconciliation.mode_reason,
+                wrapper_method=reconciliation.wrapper_method,
+                external_wrapper_method=external_wrapper_method,
             )
 
-        external_wrapper_method = (
-            str(raw.get("wrapper_method_name") or "")
-            if raw.get("wrapper_source_available") is not True
-            else ""
-        )
-        wrapper_contract = (
-            str(external_contract.get("name") or self._wrapper_contract_name)
-            if contract_method is not None and external_contract is not None
-            else ""
-        )
+        common = {
+            "method_chain": tuple(raw.get("method_chain") or ()),
+            "method_class_chain": method_class_chain,
+            "branch_context": branch_context,
+        }
 
-        if raw.get("wrapper_source_available") is not True:
-            if contract_method is not None:
-                contract_mode = str(contract_method.get("mode") or "").casefold()
-                if contract_mode == "inline_sql":
-                    return None
-                if contract_mode == "stored_procedure":
-                    mode = "stored_procedure"
-                elif contract_mode == "call_site" and mode == "inline_sql":
-                    return None
-                elif contract_mode == "call_site" and mode == "stored_procedure":
-                    mode = "stored_procedure"
-                elif mode != "stored_procedure":
-                    return annotate(DbInvocation(
-                        class_name,
-                        method_name,
-                        database,
-                        None,
-                        InvocationEvidence.UNRESOLVED,
-                        source,
-                        "wrapper_mode_unresolved",
-                        method_chain=tuple(raw.get("method_chain") or ()),
-                        method_class_chain=method_class_chain,
-                        branch_context=branch_context,
-                        external_wrapper_method=external_wrapper_method,
-                        wrapper_contract=wrapper_contract,
-                    ))
-                if not contract_method.get("sink"):
+        if not source_available:
+            if reconciliation.status in {"explicit_selected", "auto_selected"}:
+                if not reconciliation.contract_sink:
                     return annotate(DbInvocation(
                         class_name,
                         method_name,
@@ -388,13 +711,19 @@ class CSharpAnalysisGateway:
                         InvocationEvidence.UNRESOLVED,
                         source,
                         "wrapper_contract_sink_unresolved",
-                        method_chain=tuple(raw.get("method_chain") or ()),
-                        method_class_chain=method_class_chain,
-                        branch_context=branch_context,
-                        external_wrapper_method=external_wrapper_method,
-                        wrapper_contract=wrapper_contract,
+                        **common,
                     ))
-
+                if not reconciliation.stored_procedure_mode:
+                    return annotate(DbInvocation(
+                        class_name,
+                        method_name,
+                        database,
+                        None,
+                        InvocationEvidence.UNRESOLVED,
+                        source,
+                        "wrapper_mode_unresolved",
+                        **common,
+                    ))
                 if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
                     return annotate(DbInvocation(
                         class_name,
@@ -404,11 +733,7 @@ class CSharpAnalysisGateway:
                         InvocationEvidence.UNRESOLVED,
                         source,
                         "dynamic_command_text",
-                        method_chain=tuple(raw.get("method_chain") or ()),
-                        method_class_chain=method_class_chain,
-                        branch_context=branch_context,
-                        external_wrapper_method=external_wrapper_method,
-                        wrapper_contract=wrapper_contract,
+                        **common,
                     ))
 
                 rated = self._rate_literal_candidate(
@@ -417,20 +742,14 @@ class CSharpAnalysisGateway:
                     database,
                     raw["command_text"],
                     source,
-                    method_chain=tuple(raw.get("method_chain") or ()),
-                    method_class_chain=method_class_chain,
-                    branch_context=branch_context,
+                    **common,
                 )
-                return annotate(replace(
-                    rated,
-                    external_wrapper_method=external_wrapper_method,
-                    wrapper_contract=wrapper_contract,
-                ))
+                return annotate(rated)
 
             procedure_name = None
             procedure_schema = None
             if (
-                mode == "stored_procedure"
+                reconciliation.stored_procedure_mode
                 and raw.get("command_text_kind") == "literal"
                 and raw.get("command_text")
             ):
@@ -445,12 +764,10 @@ class CSharpAnalysisGateway:
                 source,
                 "wrapper_source_unavailable",
                 procedure_schema,
-                method_chain=tuple(raw.get("method_chain") or ()),
-                method_class_chain=method_class_chain,
-                branch_context=branch_context,
                 raw_command_text=raw.get("command_text") if procedure_name else None,
-                external_wrapper_method=external_wrapper_method,
+                **common,
             ))
+
         if raw.get("wrapper_reaches_stored_procedure_sink") is not True:
             return annotate(DbInvocation(
                 class_name,
@@ -460,11 +777,9 @@ class CSharpAnalysisGateway:
                 InvocationEvidence.UNRESOLVED,
                 source,
                 "wrapper_sink_unresolved",
-                method_chain=tuple(raw.get("method_chain") or ()),
-                method_class_chain=method_class_chain,
-                branch_context=branch_context,
+                **common,
             ))
-        if mode != "stored_procedure":
+        if not reconciliation.stored_procedure_mode:
             return annotate(DbInvocation(
                 class_name,
                 method_name,
@@ -473,9 +788,7 @@ class CSharpAnalysisGateway:
                 InvocationEvidence.UNRESOLVED,
                 source,
                 "wrapper_mode_unresolved",
-                method_chain=tuple(raw.get("method_chain") or ()),
-                method_class_chain=method_class_chain,
-                branch_context=branch_context,
+                **common,
             ))
 
         if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
@@ -487,9 +800,7 @@ class CSharpAnalysisGateway:
                 InvocationEvidence.UNRESOLVED,
                 source,
                 "dynamic_command_text",
-                method_chain=tuple(raw.get("method_chain") or ()),
-                method_class_chain=method_class_chain,
-                branch_context=branch_context,
+                **common,
             ))
 
         return annotate(self._rate_literal_candidate(
@@ -498,73 +809,8 @@ class CSharpAnalysisGateway:
             database,
             raw["command_text"],
             source,
-            method_chain=tuple(raw.get("method_chain") or ()),
-            method_class_chain=method_class_chain,
-            branch_context=branch_context,
+            **common,
         ))
-
-    def _external_wrapper_resolution_for_raw(
-        self,
-        raw: Mapping[str, Any],
-    ) -> tuple[Optional[Mapping[str, Any]], str, tuple[str, ...]]:
-        if self._external_wrapper_contract:
-            return self._external_wrapper_contract, "explicit", ()
-
-        receiver_type = str(raw.get("wrapper_receiver_type") or "")
-        candidates = external_wrapper_contract_candidates(receiver_type)
-        candidate_names = tuple(str(contract.get("name") or "") for contract in candidates)
-        if len(candidates) == 1:
-            return candidates[0], "auto_receiver_type", candidate_names
-        if candidates:
-            return None, "ambiguous_receiver_type", candidate_names
-        return None, "unresolved_receiver_type", ()
-
-    def _external_wrapper_contract_for_raw(
-        self,
-        raw: Mapping[str, Any],
-    ) -> Optional[Mapping[str, Any]]:
-        if self._external_wrapper_contract:
-            return self._external_wrapper_contract
-        return load_external_wrapper_contract_for_receiver(
-            str(raw.get("wrapper_receiver_type") or "")
-        )
-
-    def _external_wrapper_method_contract(
-        self,
-        raw: Mapping[str, Any],
-        contract: Optional[Mapping[str, Any]] = None,
-    ) -> Optional[Mapping[str, Any]]:
-        contract = contract or self._external_wrapper_contract_for_raw(raw)
-        if contract is None:
-            return None
-        methods = contract.get("methods", {})
-        if not isinstance(methods, Mapping):
-            return None
-
-        method_name = str(raw.get("wrapper_method_name") or "").casefold()
-        if not method_name:
-            return None
-        configured_method = next(
-            (
-                value
-                for name, value in methods.items()
-                if str(name).casefold() == method_name and isinstance(value, Mapping)
-            ),
-            None,
-        )
-        if configured_method is None:
-            return None
-
-        receiver_types = contract.get("receiver_types", [])
-        receiver_type = str(raw.get("wrapper_receiver_type") or "").strip()
-        if receiver_type and receiver_types:
-            normalized_receiver = receiver_type.split(".")[-1].casefold()
-            if not any(
-                normalized_receiver == str(candidate).split(".")[-1].casefold()
-                for candidate in receiver_types
-            ):
-                return None
-        return configured_method
 
     def _rate_literal_candidate(
         self,
