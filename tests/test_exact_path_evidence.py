@@ -239,6 +239,64 @@ def test_path_evidence_returns_only_selected_branch_and_source_methods(monkeypat
     assert evidence.functions == []
 
 
+def test_path_evidence_preserves_wrapper_classification_and_database_evidence(tmp_path: Path) -> None:
+    scan, cached, _ = _cached_path_fixture(tmp_path)
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="Save",
+        database="OrdersDb",
+        procedure_name="usp_saveorder",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("OrderPage.cs", 0, 10),
+        procedure_schema="dbo",
+        method_chain=("Save",),
+        source_snapshot_hash="snapshot-hash",
+        external_wrapper_method="ExeProcNon",
+        wrapper_contract="sqlobject",
+        wrapper_contract_source="auto_receiver_type",
+        wrapper_receiver_type="SQLObject",
+        wrapper_contract_candidates=("sqlobject",),
+        wrapper_kind="external_wrapper",
+        wrapper_status="auto_selected",
+        wrapper_selection_source="auto_receiver_type",
+        wrapper_contract_mode="stored_procedure",
+        wrapper_contract_sink="ExecuteNonQuery",
+        wrapper_scan_root=str(tmp_path),
+        wrapper_review_candidate=False,
+        wrapper_method="ExeProcNon",
+        wrapper_source_available=False,
+        wrapper_stored_procedure_mode=True,
+    )
+    path = build_execution_paths([invocation], cached["sql_execution_graph"])[0]
+
+    evidence = analyze_service._materialize_path_evidence(
+        path,
+        invocation,
+        scan,
+        cached,
+        cached["sql_execution_graph"],
+    )
+
+    assert evidence.wrapper_kind == "external_wrapper"
+    assert evidence.wrapper_status == "auto_selected"
+    assert evidence.wrapper_classification_status == "auto_selected"
+    assert evidence.classification_status == "auto_selected"
+    assert evidence.status == "auto_selected"
+    assert evidence.wrapper_selection_source == "auto_receiver_type"
+    assert evidence.wrapper_contract == "sqlobject"
+    assert evidence.contract == "sqlobject"
+    assert evidence.wrapper_contract_mode == "stored_procedure"
+    assert evidence.wrapper_contract_sink == "ExecuteNonQuery"
+    assert evidence.wrapper_receiver_type == "SQLObject"
+    assert evidence.wrapper_method == "ExeProcNon"
+    assert evidence.stored_procedure_mode is True
+    assert evidence.wrapper_stored_procedure_mode is True
+    assert evidence.evidence == "proven"
+    assert evidence.evidence_status == "proven"
+    assert evidence.source_snapshot_identity == "snapshot-hash"
+    assert evidence.source_provenance["scan_root"] == str(tmp_path)
+
+
 def test_multi_root_path_evidence_uses_repo_relative_source_snapshot(
     monkeypatch,
     tmp_path: Path,

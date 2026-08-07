@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
-from code_analyzer.csharp_analysis_gateway import DbInvocation
+from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 
 from .execution_path_builder import build_execution_paths
 
@@ -69,7 +69,7 @@ def _access_record(
 ) -> dict[str, Any]:
     sp_chain = list(path.get("sp_chain", []) or [])
     operation = str(path.get("terminal_operation") or "")
-    return {
+    record = {
         "table": table_name,
         "access_type": operation if is_write else "READ",
         "is_write": is_write,
@@ -107,6 +107,12 @@ def _access_record(
         "unresolved_reason": path.get("unresolved_reason", ""),
         "unresolved_targets": list(path.get("unresolved_targets", []) or []),
     }
+    for key in WRAPPER_EVIDENCE_FIELDS:
+        if key not in path:
+            continue
+        value = path[key]
+        record[key] = list(value) if isinstance(value, tuple) else value
+    return record
 
 
 def _matching_graph_read_lineage(

@@ -71,10 +71,41 @@ class PathEvidenceResponse(BaseModel):
     caller_class: str = ""
     caller_method: str = ""
     external_wrapper_method: str = ""
+    wrapper_kind: str = ""
+    wrapper_status: str = ""
+    wrapper_classification_status: str = ""
+    classification_status: str = ""
+    status: str = ""
+    wrapper_selection_source: str = ""
+    selection_source: str = ""
     wrapper_contract: str = ""
+    contract: str = ""
+    selected_contract: str = ""
     wrapper_contract_source: str = ""
+    wrapper_contract_mode: str = ""
+    contract_mode: str = ""
+    wrapper_contract_sink: str = ""
+    contract_sink: str = ""
     wrapper_receiver_type: str = ""
     wrapper_contract_candidates: List[str] = Field(default_factory=list)
+    candidate_contracts: List[str] = Field(default_factory=list)
+    candidate_contract_names: List[str] = Field(default_factory=list)
+    receiver_type: str = ""
+    wrapper_scan_root: str = ""
+    scan_root: str = ""
+    wrapper_source_available: bool = False
+    source_available: bool = False
+    wrapper_review_candidate: bool = False
+    review_candidate: bool = False
+    wrapper_unresolved_reason: str = ""
+    classification_reason: str = ""
+    wrapper_mode_reason: str = ""
+    mode_reason: str = ""
+    wrapper_method: str = ""
+    observed_method: str = ""
+    stored_procedure_mode: bool = False
+    wrapper_stored_procedure_mode: bool = False
+    active_contract: bool = False
     procedure_name: str = ""
     procedure_schema: str = ""
     branch_context: List[str] = Field(default_factory=list)
@@ -84,6 +115,8 @@ class PathEvidenceResponse(BaseModel):
     conditions: List[str] = Field(default_factory=list)
     risk_flags: List[str] = Field(default_factory=list)
     evidence: str = "unresolved"
+    evidence_status: str = "unresolved"
+    evidence_reason: str = ""
     confirmed: bool = False
     reason: str = ""
     unresolved_reason: str = ""
@@ -94,6 +127,8 @@ class PathEvidenceResponse(BaseModel):
     operations: List[Dict] = Field(default_factory=list)
     views: List[Dict] = Field(default_factory=list)
     functions: List[Dict] = Field(default_factory=list)
+    source_snapshot_identity: str = ""
+    source_provenance: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CodeSnippet(BaseModel):
@@ -213,11 +248,51 @@ class SPMatchProgram(BaseModel):
     caller: str = ""
     caller_class: str = ""
     caller_method: str = ""
+    external_wrapper_method: str = ""
+    wrapper_kind: str = ""
+    wrapper_status: str = ""
+    wrapper_classification_status: str = ""
+    classification_status: str = ""
+    status: str = ""
+    wrapper_selection_source: str = ""
+    selection_source: str = ""
+    wrapper_contract: str = ""
+    contract: str = ""
+    selected_contract: str = ""
+    wrapper_contract_source: str = ""
+    wrapper_contract_mode: str = ""
+    contract_mode: str = ""
+    wrapper_contract_sink: str = ""
+    contract_sink: str = ""
+    wrapper_receiver_type: str = ""
+    receiver_type: str = ""
+    wrapper_contract_candidates: List[str] = Field(default_factory=list)
+    candidate_contracts: List[str] = Field(default_factory=list)
+    candidate_contract_names: List[str] = Field(default_factory=list)
+    wrapper_scan_root: str = ""
+    scan_root: str = ""
+    wrapper_source_available: bool = False
+    source_available: bool = False
+    wrapper_review_candidate: bool = False
+    review_candidate: bool = False
+    wrapper_unresolved_reason: str = ""
+    classification_reason: str = ""
+    wrapper_mode_reason: str = ""
+    mode_reason: str = ""
+    wrapper_method: str = ""
+    observed_method: str = ""
+    stored_procedure_mode: bool = False
+    wrapper_stored_procedure_mode: bool = False
+    active_contract: bool = False
     procedure_name: str = ""
     procedure_schema: str = ""
     branch_context: List[str] = Field(default_factory=list)
     source_span: Dict = Field(default_factory=dict)
     source_snapshot_hash: str = ""
+    source_snapshot_identity: str = ""
+    source_provenance: Dict[str, Any] = Field(default_factory=dict)
+    evidence_status: str = "unresolved"
+    evidence_reason: str = ""
 
 
 class FindBySPResponse(BaseModel):
@@ -267,12 +342,52 @@ class TableMatchProgram(BaseModel):
     caller: str = ""
     caller_class: str = ""
     caller_method: str = ""
+    external_wrapper_method: str = ""
+    wrapper_kind: str = ""
+    wrapper_status: str = ""
+    wrapper_classification_status: str = ""
+    classification_status: str = ""
+    status: str = ""
+    wrapper_selection_source: str = ""
+    selection_source: str = ""
+    wrapper_contract: str = ""
+    contract: str = ""
+    selected_contract: str = ""
+    wrapper_contract_source: str = ""
+    wrapper_contract_mode: str = ""
+    contract_mode: str = ""
+    wrapper_contract_sink: str = ""
+    contract_sink: str = ""
+    wrapper_receiver_type: str = ""
+    receiver_type: str = ""
+    wrapper_contract_candidates: List[str] = Field(default_factory=list)
+    candidate_contracts: List[str] = Field(default_factory=list)
+    candidate_contract_names: List[str] = Field(default_factory=list)
+    wrapper_scan_root: str = ""
+    scan_root: str = ""
+    wrapper_source_available: bool = False
+    source_available: bool = False
+    wrapper_review_candidate: bool = False
+    review_candidate: bool = False
+    wrapper_unresolved_reason: str = ""
+    classification_reason: str = ""
+    wrapper_mode_reason: str = ""
+    mode_reason: str = ""
+    wrapper_method: str = ""
+    observed_method: str = ""
+    stored_procedure_mode: bool = False
+    wrapper_stored_procedure_mode: bool = False
+    active_contract: bool = False
     procedure_name: str = ""
     procedure_schema: str = ""
     branch_context: List[str] = Field(default_factory=list)
     source_span: Dict = Field(default_factory=dict)
     source_snapshot_hash: str = ""
     operation_type: str = ""
+    source_snapshot_identity: str = ""
+    source_provenance: Dict[str, Any] = Field(default_factory=dict)
+    evidence_status: str = "unresolved"
+    evidence_reason: str = ""
 
 
 class FindByTableResponse(BaseModel):

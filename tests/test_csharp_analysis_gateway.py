@@ -1681,6 +1681,28 @@ def test_static_analyzer_host_applies_external_sqlobject_wrapper_contract() -> N
             for invocation in raw_invocations
         } == {"SQLObject"}
 
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_Enable", "usp_Save"]}),
+            connection_sources={"obj": "OrdersDb"},
+        )
+        observations = {
+            invocation["method_name"]: gateway.reconcile_wrapper_observation(
+                "SqlObjectPage.cs",
+                invocation,
+                scan_root=temp_dir,
+            )
+            for invocation in raw_invocations
+        }
+        assert observations["EnableData"]["wrapper_receiver_type"] == "SQLObject"
+        assert observations["EnableData"]["wrapper_status"] == "auto_selected"
+        assert observations["EnableData"]["evidence_status"] == "proven"
+        assert observations["SaveData"]["wrapper_contract_mode"] == "call_site"
+        assert observations["SaveData"]["stored_procedure_mode"] is True
+        assert observations["SaveData"]["evidence_status"] == "proven"
+        assert observations["DynamicData"]["wrapper_status"] == "auto_selected"
+        assert observations["DynamicData"]["evidence_status"] == "unresolved"
+        assert observations["DynamicData"]["evidence_reason"] == "dynamic_command_text"
+
 
 if __name__ == "__main__":
     test_normalize_procedure_name_strips_schema_and_brackets()

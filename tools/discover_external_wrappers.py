@@ -156,9 +156,14 @@ def _is_wrapper_record(record: Mapping[str, Any]) -> bool:
     )
 
 
-def _location(record: Mapping[str, Any], source_file: str, project_root: str) -> Dict[str, Any]:
+def _location(
+    record: Mapping[str, Any],
+    source_file: str,
+    project_root: str,
+    observation: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     command_text = record.get("command_text")
-    return {
+    location = {
         "file": _relative_path(source_file, project_root),
         "line": int(record.get("line_number") or 0),
         "start_offset": int(record.get("start_offset") or 0),
@@ -167,6 +172,9 @@ def _location(record: Mapping[str, Any], source_file: str, project_root: str) ->
         "command_text": str(command_text) if command_text is not None else "",
         "wrapper_mode": str(record.get("wrapper_mode") or ""),
     }
+    if observation is not None:
+        location.update(dict(observation))
+    return location
 
 
 def _cache_state(root: Path) -> Tuple[bool, str]:
@@ -211,19 +219,36 @@ def _scan_report(
 
     scan = scan_store.get_or_scan(root, refresh=False)
     groups: OrderedDict[tuple, Dict[str, Any]] = OrderedDict()
-    gateway = CSharpAnalysisGateway(SpCatalog.from_databases({}))
     wrapper_calls = 0
+    connection_sources_by_file = getattr(scan, "connection_sources", {}) or {}
+    source_snapshots = getattr(scan, "source_snapshots", {}) or {}
     for source_file, records in getattr(scan, "db_invocations", {}).items():
+        source_key = str(Path(source_file).resolve())
+        connection_sources = dict(
+            connection_sources_by_file.get(source_key)
+            or connection_sources_by_file.get(source_file)
+            or {}
+        )
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({}),
+            connection_sources=connection_sources,
+        )
         for record in records or []:
             if not isinstance(record, Mapping) or not _is_wrapper_record(record):
                 continue
             wrapper_calls += 1
-            classification = _classify_wrapper(
+            relative_path = _relative_path(source_file, str(root))
+            snapshot_hash = ""
+            for snapshot_path, snapshot in source_snapshots.items():
+                if str(snapshot_path).replace("\\", "/").casefold() == relative_path.casefold():
+                    snapshot_hash = str(getattr(snapshot, "content_hash", "") or "")
+                    break
+            observation = gateway.reconcile_wrapper_observation(
+                relative_path,
                 record,
-                configured_contract_name,
-                source_file=source_file,
-                project_root=str(root),
-                gateway=gateway,
+                scan_root=str(root),
+                source_snapshot_hash=snapshot_hash,
+                explicit_contract=str(configured_contract_name or "").strip() or None,
             )
             wrapper_class = str(record.get("wrapper_class_name") or "").strip()
             receiver_type = str(record.get("wrapper_receiver_type") or "").strip()
@@ -232,10 +257,12 @@ def _scan_report(
                 wrapper_class,
                 receiver_type,
                 method_name,
-                classification["wrapper_kind"],
-                classification["status"],
-                classification["contract"],
-                classification["reason"],
+                observation["wrapper_kind"],
+                observation["status"],
+                observation["contract"],
+                observation["classification_reason"],
+                observation["evidence_status"],
+                observation["evidence_reason"],
             )
             group = groups.get(group_key)
             if group is None:
@@ -245,13 +272,15 @@ def _scan_report(
                     "wrapper_class": wrapper_class,
                     "receiver_type": receiver_type,
                     "wrapper_method": method_name,
-                    **classification,
+                    **observation,
                     "calls": 0,
                     "locations": [],
                 }
                 groups[group_key] = group
             group["calls"] += 1
-            group["locations"].append(_location(record, source_file, str(root)))
+            group["locations"].append(
+                _location(record, source_file, str(root), observation)
+            )
 
     summary = {
         "system_id": system_id,
@@ -306,6 +335,18 @@ def build_report(targets: Iterable[dict], missing_systems: Iterable[str] = ()) -
             "wrapper_calls": sum(item["wrapper_calls"] for item in summaries),
             "observation_groups": len(observations),
             "auto_selected": sum(item["status"] == "auto_selected" for item in observations),
+            "evidence_proven": sum(
+                item.get("evidence_status") == "proven" for item in observations
+            ),
+            "evidence_likely": sum(
+                item.get("evidence_status") == "likely" for item in observations
+            ),
+            "evidence_unresolved": sum(
+                item.get("evidence_status") == "unresolved" for item in observations
+            ),
+            "evidence_not_applicable": sum(
+                item.get("evidence_status") == "not_applicable" for item in observations
+            ),
             "unresolved": sum(
                 item["status"] in {"ambiguous_contract", "unresolved_contract", "unresolved_method", "receiver_mismatch"}
                 for item in observations

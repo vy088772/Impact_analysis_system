@@ -26,6 +26,8 @@ from code_analyzer.csharp_analysis_gateway import (
     DbInvocation,
     InvocationEvidence,
     SpCatalog,
+    WRAPPER_EVIDENCE_FIELDS,
+    invocation_wrapper_evidence_fields,
     load_external_wrapper_contract,
     normalize_procedure_name,
 )
@@ -519,6 +521,7 @@ def _rated_execution_invocations(
         for invocation in gateway.resolve_direct_invocations(
             relative_path,
             raw_invocations,
+            scan_root=str(root),
             explicit_contract=getattr(req, "wrapper_contract", "") or None,
         ):
             method_chain = _merge_method_chains(
@@ -559,7 +562,7 @@ def _serialize_db_invocation(invocation: DbInvocation) -> Dict:
         if invocation.class_name
         else caller_method
     )
-    return {
+    serialized = {
         "class_name": invocation.class_name,
         "method_name": invocation.method_name,
         "database": invocation.database,
@@ -595,11 +598,35 @@ def _serialize_db_invocation(invocation: DbInvocation) -> Dict:
         "branch_context": list(invocation.branch_context),
         "source_snapshot_hash": invocation.source_snapshot_hash,
     }
+    serialized.update(invocation_wrapper_evidence_fields(invocation))
+    serialized["reason"] = invocation.reason
+    serialized["source_span"] = {
+        "relative_path": invocation.source.relative_path,
+        "start_offset": invocation.source.start_offset,
+        "end_offset": invocation.source.end_offset,
+        "content_hash": invocation.source_snapshot_hash,
+    }
+    serialized["source_snapshot_hash"] = invocation.source_snapshot_hash
+    return serialized
+
+
+def _wrapper_projection_fields(
+    source: Mapping[str, Any],
+    *,
+    exclude: Iterable[str] = (),
+) -> Dict[str, Any]:
+    excluded = set(exclude)
+    return {
+        key: list(value) if isinstance(value, tuple) else value
+        for key in WRAPPER_EVIDENCE_FIELDS
+        if key in source and key not in excluded
+        for value in (source[key],)
+    }
 
 
 def _invocation_response_fields(invocation: DbInvocation) -> Dict:
     serialized = _serialize_db_invocation(invocation)
-    return {
+    response = {
         key: serialized[key]
         for key in (
             "evidence",
@@ -623,6 +650,8 @@ def _invocation_response_fields(invocation: DbInvocation) -> Dict:
             "source_snapshot_hash",
         )
     }
+    response.update(_wrapper_projection_fields(serialized))
+    return response
 
 
 def _invocation_diagnostic(
@@ -822,6 +851,10 @@ def _materialize_path_evidence(
         else:
             functions.append(sql_object)
 
+    wrapper_projection = _wrapper_projection_fields(
+        path,
+        exclude=("evidence", "source_span", "source_snapshot_hash"),
+    )
     return PathEvidenceResponse(
         path_id=str(path.get("path_id") or ""),
         entry_method=str(path.get("entry_method") or ""),
@@ -834,11 +867,6 @@ def _materialize_path_evidence(
         caller=str(path.get("caller") or ""),
         caller_class=str(path.get("caller_class") or ""),
         caller_method=str(path.get("caller_method") or ""),
-        external_wrapper_method=str(path.get("external_wrapper_method") or ""),
-        wrapper_contract=str(path.get("wrapper_contract") or ""),
-        wrapper_contract_source=str(path.get("wrapper_contract_source") or ""),
-        wrapper_receiver_type=str(path.get("wrapper_receiver_type") or ""),
-        wrapper_contract_candidates=list(path.get("wrapper_contract_candidates", []) or []),
         procedure_name=str(path.get("procedure_name") or ""),
         procedure_schema=str(path.get("procedure_schema") or ""),
         branch_context=list(path.get("branch_context", []) or []),
@@ -860,6 +888,7 @@ def _materialize_path_evidence(
         operations=[operation_evidence] if operation_evidence else [],
         views=views,
         functions=functions,
+        **wrapper_projection,
     )
 
 
@@ -1462,6 +1491,8 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             # are queried from the Execution Graph below.
             access_type=rel.access_type,
             reason="inline_sql_source_fact",
+            evidence_status="not_applicable",
+            evidence_reason="inline_sql",
             database=database,
             database_attribution="resolved" if database else "unresolved",
             caller=(
@@ -1513,6 +1544,10 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
                 else "READ"
             )
             sp_chain = list(access_record.get("sp_chain") or [])
+            wrapper_projection = _wrapper_projection_fields(
+                access_record,
+                exclude=("evidence", "source_span", "source_snapshot_hash"),
+            )
             candidate = TableMatchProgram(
                 program=_normalize_program(Path(csharp_file).name),
                 file=_rel(csharp_file, root),
@@ -1537,6 +1572,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
                 source_span=dict(source_span),
                 source_snapshot_hash=str(source_span.get("content_hash") or ""),
                 operation_type=operation_type,
+                **wrapper_projection,
             )
             _prefer_table_match(matches_by_file, candidate)
 
@@ -1748,6 +1784,7 @@ def _refresh_wrapper_location(
     relative_path: str,
     snapshot_hash: str,
     evidence: Optional[DbInvocation] = None,
+    observation: Optional[Mapping[str, object]] = None,
 ) -> Dict[str, object]:
     command_text = record.get("command_text")
     location: Dict[str, object] = {
@@ -1761,7 +1798,9 @@ def _refresh_wrapper_location(
         "source_file": str(source_file),
         "source_snapshot_hash": snapshot_hash,
     }
-    if evidence is None:
+    if observation is not None:
+        location.update(dict(observation))
+    elif evidence is None:
         location.update(
             {
                 "evidence_status": "not_applicable",
@@ -1830,53 +1869,43 @@ def reconcile_refresh_wrappers(
                 if not isinstance(record, Mapping) or not _is_refresh_wrapper_record(record):
                     continue
                 wrapper_calls += 1
-                classification = gateway.reconcile_wrapper(
+                observation = gateway.reconcile_wrapper_observation(
                     relative_path,
                     record,
                     scan_root=str(root),
-                    explicit_contract=normalized_contract or None,
-                ).to_dict()
-                evidence_invocations = gateway.resolve_direct_invocations(
-                    relative_path,
-                    [dict(record)],
-                    scan_root=str(root),
+                    source_snapshot_hash=snapshot_hash,
                     explicit_contract=normalized_contract or None,
                 )
-                evidence_invocation = evidence_invocations[0] if evidence_invocations else None
-                if evidence_invocation is not None:
-                    evidence_status = evidence_invocation.evidence.value
-                    evidence_reason = evidence_invocation.reason
-                else:
-                    evidence_status = "not_applicable"
-                    evidence_reason = "inline_sql"
+                evidence_status = str(observation["evidence_status"])
+                evidence_reason = str(observation["evidence_reason"])
                 wrapper_class = str(record.get("wrapper_class_name") or "").strip()
                 receiver_type = str(record.get("wrapper_receiver_type") or "").strip()
                 method_name = str(record.get("wrapper_method_name") or "").strip()
                 group_key = (
-                    classification["scan_root"],
+                    observation["scan_root"],
                     wrapper_class,
                     receiver_type,
                     method_name,
-                    classification["wrapper_kind"],
-                    classification["status"],
-                    classification["contract"],
-                    classification["selection_source"],
-                    classification["reason"],
+                    observation["wrapper_kind"],
+                    observation["status"],
+                    observation["contract"],
+                    observation["selection_source"],
+                    observation["classification_reason"],
                     evidence_status,
                     evidence_reason,
                     (
-                        classification["source_span"]["relative_path"],
-                        classification["source_span"]["start_offset"],
-                        classification["source_span"]["end_offset"],
+                        observation["source_span"]["relative_path"],
+                        observation["source_span"]["start_offset"],
+                        observation["source_span"]["end_offset"],
                         snapshot_hash,
                     )
-                    if classification["review_candidate"]
+                    if observation["review_candidate"]
                     else (),
                 )
                 root_observation_keys.add(group_key)
                 group = observations_by_key.get(group_key)
                 if group is None:
-                    reason = str(classification["reason"] or "")
+                    reason = str(observation["classification_reason"] or "")
                     group = {
                         "wrapper_class": wrapper_class,
                         "receiver_type": receiver_type,
@@ -1884,38 +1913,12 @@ def reconcile_refresh_wrappers(
                         "observed_method": method_name,
                         "observed_methods": [method_name] if method_name else [],
                         "methods": [method_name] if method_name else [],
-                        "wrapper_kind": classification["wrapper_kind"],
-                        "status": classification["status"],
-                        "classification_status": classification["status"],
+                        **observation,
                         "evidence_status": evidence_status,
                         "evidence_reason": evidence_reason,
-                        "contract": classification["contract"],
-                        "selected_contract": classification["contract"],
-                        "contract_mode": classification["contract_mode"],
-                        "contract_sink": classification["contract_sink"],
-                        "selection_source": classification["selection_source"],
-                        "candidate_contracts": classification["candidate_contracts"],
-                        "candidate_contract_names": classification["candidate_contracts"],
-                        "source_available": classification["source_available"],
-                        "source_provenance": {
-                            "selection_source": classification["selection_source"],
-                            "source_available": classification["source_available"],
-                            "scan_root": classification["scan_root"],
-                            "source_span": classification["source_span"],
-                            "source_snapshot_hash": snapshot_hash,
-                            "source_snapshot_identity": snapshot_hash,
-                        },
-                        "scan_root": classification["scan_root"],
-                        "source_span": classification["source_span"],
-                        "source_snapshot_hash": snapshot_hash,
-                        "source_snapshot_identity": snapshot_hash,
                         "reason": reason,
                         "unresolved_reason": reason,
-                        "review_candidate": classification["review_candidate"],
-                        "active_contract": classification["active_contract"],
                         "review_reasons": [reason] if reason else [],
-                        "stored_procedure_mode": classification["stored_procedure_mode"],
-                        "mode_reason": classification["mode_reason"],
                         "calls": 0,
                         "locations": [],
                     }
@@ -1929,7 +1932,7 @@ def reconcile_refresh_wrappers(
                         str(source_file),
                         relative_path,
                         snapshot_hash,
-                        evidence_invocation,
+                        observation=observation,
                     )
                 )
 

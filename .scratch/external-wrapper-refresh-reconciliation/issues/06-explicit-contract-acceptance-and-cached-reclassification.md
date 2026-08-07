@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] A reviewed proposal can be explicitly accepted; ordinary refresh has no implicit acceptance path.
-- [ ] Acceptance validates receiver types, method identity, allowed `mode` values, sink values, contract uniqueness, and any requested system selector before writing active configuration.
-- [ ] Incomplete proposals with no approved semantic `mode` or `sink` are rejected and remain review-only.
-- [ ] Acceptance produces a reviewable registry/catalog diff and does not commit changes automatically.
-- [ ] The existing `sqlobject` contract is reused for `SQLObject` observations instead of creating a duplicate contract.
-- [ ] Changing only contract configuration reclassifies existing cached raw facts without invoking the C# analyzer or changing source snapshots.
-- [ ] A source revision still requires a normal full or program-scoped refresh before new raw observations can be classified.
-- [ ] Acceptance, validation, no-write, reuse, and no-rescan behavior are covered by focused tests.
+- [x] A reviewed proposal can be explicitly accepted; ordinary refresh has no implicit acceptance path.
+- [x] Acceptance validates receiver types, method identity, allowed `mode` values, sink values, contract uniqueness, and any requested system selector before writing active configuration.
+- [x] Incomplete proposals with no approved semantic `mode` or `sink` are rejected and remain review-only.
+- [x] Acceptance produces a reviewable registry/catalog diff and does not commit changes automatically.
+- [x] The existing `sqlobject` contract is reused for `SQLObject` observations instead of creating a duplicate contract.
+- [x] Changing only contract configuration reclassifies existing cached raw facts without invoking the C# analyzer or changing source snapshots.
+- [x] A source revision still requires a normal full or program-scoped refresh before new raw observations can be classified.
+- [x] Acceptance, validation, no-write, reuse, and no-rescan behavior are covered by focused tests.

@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] A program-scoped refresh replaces only selected C# records and their derived raw wrapper facts in the scan cache.
-- [ ] The selected-file analyzer receives the complete current scan root as source context, allowing same-root source wrappers to remain source-backed without scanning unrelated input files.
-- [ ] Wrapper reconciliation covers the resulting logical cache state without triggering a second C# analyzer pass.
-- [ ] All scan roots pass current-cache preflight before any selected-root update begins; stale or missing roots return the existing fail-closed error.
-- [ ] A forbidden full-project scan test fails if program-scoped refresh attempts to fall back to full analysis.
-- [ ] Unchanged files retain their raw invocation facts and wrapper observations; removed files no longer appear in the reconciled result.
-- [ ] Multi-root tests verify that source-wrapper lookup does not cross a scan-root boundary.
-- [ ] The CLI returns a non-zero exit code for program-refresh failures and exposes the wrapper summary for successful partial refreshes.
+- [x] A program-scoped refresh replaces only selected C# records and their derived raw wrapper facts in the scan cache.
+- [x] The selected-file analyzer receives the complete current scan root as source context, allowing same-root source wrappers to remain source-backed without scanning unrelated input files.
+- [x] Wrapper reconciliation covers the resulting logical cache state without triggering a second C# analyzer pass.
+- [x] All scan roots pass current-cache preflight before any selected-root update begins; stale or missing roots return the existing fail-closed error.
+- [x] A forbidden full-project scan test fails if program-scoped refresh attempts to fall back to full analysis.
+- [x] Unchanged files retain their raw invocation facts and wrapper observations; removed files no longer appear in the reconciled result.
+- [x] Multi-root tests verify that source-wrapper lookup does not cross a scan-root boundary.
+- [x] The CLI returns a non-zero exit code for program-refresh failures and exposes the wrapper summary for successful partial refreshes.

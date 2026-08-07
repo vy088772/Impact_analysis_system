@@ -11,6 +11,7 @@ from code_analyzer.csharp_analysis_gateway import (
     DbInvocation,
     InvocationEvidence,
     SpCatalog,
+    invocation_wrapper_evidence_fields,
 )
 
 MAX_COMPACT_PATHS = 20
@@ -424,7 +425,7 @@ def _path_for_operation(
         _ordered_unique((*call_conditions, *list(operation.get("branch_path", []) or [])))
     )
 
-    return {
+    path = {
         "path_id": _path_id(
             invocation,
             operation_id,
@@ -479,6 +480,12 @@ def _path_for_operation(
         ),
         "unresolved_targets": missing_targets,
     }
+    path_evidence = path["evidence"]
+    path.update(invocation_wrapper_evidence_fields(invocation))
+    path["database"] = invocation.database or ""
+    path["evidence"] = path_evidence
+    path["source_span"] = _source_span(invocation)
+    return path
 
 
 def _unresolved_path(
@@ -500,7 +507,7 @@ def _unresolved_path(
         [_qualified_name(module)] if module else ([procedure_name] if procedure_name else [])
     )
     module_id = path_identity or (str(module.get("id", "")) if module else "")
-    return {
+    path = {
         "path_id": _path_id(
             invocation,
             operation_id or f"unresolved:{reason}",
@@ -541,6 +548,12 @@ def _unresolved_path(
         "unresolved_reason": reason,
         "unresolved_targets": list(unresolved_targets or []),
     }
+    path_evidence = path["evidence"]
+    path.update(invocation_wrapper_evidence_fields(invocation))
+    path["database"] = invocation.database or ""
+    path["evidence"] = path_evidence
+    path["source_span"] = _source_span(invocation)
+    return path
 
 
 def _relationship_targets(

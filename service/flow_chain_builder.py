@@ -36,7 +36,7 @@ from pathlib import Path
 import re
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-from code_analyzer.csharp_analysis_gateway import DbInvocation
+from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 from code_analyzer.models import FileAnalysisResult
 from code_analyzer.sql_analyzer import extract_tables_from_definition
 from .graph_queries import query_table_accesses
@@ -61,6 +61,15 @@ def _rel(file_path: str, root: Path) -> str:
         return str(Path(file_path).resolve().relative_to(root.resolve()))
     except Exception:
         return file_path
+
+
+def _wrapper_projection_fields(source: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: list(value) if isinstance(value, tuple) else value
+        for key in WRAPPER_EVIDENCE_FIELDS
+        if key in source
+        for value in (source[key],)
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -294,6 +303,7 @@ def build_forward_chain(
                         "conditions": list(path.get("conditions", []) or []),
                     }
                 )
+                formal_sp_chain[-1].update(_wrapper_projection_fields(path))
 
     sp_chain = formal_sp_chain
 
@@ -565,6 +575,7 @@ def build_backward_chains(
                     "writes": list(access_record.get("writes", []) or []),
                 }
             )
+            entry.update(_wrapper_projection_fields(access_record))
         chains.append(entry)
 
     # 1) SQL-module access comes from the same Gateway + Execution Graph join as

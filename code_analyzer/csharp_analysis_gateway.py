@@ -119,11 +119,191 @@ class DbInvocation:
     wrapper_unresolved_reason: str = ""
     wrapper_mode_reason: str = ""
     wrapper_method: str = ""
+    wrapper_source_available: bool = False
+    wrapper_stored_procedure_mode: bool = False
 
     @property
     def wrapper_classification_status(self) -> str:
         """Compatibility alias for consumers that use the longer field name."""
         return self.wrapper_status
+
+
+WRAPPER_EVIDENCE_FIELDS = (
+    "wrapper_kind",
+    "wrapper_status",
+    "wrapper_classification_status",
+    "classification_status",
+    "status",
+    "wrapper_selection_source",
+    "selection_source",
+    "wrapper_contract",
+    "contract",
+    "selected_contract",
+    "wrapper_contract_source",
+    "wrapper_contract_mode",
+    "contract_mode",
+    "wrapper_contract_sink",
+    "contract_sink",
+    "wrapper_contract_candidates",
+    "candidate_contracts",
+    "candidate_contract_names",
+    "wrapper_receiver_type",
+    "receiver_type",
+    "wrapper_scan_root",
+    "scan_root",
+    "wrapper_source_available",
+    "source_available",
+    "wrapper_review_candidate",
+    "review_candidate",
+    "wrapper_unresolved_reason",
+    "classification_reason",
+    "wrapper_mode_reason",
+    "mode_reason",
+    "wrapper_method",
+    "external_wrapper_method",
+    "observed_method",
+    "stored_procedure_mode",
+    "wrapper_stored_procedure_mode",
+    "active_contract",
+    "evidence",
+    "evidence_status",
+    "evidence_reason",
+    "source_span",
+    "source_snapshot_hash",
+    "source_snapshot_identity",
+    "source_provenance",
+)
+
+
+def wrapper_observation_fields(
+    reconciliation: WrapperReconciliation,
+    evidence: Optional[DbInvocation] = None,
+    *,
+    source_snapshot_hash: str = "",
+) -> Dict[str, Any]:
+    """Project classification and database evidence into one audit shape."""
+    classification = reconciliation.to_dict()
+    snapshot_hash = str(
+        source_snapshot_hash
+        or (evidence.source_snapshot_hash if evidence is not None else "")
+        or ""
+    )
+    evidence_status = evidence.evidence.value if evidence is not None else "not_applicable"
+    evidence_reason = evidence.reason if evidence is not None else "inline_sql"
+    database = evidence.database if evidence is not None else None
+    database_candidates = (
+        list(evidence.database_candidates) if evidence is not None else []
+    )
+    procedure_name = evidence.procedure_name if evidence is not None else None
+    procedure_schema = evidence.procedure_schema if evidence is not None else None
+    source_span = dict(classification["source_span"])
+    source_provenance = {
+        "selection_source": classification["selection_source"],
+        "source_available": classification["source_available"],
+        "scan_root": classification["scan_root"],
+        "source_span": source_span,
+        "source_snapshot_hash": snapshot_hash,
+        "source_snapshot_identity": snapshot_hash,
+    }
+    return {
+        "wrapper_kind": classification["wrapper_kind"],
+        "wrapper_status": classification["status"],
+        "wrapper_classification_status": classification["status"],
+        "classification_status": classification["status"],
+        "status": classification["status"],
+        "wrapper_selection_source": classification["selection_source"],
+        "selection_source": classification["selection_source"],
+        "wrapper_contract": classification["contract"],
+        "contract": classification["contract"],
+        "selected_contract": classification["contract"],
+        "wrapper_contract_source": (
+            "" if classification["source_available"] else classification["selection_source"]
+        ),
+        "wrapper_contract_mode": classification["contract_mode"],
+        "contract_mode": classification["contract_mode"],
+        "wrapper_contract_sink": classification["contract_sink"],
+        "contract_sink": classification["contract_sink"],
+        "wrapper_contract_candidates": list(classification["candidate_contracts"]),
+        "candidate_contracts": list(classification["candidate_contracts"]),
+        "candidate_contract_names": list(classification["candidate_contracts"]),
+        "wrapper_receiver_type": classification["receiver_type"],
+        "receiver_type": classification["receiver_type"],
+        "wrapper_scan_root": classification["scan_root"],
+        "scan_root": classification["scan_root"],
+        "wrapper_source_available": classification["source_available"],
+        "source_available": classification["source_available"],
+        "wrapper_review_candidate": classification["review_candidate"],
+        "review_candidate": classification["review_candidate"],
+        "wrapper_unresolved_reason": classification["reason"],
+        "classification_reason": classification["reason"],
+        "wrapper_mode_reason": classification["mode_reason"],
+        "mode_reason": classification["mode_reason"],
+        "wrapper_method": classification["wrapper_method"],
+        "external_wrapper_method": (
+            evidence.external_wrapper_method
+            if evidence is not None
+            else classification["wrapper_method"]
+            if classification["wrapper_kind"] == "external_wrapper"
+            else ""
+        ),
+        "observed_method": classification["wrapper_method"],
+        "stored_procedure_mode": classification["stored_procedure_mode"],
+        "wrapper_stored_procedure_mode": classification["stored_procedure_mode"],
+        "active_contract": classification["active_contract"],
+        "evidence": evidence_status,
+        "evidence_status": evidence_status,
+        "evidence_reason": evidence_reason,
+        "procedure_name": procedure_name or "",
+        "procedure_schema": procedure_schema or "",
+        "database": database,
+        "database_candidates": database_candidates,
+        "database_attribution": (
+            "resolved"
+            if database
+            else "candidate"
+            if database_candidates
+            else "unresolved"
+        ),
+        "source_span": source_span,
+        "source_snapshot_hash": snapshot_hash,
+        "source_snapshot_identity": snapshot_hash,
+        "source_provenance": source_provenance,
+    }
+
+
+def invocation_wrapper_evidence_fields(invocation: DbInvocation) -> Dict[str, Any]:
+    """Project one rated invocation using the same shape as wrapper audits."""
+    reconciliation = WrapperReconciliation(
+        wrapper_kind=invocation.wrapper_kind,
+        status=invocation.wrapper_status,
+        selection_source=invocation.wrapper_selection_source,
+        contract=invocation.wrapper_contract,
+        contract_mode=invocation.wrapper_contract_mode,
+        contract_sink=invocation.wrapper_contract_sink,
+        candidate_contracts=invocation.wrapper_contract_candidates,
+        receiver_type=invocation.wrapper_receiver_type,
+        wrapper_method=invocation.wrapper_method,
+        source_span=invocation.source,
+        source_available=invocation.wrapper_source_available,
+        scan_root=invocation.wrapper_scan_root,
+        reason=invocation.wrapper_unresolved_reason,
+        review_candidate=invocation.wrapper_review_candidate,
+        stored_procedure_mode=invocation.wrapper_stored_procedure_mode,
+        mode_reason=invocation.wrapper_mode_reason,
+    )
+    fields = wrapper_observation_fields(
+        reconciliation,
+        invocation,
+        source_snapshot_hash=invocation.source_snapshot_hash,
+    )
+    fields["source_span"] = {
+        "relative_path": invocation.source.relative_path,
+        "start_offset": invocation.source.start_offset,
+        "end_offset": invocation.source.end_offset,
+        "content_hash": invocation.source_snapshot_hash,
+    }
+    fields["external_wrapper_method"] = invocation.external_wrapper_method
+    return fields
 
 
 def _load_external_wrapper_contracts() -> Dict[str, Dict[str, Any]]:
@@ -609,6 +789,34 @@ class CSharpAnalysisGateway:
                 results.append(invocation)
         return results
 
+    def reconcile_wrapper_observation(
+        self,
+        relative_path: str,
+        raw: Mapping[str, Any],
+        *,
+        scan_root: str = "",
+        source_snapshot_hash: str = "",
+        explicit_contract: Optional[Mapping[str, Any] | str] = None,
+    ) -> Dict[str, Any]:
+        """Return one wrapper observation with classification and evidence parity."""
+        classification = self.reconcile_wrapper(
+            relative_path,
+            raw,
+            scan_root=scan_root,
+            explicit_contract=explicit_contract,
+        )
+        rated = self.resolve_direct_invocations(
+            relative_path,
+            [dict(raw)],
+            scan_root=scan_root,
+            explicit_contract=explicit_contract,
+        )
+        return wrapper_observation_fields(
+            classification,
+            rated[0] if rated else None,
+            source_snapshot_hash=source_snapshot_hash,
+        )
+
     def _resolve_one(
         self,
         relative_path: str,
@@ -757,6 +965,8 @@ class CSharpAnalysisGateway:
                 wrapper_unresolved_reason=reconciliation.reason,
                 wrapper_mode_reason=reconciliation.mode_reason,
                 wrapper_method=reconciliation.wrapper_method,
+                wrapper_source_available=reconciliation.source_available,
+                wrapper_stored_procedure_mode=reconciliation.stored_procedure_mode,
                 external_wrapper_method=external_wrapper_method,
             )
 

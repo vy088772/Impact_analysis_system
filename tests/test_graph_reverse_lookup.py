@@ -208,6 +208,119 @@ def test_find_by_table_write_only_uses_graph_writers(monkeypatch, tmp_path: Path
     assert all(match.path_id for match in response.matches)
 
 
+def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    scan = _scan(tmp_path)
+    direct_file = str((tmp_path / "DirectPage.cs").resolve())
+    scan.db_invocations[direct_file][0].update(
+        {
+            "invocation_kind": "source_wrapper",
+            "wrapper_method_name": "ExeProcNon",
+            "wrapper_receiver_type": "SQLObject",
+            "wrapper_source_available": False,
+            "wrapper_mode": "stored_procedure",
+        }
+    )
+    monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema: {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "procedures": [
+                {"name": "dbo.usp_Direct"},
+                {"name": "dbo.usp_Entry"},
+                {"name": "dbo.usp_Nested"},
+            ],
+            "sql_execution_graph": _graph(),
+        },
+    )
+
+    analyze_response = analyze_service.analyze(
+        AnalyzeRequest(
+            database="OrdersDb",
+            program_names=["DirectPage"],
+            include_snippets=False,
+            fk_depth=0,
+        )
+    )
+    invocation = analyze_response.programs[0].database_invocations[0]
+    path = analyze_response.programs[0].execution_paths[0]
+
+    sp_response = analyze_service.find_by_sp(
+        FindBySPRequest(
+            source={"project": "orders", "repo": "orders"},
+            sp_name="dbo.usp_Direct",
+            database="OrdersDb",
+            cache_only=False,
+        )
+    )
+    table_response = analyze_service.find_by_table(
+        FindByTableRequest(
+            source={"project": "orders", "repo": "orders"},
+            table_name="dbo.SOrder",
+            database="OrdersDb",
+            cache_only=False,
+            write_only=True,
+        )
+    )
+    flow_response = analyze_service.flow_chain(
+        FlowChainRequest(
+            source={"project": "orders", "repo": "orders"},
+            direction="backward",
+            table_name="dbo.SOrder",
+            database="OrdersDb",
+            cache_only=False,
+        )
+    )
+
+    sp_match = next(match for match in sp_response.matches if match.program == "directpage")
+    table_match = next(match for match in table_response.matches if match.program == "directpage")
+    flow_match = next(chain for chain in flow_response.backward_chains if chain["program"] == "DirectPage.cs")
+    parity_keys = (
+        "wrapper_kind",
+        "wrapper_status",
+        "wrapper_classification_status",
+        "classification_status",
+        "status",
+        "wrapper_selection_source",
+        "selection_source",
+        "wrapper_contract",
+        "contract",
+        "selected_contract",
+        "wrapper_contract_mode",
+        "contract_mode",
+        "wrapper_contract_sink",
+        "contract_sink",
+        "wrapper_receiver_type",
+        "receiver_type",
+        "wrapper_method",
+        "stored_procedure_mode",
+        "wrapper_stored_procedure_mode",
+        "evidence_status",
+        "evidence_reason",
+        "source_snapshot_identity",
+        "source_provenance",
+    )
+
+    def values(item):
+        return {
+            key: item.get(key) if isinstance(item, dict) else getattr(item, key)
+            for key in parity_keys
+        }
+
+    expected = values(invocation)
+    assert values(path) == expected
+    assert values(sp_match) == expected
+    assert values(table_match) == expected
+    assert values(flow_match) == expected
+
+
 def test_find_by_sp_accepts_schema_qualified_name(monkeypatch, tmp_path: Path) -> None:
     scan = _scan(tmp_path)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
