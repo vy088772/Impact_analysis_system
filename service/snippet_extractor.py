@@ -30,6 +30,11 @@ def _read_lines(file_path: Path) -> List[str]:
     return []
 
 
+def _join_non_blank_lines(lines: List[str]) -> str:
+    """組裝片段時移除空白行，但保留程式碼行原有的縮排。"""
+    return "\n".join(line for line in lines if line.strip())
+
+
 def _rel(file_path: str, root: Path) -> str:
     try:
         return str(Path(file_path).resolve().relative_to(root.resolve()))
@@ -79,7 +84,7 @@ def extract_snippets(
             start = max(1, int(loc.line_number))
             span = max(1, int(getattr(method, "line_count", 0) or 1))
             end = min(total, start + min(span, max_lines_per_snippet) - 1)
-            text = "\n".join(lines[start - 1:end])
+            text = _join_non_blank_lines(lines[start - 1:end])
             if not text.strip():
                 continue
             snippets.append(
@@ -96,7 +101,7 @@ def extract_snippets(
     # 2) 無方法位置 → 退回檔案開頭片段
     if not snippets:
         end = min(total, head_lines)
-        text = "\n".join(lines[:end])
+        text = _join_non_blank_lines(lines[:end])
         if text.strip():
             snippets.append(
                 CodeSnippet(

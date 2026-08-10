@@ -31,5 +31,17 @@ The normalized stored-procedure inventory for one refreshed database, used to va
 _Avoid_: global SP-name match
 
 **Database Invocation**:
-An evidence-rated C# call to a stored procedure, inline SQL operation, or unresolved dynamic SQL target.
+An evidence-rated C# data-access call that represents stored-procedure execution, inline SQL execution, or an unresolved database operation, regardless of whether it crosses direct ADO.NET, a local wrapper, an external wrapper, Dapper, or Entity Framework.
 _Avoid_: assumed SP call
+
+**Evidence Status**:
+The confidence state of a Database Invocation: `proven`, `likely`, or `unresolved`. It rates the available execution and target evidence independently from contract selection status.
+_Avoid_: contract status, scan success
+
+**Wrapper Contract Selector**:
+The system-level choice of reusable semantics for an unavailable external wrapper. It may identify one contract or an explicit set of contracts; it is not an inventory of observed methods and does not prove a procedure target or database identity.
+_Avoid_: wrapper method list, SP proof
+
+**Contract Preflight**:
+A preliminary evidence evaluation that determines whether source or verified external implementation facts can supply reusable wrapper semantics before formal Database Invocation classification. A preflight proposal is configuration interpretation, not procedure evidence.
+_Avoid_: formal invocation evidence, runtime discovery

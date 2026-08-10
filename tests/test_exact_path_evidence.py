@@ -457,9 +457,23 @@ def test_path_evidence_materializes_unresolved_cycle_without_terminal_dml(tmp_pa
     ]
 
 
-def test_path_evidence_retains_unverified_literal_sp_candidate(tmp_path: Path) -> None:
+def test_path_evidence_retains_unverified_literal_sp_candidate(monkeypatch, tmp_path: Path) -> None:
     scan, cached, _ = _cached_path_fixture(tmp_path)
     graph = cached["sql_execution_graph"]
+    monkeypatch.setattr(
+        analyze_service,
+        "fetch_sp_definitions",
+        lambda sp_names, database_alias=None: [
+            {
+                "name": sp_names[0],
+                "exists": True,
+                "parameters": [{"name": "@Id"}],
+                "tables": ["dbo.SOrder"],
+                "dependency_source": "execution_graph",
+                "definition": "CREATE PROCEDURE dbo.usp_SaveOrder AS SELECT 1;",
+            }
+        ],
+    )
     invocation = DbInvocation(
         class_name="OrderPage",
         method_name="Save",
@@ -489,6 +503,10 @@ def test_path_evidence_retains_unverified_literal_sp_candidate(tmp_path: Path) -
     assert candidate["procedure_name"] == "usp_saveorder"
     assert candidate["raw_command_text"] == "[dbo].[usp_SaveOrder]"
     assert candidate["reason"] == "wrapper_source_unavailable"
+    assert candidate["sql_cache_matched"] is True
+    assert candidate["exists"] is True
+    assert candidate["parameters"] == [{"name": "@Id"}]
+    assert "CREATE PROCEDURE" in candidate["definition"]
 
 
 def test_path_evidence_skips_external_wrapper_method_span(tmp_path: Path) -> None:

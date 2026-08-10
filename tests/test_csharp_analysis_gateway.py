@@ -1625,6 +1625,55 @@ def test_static_analyzer_host_preserves_unavailable_wrapper_candidate() -> None:
         assert invocations[0].raw_command_text == "usp_SaveOrder"
 
 
+def test_static_analyzer_host_ignores_ui_helpers_with_boolean_arguments() -> None:
+    """UI helper flags must not be mistaken for external wrapper mode selectors."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "UiHelpers.cs"
+        source_path.write_text(
+            "public class UiHelpers {\n"
+            "    private string ScriptText { get; }\n"
+            "    private void Show(Page page, UpdatePanel panel) {\n"
+            "        CommonFunction.AlertMsg(page, \"done\", true);\n"
+            "        ScriptManager.RegisterStartupScript(panel, typeof(string), \"key\", \"alert(1)\", true);\n"
+            "        ScriptManager.RegisterStartupScript(this.Page, typeof(string), \"key2\", \"alert(2)\", true);\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+
+        assert result["db_invocations"] == []
+
+
+def test_static_analyzer_host_keeps_string_typed_unknown_wrapper_candidates() -> None:
+    """String-typed dynamic command text remains eligible for wrapper review."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "DynamicWrapper.cs"
+        source_path.write_text(
+            "public class DynamicWrapper {\n"
+            "    private void Save(string procedure) {\n"
+            "        var wrapper = GetExternalWrapper();\n"
+            "        wrapper.Execute(procedure, true);\n"
+            "    }\n"
+            "    private object GetExternalWrapper() { return null; }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+
+        assert len(result["db_invocations"]) == 1
+        assert result["db_invocations"][0]["wrapper_mode"] == "stored_procedure"
+        assert result["db_invocations"][0]["command_text_kind"] == "dynamic"
+
+
 def test_static_analyzer_host_applies_external_sqlobject_wrapper_contract() -> None:
     """Known external SQLObject methods distinguish SP, inline SQL, and dynamic calls."""
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)

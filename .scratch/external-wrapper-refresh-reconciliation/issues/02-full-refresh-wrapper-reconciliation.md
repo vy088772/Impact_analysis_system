@@ -1,6 +1,6 @@
 # 02 — Full Refresh Wrapper Reconciliation
 
-**What to build:** Make a full code refresh run one source scan followed by wrapper reconciliation and return a machine-readable wrapper summary through the Impact refresh API and `refresh_cli`. The refresh must report contract provenance and review items without modifying the active contract registry or system catalog.
+**What to build:** Make a full code refresh run one raw source scan, contract preflight, formal wrapper classification, and reconciliation, then return a machine-readable wrapper summary through the Impact refresh API and `refresh_cli`. A valid selector prevents automatic contract changes; an unspecified or invalid selector may stage only complete source/DLL-backed contracts and commit them atomically after successful classification and reconciliation.
 
 **Blocked by:** 01 — Canonical Wrapper Reconciliation Boundary
 
@@ -10,6 +10,6 @@
 - [x] `POST /refresh` returns additive wrapper summary data including observed receiver types, methods, classification statuses, selected contracts, selection sources, candidate contracts, source provenance, and review reasons.
 - [x] `refresh_cli` displays or forwards the wrapper summary without requiring a separate `discover_external_wrappers` invocation.
 - [x] A successful source refresh can return source-backed and unresolved wrapper results without requiring a live SQL connection when SQL enrichment is not otherwise needed.
-- [x] The refresh does not write `external_wrapper_contracts` or `system_catalog` as a side effect.
+- [x] A valid existing selector does not create or overwrite `external_wrapper_contracts` or `system_catalog`; an unspecified or invalid selector writes only a validated complete proposal after formal classification and reconciliation succeed.
 - [x] Existing refresh counts, source-root information, partial-refresh fields, and legacy response aliases remain backward compatible.
-- [x] API and service tests verify the single-scan flow, response serialization, no-write behavior, and machine-readable unresolved results.
+- [x] API and service tests verify the single-scan/preflight flow, response serialization, conditional write and rollback behavior, and machine-readable unresolved results.

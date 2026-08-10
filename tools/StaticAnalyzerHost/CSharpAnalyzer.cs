@@ -873,7 +873,7 @@ internal static class WrapperAnalyzer
             return null;
 
         var commandText = call.ArgumentList.Arguments.ElementAtOrDefault(0)?.Expression;
-        var mode = ResolveExternalSqlObjectMode(call);
+        var mode = ResolveExternalSqlObjectMode(call, caller);
         if (mode == "inline_sql")
             return null;
 
@@ -998,7 +998,9 @@ internal static class WrapperAnalyzer
             ?.Type.ToString();
     }
 
-    private static string ResolveExternalSqlObjectMode(InvocationExpressionSyntax call)
+    private static string ResolveExternalSqlObjectMode(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax caller)
     {
         if (call.Expression is not MemberAccessExpressionSyntax member)
             return "unknown";
@@ -1010,11 +1012,19 @@ internal static class WrapperAnalyzer
         if (methodName.Equals("CreateReader", StringComparison.OrdinalIgnoreCase)
             || methodName.Equals("GetFirstValue", StringComparison.OrdinalIgnoreCase))
             return "inline_sql";
-        return ResolveUnknownCallMode(call);
+        return ResolveUnknownCallMode(call, caller);
     }
 
-    private static string ResolveUnknownCallMode(InvocationExpressionSyntax call)
+    private static string ResolveUnknownCallMode(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax caller)
     {
+        var commandTextExpression = call.ArgumentList.Arguments
+            .ElementAtOrDefault(0)
+            ?.Expression;
+        if (!LooksLikeCommandTextExpression(commandTextExpression, caller))
+            return "unknown";
+
         var hasStoredMode = call.ArgumentList.Arguments.Any(argument => IsStoredModeLiteral(argument.Expression));
         var hasInlineMode = call.ArgumentList.Arguments.Any(argument => IsInlineModeLiteral(argument.Expression));
         if (hasStoredMode)
@@ -1022,6 +1032,81 @@ internal static class WrapperAnalyzer
         if (hasInlineMode)
             return "inline_sql";
         return "unknown";
+    }
+
+    private static bool LooksLikeCommandTextExpression(
+        ExpressionSyntax? expression,
+        MethodDeclarationSyntax caller)
+    {
+        return expression switch
+        {
+            LiteralExpressionSyntax { Token.Value: string } => true,
+            InterpolatedStringExpressionSyntax => true,
+            IdentifierNameSyntax identifier => IsStringIdentifier(identifier.Identifier.Text, caller),
+            MemberAccessExpressionSyntax member => IsStringMember(member, caller),
+            ConditionalExpressionSyntax conditional =>
+                LooksLikeCommandTextExpression(conditional.WhenTrue, caller)
+                && LooksLikeCommandTextExpression(conditional.WhenFalse, caller),
+            _ => false,
+        };
+    }
+
+    private static bool IsStringIdentifier(string identifierName, MethodDeclarationSyntax caller)
+    {
+        foreach (var declaration in caller.DescendantNodes().OfType<VariableDeclarationSyntax>())
+        {
+            var variable = declaration.Variables.FirstOrDefault(
+                item => item.Identifier.Text == identifierName);
+            if (variable is null)
+                continue;
+            if (IsStringType(declaration.Type))
+                return true;
+            if (declaration.Type.ToString().Equals("var", StringComparison.Ordinal)
+                && IsStringValueExpression(variable.Initializer?.Value))
+                return true;
+        }
+
+        var parameter = caller.ParameterList.Parameters.FirstOrDefault(
+            item => item.Identifier.Text == identifierName);
+        if (parameter?.Type is not null && IsStringType(parameter.Type))
+            return true;
+
+        return IsStringMemberName(identifierName, caller);
+    }
+
+    private static bool IsStringMember(MemberAccessExpressionSyntax member, MethodDeclarationSyntax caller)
+        => member.Expression is ThisExpressionSyntax
+            && IsStringMemberName(member.Name.Identifier.Text, caller);
+
+    private static bool IsStringMemberName(string memberName, MethodDeclarationSyntax caller)
+    {
+        var containingClass = caller.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+        if (containingClass is null)
+            return false;
+
+        var field = containingClass.DescendantNodes()
+            .OfType<FieldDeclarationSyntax>()
+            .FirstOrDefault(item => item.Declaration.Variables.Any(
+                variable => variable.Identifier.Text == memberName));
+        if (field is not null && IsStringType(field.Declaration.Type))
+            return true;
+
+        var property = containingClass.DescendantNodes()
+            .OfType<PropertyDeclarationSyntax>()
+            .FirstOrDefault(item => item.Identifier.Text == memberName);
+        return property is not null && IsStringType(property.Type);
+    }
+
+    private static bool IsStringValueExpression(ExpressionSyntax? expression)
+        => expression is LiteralExpressionSyntax { Token.Value: string }
+            || expression is InterpolatedStringExpressionSyntax;
+
+    private static bool IsStringType(TypeSyntax type)
+    {
+        var typeName = type.ToString().Trim().TrimEnd('?');
+        return typeName.Equals("string", StringComparison.Ordinal)
+            || typeName.Equals("String", StringComparison.Ordinal)
+            || typeName.EndsWith(".String", StringComparison.Ordinal);
     }
 
     private static bool IsStoredModeLiteral(ExpressionSyntax expression)

@@ -825,7 +825,26 @@ def _materialize_path_evidence(
         and invocation.procedure_name
         and invocation.raw_command_text is not None
     ):
-        literal_sp_candidates.append(_serialize_db_invocation(invocation))
+        candidate = _serialize_db_invocation(invocation)
+        database_alias = str(
+            path.get("database")
+            or cached.get("database")
+            or graph.get("database")
+            or invocation.database
+            or ""
+        ).strip()
+        if database_alias:
+            definitions = fetch_sp_definitions(
+                [invocation.raw_command_text or invocation.procedure_name],
+                database_alias=database_alias,
+            )
+            if definitions:
+                definition = definitions[0]
+                candidate.update(definition)
+                if definition.get("dependency_source") == "execution_graph":
+                    candidate["sql_cache_matched"] = True
+                    candidate["sql_cache_database"] = database_alias
+        literal_sp_candidates.append(candidate)
     views: List[Dict] = []
     functions: List[Dict] = []
     referenced_object_ids: set[str] = set()

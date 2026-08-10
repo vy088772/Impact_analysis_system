@@ -94,7 +94,9 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # ProjectScanResult serialization; cached scans must not retain a second relation source.
 # v20：remove legacy SP-based database inference from formal table facts.
 # v21：external wrapper raw facts include receiver type metadata.
-_CACHE_VERSION = 21
+# v22：unknown external wrapper mode inference no longer treats a boolean argument
+# on calls whose first argument is not command-text-shaped as stored-procedure mode.
+_CACHE_VERSION = 22
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

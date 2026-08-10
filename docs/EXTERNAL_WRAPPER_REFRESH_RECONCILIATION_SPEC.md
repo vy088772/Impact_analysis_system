@@ -15,18 +15,21 @@ triage: ready-for-agent
 
 ## Solution
 
-讓程式碼 refresh 在完成一次 C# scan 後，立即使用共用的 wrapper reconciliation service 對最新 raw Database Invocation 做分類，並將分類摘要、Evidence Status、contract provenance 與 review candidates 一起回傳。完整 refresh 與 program-scoped refresh 都沿用同一個 source-root source boundary；program-scoped refresh 仍只重建選定程式的 C# records，不因 wrapper reconciliation 而觸發整個 system 的 analyzer。
+讓 `refresh_cli` 成為完整的 contract onboarding 與 source classification orchestrator。它在同一次操作中完成 `git pull`、raw source analysis、source contract preflight、formal `Database Invocation` classification、wrapper observations/reconciliation，以及 `proven` / `likely` / `unresolved` 輸出。preflight 與 formal classification 重用同一份 raw analyzer result，不重複掃描檔案系統。
 
-reconciliation 遵循下列順序：
+refresh 依下列順序執行：
 
-1. source wrapper 若可在目前 scan root 的 source snapshot 中追蹤，保留為 source-backed evidence，不要求 external contract。
-2. system 明確選定的 contract 優先使用；沒有明確 selector 時，才依 receiver type 尋找 `auto_select: true` 的 reusable contract。
-3. receiver type 唯一對應既有 contract 時自動套用；零個候選或多個候選時保持 unresolved，並保留候選名稱作為 provenance。
-4. contract method 的 `mode` 與 `sink` 必須來自 registry 或明確的 call-site evidence。`inline_sql` 不得被當成 stored procedure；`call_site` 只有在呼叫點明確選擇 stored-procedure mode 時才可作為 SP invocation。
-5. 新 method 或新 receiver type 不會因名稱相似而自動加入 active contract。refresh 會產生 review candidate，接受後才可更新 contract registry；若需要變更 system selector，也必須透過明確的 acceptance workflow 更新 catalog。
-6. contract 被接受或修改後，優先對已保存的 raw facts 重新分類，不重新執行 C# scan；只有 source 變更才需要新的 refresh。
+1. 解析 system 的 source roots 並執行 `git pull`。
+2. 執行一次 raw C# source analysis，保留 source snapshot、typed invocation facts、source spans 與 connection facts。
+3. 正規化 `system_catalog.wrapper_contract`。缺欄位、`null`、空白字串、空 array、只有空白值的 array 都代表未指定。單一非空字串代表一個 explicit contract；非空 array 代表多個 explicit contract candidate。
+4. 若 selector 指向不存在的 contract，將單一 invalid selector 或包含任一 missing name 的整個 array 視為未指定，但保留原始值與 `invalid_selected_contract` diagnostics。若 selector 有效，禁止建立或覆寫 contract，formal scan 只使用指定 contract 或指定 candidate set，不向集合外 fallback。
+5. 對未指定 selector 執行 source/DLL contract preflight。preflight 只能從 local source 或帶有 exact external assembly identity 的 verified implementation snapshot 建立完整 method semantics；reflection-only metadata、method name 或不完整 DLL evidence 不得建立 active semantics。等價 receiver contract 會被重用；conflict、ambiguous、incomplete 或 name collision 只產生 review candidate。
+6. 建立 in-memory staged registry 與 catalog selector。單一完整 contract 寫成 string；多個完整 contract 寫成 deterministic sorted array；array 順序不是優先級。若沒有完整 proposal，保留目前 selector，受影響 external wrapper 於 formal scan 中標示 `unresolved`。
+7. 使用 staged registry/catalog 執行 formal source classification 與 wrapper reconciliation。source-backed implementation 優先於 external contract；valid explicit selector 或 candidate set 只限制 external contract 的選擇範圍。contract selector 不等於 procedure proof，仍須通過 mode、sink、connection source 與 SP Catalog evidence。
+8. 輸出 method semantics、invocation mode、sink、target、connection source、proven / likely / unresolved、contract provenance 與 unresolved reasons。
+9. 只有 formal classification 與 reconciliation 成功後，才以 logical two-file atomic commit 同步寫入 `external_wrapper_contracts.json` 與 `system_catalog.wrapper_contract`。任何 preflight、scan、reconciliation 或 commit failure 都保留兩份 active configuration 原狀。
 
-`discover_external_wrappers` 保留為可選的 audit/report 入口，但改為重用同一套 reconciliation service。它不再是 refresh 後取得 wrapper classification 的必要第二階段，也不會擁有另一套 wrapper 語義規則。
+`discover_external_wrappers` 保留為可選的 audit/report 入口，但重用同一套 reconciliation service。它不再是 refresh 後取得 wrapper classification 的必要第二階段，也不會擁有另一套 wrapper 語義規則。
 
 ## User Stories
 
@@ -50,8 +53,8 @@ reconciliation 遵循下列順序：
 18. As a system maintainer, I want the existing `sqlobject` contract to be reused for `SQLObject`, so that refresh does not create duplicate contracts with competing names.
 19. As a system maintainer, I want a newly observed method to produce a review candidate rather than an active contract entry, so that `mode` and `sink` are approved before they affect formal evidence.
 20. As a system maintainer, I want the review candidate to distinguish an unknown method from an unknown receiver contract, so that the next registry change is narrowly scoped.
-21. As a system maintainer, I want normal refresh to avoid writing Git-tracked contract or catalog files, so that an ordinary source update cannot silently change analysis semantics.
-22. As a system maintainer, I want an explicit acceptance workflow to apply a reviewed contract proposal, so that the registry and the system selector can be changed deliberately and audited.
+21. As a system maintainer, I want a valid existing selector to prevent automatic contract creation or overwrite, so that an explicitly chosen contract remains authoritative for formal external-wrapper classification.
+22. As a system maintainer, I want an unspecified selector to allow only complete source/DLL-backed contract onboarding, so that ordinary refresh can repair missing semantics without promoting incomplete observations.
 23. As a system maintainer, I want an accepted contract change to reclassify existing raw scan facts without rescanning C#, so that semantic registry maintenance is cheap and does not create unnecessary source churn.
 24. As a system maintainer, I want source changes to remain the trigger for a new C# refresh, so that the distinction between source revision and contract revision stays explicit.
 25. As a downstream RAG coordinator, I want `wrapper_contract` to be resolved from the system catalog and forwarded through refresh, analyze, and path-evidence requests, so that every entry point uses the same selector semantics.
@@ -65,30 +68,42 @@ reconciliation 遵循下列順序：
 33. As a system maintainer, I want the refresh summary to identify whether a result came from explicit selection, receiver auto-selection, or source resolution, so that provenance survives into later review.
 34. As a system analyst, I want source snapshots and invocation spans to remain the evidence source for wrapper observations, so that the reconciliation report can be traced back to concrete code.
 35. As a future implementation agent, I want the normal refresh path, explicit acceptance path, and optional audit path to share a documented contract, so that follow-up changes do not recreate competing discovery logic.
+36. As a system operator, I want refresh to run `git pull`, one raw scan, preflight, formal scan, reconciliation, and output in one deterministic order, so that contract semantics are ready before invocation evidence is rated.
+37. As a system maintainer, I want a missing named contract to behave like an unspecified selector, so that a stale catalog reference can be repaired without blocking unaffected invocations.
+38. As a system maintainer, I want an array selector to represent an explicit contract set, so that multiple contracts can serve one system without array order becoming precedence.
+39. As a system maintainer, I want an array with any missing contract name to be treated as invalid as a whole, so that partial configuration cannot create environment-dependent semantics.
+40. As a system maintainer, I want one complete contract to serialize as a string and multiple complete contracts as a deterministic array, so that catalog format remains backward compatible and stable.
+41. As a system analyst, I want incomplete, conflicting, or ambiguous preflight evidence to leave affected wrappers unresolved, so that the workflow remains useful for direct and source-backed invocations without guessing.
+42. As a system operator, I want registry and catalog changes to commit atomically after successful reconciliation, so that a failed refresh cannot leave a half-applied selector.
+43. As a system maintainer, I want a program-scoped refresh to require an existing valid selector or completed full-system onboarding, so that partial observations cannot generate an incomplete contract set.
 
 ## Implementation Decisions
 
 - The `CSharpAnalysisGateway` remains the single high-level owner of wrapper classification and Evidence Status. It consumes raw StaticAnalyzerHost facts, source snapshot availability, the optional explicit contract, receiver-type registry candidates, and the database-scoped SP Catalog; it does not infer semantics from method names.
 - `ProjectScanner` remains responsible for one source scan and for passing the complete current scan root as source context when analyzing selected C# files. Wrapper reconciliation consumes the resulting facts and does not invoke another C# analyzer pass.
-- `refresh_source` orchestrates reconciliation after a successful full or program-scoped update. For a partial update, unchanged raw invocation facts remain in the cache and selected files replace only their own records; the response summarizes the logical cache state after the replacement.
-- `RefreshRequest` accepts an optional wrapper-contract selector. The spec-rag refresh client resolves the selector from the system catalog when the caller has not supplied one, matching the existing behavior of analyze and path-evidence clients.
+- `refresh_source` orchestrates raw analysis, contract preflight, staged formal classification, reconciliation, and commit after a successful full update. For a partial update, unchanged raw invocation facts remain in the cache and selected files replace only their own records; contract onboarding is not allowed unless a valid selector already exists or a prior full-system onboarding refresh completed.
+- `RefreshRequest` accepts a backward-compatible wrapper-contract selector represented as a string or array. The spec-rag refresh client resolves it from the system catalog when the caller has not supplied one, then normalizes blank/null/empty values as unspecified.
 - `RefreshResponse` gains additive machine-readable wrapper summary fields. The response must expose observed wrapper groups, classification status, selected contract, selection source, receiver type, observed methods, candidate contract names, source provenance, and review reasons without requiring consumers to parse terminal text.
 - Wrapper classification status is separate from `InvocationEvidence`. `source_wrapper`, `explicit_selected`, and `auto_selected` describe contract/source resolution; `proven`, `likely`, and `unresolved` describe the resulting Database Invocation evidence. One status must not be used as a substitute for the other.
 - Source-wrapper resolution is bounded by the current scan root. In a multi-root system, each root is reconciled with its own source context. Cross-root source lookup, repository-wide dependency materialization, and DLL retrieval are not introduced by this feature.
-- Contract selection precedence is explicit selector first, then unique `auto_select` receiver-type match. Zero candidates produce an unresolved contract result. Multiple candidates produce an ambiguous result and retain all candidate contract names as Impact Provenance.
+- Contract selection precedence is source-backed implementation first, then a valid explicit selector or explicit selector array for unavailable external wrappers, then a unique `auto_select` receiver-type match from the staged registry when no selector is specified. Zero candidates produce an unresolved contract result. Multiple candidates produce an ambiguous result and retain all candidate contract names as Impact Provenance. An explicit selector array is a candidate set, not an ordered priority list.
+- Selector normalization treats a missing field, `null`, blank string, empty array, or all-blank array as unspecified. A missing named contract makes a string selector unspecified for preflight. Any missing member makes an array selector invalid as a whole and therefore unspecified for preflight. The original invalid value remains in diagnostics until a successful commit replaces it.
 - Contract receiver and method matching is normalized by the existing receiver and method identity rules. A matching receiver type alone is insufficient: the observed wrapper method must also exist in the selected contract, and the contract receiver declaration must match the observed receiver.
 - `stored_procedure`, `inline_sql`, and `call_site` retain their existing meanings. An `inline_sql` method is excluded from stored-procedure invocation classification. A `call_site` method requires explicit call-site SP mode. The contract sink is descriptive of the downstream wrapper operation and is not itself a new wrapper method.
 - A source-available wrapper is not converted into an external contract proposal merely because its name is absent from the registry. The source implementation is the stronger local evidence path; an external contract is for unavailable or opaque wrapper boundaries.
-- An unavailable external wrapper with a new method or receiver type produces a review-only contract candidate. The candidate records observed identity and provenance, but leaves `mode`, `sink`, and active trust unresolved until a maintainer supplies and accepts the semantics.
+- Contract preflight may reuse an equivalent receiver contract or create a deterministic new contract only when local source or an exact-identity verified external implementation snapshot establishes receiver, method, mode, and sink semantics. Reflection-only metadata, method-name heuristics, and incomplete DLL facts remain review-only.
+- An unavailable external wrapper with a new method or receiver type produces a review-only contract candidate when complete semantics are not available. The candidate records observed identity and provenance, but leaves `mode`, `sink`, and active trust unresolved.
 - An observed method that is absent from an existing receiver contract produces an `unresolved_method` review item. It must not be appended automatically to the active contract, even when the receiver type uniquely selects that contract.
 - The current `sqlobject` registry entry is reused when the receiver type is `SQLObject`. The feature must not create a second contract solely because a refresh observed another `SQLObject` call site.
-- Normal refresh is read/write only for source repositories and scan cache. It does not modify the external wrapper registry or the system catalog. This prevents an ordinary source update from silently changing evidence semantics across repositories.
-- A separate explicit acceptance workflow may apply a reviewed contract proposal and, when required, update the system catalog selector. Acceptance must validate registry schema, receiver/method consistency, allowed modes, sink values, and catalog selector existence before making active configuration changes. The workflow must produce a reviewable diff; it does not commit changes automatically.
+- Normal refresh may stage and conditionally write the external wrapper registry and system catalog only when the selector is unspecified or invalid and preflight produces complete proposals. A valid existing selector prevents automatic contract creation and overwrite. This keeps the user's explicit contract choice authoritative while allowing safe onboarding for systems that have no usable selector.
+- The staged proposal must be validated for registry schema, receiver/method consistency, allowed modes, sink values, deterministic names, and selector representation before formal classification. The refresh commit happens only after formal classification and reconciliation succeed. A separate explicit acceptance workflow remains available for incomplete/review-only proposals, deliberate contract edits, and registry-only changes.
+- The registry and catalog update is a logical two-file atomic transaction. The implementation writes validated temporary files with one transaction identity, replaces both active files, and restores the previous bytes if the second replacement or post-commit validation fails. A failed transaction must not leave only one file updated.
 - When a contract is accepted or edited without a source revision, the implementation reclassifies cached raw invocation facts instead of rescanning C#. The raw facts remain the durable input to reclassification; active contract semantics remain configuration rather than duplicated scan output.
 - The optional `discover_external_wrappers` CLI becomes a thin read-only consumer of the shared reconciliation service. It may format a system-wide or root-scoped report, but it must not contain separate receiver matching, contract matching, or mode inference rules.
 - Refresh-time wrapper reconciliation is deterministic and contains no LLM or runtime execution. It may report an Evidence Gap, but it cannot fill that gap with semantic retrieval, reflection, or guessed database objects.
 - SQL refresh and SQL Execution Graph construction remain independent resources. A successful code refresh may return source-backed wrapper facts even when the SQL graph is missing or stale; graph-backed APIs retain their existing readiness and Evidence Status rules.
 - Existing cache safety rules remain unchanged: program-scoped refresh requires a current cache for every scan root and fails closed on stale or missing cache. Wrapper reconciliation must not call the full-project scan as a fallback.
+- Contract preflight is a full-system operation. A program-scoped refresh with no valid selector fails with a clear onboarding precondition and does not create a partial registry/catalog proposal.
 - The contract is additive for existing consumers. Existing refresh counts, source-root fields, partial-refresh fields, and legacy relation aliases remain available while wrapper summary fields are introduced.
 
 ## Testing Decisions
@@ -104,7 +119,9 @@ reconciliation 遵循下列順序：
 - API tests verify additive request/response behavior: the explicit wrapper selector is forwarded, catalog-resolved selection reaches the Impact boundary, and machine-readable wrapper status fields survive response-model serialization.
 - Spec-rag client tests verify that refresh resolves `wrapper_contract` through the catalog when the caller leaves it empty, preserves an explicit override, and does not require a second discovery HTTP request.
 - Reconciliation tests verify that changing only the contract registry reclassifies cached raw facts without invoking source scanning. A source content change must still require refresh before the new observation appears.
-- Acceptance-workflow tests verify the default no-write behavior, rejection of incomplete proposals, rejection of invalid modes or sinks, and explicit application of a reviewed registry/catalog change. They also verify that existing `sqlobject` is reused rather than duplicated.
+- Preflight tests verify valid selector reuse, missing selector onboarding, invalid string fallback, invalid array fallback, complete source/DLL evidence requirements, equivalent receiver reuse, conflict/name-collision rejection, string-versus-array selector serialization, and deterministic array ordering.
+- Refresh transaction tests verify that formal classification uses the staged registry/catalog, that incomplete preflight leaves affected wrappers unresolved, and that a failure before or during the two-file commit preserves both active configuration files.
+- Acceptance-workflow tests verify rejection of incomplete proposals, rejection of invalid modes or sinks, explicit application of a reviewed registry/catalog change, and cached reclassification without source rescanning. They also verify that existing `sqlobject` is reused rather than duplicated.
 - Audit CLI tests verify that it consumes the shared classifier, reports stale/missing cache separately from wrapper unresolved status, and produces equivalent classification results to refresh for the same cache snapshot.
 - One end-to-end smoke test may call the real StaticAnalyzerHost for typed receiver extraction and feed its raw result into the Gateway, following the existing Gateway test pattern. The majority of tests remain dependency-light and do not require a live Azure repository, SQL Server, or LLM.
 - Test assertions focus on external behavior: evidence status, selected contract, unresolved reason, provenance, cache scope, response schema, and write/no-write behavior. Internal data structure layout is tested only where it is part of the documented machine-readable contract.
@@ -112,8 +129,9 @@ reconciliation 遵循下列順序：
 ## Out of Scope
 
 - Inferring `mode` or `sink` from a wrapper method name alone.
-- Automatically adding a new method to an active external wrapper contract during an ordinary refresh.
-- Automatically changing a Git-tracked system catalog or contract registry without an explicit acceptance action.
+- Automatically adding a new method to an active external wrapper contract when a valid selector exists, or when source/DLL semantics are incomplete, conflicting, or ambiguous.
+- Automatically changing a Git-tracked system catalog or contract registry before preflight, formal classification, and reconciliation have succeeded.
+- Treating a partially valid selector array as a usable subset, or treating array order as contract precedence.
 - Runtime execution tracing, reflection, decompiling DLLs, downloading unavailable wrapper source, or querying an external package registry.
 - Cross-root or cross-repository source-wrapper resolution in the first implementation.
 - Full Roslyn semantic compilation, runtime configuration evaluation, or proving values assembled dynamically outside the available source facts.
@@ -130,4 +148,6 @@ reconciliation 遵循下列順序：
 - The existing `sqlobject` contract already covers `ExeProcNon`, `ExeProcRead`, `CreateReader`, `GetFirstValue`, `CreateTable`, and `CreateDataSet`. Its inline-SQL and call-site distinctions are part of this feature's acceptance criteria.
 - The intended operational flow is one refresh followed by normal analysis. The audit CLI is for maintenance, registry changes, parser changes, cache-version changes, and explicit review, not a mandatory step in every update.
 - The selected seam model follows the existing CSharpAnalysisGateway specification and the current `test_program_refresh` regression pattern. It deliberately avoids introducing a second formal evidence source in the discovery CLI.
+- The intended refresh flow is `git pull -> one raw analysis -> source/DLL contract preflight -> staged registry/catalog -> formal source classification -> wrapper reconciliation -> proven/likely/unresolved output -> atomic commit`. A preflight proposal is configuration interpretation, not procedure proof; SP Catalog and connection-source evidence remain mandatory for `proven` stored-procedure results.
+- `wrapper_contract` remains backward compatible as a string for one contract and uses an array only for multiple contracts. Empty and invalid values are diagnostic input to preflight, not a reason to silently select an unrelated registry entry. A successful preflight may replace an invalid selector; a failed workflow preserves it.
 - This workspace does not currently expose an authenticated issue-tracker publishing integration or a usable GitHub CLI. This document therefore serves as the local Markdown tracker fallback and carries `ready-for-agent` triage metadata. Once tracker access is available, publish this document as one cross-repository architecture issue and apply the `ready-for-agent` label.
