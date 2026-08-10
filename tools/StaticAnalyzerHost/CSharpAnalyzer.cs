@@ -106,6 +106,7 @@ internal static class DirectSqlClientAnalyzer
         var connectionArgument = arguments.Count > 1 ? arguments[1].Expression : null;
 
         var connectionExpression = connectionArgument?.ToString().Trim();
+        var terminalSinks = ResolveTerminalSinks(method, variableName, creation, creation.SpanStart);
 
         var relevantStatements = new List<StatementSyntax>();
         var creationStatement = creation.FirstAncestorOrSelf<StatementSyntax>();
@@ -134,6 +135,12 @@ internal static class DirectSqlClientAnalyzer
                     connectionExpression = assignment.Right.ToString().Trim();
             }
         }
+        foreach (var terminalSink in terminalSinks)
+        {
+            var sinkStatement = terminalSink.FirstAncestorOrSelf<StatementSyntax>();
+            if (sinkStatement is not null)
+                relevantStatements.Add(sinkStatement);
+        }
 
         var commandTextAssignments = propertyAssignments
             .Where(assignment => ((MemberAccessExpressionSyntax)assignment.Left).Name.Identifier.Text == "CommandText")
@@ -161,10 +168,13 @@ internal static class DirectSqlClientAnalyzer
                 .ToList()
             : ReadCommandTextCandidates(textArgument, method, creation, creation.SpanStart).ToList();
 
-        var storedProcedureAssignments = propertyAssignments
+        var commandTypeAssignments = propertyAssignments
             .Where(assignment => ((MemberAccessExpressionSyntax)assignment.Left).Name.Identifier.Text == "CommandType")
-            .Where(assignment => IsStoredProcedureCommandType(assignment.Right))
             .ToList();
+        var effectiveCommandTypeAssignments = SyntaxBranchAnalyzer.RemoveShadowedAssignments(
+            commandTypeAssignments.Select(assignment => (
+                Assignment: (SyntaxNode)assignment,
+                Value: assignment.Right)));
 
         SyntaxNode fallbackSpan = (SyntaxNode?)creation.FirstAncestorOrSelf<StatementSyntax>() ?? creation;
         var startOffset = relevantStatements.Count > 0
@@ -177,11 +187,55 @@ internal static class DirectSqlClientAnalyzer
         var invocations = new List<DirectSqlInvocation>();
         foreach (var candidate in commandTextCandidates)
         {
-            var matchingStoredProcedureAssignments = storedProcedureAssignments
+            var terminalSinkResolution = ResolveTerminalSink(terminalSinks, candidate.BranchContext);
+            var terminalSink = terminalSinkResolution.Name;
+            var branchContext = SyntaxBranchAnalyzer.Combine(
+                candidate.BranchContext,
+                terminalSinkResolution.BranchContext);
+            var matchingCommandTypeAssignments = effectiveCommandTypeAssignments
                 .Where(assignment => SyntaxBranchAnalyzer.IsCompatible(
                     candidate.BranchContext,
-                    SyntaxBranchAnalyzer.GetBranchContext(assignment)))
+                    SyntaxBranchAnalyzer.GetBranchContext(assignment.Assignment)))
                 .ToList();
+            var commandTypeModes = matchingCommandTypeAssignments
+                .Select(assignment => IsStoredProcedureCommandType(assignment.Value)
+                    ? "stored_procedure"
+                    : IsTextCommandType(assignment.Value)
+                        ? "text"
+                        : "unknown")
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            var hasUnknownCommandType = commandTypeModes.Contains("unknown", StringComparer.Ordinal)
+                || commandTypeModes.Count > 1;
+            var matchingStoredProcedureAssignments = matchingCommandTypeAssignments
+                .Where(assignment => IsStoredProcedureCommandType(assignment.Value))
+                .ToList();
+            var commandTypeMode = hasUnknownCommandType
+                ? "unknown"
+                : matchingStoredProcedureAssignments.Count > 0
+                    ? "stored_procedure"
+                    : matchingCommandTypeAssignments.Count > 0
+                        ? "text"
+                        : "default_text";
+
+            if (hasUnknownCommandType)
+            {
+                invocations.Add(CreateInvocation(
+                    className,
+                    method.Identifier.Text,
+                    candidate,
+                    false,
+                    connectionExpression,
+                    startOffset,
+                    endOffset,
+                    variableName,
+                    creation.Type.ToString(),
+                    candidate.ArgumentExpression,
+                    terminalSink,
+                    commandTypeMode: commandTypeMode,
+                    branchContext: branchContext));
+                continue;
+            }
 
             if (matchingStoredProcedureAssignments.Count == 0)
             {
@@ -192,7 +246,13 @@ internal static class DirectSqlClientAnalyzer
                     false,
                     connectionExpression,
                     startOffset,
-                    endOffset));
+                    endOffset,
+                    variableName,
+                    creation.Type.ToString(),
+                    candidate.ArgumentExpression,
+                    terminalSink,
+                    commandTypeMode: commandTypeMode,
+                    branchContext: branchContext));
                 continue;
             }
 
@@ -206,9 +266,14 @@ internal static class DirectSqlClientAnalyzer
                     connectionExpression,
                     startOffset,
                     endOffset,
-                    SyntaxBranchAnalyzer.Combine(
-                        candidate.BranchContext,
-                        SyntaxBranchAnalyzer.GetBranchContext(assignment))));
+                    variableName,
+                    creation.Type.ToString(),
+                    candidate.ArgumentExpression,
+                    terminalSink,
+                    commandTypeMode: commandTypeMode,
+                    branchContext: SyntaxBranchAnalyzer.Combine(
+                        branchContext,
+                        SyntaxBranchAnalyzer.GetBranchContext(assignment.Assignment))));
             }
         }
 
@@ -233,6 +298,11 @@ internal static class DirectSqlClientAnalyzer
         string? connectionExpression,
         int startOffset,
         int endOffset,
+        string? receiverName,
+        string receiverType,
+        string? commandTextArgument,
+        string? terminalSink,
+        string? commandTypeMode = null,
         IReadOnlyList<string>? branchContext = null)
         => new(
             className,
@@ -243,17 +313,84 @@ internal static class DirectSqlClientAnalyzer
             connectionExpression,
             startOffset,
             endOffset,
-            BranchContext: branchContext ?? candidate.BranchContext);
+            BranchContext: branchContext ?? candidate.BranchContext,
+            ReceiverType: receiverType,
+            ReceiverName: receiverName,
+            CommandTextArgument: commandTextArgument,
+            CommandTextLiteral: candidate.CommandText,
+            TerminalSink: terminalSink,
+            CommandTypeMode: commandTypeMode);
 
     private static string? ResolveVariableName(ObjectCreationExpressionSyntax creation)
     {
         if (creation.Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator })
             return declarator.Identifier.Text;
-        if (creation.Parent is AssignmentExpressionSyntax { Left: IdentifierNameSyntax identifier } assignment
+        if (creation.Parent is AssignmentExpressionSyntax assignment
             && assignment.Right == creation)
-            return identifier.Identifier.Text;
+            return assignment.Left.ToString();
         return null;
     }
+
+    private static IReadOnlyList<InvocationExpressionSyntax> ResolveTerminalSinks(
+        MethodDeclarationSyntax method,
+        string? variableName,
+        ObjectCreationExpressionSyntax creation,
+        int creationStart)
+    {
+        if (variableName is null
+            && creation.Parent is MemberAccessExpressionSyntax fluentMember
+            && fluentMember.Expression == creation
+            && fluentMember.Parent is InvocationExpressionSyntax fluentCall
+            && fluentCall.Expression == fluentMember
+            && IsTerminalSink(fluentMember.Name.Identifier.Text))
+            return new[] { fluentCall };
+
+        if (string.IsNullOrWhiteSpace(variableName))
+            return Array.Empty<InvocationExpressionSyntax>();
+
+        return method.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(call => call.Expression is MemberAccessExpressionSyntax member
+                && member.Expression.ToString() == variableName
+                && IsTerminalSink(member.Name.Identifier.Text)
+                && call.SpanStart > creationStart)
+            .OrderBy(call => call.SpanStart)
+            .ToList();
+    }
+
+    private static TerminalSinkResolution ResolveTerminalSink(
+        IReadOnlyList<InvocationExpressionSyntax> terminalSinks,
+        IReadOnlyList<string> candidateBranchContext)
+    {
+        var matchingSinks = terminalSinks
+            .Where(sink =>
+            {
+                var sinkBranchContext = SyntaxBranchAnalyzer.GetBranchContext(sink);
+                return SyntaxBranchAnalyzer.IsCompatible(candidateBranchContext, sinkBranchContext)
+                    || SyntaxBranchAnalyzer.IsCompatible(sinkBranchContext, candidateBranchContext);
+            })
+            .ToList();
+        var sinkNames = matchingSinks
+            .Select(sink => ((MemberAccessExpressionSyntax)sink.Expression).Name.Identifier.Text)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (sinkNames.Count != 1)
+            return new TerminalSinkResolution(null, Array.Empty<string>());
+
+        var branchContext = matchingSinks.Count == 1
+            ? SyntaxBranchAnalyzer.GetBranchContext(matchingSinks[0])
+            : Array.Empty<string>();
+        return new TerminalSinkResolution(sinkNames[0], branchContext);
+    }
+
+    private static bool IsTerminalSink(string methodName)
+        => methodName is "ExecuteNonQuery"
+            or "ExecuteNonQueryAsync"
+            or "ExecuteReader"
+            or "ExecuteReaderAsync"
+            or "ExecuteScalar"
+            or "ExecuteScalarAsync";
 
     private static (string Kind, string? Text) ReadCommandText(ExpressionSyntax? expression)
     {
@@ -268,8 +405,10 @@ internal static class DirectSqlClientAnalyzer
         ExpressionSyntax? expression,
         MethodDeclarationSyntax method,
         SyntaxNode anchor,
-        int position)
+        int position,
+        string? originalArgumentExpression = null)
     {
+        var argumentExpression = originalArgumentExpression ?? expression?.ToString();
         if (expression is IdentifierNameSyntax identifier)
         {
             var assignments = method.DescendantNodes()
@@ -298,7 +437,8 @@ internal static class DirectSqlClientAnalyzer
                     method,
                     item.Assignment,
                     item.Assignment.SpanStart,
-                    allowVariableLookup: false))
+                    allowVariableLookup: false,
+                    originalArgumentExpression: argumentExpression))
                 .ToList();
             if (resolved.Count > 0)
                 return resolved;
@@ -310,6 +450,7 @@ internal static class DirectSqlClientAnalyzer
             new CommandTextCandidate(
                 kind,
                 text,
+                argumentExpression,
                 SyntaxBranchAnalyzer.GetBranchContext(anchor)),
         };
     }
@@ -319,10 +460,16 @@ internal static class DirectSqlClientAnalyzer
         MethodDeclarationSyntax method,
         SyntaxNode anchor,
         int position,
-        bool allowVariableLookup)
+        bool allowVariableLookup,
+        string? originalArgumentExpression = null)
     {
         if (allowVariableLookup)
-            return ReadCommandTextCandidates(expression, method, anchor, position);
+            return ReadCommandTextCandidates(
+                expression,
+                method,
+                anchor,
+                position,
+                originalArgumentExpression);
 
         var (kind, text) = ReadCommandText(expression);
         return new[]
@@ -330,6 +477,7 @@ internal static class DirectSqlClientAnalyzer
             new CommandTextCandidate(
                 kind,
                 text,
+                originalArgumentExpression ?? expression?.ToString(),
                 SyntaxBranchAnalyzer.GetBranchContext(anchor)),
         };
     }
@@ -338,9 +486,17 @@ internal static class DirectSqlClientAnalyzer
     private static bool IsStoredProcedureCommandType(ExpressionSyntax expression)
         => expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "StoredProcedure" };
 
+    private static bool IsTextCommandType(ExpressionSyntax expression)
+        => expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Text" };
+
     private sealed record CommandTextCandidate(
         string CommandTextKind,
         string? CommandText,
+        string? ArgumentExpression,
+        IReadOnlyList<string> BranchContext);
+
+    private sealed record TerminalSinkResolution(
+        string? Name,
         IReadOnlyList<string> BranchContext);
 }
 
@@ -703,7 +859,13 @@ internal sealed record DirectSqlInvocation(
     string WrapperMode = "",
     IReadOnlyList<string>? MethodChain = null,
     IReadOnlyList<string>? BranchContext = null,
-    string? WrapperReceiverType = null);
+    string? WrapperReceiverType = null,
+    string? ReceiverType = null,
+    string? ReceiverName = null,
+    string? CommandTextArgument = null,
+    string? CommandTextLiteral = null,
+    string? TerminalSink = null,
+    string? CommandTypeMode = null);
 
 internal static class SyntaxBranchAnalyzer
 {

@@ -50,6 +50,8 @@ def build_execution_paths(
     graph_database = _normalize_database(graph.get("database"))
 
     for invocation in sorted(invocations, key=_invocation_sort_key):
+        if invocation.invocation_mode and invocation.invocation_mode != "stored_procedure":
+            continue
         evidence = _evidence_value(invocation.evidence)
         if evidence != InvocationEvidence.PROVEN.value:
             diagnostic_evidence = (

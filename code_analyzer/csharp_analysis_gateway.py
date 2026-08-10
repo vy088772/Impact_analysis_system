@@ -121,6 +121,19 @@ class DbInvocation:
     wrapper_method: str = ""
     wrapper_source_available: bool = False
     wrapper_stored_procedure_mode: bool = False
+    method_semantics: str = ""
+    invocation_mode: str = ""
+    command_text_kind: str = ""
+    command_type_mode: str = ""
+    command_text_argument: str = ""
+    command_text_literal: Optional[str] = None
+    literal_value: Optional[str] = None
+    terminal_sink: str = ""
+    receiver_type: str = ""
+    receiver_name: str = ""
+    connection_expression: str = ""
+    connection_source: Optional[str] = None
+    provenance: str = ""
 
     @property
     def wrapper_classification_status(self) -> str:
@@ -172,6 +185,18 @@ WRAPPER_EVIDENCE_FIELDS = (
     "source_snapshot_hash",
     "source_snapshot_identity",
     "source_provenance",
+    "method_semantics",
+    "invocation_mode",
+    "command_text_kind",
+    "command_type_mode",
+    "command_text_argument",
+    "command_text_literal",
+    "literal_value",
+    "terminal_sink",
+    "receiver_name",
+    "connection_expression",
+    "connection_source",
+    "provenance",
 )
 
 
@@ -303,6 +328,26 @@ def invocation_wrapper_evidence_fields(invocation: DbInvocation) -> Dict[str, An
         "content_hash": invocation.source_snapshot_hash,
     }
     fields["external_wrapper_method"] = invocation.external_wrapper_method
+    fields.update(
+        {
+            "method_semantics": invocation.method_semantics,
+            "invocation_mode": invocation.invocation_mode,
+            "command_text_kind": invocation.command_text_kind,
+            "command_type_mode": invocation.command_type_mode,
+            "command_text_argument": invocation.command_text_argument,
+            "command_text_literal": invocation.command_text_literal,
+            "literal_value": invocation.literal_value,
+            "terminal_sink": invocation.terminal_sink,
+            "receiver_type": (
+                invocation.receiver_type
+                or fields.get("receiver_type", "")
+            ),
+            "receiver_name": invocation.receiver_name,
+            "connection_expression": invocation.connection_expression,
+            "connection_source": invocation.connection_source or invocation.database,
+            "provenance": invocation.provenance,
+        }
+    )
     return fields
 
 
@@ -837,8 +882,11 @@ class CSharpAnalysisGateway:
             return self._resolve_adapter_invocation(relative_path, raw)
 
         if not raw.get("command_type_stored_procedure"):
-            # No explicit StoredProcedure command type: this is plain SQL text, not an SP invocation.
-            return None
+            if invocation_kind not in {"", "direct_sqlclient"}:
+                return None
+            if invocation_kind == "" and not raw.get("command_text_kind"):
+                return None
+            return self._resolve_inline_direct_invocation(relative_path, raw)
 
         source = InvocationSourceSpan(relative_path, raw["start_offset"], raw["end_offset"])
         class_name = raw["class_name"]
@@ -847,6 +895,48 @@ class CSharpAnalysisGateway:
 
         connection_expression = raw.get("connection_expression")
         database = self._resolve_database(connection_expression)
+        metadata = self._invocation_metadata(
+            raw,
+            database=database,
+            method_semantics="fixed_stored_procedure",
+            invocation_mode="stored_procedure",
+        )
+        if str(raw.get("command_type_mode") or "").casefold() == "unknown":
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "command_type_unresolved",
+                branch_context=branch_context,
+                raw_command_text=(
+                    str(raw["command_text"])
+                    if raw.get("command_text_kind") == "literal"
+                    and raw.get("command_text")
+                    else None
+                ),
+                **metadata,
+            )
+        if "terminal_sink" in raw and not metadata["terminal_sink"]:
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "terminal_sink_unresolved",
+                branch_context=branch_context,
+                raw_command_text=(
+                    str(raw["command_text"])
+                    if raw.get("command_text_kind") == "literal"
+                    and raw.get("command_text")
+                    else None
+                ),
+                **metadata,
+            )
 
         if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
             return DbInvocation(
@@ -858,6 +948,7 @@ class CSharpAnalysisGateway:
                 source,
                 "dynamic_command_text",
                 branch_context=branch_context,
+                **metadata,
             )
 
         return self._rate_literal_candidate(
@@ -867,7 +958,151 @@ class CSharpAnalysisGateway:
             raw["command_text"],
             source,
             branch_context=branch_context,
+            metadata=metadata,
         )
+
+    def _resolve_inline_direct_invocation(
+        self,
+        relative_path: str,
+        raw: dict,
+    ) -> Optional[DbInvocation]:
+        command_text_kind = str(raw.get("command_text_kind") or "").casefold()
+        command_text = raw.get("command_text")
+        if command_text_kind in {"", "none", "unknown"} and not command_text:
+            return None
+
+        source = InvocationSourceSpan(relative_path, raw["start_offset"], raw["end_offset"])
+        class_name = raw["class_name"]
+        method_name = raw["method_name"]
+        branch_context = self._branch_context(raw)
+        database = self._resolve_database(raw.get("connection_expression"))
+        command_type_mode = str(raw.get("command_type_mode") or "").casefold()
+        metadata = self._invocation_metadata(
+            raw,
+            database=database,
+            method_semantics=(
+                "unresolved" if command_type_mode == "unknown" else "fixed_inline_sql"
+            ),
+            invocation_mode=(
+                "unresolved" if command_type_mode == "unknown" else "inline_sql"
+            ),
+        )
+        if command_type_mode == "unknown":
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "command_type_unresolved",
+                branch_context=branch_context,
+                raw_command_text=(
+                    str(command_text)
+                    if command_text_kind == "literal" and command_text
+                    else None
+                ),
+                **metadata,
+            )
+        if not metadata["terminal_sink"]:
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "terminal_sink_unresolved",
+                branch_context=branch_context,
+                raw_command_text=(
+                    str(command_text)
+                    if command_text_kind == "literal" and command_text
+                    else None
+                ),
+                **metadata,
+            )
+
+        if command_text_kind != "literal" or not command_text:
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "dynamic_command_text",
+                branch_context=branch_context,
+                **metadata,
+            )
+
+        return DbInvocation(
+            class_name,
+            method_name,
+            database,
+            None,
+            InvocationEvidence.PROVEN,
+            source,
+            "inline_sql",
+            branch_context=branch_context,
+            raw_command_text=str(command_text),
+            **metadata,
+        )
+
+    def _invocation_metadata(
+        self,
+        raw: Mapping[str, Any],
+        *,
+        database: Optional[str],
+        method_semantics: str,
+        invocation_mode: str,
+    ) -> Dict[str, Any]:
+        command_text_argument = raw.get("command_text_argument")
+        if command_text_argument is None:
+            command_text_argument = raw.get("argument_expression")
+        if command_text_argument is None:
+            command_text_argument = raw.get("argument")
+
+        command_text_literal = raw.get("command_text_literal")
+        if command_text_literal is None:
+            command_text_literal = raw.get("literal_value")
+        if command_text_literal is None and raw.get("command_text_kind") == "literal":
+            command_text_literal = raw.get("command_text")
+
+        return {
+            "method_semantics": str(raw.get("method_semantics") or method_semantics),
+            "invocation_mode": str(raw.get("invocation_mode") or invocation_mode),
+            "command_text_kind": str(raw.get("command_text_kind") or ""),
+            "command_type_mode": str(raw.get("command_type_mode") or ""),
+            "command_text_argument": str(command_text_argument or ""),
+            "command_text_literal": (
+                str(command_text_literal)
+                if command_text_literal is not None
+                else None
+            ),
+            "literal_value": (
+                str(command_text_literal)
+                if command_text_literal is not None
+                else None
+            ),
+            "terminal_sink": str(raw.get("terminal_sink") or ""),
+            "receiver_type": str(
+                raw.get("receiver_type")
+                or raw.get("wrapper_receiver_type")
+                or ""
+            ),
+            "receiver_name": str(
+                raw.get("receiver_name")
+                or raw.get("receiver")
+                or ""
+            ),
+            "connection_expression": str(
+                raw.get("connection_expression")
+                or raw.get("connection_variable")
+                or ""
+            ),
+            "connection_source": database,
+            "provenance": str(raw.get("provenance") or "static_analyzer_host"),
+        }
 
     def _resolve_adapter_invocation(self, relative_path: str, raw: dict) -> Optional[DbInvocation]:
         mode = str(raw.get("adapter_mode") or raw.get("wrapper_mode") or "").casefold()
@@ -1098,7 +1333,9 @@ class CSharpAnalysisGateway:
         method_chain: tuple[str, ...] = (),
         branch_context: tuple[str, ...] = (),
         method_class_chain: tuple[str, ...] = (),
+        metadata: Optional[Mapping[str, Any]] = None,
     ) -> DbInvocation:
+        metadata = dict(metadata or {})
         normalized_name = normalize_procedure_name(command_text)
         procedure_schema = normalize_procedure_schema(command_text)
 
@@ -1116,6 +1353,7 @@ class CSharpAnalysisGateway:
                     branch_context=branch_context,
                     method_class_chain=method_class_chain,
                     raw_command_text=command_text,
+                    **metadata,
                 )
             return DbInvocation(
                 class_name,
@@ -1130,6 +1368,7 @@ class CSharpAnalysisGateway:
                 branch_context,
                 method_class_chain=method_class_chain,
                 raw_command_text=command_text,
+                **metadata,
             )
 
         matches = self._catalog.databases_containing(normalized_name, procedure_schema)
@@ -1148,6 +1387,7 @@ class CSharpAnalysisGateway:
                 method_class_chain=method_class_chain,
                 database_candidates=tuple(matches),
                 raw_command_text=command_text,
+                **metadata,
             )
         reason = "unknown_database_source" if len(matches) == 0 else "ambiguous_cross_database"
         return DbInvocation(
@@ -1164,6 +1404,7 @@ class CSharpAnalysisGateway:
             method_class_chain=method_class_chain,
             database_candidates=tuple(matches),
             raw_command_text=command_text,
+            **metadata,
         )
 
     def _resolve_database(self, connection_expression: object) -> Optional[str]:

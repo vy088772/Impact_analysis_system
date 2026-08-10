@@ -154,6 +154,36 @@ def test_direct_invocation_builds_one_path_per_terminal_branch() -> None:
     assert "definition" not in update_path
 
 
+def test_inline_sql_invocation_is_not_promoted_to_a_stored_procedure_path() -> None:
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="PreviewData",
+        database="OrdersDb",
+        procedure_name=None,
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("Ship/OrderPage.aspx.cs", 120, 220),
+        raw_command_text="SELECT * FROM SOrder",
+        invocation_mode="inline_sql",
+        method_semantics="fixed_inline_sql",
+    )
+
+    assert build_execution_paths([invocation], _graph()) == []
+
+
+def test_unresolved_invocation_mode_is_not_promoted_to_a_stored_procedure_path() -> None:
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="Run",
+        database="OrdersDb",
+        procedure_name="usp_SaveOrder",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("Ship/OrderPage.aspx.cs", 120, 220),
+        invocation_mode="unresolved",
+    )
+
+    assert build_execution_paths([invocation], _graph()) == []
+
+
 def test_invocation_branch_context_is_preserved_and_part_of_path_identity() -> None:
     source = InvocationSourceSpan("Ship/OrderPage.aspx.cs", 120, 220)
     invocations = [

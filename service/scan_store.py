@@ -96,7 +96,7 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # v21：external wrapper raw facts include receiver type metadata.
 # v22：unknown external wrapper mode inference no longer treats a boolean argument
 # on calls whose first argument is not command-text-shaped as stored-procedure mode.
-_CACHE_VERSION = 22
+_CACHE_VERSION = 24
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

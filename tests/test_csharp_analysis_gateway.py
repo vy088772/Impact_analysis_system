@@ -15,6 +15,7 @@ from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     InvocationEvidence,
     SpCatalog,
+    invocation_wrapper_evidence_fields,
     normalize_procedure_name,
 )
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
@@ -32,6 +33,7 @@ def _raw_invocation(**overrides) -> dict:
         "connection_expression": "conn",
         "start_offset": 10,
         "end_offset": 90,
+        "terminal_sink": "ExecuteNonQuery",
     }
     base.update(overrides)
     return base
@@ -399,15 +401,148 @@ def test_bare_catalog_entries_are_scoped_to_default_schema_for_qualified_calls()
     assert invocation.reason == "not_in_resolved_catalog"
 
 
-def test_inline_sql_without_stored_procedure_type_is_not_reported() -> None:
-    """A SqlCommand call that never sets CommandType.StoredProcedure is plain SQL, not an SP invocation."""
+def test_inline_sql_without_stored_procedure_type_is_a_database_invocation() -> None:
+    """A direct SqlCommand text call keeps its execution evidence without becoming an SP."""
     catalog = SpCatalog.from_databases({"Y-Docs_TTPUR": ["usp_SO_Delete"]})
     gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "Y-Docs_TTPUR"})
 
-    raw = _raw_invocation(command_text="SELECT * FROM SOrder", command_type_stored_procedure=False)
+    raw = _raw_invocation(
+        invocation_kind="direct_sqlclient",
+        command_text="SELECT * FROM SOrder",
+        command_type_stored_procedure=False,
+        receiver_type="SqlCommand",
+        receiver_name="cmd",
+        command_text_argument='"SELECT * FROM SOrder"',
+        command_text_literal="SELECT * FROM SOrder",
+        terminal_sink="ExecuteReader",
+    )
     invocations = gateway.resolve_direct_invocations("Ship/PUR_SOMaintain.aspx.cs", [raw])
 
-    assert invocations == []
+    assert len(invocations) == 1
+    invocation = invocations[0]
+    assert invocation.method_semantics == "fixed_inline_sql"
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.command_text_kind == "literal"
+    assert invocation.raw_command_text == "SELECT * FROM SOrder"
+    assert invocation.procedure_name is None
+    assert invocation.terminal_sink == "ExecuteReader"
+    assert invocation.connection_expression == "conn"
+    assert invocation.connection_source == "Y-Docs_TTPUR"
+    assert invocation.receiver_type == "SqlCommand"
+    assert invocation.receiver_name == "cmd"
+    assert invocation.command_text_argument == '"SELECT * FROM SOrder"'
+    assert invocation.provenance == "static_analyzer_host"
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.reason == "inline_sql"
+    assert invocation.source.start_offset == 10
+    assert invocation.source.end_offset == 90
+
+    projected = invocation_wrapper_evidence_fields(invocation)
+    assert projected["method_semantics"] == "fixed_inline_sql"
+    assert projected["invocation_mode"] == "inline_sql"
+    assert projected["command_text_kind"] == "literal"
+    assert projected["command_text_argument"] == '"SELECT * FROM SOrder"'
+    assert projected["literal_value"] == "SELECT * FROM SOrder"
+    assert projected["terminal_sink"] == "ExecuteReader"
+    assert projected["connection_expression"] == "conn"
+    assert projected["connection_source"] == "Y-Docs_TTPUR"
+    assert projected["provenance"] == "static_analyzer_host"
+
+
+def test_literal_sql_operations_remain_inline_even_when_the_text_looks_like_an_sp() -> None:
+    """Text mode owns the classification; SQL shape and procedure prefixes do not promote it to SP."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    sql_statements = [
+        "SELECT * FROM SOrder",
+        "INSERT INTO SOrder (OrderNo) VALUES ('A1')",
+        "UPDATE SOrder SET Status = 1",
+        "DELETE FROM SOrder WHERE OrderNo = 'A1'",
+        "usp_SaveOrder",
+    ]
+
+    invocations = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_text=statement,
+                command_type_stored_procedure=False,
+                terminal_sink="ExecuteNonQuery",
+            )
+            for statement in sql_statements
+        ],
+    )
+
+    assert len(invocations) == len(sql_statements)
+    assert [invocation.invocation_mode for invocation in invocations] == [
+        "inline_sql"
+    ] * len(sql_statements)
+    assert [invocation.raw_command_text for invocation in invocations] == sql_statements
+    assert all(invocation.procedure_name is None for invocation in invocations)
+    assert all(invocation.evidence is InvocationEvidence.PROVEN for invocation in invocations)
+
+
+def test_direct_inline_sql_without_a_terminal_sink_remains_unresolved() -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_text="SELECT * FROM SOrder",
+                command_type_stored_procedure=False,
+                terminal_sink="",
+            )
+        ],
+    )[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.raw_command_text == "SELECT * FROM SOrder"
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "terminal_sink_unresolved"
+
+
+def test_direct_stored_procedure_without_an_explicit_terminal_sink_remains_unresolved() -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_type_stored_procedure=True,
+                command_text="usp_SaveOrder",
+                terminal_sink="",
+            )
+        ],
+    )[0]
+
+    assert invocation.procedure_name is None
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "terminal_sink_unresolved"
+
+
+def test_unknown_direct_command_type_remains_unresolved() -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_type_stored_procedure=False,
+                command_type_mode="unknown",
+                command_text="SELECT * FROM SOrder",
+            )
+        ],
+    )[0]
+
+    assert invocation.method_semantics == "unresolved"
+    assert invocation.invocation_mode == "unresolved"
+    assert invocation.command_type_mode == "unknown"
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "command_type_unresolved"
 
 
 def test_ordinary_method_without_database_invocation_fact_is_not_reported() -> None:
@@ -614,10 +749,15 @@ def test_gateway_detects_real_direct_sqlclient_invocation_via_static_analyzer_ho
         gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "MyDb"})
         invocations = gateway.resolve_direct_invocations("Foo.cs", raw_invocations)
 
-        assert len(invocations) == 1
-        assert invocations[0].evidence is InvocationEvidence.PROVEN
-        assert invocations[0].procedure_name == "usp_dothing"
-        assert invocations[0].database == "MyDb"
+        assert len(invocations) == 2
+        stored_procedure, inline_sql = invocations
+        assert stored_procedure.evidence is InvocationEvidence.PROVEN
+        assert stored_procedure.procedure_name == "usp_dothing"
+        assert stored_procedure.database == "MyDb"
+        assert inline_sql.invocation_mode == "inline_sql"
+        assert inline_sql.raw_command_text == "SELECT * FROM Foo"
+        assert inline_sql.procedure_name is None
+        assert inline_sql.evidence is InvocationEvidence.PROVEN
 
 
 def test_static_analyzer_host_emits_default_and_conditional_procedure_assignments() -> None:
@@ -1649,6 +1789,277 @@ def test_static_analyzer_host_ignores_ui_helpers_with_boolean_arguments() -> Non
         assert result["db_invocations"] == []
 
 
+def test_static_analyzer_host_keeps_direct_sqlclient_facts_alongside_ui_helpers() -> None:
+    """UI helpers in one class must not hide a real direct SqlClient call."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "MixedCalls.cs"
+        source_path.write_text(
+            "public class MixedCalls {\n"
+            "    private void Run() {\n"
+            "        CommonFunction.AlertMsg(this, \"done\", true);\n"
+            "        ScriptManager.RegisterStartupScript(this.Page, typeof(string), \"key\", \"alert(1)\", true);\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        var cmd = new SqlCommand(\"SELECT * FROM SOrder\", conn);\n"
+            "        cmd.ExecuteReader();\n"
+            "        var cmd2 = new SqlCommand(\"initial\", conn);\n"
+            "        cmd2.CommandText = \"UPDATE SOrder SET Status = 1\";\n"
+            "        cmd2.ExecuteNonQuery();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 2
+        raw = next(item for item in raw_invocations if item["receiver_name"] == "cmd")
+        assert raw["invocation_kind"] == "direct_sqlclient"
+        assert raw["receiver_type"] == "SqlCommand"
+        assert raw["receiver_name"] == "cmd"
+        assert raw["command_text_argument"] == '"SELECT * FROM SOrder"'
+        assert raw["command_text_literal"] == "SELECT * FROM SOrder"
+        assert raw["connection_expression"] == "conn"
+        assert raw["terminal_sink"] == "ExecuteReader"
+
+        reassigned = next(
+            item for item in raw_invocations if item["receiver_name"] == "cmd2"
+        )
+        assert reassigned["command_text_argument"] == '"UPDATE SOrder SET Status = 1"'
+        assert reassigned["command_text_literal"] == "UPDATE SOrder SET Status = 1"
+        assert reassigned["terminal_sink"] == "ExecuteNonQuery"
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+            connection_sources={"conn": "OrdersDb"},
+        )
+        invocations = gateway.resolve_direct_invocations("MixedCalls.cs", raw_invocations)
+
+        assert len(invocations) == 2
+        assert all(invocation.invocation_mode == "inline_sql" for invocation in invocations)
+        assert all(invocation.evidence is InvocationEvidence.PROVEN for invocation in invocations)
+        assert {
+            invocation.raw_command_text: invocation.terminal_sink
+            for invocation in invocations
+        } == {
+            "SELECT * FROM SOrder": "ExecuteReader",
+            "UPDATE SOrder SET Status = 1": "ExecuteNonQuery",
+        }
+
+
+def test_static_analyzer_host_preserves_unknown_command_type_mode() -> None:
+    """A runtime CommandType assignment cannot be promoted to inline SQL."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "UnknownCommandType.cs"
+        source_path.write_text(
+            "public class UnknownCommandType {\n"
+            "    private void Run(object mode) {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        var cmd = new SqlCommand(\"SELECT * FROM SOrder\", conn);\n"
+            "        cmd.CommandType = mode;\n"
+            "        cmd.ExecuteReader();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 1
+        raw = raw_invocations[0]
+        assert raw["command_type_mode"] == "unknown"
+        assert raw["command_type_stored_procedure"] is False
+        assert raw["terminal_sink"] == "ExecuteReader"
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+            connection_sources={"conn": "OrdersDb"},
+        )
+        invocation = gateway.resolve_direct_invocations(
+            "UnknownCommandType.cs", raw_invocations
+        )[0]
+        assert invocation.invocation_mode == "unresolved"
+        assert invocation_wrapper_evidence_fields(invocation)["command_type_mode"] == "unknown"
+        assert invocation.reason == "command_type_unresolved"
+
+
+def test_static_analyzer_host_uses_the_last_command_type_assignment() -> None:
+    """A later Text assignment overrides an earlier StoredProcedure assignment."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "CommandTypeOverride.cs"
+        source_path.write_text(
+            "public class CommandTypeOverride {\n"
+            "    private void Run() {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        var cmd = new SqlCommand(\"SELECT * FROM SOrder\", conn);\n"
+            "        cmd.CommandType = CommandType.StoredProcedure;\n"
+            "        cmd.CommandType = CommandType.Text;\n"
+            "        cmd.ExecuteReader();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 1
+        assert raw_invocations[0]["command_type_mode"] == "text"
+        assert raw_invocations[0]["command_type_stored_procedure"] is False
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+            connection_sources={"conn": "OrdersDb"},
+        )
+        invocation = gateway.resolve_direct_invocations(
+            "CommandTypeOverride.cs", raw_invocations
+        )[0]
+        assert invocation.invocation_mode == "inline_sql"
+        assert invocation.evidence is InvocationEvidence.PROVEN
+
+
+def test_static_analyzer_host_keeps_member_and_fluent_sqlcommand_receivers() -> None:
+    """Member-assigned and fluent commands retain their sink facts."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "ReceiverShapes.cs"
+        source_path.write_text(
+            "public class ReceiverShapes {\n"
+            "    private SqlCommand cmd;\n"
+            "    private void Run() {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        this.cmd = new SqlCommand(\"SELECT * FROM SOrder\", conn);\n"
+            "        this.cmd.ExecuteReader();\n"
+            "        new SqlCommand(\"UPDATE SOrder SET Status = 1\", conn).ExecuteNonQuery();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert {
+            invocation["command_text_literal"]: (
+                invocation["receiver_name"],
+                invocation["terminal_sink"],
+            )
+            for invocation in raw_invocations
+        } == {
+            "SELECT * FROM SOrder": ("this.cmd", "ExecuteReader"),
+            "UPDATE SOrder SET Status = 1": (None, "ExecuteNonQuery"),
+        }
+
+
+def test_static_analyzer_host_retains_terminal_sink_branch_context() -> None:
+    """A unique conditional sink contributes its predicate to raw evidence."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "ConditionalSink.cs"
+        source_path.write_text(
+            "public class ConditionalSink {\n"
+            "    private void Run(bool read) {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        var cmd = new SqlCommand(\"SELECT * FROM SOrder\", conn);\n"
+            "        if (read) cmd.ExecuteReader();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 1
+        assert raw_invocations[0]["branch_context"] == ["if (read)"]
+
+
+def test_static_analyzer_host_matches_terminal_sinks_to_command_branches() -> None:
+    """Branch-local direct commands retain their matching ADO.NET sink."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "BranchCalls.cs"
+        source_path.write_text(
+            "public class BranchCalls {\n"
+            "    private void Run(bool read) {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        if (read) {\n"
+            "            var cmd = new SqlCommand(\"SELECT * FROM SOrder\", conn);\n"
+            "            cmd.ExecuteReader();\n"
+            "        } else {\n"
+            "            var cmd = new SqlCommand(\"DELETE FROM SOrder\", conn);\n"
+            "            cmd.ExecuteNonQuery();\n"
+            "        }\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 2
+        assert {
+            invocation["command_text_literal"]: invocation["terminal_sink"]
+            for invocation in raw_invocations
+        } == {
+            "SELECT * FROM SOrder": "ExecuteReader",
+            "DELETE FROM SOrder": "ExecuteNonQuery",
+        }
+
+
+def test_static_analyzer_host_leaves_ambiguous_terminal_sinks_unresolved() -> None:
+    """Different branch sinks must not be collapsed to the first sink found."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "AmbiguousSink.cs"
+        source_path.write_text(
+            "public class AmbiguousSink {\n"
+            "    private void Run(bool read) {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        var cmd = new SqlCommand(\"SELECT * FROM SOrder\", conn);\n"
+            "        if (read) cmd.ExecuteReader();\n"
+            "        else cmd.ExecuteNonQuery();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 1
+        assert raw_invocations[0].get("terminal_sink") in (None, "")
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+            connection_sources={"conn": "OrdersDb"},
+        )
+        invocation = gateway.resolve_direct_invocations(
+            "AmbiguousSink.cs", raw_invocations
+        )[0]
+        assert invocation.evidence is InvocationEvidence.UNRESOLVED
+        assert invocation.reason == "terminal_sink_unresolved"
+
+
 def test_static_analyzer_host_keeps_string_typed_unknown_wrapper_candidates() -> None:
     """String-typed dynamic command text remains eligible for wrapper review."""
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
@@ -1756,7 +2167,7 @@ def test_static_analyzer_host_applies_external_sqlobject_wrapper_contract() -> N
 if __name__ == "__main__":
     test_normalize_procedure_name_strips_schema_and_brackets()
     test_explicit_stored_procedure_type_with_catalog_hit_is_proven()
-    test_inline_sql_without_stored_procedure_type_is_not_reported()
+    test_inline_sql_without_stored_procedure_type_is_a_database_invocation()
     test_dynamic_command_text_is_unresolved()
     test_resolved_database_without_catalog_hit_is_unresolved_not_guessed()
     test_unknown_connection_source_unique_across_catalogs_is_likely()
