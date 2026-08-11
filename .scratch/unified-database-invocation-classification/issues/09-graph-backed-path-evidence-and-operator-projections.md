@@ -1,8 +1,8 @@
 # 09 — Graph-Backed Path Evidence and Operator Projections
 
-**What to build:** 將 proven `Database Invocation` 接入既有 `SQL Execution Graph`，形成可追溯的 `Execution Path` 與完整 `Path Evidence`；同時讓 refresh、analyze、reverse lookup、audit 與 CLI 對同一 source snapshot 輸出一致的 unified classification。
+**What to build:** 將 proven `Database Invocation` 接入既有 `SQL Execution Graph`，形成可追溯的 `Execution Path` 與完整 `Path Evidence`；同時讓 refresh、analyze、reverse lookup、audit 與 CLI 對同一 source snapshot 輸出一致的 unified classification，並保留 contract revision 與 `Analysis Manifest` provenance。
 
-**Blocked by:** 05 — Adapter and Fill Sink Parity; 06 — External Wrapper Contract Classification; existing `graph-gateway-contract` 03 — Evidence-Preserving Gateway Responses; existing `csharp-sql-execution-paths` 04 — First Execution Path Summary; existing `csharp-sql-execution-paths` 10 — Exact Path Evidence.
+**Blocked by:** 05 — Adapter and Fill Sink Parity; 06 — External Wrapper Contract Classification; 07 — Refresh-Time Contract Preflight; 08 — Atomic Refresh Commit and Scope Guards; existing `graph-gateway-contract` 03 — Evidence-Preserving Gateway Responses; existing `csharp-sql-execution-paths` 04 — First Execution Path Summary; existing `csharp-sql-execution-paths` 10 — Exact Path Evidence.
 
 **Status:** ready-for-agent
 
@@ -10,5 +10,6 @@
 - [ ] `Path Evidence` 保留 C# method、method semantics、invocation mode、command-text candidate、procedure target、terminal sink、connection source、branch predicate、source span、provenance 與 `Evidence Status`。
 - [ ] inline SQL 會保留為 inline `Database Invocation`；embedded `EXEC` 是額外 target evidence，不會被序列化成 stored-procedure mode。
 - [ ] unresolved target、ambiguous connection 或 dynamic SQL 會保留 documented unresolved evidence，不會被硬接成 proven graph relationship。
-- [ ] refresh、analyze、SP/table reverse lookup、optional wrapper audit 與 CLI summary 對相同 invocation 回傳一致的 mode、sink、target、connection source、status 與 unresolved reason。
-- [ ] SQL Execution Graph 仍是 SQL relationship、lineage、reverse lookup 與 terminal DML evidence 的唯一正式來源。
+- [ ] refresh、analyze、SP/table reverse lookup、optional wrapper audit 與 CLI summary 對相同 invocation 回傳一致的 mode、sink、target、connection source、status 與 unresolved reason，且不會把 contract onboarding status 當成 `Evidence Status`。
+- [ ] operator projections 與 `Analysis Manifest` 保留本次使用的 contract fingerprint、signature revision、implementation snapshot、comparison report、binding revision 與 lifecycle status，能辨識 current、stale、conflicting contract evidence。
+- [ ] SQL Execution Graph 仍是 SQL relationship、lineage、reverse lookup 與 terminal DML evidence 的唯一正式來源；optional discovery/audit 不得建立第二套 classifier。
