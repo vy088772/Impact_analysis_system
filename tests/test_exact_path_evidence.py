@@ -181,6 +181,7 @@ def _cached_path_fixture(
                     "command_text_kind": "literal",
                     "command_text": "dbo.usp_SaveOrder",
                     "command_type_stored_procedure": True,
+                    "terminal_sink": "ExecuteNonQuery",
                     "connection_expression": "conn",
                     "start_offset": 0,
                     "end_offset": 10,

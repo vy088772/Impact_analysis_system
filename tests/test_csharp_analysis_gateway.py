@@ -367,6 +367,27 @@ def test_explicit_stored_procedure_type_with_catalog_hit_is_proven() -> None:
     assert invocation.source.end_offset == 90
 
 
+def test_stored_procedure_projection_separates_execution_and_evidence_fields() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [_raw_invocation(command_text="dbo.usp_SaveOrder")],
+    )[0]
+    projected = invocation_wrapper_evidence_fields(invocation)
+
+    assert projected["connection_expression"] == "conn"
+    assert projected["connection_source"] == "OrdersDb"
+    assert projected["invocation_mode"] == "stored_procedure"
+    assert projected["procedure_name"] == "usp_saveorder"
+    assert projected["terminal_sink"] == "ExecuteNonQuery"
+    assert projected["evidence"] == "proven"
+    assert projected["evidence_status"] == "proven"
+
+
 def test_schema_qualified_catalog_matching_does_not_cross_same_name_schemas() -> None:
     catalog = SpCatalog.from_databases({
         "Y-Docs_TTPUR": ["dbo.usp_SO_Delete", "sales.usp_SO_Delete"],
@@ -523,6 +544,45 @@ def test_direct_stored_procedure_without_an_explicit_terminal_sink_remains_unres
     assert invocation.reason == "terminal_sink_unresolved"
 
 
+def test_direct_stored_procedure_without_terminal_sink_fact_remains_unresolved() -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    raw = _raw_invocation(command_text="usp_SaveOrder")
+    raw.pop("terminal_sink")
+
+    invocation = gateway.resolve_direct_invocations("OrderPage.cs", [raw])[0]
+
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "terminal_sink_unresolved"
+
+
+def test_direct_stored_procedure_with_blank_terminal_sink_fact_remains_unresolved() -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [_raw_invocation(command_text="usp_SaveOrder", terminal_sink="   ")],
+    )[0]
+
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "terminal_sink_unresolved"
+
+
+def test_direct_stored_procedure_with_incomplete_literal_command_text_is_unresolved() -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [_raw_invocation(command_text="   ")],
+    )[0]
+
+    assert invocation.procedure_name is None
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "dynamic_command_text"
+
+
 def test_unknown_direct_command_type_remains_unresolved() -> None:
     catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
     gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
@@ -671,6 +731,25 @@ def test_resolved_database_without_catalog_hit_is_unresolved_not_guessed() -> No
     assert invocations[0].evidence is InvocationEvidence.UNRESOLVED
     assert invocations[0].database == "Y-Docs_TTPUR"
     assert invocations[0].procedure_name == "usp_so_delete"
+
+
+def test_resolved_connection_source_scopes_same_named_procedure_to_one_catalog() -> None:
+    catalog = SpCatalog.from_databases({
+        "OrdersDb": ["usp_SaveOrder"],
+        "ArchiveDb": ["usp_ArchiveOrder"],
+    })
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "ArchiveDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [_raw_invocation(command_text="usp_SaveOrder")],
+    )[0]
+
+    assert invocation.database == "ArchiveDb"
+    assert invocation.database_candidates == ()
+    assert invocation.procedure_name == "usp_saveorder"
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "not_in_resolved_catalog"
 
 
 def test_unknown_connection_source_unique_across_catalogs_is_likely() -> None:

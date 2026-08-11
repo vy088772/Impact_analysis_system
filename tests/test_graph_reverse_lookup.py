@@ -153,6 +153,7 @@ def _scan(root: Path) -> ProjectScanResult:
                 "command_text_kind": "literal",
                 "command_text": procedure,
                 "command_type_stored_procedure": True,
+                "terminal_sink": "ExecuteNonQuery",
                 "connection_expression": "conn",
                 "start_offset": 10,
                 "end_offset": 90,

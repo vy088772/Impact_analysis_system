@@ -919,7 +919,7 @@ class CSharpAnalysisGateway:
                 ),
                 **metadata,
             )
-        if "terminal_sink" in raw and not metadata["terminal_sink"]:
+        if not metadata["terminal_sink"]:
             return DbInvocation(
                 class_name,
                 method_name,
@@ -938,7 +938,10 @@ class CSharpAnalysisGateway:
                 **metadata,
             )
 
-        if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
+        if (
+            raw.get("command_text_kind") != "literal"
+            or not str(raw.get("command_text") or "").strip()
+        ):
             return DbInvocation(
                 class_name,
                 method_name,
@@ -1084,7 +1087,7 @@ class CSharpAnalysisGateway:
                 if command_text_literal is not None
                 else None
             ),
-            "terminal_sink": str(raw.get("terminal_sink") or ""),
+            "terminal_sink": str(raw.get("terminal_sink") or "").strip(),
             "receiver_type": str(
                 raw.get("receiver_type")
                 or raw.get("wrapper_receiver_type")
