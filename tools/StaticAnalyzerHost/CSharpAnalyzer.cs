@@ -170,6 +170,44 @@ internal static class CSharpAnalyzer
     }
 }
 
+internal static class SqlTextClassifier
+{
+    internal static bool LooksLikeInlineSql(string text)
+    {
+        var normalized = TrimLeadingTrivia(text);
+        var match = Regex.Match(normalized, @"^(?<statement>[A-Za-z]+)\b");
+        if (!match.Success)
+            return false;
+
+        return match.Groups["statement"].Value.ToUpperInvariant() is
+            "SELECT" or "INSERT" or "UPDATE" or "DELETE" or "MERGE" or "EXEC" or "EXECUTE";
+    }
+
+    private static string TrimLeadingTrivia(string text)
+    {
+        var index = 0;
+        while (index < text.Length)
+        {
+            while (index < text.Length && char.IsWhiteSpace(text[index]))
+                index++;
+            if (text.AsSpan(index).StartsWith("--", StringComparison.Ordinal))
+            {
+                var newline = text.IndexOf('\n', index + 2);
+                index = newline < 0 ? text.Length : newline + 1;
+                continue;
+            }
+            if (text.AsSpan(index).StartsWith("/*", StringComparison.Ordinal))
+            {
+                var commentEnd = text.IndexOf("*/", index + 2, StringComparison.Ordinal);
+                index = commentEnd < 0 ? text.Length : commentEnd + 2;
+                continue;
+            }
+            break;
+        }
+        return text[index..];
+    }
+}
+
 /// <summary>Finds direct `SqlCommand` invocations by name-based statement matching, without a full Compilation.</summary>
 internal static class DirectSqlClientAnalyzer
 {
@@ -399,7 +437,10 @@ internal static class DirectSqlClientAnalyzer
             CommandTextArgument: commandTextArgument,
             CommandTextLiteral: candidate.CommandText,
             TerminalSink: terminalSink,
-            CommandTypeMode: commandTypeMode);
+            CommandTypeMode: commandTypeMode,
+            CommandTextSourceStartOffset: candidate.SourceStartOffset,
+            CommandTextSourceEndOffset: candidate.SourceEndOffset,
+            CommandTextProvenance: candidate.ValueProvenance);
 
     private static string? ResolveVariableName(ObjectCreationExpressionSyntax creation)
     {
@@ -531,7 +572,10 @@ internal static class DirectSqlClientAnalyzer
                 kind,
                 text,
                 argumentExpression,
-                SyntaxBranchAnalyzer.GetBranchContext(anchor)),
+                SyntaxBranchAnalyzer.GetBranchContext(anchor),
+                anchor.SpanStart,
+                anchor.Span.End,
+                BuildCommandTextProvenance(anchor, text)),
         };
     }
 
@@ -558,9 +602,19 @@ internal static class DirectSqlClientAnalyzer
                 kind,
                 text,
                 originalArgumentExpression ?? expression?.ToString(),
-                SyntaxBranchAnalyzer.GetBranchContext(anchor)),
+                SyntaxBranchAnalyzer.GetBranchContext(anchor),
+                anchor.SpanStart,
+                anchor.Span.End,
+                BuildCommandTextProvenance(anchor, text)),
         };
     }
+
+    private static string BuildCommandTextProvenance(SyntaxNode anchor, string? value)
+        => anchor is VariableDeclaratorSyntax or AssignmentExpressionSyntax
+            ? $"assignment:{anchor.ToString().Trim()}"
+            : value is null
+                ? "dynamic_expression"
+                : "literal_expression";
 
     /// <summary>Matches only an exact `CommandType.StoredProcedure` member access, not any value containing the substring.</summary>
     private static bool IsStoredProcedureCommandType(ExpressionSyntax expression)
@@ -573,7 +627,10 @@ internal static class DirectSqlClientAnalyzer
         string CommandTextKind,
         string? CommandText,
         string? ArgumentExpression,
-        IReadOnlyList<string> BranchContext);
+        IReadOnlyList<string> BranchContext,
+        int? SourceStartOffset = null,
+        int? SourceEndOffset = null,
+        string ValueProvenance = "");
 
     private sealed record TerminalSinkResolution(
         string? Name,
@@ -688,7 +745,11 @@ internal static class AdapterAnalyzer
             InvocationKind: "dapper",
             WrapperMode: mode,
             MethodChain: new[] { method.Identifier.Text, member.Name.Identifier.Text },
-            BranchContext: SyntaxBranchAnalyzer.Combine(callContext, candidate.BranchContext)))
+            BranchContext: SyntaxBranchAnalyzer.Combine(callContext, candidate.BranchContext),
+            TerminalSink: ResolveTerminalSink(member.Name.Identifier.Text),
+            CommandTextSourceStartOffset: candidate.SourceStartOffset,
+            CommandTextSourceEndOffset: candidate.SourceEndOffset,
+            CommandTextProvenance: candidate.ValueProvenance))
             .ToList();
     }
 
@@ -712,7 +773,24 @@ internal static class AdapterAnalyzer
             InvocationKind: "entity_framework",
             WrapperMode: mode,
             MethodChain: new[] { method.Identifier.Text, member.Name.Identifier.Text },
-            BranchContext: SyntaxBranchAnalyzer.GetBranchContext(call));
+            BranchContext: SyntaxBranchAnalyzer.GetBranchContext(call),
+            TerminalSink: ResolveTerminalSink(member.Name.Identifier.Text),
+            CommandTextSourceStartOffset: expression?.SpanStart ?? call.SpanStart,
+            CommandTextSourceEndOffset: expression?.Span.End ?? call.Span.End,
+            CommandTextProvenance: expression is LiteralExpressionSyntax
+                ? "literal_expression"
+                : "dynamic_expression");
+    }
+
+    private static string ResolveTerminalSink(string methodName)
+    {
+        if (methodName.StartsWith("Query", StringComparison.OrdinalIgnoreCase)
+            || methodName.StartsWith("FromSql", StringComparison.OrdinalIgnoreCase)
+            || methodName.StartsWith("SqlQuery", StringComparison.OrdinalIgnoreCase))
+            return "ExecuteReader";
+        if (methodName.Contains("Scalar", StringComparison.OrdinalIgnoreCase))
+            return "ExecuteScalar";
+        return "ExecuteNonQuery";
     }
 
     private static string ResolveDapperMode(
@@ -740,15 +818,7 @@ internal static class AdapterAnalyzer
         ExpressionSyntax? expression)
     {
         if (expression is LiteralExpressionSyntax { Token.Value: string text })
-        {
-            var match = Regex.Match(
-                text,
-                @"^\s*EXEC(?:UTE)?\s+(?<name>(?:(?:\[[^\]]+\]|[A-Za-z_][\w$]*)\s*\.)*(?:\[[^\]]+\]|[A-Za-z_][\w$]*))",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-            if (match.Success)
-                return ("literal", match.Groups["name"].Value, "stored_procedure");
             return ("literal", text, LooksLikeInlineSql(text) ? "inline_sql" : "unknown");
-        }
 
         return ("dynamic", null, "unknown");
     }
@@ -873,14 +943,7 @@ internal static class AdapterAnalyzer
     }
 
     private static bool LooksLikeInlineSql(string text)
-    {
-        var normalized = text.TrimStart();
-        return normalized.StartsWith("SELECT ", StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith("INSERT ", StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith("UPDATE ", StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith("DELETE ", StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith("MERGE ", StringComparison.OrdinalIgnoreCase);
-    }
+        => SqlTextClassifier.LooksLikeInlineSql(text);
 
     private static IReadOnlyList<AdapterCommandTextCandidate> ReadCommandTextCandidates(
         ExpressionSyntax? expression,
@@ -911,7 +974,8 @@ internal static class AdapterAnalyzer
                 assignments.Concat(declarations))
                 .Select(item => ReadCommandTextCandidate(
                     item.Value,
-                    SyntaxBranchAnalyzer.GetBranchContext(item.Assignment)))
+                    SyntaxBranchAnalyzer.GetBranchContext(item.Assignment),
+                    item.Assignment))
                 .ToList();
             if (resolved.Count > 0)
                 return resolved;
@@ -919,23 +983,44 @@ internal static class AdapterAnalyzer
 
         return new[]
         {
-            ReadCommandTextCandidate(expression, SyntaxBranchAnalyzer.GetBranchContext(anchor)),
+            ReadCommandTextCandidate(
+                expression,
+                SyntaxBranchAnalyzer.GetBranchContext(anchor),
+                anchor),
         };
     }
 
     private static AdapterCommandTextCandidate ReadCommandTextCandidate(
         ExpressionSyntax? expression,
-        IReadOnlyList<string> branchContext)
+        IReadOnlyList<string> branchContext,
+        SyntaxNode anchor)
     {
         if (expression is LiteralExpressionSyntax { Token.Value: string text })
-            return new AdapterCommandTextCandidate("literal", text, branchContext);
-        return new AdapterCommandTextCandidate("dynamic", null, branchContext);
+            return new AdapterCommandTextCandidate(
+                "literal",
+                text,
+                branchContext,
+                anchor.SpanStart,
+                anchor.Span.End,
+                anchor is VariableDeclaratorSyntax or AssignmentExpressionSyntax
+                    ? $"assignment:{anchor.ToString().Trim()}"
+                    : "literal_expression");
+        return new AdapterCommandTextCandidate(
+            "dynamic",
+            null,
+            branchContext,
+            anchor.SpanStart,
+            anchor.Span.End,
+            "dynamic_expression");
     }
 
     private sealed record AdapterCommandTextCandidate(
         string CommandTextKind,
         string? CommandText,
-        IReadOnlyList<string> BranchContext);
+        IReadOnlyList<string> BranchContext,
+        int? SourceStartOffset = null,
+        int? SourceEndOffset = null,
+        string ValueProvenance = "");
 }
 
 internal sealed record CSharpAnalysis(string SourceId, List<MethodSourceSpan> Methods, List<DirectSqlInvocation> DbInvocations);
@@ -985,7 +1070,10 @@ internal sealed record DirectSqlInvocation(
     IReadOnlyList<WrapperOverloadCandidateFact>? WrapperOverloadCandidates = null,
     bool WrapperOverloadAmbiguous = false,
     string? WrapperUnresolvedReason = null,
-    IReadOnlyList<string>? ConnectionExpressionCandidates = null);
+    IReadOnlyList<string>? ConnectionExpressionCandidates = null,
+    int? CommandTextSourceStartOffset = null,
+    int? CommandTextSourceEndOffset = null,
+    string? CommandTextProvenance = null);
 
 /// <summary>One ambiguous/unavailable overload candidate's bound-implementation and signature facts.</summary>
 internal sealed record WrapperOverloadCandidateFact(
@@ -1315,7 +1403,10 @@ internal static class WrapperAnalyzer
                         WrapperAssemblyIdentity: wrapper.AssemblyIdentity,
                         WrapperAssemblyRevision: wrapper.AssemblyRevision,
                         WrapperUnresolvedReason: wrapper.UnresolvedReason,
-                        ConnectionExpressionCandidates: connectionExpression.Candidates));
+                        ConnectionExpressionCandidates: connectionExpression.Candidates,
+                        CommandTextSourceStartOffset: commandTextCandidate.SourceStartOffset,
+                        CommandTextSourceEndOffset: commandTextCandidate.SourceEndOffset,
+                        CommandTextProvenance: commandTextCandidate.ValueProvenance));
                 }
             }
         }
@@ -1694,15 +1785,7 @@ internal static class WrapperAnalyzer
                     || text.Equals("Inline", StringComparison.OrdinalIgnoreCase)));
 
     private static bool LooksLikeInlineSql(string text)
-    {
-        var normalized = text.TrimStart();
-        return normalized.StartsWith("SELECT ", StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith("INSERT ", StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith("UPDATE ", StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith("DELETE ", StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith("EXEC ", StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith("EXECUTE ", StringComparison.OrdinalIgnoreCase);
-    }
+        => SqlTextClassifier.LooksLikeInlineSql(text);
 
     private static bool LooksLikeProcedureName(string text)
     {
@@ -2684,13 +2767,23 @@ internal static class WrapperAnalyzer
             commandText is null ? "dynamic" : "literal",
             commandText,
             argumentExpression,
-            SyntaxBranchAnalyzer.GetBranchContext(anchor));
+            SyntaxBranchAnalyzer.GetBranchContext(anchor),
+            anchor.SpanStart,
+            anchor.Span.End,
+            anchor is VariableDeclaratorSyntax or AssignmentExpressionSyntax
+                ? $"assignment:{anchor.ToString().Trim()}"
+                : commandText is null
+                    ? "dynamic_expression"
+                    : "literal_expression");
 
     private sealed record WrapperCommandTextCandidate(
         string CommandTextKind,
         string? CommandText,
         string? ArgumentExpression,
-        IReadOnlyList<string> BranchContext);
+        IReadOnlyList<string> BranchContext,
+        int? SourceStartOffset = null,
+        int? SourceEndOffset = null,
+        string ValueProvenance = "");
 
     private sealed record ConnectionResolution(
         string? Expression,

@@ -8,6 +8,7 @@ evidence-rating decisions live here so unresolved names or databases are never g
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
@@ -29,6 +30,31 @@ class InvocationSourceSpan:
     relative_path: str
     start_offset: int
     end_offset: int
+
+
+@dataclass(frozen=True)
+class EmbeddedProcedureTarget:
+    """Catalog evidence for a procedure named by inline SQL ``EXEC`` text."""
+
+    procedure_name: Optional[str]
+    procedure_schema: Optional[str]
+    database: Optional[str]
+    evidence: InvocationEvidence
+    reason: str = ""
+    database_candidates: tuple[str, ...] = ()
+    raw_target: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "procedure_name": self.procedure_name,
+            "procedure_schema": self.procedure_schema,
+            "database": self.database,
+            "database_candidates": list(self.database_candidates),
+            "evidence": self.evidence.value,
+            "evidence_status": self.evidence.value,
+            "reason": self.reason,
+            "raw_target": self.raw_target,
+        }
 
 
 @dataclass(frozen=True)
@@ -178,6 +204,27 @@ class DbInvocation:
     wrapper_method_semantics: str = ""
     wrapper_overload_candidates: tuple[str, ...] = ()
     wrapper_overload_candidate_facts: tuple[Mapping[str, Any], ...] = ()
+    embedded_target: Optional[EmbeddedProcedureTarget] = None
+    procedure_name_hint: Optional[str] = None
+    command_text_source: Optional[InvocationSourceSpan] = None
+    command_text_provenance: str = ""
+
+    @property
+    def embedded_procedure_target(self) -> Optional[EmbeddedProcedureTarget]:
+        """Compatibility name for the optional inline EXEC target evidence."""
+        return self.embedded_target
+
+    @property
+    def embedded_procedure_name(self) -> Optional[str]:
+        return self.embedded_target.procedure_name if self.embedded_target else None
+
+    @property
+    def embedded_procedure_schema(self) -> Optional[str]:
+        return self.embedded_target.procedure_schema if self.embedded_target else None
+
+    @property
+    def embedded_procedure_evidence(self) -> Optional[InvocationEvidence]:
+        return self.embedded_target.evidence if self.embedded_target else None
 
     @property
     def wrapper_classification_status(self) -> str:
@@ -235,8 +282,16 @@ WRAPPER_EVIDENCE_FIELDS = (
     "command_type_mode",
     "command_text_argument",
     "command_text_literal",
+    "command_text_source_span",
+    "command_text_provenance",
     "literal_value",
     "terminal_sink",
+    "embedded_target",
+    "embedded_targets",
+    "embedded_procedure_name",
+    "embedded_procedure_schema",
+    "embedded_procedure_evidence",
+    "procedure_name_hint",
     "receiver_name",
     "connection_expression",
     "connection_expression_candidates",
@@ -360,6 +415,9 @@ def wrapper_observation_fields(
         "evidence_reason": evidence_reason,
         "procedure_name": procedure_name or "",
         "procedure_schema": procedure_schema or "",
+        "procedure_name_hint": (
+            evidence.procedure_name_hint if evidence is not None else None
+        ),
         "database": database,
         "database_candidates": database_candidates,
         "database_attribution": (
@@ -409,6 +467,18 @@ def wrapper_observation_fields(
         "command_text_literal": (
             evidence.command_text_literal if evidence is not None else None
         ),
+        "command_text_source_span": (
+            {
+                "relative_path": evidence.command_text_source.relative_path,
+                "start_offset": evidence.command_text_source.start_offset,
+                "end_offset": evidence.command_text_source.end_offset,
+            }
+            if evidence is not None and evidence.command_text_source is not None
+            else None
+        ),
+        "command_text_provenance": (
+            evidence.command_text_provenance if evidence is not None else ""
+        ),
         "literal_value": evidence.literal_value if evidence is not None else None,
         "raw_command_text": evidence.raw_command_text if evidence is not None else None,
         "terminal_sink": evidence.terminal_sink if evidence is not None else "",
@@ -428,6 +498,27 @@ def wrapper_observation_fields(
             list(evidence.branch_context) if evidence is not None else []
         ),
         "provenance": evidence.provenance if evidence is not None else "",
+        "embedded_target": (
+            evidence.embedded_target.to_dict()
+            if evidence is not None and evidence.embedded_target is not None
+            else None
+        ),
+        "embedded_targets": (
+            [evidence.embedded_target.to_dict()]
+            if evidence is not None and evidence.embedded_target is not None
+            else []
+        ),
+        "embedded_procedure_name": (
+            evidence.embedded_procedure_name if evidence is not None else None
+        ),
+        "embedded_procedure_schema": (
+            evidence.embedded_procedure_schema if evidence is not None else None
+        ),
+        "embedded_procedure_evidence": (
+            evidence.embedded_procedure_evidence.value
+            if evidence is not None and evidence.embedded_procedure_evidence is not None
+            else None
+        ),
     }
 
 
@@ -471,6 +562,16 @@ def invocation_wrapper_evidence_fields(invocation: DbInvocation) -> Dict[str, An
             "command_type_mode": invocation.command_type_mode,
             "command_text_argument": invocation.command_text_argument,
             "command_text_literal": invocation.command_text_literal,
+            "command_text_source_span": (
+                {
+                    "relative_path": invocation.command_text_source.relative_path,
+                    "start_offset": invocation.command_text_source.start_offset,
+                    "end_offset": invocation.command_text_source.end_offset,
+                }
+                if invocation.command_text_source is not None
+                else None
+            ),
+            "command_text_provenance": invocation.command_text_provenance,
             "literal_value": invocation.literal_value,
             "terminal_sink": invocation.terminal_sink,
             "receiver_type": (
@@ -484,6 +585,23 @@ def invocation_wrapper_evidence_fields(invocation: DbInvocation) -> Dict[str, An
             ),
             "connection_source": invocation.connection_source or invocation.database,
             "provenance": invocation.provenance,
+            "embedded_target": (
+                invocation.embedded_target.to_dict()
+                if invocation.embedded_target is not None
+                else None
+            ),
+            "embedded_targets": (
+                [invocation.embedded_target.to_dict()]
+                if invocation.embedded_target is not None
+                else []
+            ),
+            "embedded_procedure_name": invocation.embedded_procedure_name,
+            "embedded_procedure_schema": invocation.embedded_procedure_schema,
+            "embedded_procedure_evidence": (
+                invocation.embedded_procedure_evidence.value
+                if invocation.embedded_procedure_evidence is not None
+                else None
+            ),
             "implementation_identity": invocation.implementation_identity,
             "assembly_identity": invocation.assembly_identity,
             "assembly_revision": invocation.assembly_revision,
@@ -1101,6 +1219,109 @@ def _wrapper_method_facts(raw: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+_SQL_IDENTIFIER = r"(?:\[[^\]]+\]|[A-Za-z_][\w$]*)"
+_EMBEDDED_EXEC_KEYWORD = re.compile(r"^EXEC(?:UTE)?\b", re.IGNORECASE)
+_EMBEDDED_EXEC_TARGET = re.compile(
+    rf"^(?P<target>{_SQL_IDENTIFIER}(?:\s*\.\s*{_SQL_IDENTIFIER})*)",
+    re.IGNORECASE,
+)
+
+
+def _skip_sql_leading_trivia(text: str, start: int = 0) -> int:
+    index = start
+    while index < len(text):
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if text.startswith("--", index):
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline + 1
+            continue
+        if text.startswith("/*", index):
+            comment_end = text.find("*/", index + 2)
+            index = len(text) if comment_end < 0 else comment_end + 2
+            continue
+        break
+    return index
+
+
+def _iter_sql_exec_offsets(text: str) -> Iterable[int]:
+    index = 0
+    while index < len(text):
+        if text.startswith("--", index):
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline + 1
+            continue
+        if text.startswith("/*", index):
+            comment_end = text.find("*/", index + 2)
+            index = len(text) if comment_end < 0 else comment_end + 2
+            continue
+        if text[index] in {"'", '"'}:
+            quote = text[index]
+            index += 1
+            while index < len(text):
+                if text[index] == quote:
+                    if index + 1 < len(text) and text[index + 1] == quote:
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            continue
+        if text[index] == "[":
+            closing = text.find("]", index + 1)
+            index = len(text) if closing < 0 else closing + 1
+            continue
+        keyword_match = _EMBEDDED_EXEC_KEYWORD.match(text[index:])
+        if keyword_match is not None and (
+            index == 0 or not (text[index - 1].isalnum() or text[index - 1] in "_$")
+        ):
+            yield index
+            index += keyword_match.end()
+            continue
+        index += 1
+
+
+def _parse_embedded_exec_target_at(
+    raw_text: str,
+    start: int,
+) -> tuple[Optional[str], str]:
+    keyword_match = _EMBEDDED_EXEC_KEYWORD.match(raw_text[start:])
+    if keyword_match is None:
+        return None, ""
+    remainder = raw_text[start + keyword_match.end() :]
+    remainder_start = _skip_sql_leading_trivia(remainder)
+    remainder = remainder[remainder_start:]
+    if re.match(r"AS\b", remainder, re.IGNORECASE):
+        return None, "embedded_exec_as"
+    target_match = _EMBEDDED_EXEC_TARGET.match(remainder)
+    if target_match is None:
+        return "", "embedded_exec_target_dynamic"
+    return target_match.group("target"), ""
+
+
+def _embedded_exec_target(raw_text: str) -> tuple[Optional[str], str]:
+    for start in _iter_sql_exec_offsets(raw_text):
+        target, reason = _parse_embedded_exec_target_at(raw_text, start)
+        if reason == "embedded_exec_as":
+            continue
+        return target, reason
+    return None, ""
+
+
+def _leading_sql_statement(raw_text: str) -> str:
+    start = _skip_sql_leading_trivia(raw_text)
+    match = re.match(r"([A-Za-z]+)\b", raw_text[start:])
+    return match.group(1).casefold() if match else ""
+
+
+def _procedure_name_hint(raw_text: str) -> Optional[str]:
+    normalized = normalize_procedure_name(raw_text)
+    bare = raw_text.strip().replace("[", "").replace("]", "").split(".")[-1]
+    if bare.casefold().startswith(("sp", "usp", "proc")):
+        return normalized
+    return None
+
+
 def normalize_procedure_name(raw_name: str) -> str:
     """Normalize a candidate SP name to its bare, case-insensitive identity."""
     cleaned = raw_name.strip().replace("[", "").replace("]", "")
@@ -1555,15 +1776,100 @@ class CSharpAnalysisGateway:
         """Turn raw Roslyn direct-SqlClient facts into evidence-rated Database Invocations."""
         results: List[DbInvocation] = []
         for raw in raw_invocations:
-            invocation = self._resolve_one(
-                relative_path,
-                raw,
-                scan_root=scan_root,
-                explicit_contract=explicit_contract,
-            )
-            if invocation is not None:
-                results.append(invocation)
+            for candidate_raw in self._expand_command_text_candidates(raw):
+                candidate_raw.setdefault("relative_path", relative_path)
+                invocation = self._resolve_one(
+                    relative_path,
+                    candidate_raw,
+                    scan_root=scan_root,
+                    explicit_contract=explicit_contract,
+                )
+                if invocation is not None:
+                    results.append(invocation)
         return results
+
+    @staticmethod
+    def _expand_command_text_candidates(raw: Mapping[str, Any]) -> List[Dict[str, Any]]:
+        base = dict(raw)
+        candidate_values = None
+        for key in (
+            "command_text_candidates",
+            "command_text_assignments",
+            "value_candidates",
+        ):
+            if key in base:
+                candidate_values = base.get(key)
+                break
+        if not isinstance(candidate_values, (list, tuple)) or not candidate_values:
+            return [base]
+
+        expanded: List[Dict[str, Any]] = []
+        for candidate in candidate_values:
+            merged = dict(base)
+            for key in (
+                "command_text_candidates",
+                "command_text_assignments",
+                "value_candidates",
+            ):
+                merged.pop(key, None)
+            if isinstance(candidate, Mapping):
+                candidate_values_map = dict(candidate)
+                if "command_text" not in candidate_values_map:
+                    candidate_values_map["command_text"] = candidate_values_map.get(
+                        "value"
+                    )
+                if "command_text_kind" not in candidate_values_map:
+                    candidate_values_map["command_text_kind"] = (
+                        "literal"
+                        if candidate_values_map.get("command_text") is not None
+                        else "dynamic"
+                    )
+                if "branch_context" not in candidate_values_map:
+                    predicate = candidate_values_map.get(
+                        "predicate", candidate_values_map.get("branch_predicate")
+                    )
+                    if predicate is not None:
+                        candidate_values_map["branch_context"] = [predicate]
+                if "command_text_source_span" not in candidate_values_map:
+                    source_span = candidate_values_map.get("source_span")
+                    if source_span is not None:
+                        candidate_values_map["command_text_source_span"] = source_span
+                if "command_text_provenance" not in candidate_values_map:
+                    provenance = candidate_values_map.get("provenance")
+                    if provenance is not None:
+                        candidate_values_map["command_text_provenance"] = provenance
+                merged.update(candidate_values_map)
+            else:
+                merged["command_text_kind"] = "literal"
+                merged["command_text"] = candidate
+            has_source_span = any(
+                key in merged
+                for key in (
+                    "command_text_source_span",
+                    "value_source_span",
+                    "source_span",
+                    "command_text_source_start_offset",
+                )
+            )
+            has_provenance = any(
+                str(merged.get(key) or "").strip()
+                for key in (
+                    "command_text_provenance",
+                    "value_provenance",
+                    "command_text_value_provenance",
+                )
+            )
+            if not has_source_span or not has_provenance:
+                merged["command_text_kind"] = "dynamic"
+                merged["command_text"] = None
+                merged["command_text_provenance"] = "candidate_provenance_incomplete"
+                merged["command_text_source_span"] = {
+                    "relative_path": merged.get("relative_path") or merged.get("source_file") or "",
+                    "start_offset": merged.get("start_offset") or 0,
+                    "end_offset": merged.get("end_offset") or 0,
+                }
+            expanded.append(merged)
+        return expanded
 
     def reconcile_wrapper_observation(
         self,
@@ -1712,15 +2018,36 @@ class CSharpAnalysisGateway:
         branch_context = self._branch_context(raw)
         database = self._resolve_database(raw.get("connection_expression"))
         command_type_mode = str(raw.get("command_type_mode") or "").casefold()
+        command_text_value = str(command_text or "")
+        explicit_text_mode = (
+            command_type_mode in {"text", "default_text", "inline_sql"}
+            or raw.get("command_type_stored_procedure") is False
+            or str(raw.get("method_semantics") or "").casefold()
+            in {"fixed_inline_sql", "inline_sql", "text"}
+        )
+        known_inline_text = command_type_mode != "unknown" and (
+            explicit_text_mode
+            or _leading_sql_statement(command_text_value)
+            in {"select", "insert", "update", "delete", "merge", "exec", "execute"}
+        )
+        inline_method_semantics = "fixed_inline_sql" if known_inline_text else "unresolved"
+        inline_invocation_mode = "inline_sql" if known_inline_text else "unresolved"
         metadata = self._invocation_metadata(
             raw,
             database=database,
-            method_semantics=(
-                "unresolved" if command_type_mode == "unknown" else "fixed_inline_sql"
-            ),
-            invocation_mode=(
-                "unresolved" if command_type_mode == "unknown" else "inline_sql"
-            ),
+            method_semantics=inline_method_semantics,
+            invocation_mode=inline_invocation_mode,
+        )
+        embedded_target = (
+            self._rate_embedded_target(
+                command_text_value,
+                database,
+                self._connection_source_unresolved_reason(raw),
+            )
+            if known_inline_text
+            and command_text_kind == "literal"
+            and command_text_value.strip()
+            else None
         )
         if command_type_mode == "unknown":
             return DbInvocation(
@@ -1737,6 +2064,7 @@ class CSharpAnalysisGateway:
                     if command_text_kind == "literal" and command_text
                     else None
                 ),
+                embedded_target=embedded_target,
                 **metadata,
             )
         if not metadata["terminal_sink"]:
@@ -1754,6 +2082,7 @@ class CSharpAnalysisGateway:
                     if command_text_kind == "literal" and command_text
                     else None
                 ),
+                embedded_target=embedded_target,
                 **metadata,
             )
 
@@ -1770,6 +2099,23 @@ class CSharpAnalysisGateway:
                 **metadata,
             )
 
+        if not known_inline_text:
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "procedure_prefix_without_mode"
+                if _procedure_name_hint(command_text_value)
+                else "command_type_unresolved",
+                branch_context=branch_context,
+                raw_command_text=command_text_value,
+                procedure_name_hint=_procedure_name_hint(command_text_value),
+                **metadata,
+            )
+
         return DbInvocation(
             class_name,
             method_name,
@@ -1780,7 +2126,78 @@ class CSharpAnalysisGateway:
             "inline_sql",
             branch_context=branch_context,
             raw_command_text=str(command_text),
+            embedded_target=embedded_target,
             **metadata,
+        )
+
+    def _rate_embedded_target(
+        self,
+        command_text: str,
+        database: Optional[str],
+        connection_resolution_reason: str = "",
+    ) -> Optional[EmbeddedProcedureTarget]:
+        raw_target, extraction_reason = _embedded_exec_target(command_text)
+        if raw_target is None:
+            return None
+        if not raw_target:
+            return EmbeddedProcedureTarget(
+                None,
+                None,
+                database,
+                InvocationEvidence.UNRESOLVED,
+                extraction_reason,
+            )
+
+        normalized_name = normalize_procedure_name(raw_target)
+        procedure_schema = normalize_procedure_schema(raw_target)
+        if database:
+            if self._catalog.contains(database, normalized_name, procedure_schema):
+                return EmbeddedProcedureTarget(
+                    normalized_name,
+                    procedure_schema,
+                    database,
+                    InvocationEvidence.PROVEN,
+                    "catalog_match",
+                    raw_target=raw_target,
+                )
+            return EmbeddedProcedureTarget(
+                normalized_name,
+                procedure_schema,
+                database,
+                InvocationEvidence.UNRESOLVED,
+                "not_in_resolved_catalog",
+                raw_target=raw_target,
+            )
+
+        matches = self._catalog.databases_containing(normalized_name, procedure_schema)
+        if connection_resolution_reason:
+            return EmbeddedProcedureTarget(
+                normalized_name,
+                procedure_schema,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                connection_resolution_reason,
+                tuple(matches),
+                raw_target,
+            )
+        if len(matches) == 1:
+            return EmbeddedProcedureTarget(
+                normalized_name,
+                procedure_schema,
+                None,
+                InvocationEvidence.LIKELY,
+                "unique_across_catalogs",
+                tuple(matches),
+                raw_target,
+            )
+        return EmbeddedProcedureTarget(
+            normalized_name,
+            procedure_schema,
+            None,
+            InvocationEvidence.UNRESOLVED,
+            "unknown_database_source" if not matches else "ambiguous_cross_database",
+            tuple(matches),
+            raw_target,
         )
 
     def _invocation_metadata(
@@ -1802,6 +2219,48 @@ class CSharpAnalysisGateway:
             command_text_literal = raw.get("literal_value")
         if command_text_literal is None and raw.get("command_text_kind") == "literal":
             command_text_literal = raw.get("command_text")
+
+        command_text_source = raw.get("command_text_source_span")
+        if command_text_source is None:
+            command_text_source = raw.get("value_source_span")
+        if command_text_source is None and (
+            raw.get("command_text_source_start_offset") is not None
+            or raw.get("command_text_source_end_offset") is not None
+        ):
+            command_text_source = {
+                "relative_path": raw.get("relative_path") or raw.get("source_file") or "",
+                "start_offset": raw.get("command_text_source_start_offset"),
+                "end_offset": raw.get("command_text_source_end_offset"),
+            }
+        if isinstance(command_text_source, Mapping):
+            command_text_source_span = InvocationSourceSpan(
+                str(
+                    command_text_source.get("relative_path")
+                    or command_text_source.get("path")
+                    or raw.get("relative_path")
+                    or raw.get("source_file")
+                    or ""
+                ),
+                int(
+                    command_text_source.get("start_offset")
+                    or command_text_source.get("start")
+                    or 0
+                ),
+                int(
+                    command_text_source.get("end_offset")
+                    or command_text_source.get("end")
+                    or 0
+                ),
+            )
+        else:
+            command_text_source_span = None
+        command_text_provenance = str(
+            raw.get("command_text_provenance")
+            or raw.get("value_provenance")
+            or raw.get("command_text_value_provenance")
+            or raw.get("provenance")
+            or ""
+        )
 
         return {
             "method_semantics": str(raw.get("method_semantics") or method_semantics),
@@ -1850,18 +2309,76 @@ class CSharpAnalysisGateway:
             ),
             "connection_source": database,
             "provenance": str(raw.get("provenance") or "static_analyzer_host"),
+            "command_text_source": command_text_source_span,
+            "command_text_provenance": command_text_provenance,
         }
 
     def _resolve_adapter_invocation(self, relative_path: str, raw: dict) -> Optional[DbInvocation]:
         mode = str(raw.get("adapter_mode") or raw.get("wrapper_mode") or "").casefold()
-        if mode == "inline_sql":
-            return None
-
         source = InvocationSourceSpan(relative_path, raw["start_offset"], raw["end_offset"])
         class_name = raw["class_name"]
         method_name = raw["method_name"]
         branch_context = self._branch_context(raw)
         database = self._resolve_database(raw.get("connection_expression"))
+        method_chain = tuple(raw.get("method_chain") or ())
+        if mode == "inline_sql":
+            metadata = self._invocation_metadata(
+                raw,
+                database=database,
+                method_semantics="fixed_inline_sql",
+                invocation_mode="inline_sql",
+            )
+            embedded_target = (
+                self._rate_embedded_target(
+                    str(raw["command_text"]),
+                    database,
+                    self._connection_source_unresolved_reason(raw),
+                )
+                if raw.get("command_text_kind") == "literal"
+                and raw.get("command_text")
+                else None
+            )
+            if not metadata["terminal_sink"]:
+                return DbInvocation(
+                    class_name,
+                    method_name,
+                    database,
+                    None,
+                    InvocationEvidence.UNRESOLVED,
+                    source,
+                    "terminal_sink_unresolved",
+                    method_chain=method_chain,
+                    branch_context=branch_context,
+                    embedded_target=embedded_target,
+                    **metadata,
+                )
+            if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
+                return DbInvocation(
+                    class_name,
+                    method_name,
+                    database,
+                    None,
+                    InvocationEvidence.UNRESOLVED,
+                    source,
+                    "dynamic_command_text",
+                    method_chain=method_chain,
+                    branch_context=branch_context,
+                    **metadata,
+                )
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.PROVEN,
+                source,
+                "inline_sql",
+                method_chain=method_chain,
+                branch_context=branch_context,
+                raw_command_text=str(raw["command_text"]),
+                embedded_target=embedded_target,
+                **metadata,
+            )
         if mode != "stored_procedure" and raw.get("command_type_stored_procedure") is not True:
             return DbInvocation(
                 class_name,
@@ -1871,7 +2388,7 @@ class CSharpAnalysisGateway:
                 InvocationEvidence.UNRESOLVED,
                 source,
                 "adapter_mode_unresolved",
-                method_chain=tuple(raw.get("method_chain") or ()),
+                method_chain=method_chain,
                 branch_context=branch_context,
             )
         if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
@@ -1883,7 +2400,7 @@ class CSharpAnalysisGateway:
                 InvocationEvidence.UNRESOLVED,
                 source,
                 "dynamic_command_text",
-                method_chain=tuple(raw.get("method_chain") or ()),
+                method_chain=method_chain,
                 branch_context=branch_context,
             )
         return self._rate_literal_candidate(
@@ -1892,7 +2409,7 @@ class CSharpAnalysisGateway:
             database,
             raw["command_text"],
             source,
-            method_chain=tuple(raw.get("method_chain") or ()),
+            method_chain=method_chain,
             branch_context=branch_context,
             connection_resolution_reason=self._connection_source_unresolved_reason(raw),
         )
@@ -1933,6 +2450,20 @@ class CSharpAnalysisGateway:
         )
 
         def annotate(invocation: DbInvocation) -> DbInvocation:
+            embedded_target = invocation.embedded_target
+            if (
+                embedded_target is None
+                and (
+                    invocation.invocation_mode == "inline_sql"
+                    or reconciliation.mode_reason == "inline_sql"
+                )
+                and invocation.raw_command_text
+            ):
+                embedded_target = self._rate_embedded_target(
+                    invocation.raw_command_text,
+                    database,
+                    self._connection_source_unresolved_reason(raw),
+                )
             return replace(
                 invocation,
                 wrapper_kind=reconciliation.wrapper_kind,
@@ -1984,6 +2515,7 @@ class CSharpAnalysisGateway:
                 wrapper_method_semantics=reconciliation.method_semantics,
                 wrapper_overload_candidates=reconciliation.overload_candidates,
                 wrapper_overload_candidate_facts=reconciliation.overload_candidate_facts,
+                embedded_target=embedded_target,
             )
 
         common = {
@@ -2023,7 +2555,11 @@ class CSharpAnalysisGateway:
                         raw,
                         database=database,
                         method_semantics=reconciliation.method_semantics,
-                        invocation_mode="unresolved",
+                        invocation_mode=(
+                            "inline_sql"
+                            if reconciliation.mode_reason == "inline_sql"
+                            else "unresolved"
+                        ),
                     )
                     return annotate(DbInvocation(
                         class_name,
@@ -2033,6 +2569,12 @@ class CSharpAnalysisGateway:
                         InvocationEvidence.UNRESOLVED,
                         source,
                         "wrapper_contract_sink_unresolved",
+                        raw_command_text=(
+                            str(raw["command_text"])
+                            if raw.get("command_text_kind") == "literal"
+                            and raw.get("command_text")
+                            else None
+                        ),
                         **metadata,
                         **common,
                     ))
@@ -2187,6 +2729,12 @@ class CSharpAnalysisGateway:
                 InvocationEvidence.UNRESOLVED,
                 source,
                 "wrapper_sink_unresolved",
+                raw_command_text=(
+                    str(raw["command_text"])
+                    if raw.get("command_text_kind") == "literal"
+                    and raw.get("command_text")
+                    else None
+                ),
                 **self._invocation_metadata(
                     raw,
                     database=database,

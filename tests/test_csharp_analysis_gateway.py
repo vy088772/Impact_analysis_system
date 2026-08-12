@@ -759,6 +759,370 @@ def test_literal_sql_operations_remain_inline_even_when_the_text_looks_like_an_s
     assert all(invocation.evidence is InvocationEvidence.PROVEN for invocation in invocations)
 
 
+def test_inline_exec_keeps_inline_mode_and_rates_embedded_target_separately() -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_text="\n/* generated */\nEXEC dbo.usp_SaveOrder @OrderId",
+                command_type_stored_procedure=False,
+                command_type_mode="text",
+                terminal_sink="ExecuteNonQuery",
+            )
+        ],
+    )[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.procedure_name is None
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.embedded_procedure_target is not None
+    assert invocation.embedded_procedure_target.procedure_name == "usp_saveorder"
+    assert invocation.embedded_procedure_target.procedure_schema == "dbo"
+    assert invocation.embedded_procedure_target.evidence is InvocationEvidence.PROVEN
+    assert invocation_wrapper_evidence_fields(invocation)["embedded_target"]["evidence"] == "proven"
+
+
+def test_inline_sql_records_top_level_exec_target_after_another_statement() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_text="SELECT 1; EXEC dbo.usp_SaveOrder @OrderId",
+                command_type_stored_procedure=False,
+                command_type_mode="text",
+            )
+        ],
+    )[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.embedded_procedure_target is not None
+    assert invocation.embedded_procedure_target.procedure_name == "usp_saveorder"
+
+
+def test_leading_sql_comments_keep_known_text_statements_inline() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    statements = [
+        "\n-- generated\nSELECT * FROM SOrder",
+        "/* generated */ INSERT INTO SOrder (OrderNo) VALUES ('A1')",
+        "/* generated */ UPDATE SOrder SET Status = 1",
+        "-- generated\nDELETE FROM SOrder WHERE OrderNo = 'A1'",
+        "/* generated */ MERGE SOrder AS target USING SOrderStage AS source ON 1 = 0;",
+    ]
+
+    invocations = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            {
+                **_raw_invocation(command_text=statement),
+                "command_type_stored_procedure": None,
+                "command_type_mode": "",
+            }
+            for statement in statements
+        ],
+    )
+
+    assert [invocation.invocation_mode for invocation in invocations] == [
+        "inline_sql"
+    ] * len(statements)
+    assert all(invocation.evidence is InvocationEvidence.PROVEN for invocation in invocations)
+
+
+def test_procedure_shaped_text_without_mode_is_only_a_weak_hint() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    raw = _raw_invocation(command_text="usp_SaveOrder")
+    raw.pop("command_type_stored_procedure")
+    raw.pop("command_type_mode", None)
+
+    invocation = gateway.resolve_direct_invocations("OrderPage.cs", [raw])[0]
+
+    assert invocation.invocation_mode == "unresolved"
+    assert invocation.procedure_name is None
+    assert invocation.procedure_name_hint == "usp_saveorder"
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "procedure_prefix_without_mode"
+
+
+def test_command_text_candidate_preserves_value_span_and_provenance() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_text="usp_SaveOrder",
+                command_text_source_span={
+                    "relative_path": "OrderPage.cs",
+                    "start_offset": 120,
+                    "end_offset": 151,
+                },
+                command_text_provenance="assignment:procedure = \"usp_SaveOrder\"",
+                branch_context=["if (useSave)"],
+            )
+        ],
+    )[0]
+
+    assert invocation.source.start_offset == 10
+    assert invocation.command_text_source is not None
+    assert invocation.command_text_source.start_offset == 120
+    assert invocation.command_text_source.end_offset == 151
+    assert invocation.command_text_provenance == (
+        'assignment:procedure = "usp_SaveOrder"'
+    )
+    projected = invocation_wrapper_evidence_fields(invocation)
+    assert projected["command_text_source_span"]["start_offset"] == 120
+    assert projected["command_text_provenance"] == (
+        'assignment:procedure = "usp_SaveOrder"'
+    )
+
+
+def test_gateway_expands_finite_command_text_candidates_without_losing_branches() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_Default", "usp_Alternate"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    raw = _raw_invocation(
+        command_text=None,
+        command_text_kind="candidate_set",
+        command_text_candidates=[
+            {
+                "command_text": "usp_Default",
+                "command_text_kind": "literal",
+                "branch_context": [],
+                "source_span": {
+                    "relative_path": "OrderPage.cs",
+                    "start_offset": 120,
+                    "end_offset": 151,
+                },
+                "command_text_provenance": "declaration:procedure = \"usp_Default\"",
+            },
+            {
+                "command_text": "usp_Alternate",
+                "command_text_kind": "literal",
+                "branch_context": ["if (useAlternate)"],
+                "source_span": {
+                    "relative_path": "OrderPage.cs",
+                    "start_offset": 180,
+                    "end_offset": 219,
+                },
+                "command_text_provenance": "assignment:procedure = \"usp_Alternate\"",
+            },
+        ],
+    )
+
+    invocations = gateway.resolve_direct_invocations("OrderPage.cs", [raw])
+
+    assert [invocation.procedure_name for invocation in invocations] == [
+        "usp_default",
+        "usp_alternate",
+    ]
+    assert [invocation.branch_context for invocation in invocations] == [
+        (),
+        ("if (useAlternate)",),
+    ]
+    assert [invocation.command_text_provenance for invocation in invocations] == [
+        'declaration:procedure = "usp_Default"',
+        'assignment:procedure = "usp_Alternate"',
+    ]
+
+
+def test_incomplete_command_text_candidate_stays_unresolved() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    raw = _raw_invocation(
+        command_text=None,
+        command_text_kind="candidate_set",
+        command_text_candidates=["usp_SaveOrder"],
+    )
+
+    invocation = gateway.resolve_direct_invocations("OrderPage.cs", [raw])[0]
+
+    assert invocation.procedure_name is None
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "dynamic_command_text"
+    assert invocation.command_text_provenance == "candidate_provenance_incomplete"
+
+
+def test_inline_exec_target_keeps_catalog_miss_separate_from_inline_evidence() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_OtherOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_text="EXECUTE dbo.usp_SaveOrder @OrderId",
+                command_type_stored_procedure=False,
+                command_type_mode="text",
+            )
+        ],
+    )[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.embedded_procedure_target is not None
+    assert invocation.embedded_procedure_target.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.embedded_procedure_target.reason == "not_in_resolved_catalog"
+    assert invocation.reason == "inline_sql"
+
+
+def test_inline_exec_target_is_preserved_when_terminal_sink_is_unresolved() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_text="EXEC dbo.usp_SaveOrder @OrderId",
+                command_type_stored_procedure=False,
+                command_type_mode="text",
+                terminal_sink="",
+            )
+        ],
+    )[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "terminal_sink_unresolved"
+    assert invocation.embedded_procedure_target is not None
+    assert invocation.embedded_procedure_target.evidence is InvocationEvidence.PROVEN
+
+
+def test_dynamic_inline_exec_target_remains_unresolved_without_a_fabricated_name() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_text="EXEC(@commandText)",
+                command_type_stored_procedure=False,
+                command_type_mode="text",
+            )
+        ],
+    )[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.embedded_procedure_target is not None
+    assert invocation.embedded_procedure_target.procedure_name is None
+    assert invocation.embedded_procedure_target.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.embedded_procedure_target.reason == "embedded_exec_target_dynamic"
+
+
+def test_external_text_wrapper_keeps_inline_exec_target_as_additional_evidence() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        wrapper_source_available=False,
+        wrapper_method_name="CreateReader",
+        wrapper_receiver_type="SQLObject",
+        wrapper_mode="inline_sql",
+        command_type_stored_procedure=False,
+        command_type_mode="text",
+        connection_expression="conn",
+        command_text="EXEC dbo.usp_SaveOrder @OrderId",
+        terminal_sink="ExecuteReader",
+    )
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [raw],
+        explicit_contract=_sqlobject_wrapper_contract(),
+    )[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.procedure_name is None
+    assert invocation.embedded_procedure_target is not None
+    assert invocation.embedded_procedure_target.procedure_name == "usp_saveorder"
+    assert invocation.embedded_procedure_target.evidence is InvocationEvidence.PROVEN
+
+
+def test_adapter_text_exec_is_retained_as_inline_invocation() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    raw = _raw_invocation(
+        invocation_kind="dapper",
+        adapter_mode="inline_sql",
+        wrapper_mode="inline_sql",
+        command_type_stored_procedure=False,
+        command_type_mode="text",
+        command_text="EXEC dbo.usp_SaveOrder @OrderId",
+        terminal_sink="ExecuteReader",
+    )
+
+    invocation = gateway.resolve_direct_invocations("OrderPage.cs", [raw])[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.procedure_name is None
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.embedded_procedure_target is not None
+    assert invocation.embedded_procedure_target.procedure_name == "usp_saveorder"
+
+
+def test_inline_wrapper_target_survives_missing_contract_sink() -> None:
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+    )
+    contract = {
+        "name": "text-only-contract",
+        "receiver_types": ["SQLObject"],
+        "methods": {"CreateReader": {"mode": "inline_sql"}},
+    }
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        wrapper_source_available=False,
+        wrapper_method_name="CreateReader",
+        wrapper_receiver_type="SQLObject",
+        wrapper_mode="inline_sql",
+        command_text="EXEC dbo.usp_SaveOrder @OrderId",
+        command_type_stored_procedure=False,
+        command_type_mode="text",
+        terminal_sink="",
+        connection_expression="conn",
+    )
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [raw],
+        explicit_contract=contract,
+    )[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "wrapper_contract_sink_unresolved"
+    assert invocation.embedded_procedure_target is not None
+    assert invocation.embedded_procedure_target.evidence is InvocationEvidence.PROVEN
+
+
 def test_direct_inline_sql_without_a_terminal_sink_remains_unresolved() -> None:
     catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
     gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
@@ -1171,6 +1535,12 @@ def test_static_analyzer_host_emits_default_and_conditional_procedure_assignment
             invocation["branch_context"] == ["if (useAlternate)"]
             for invocation in raw_invocations
         )
+        assert all(
+            invocation["command_text_source_start_offset"] is not None
+            and invocation["command_text_source_end_offset"] is not None
+            and invocation["command_text_provenance"]
+            for invocation in raw_invocations
+        )
 
 
 def test_static_analyzer_host_drops_unconditionally_overwritten_procedure_values() -> None:
@@ -1395,8 +1765,8 @@ def test_static_analyzer_host_emits_dapper_and_entity_framework_sp_facts() -> No
         assert "usp_NotEntityFramework" not in {item["command_text"] for item in raw_invocations}
         assert any(item["wrapper_mode"] == "inline_sql" for item in dapper)
         assert any(
-            item["wrapper_mode"] == "stored_procedure"
-            and item["command_text"] == "dbo.usp_SaveOrder"
+            item["wrapper_mode"] == "inline_sql"
+            and item["command_text"] == "EXEC dbo.usp_SaveOrder @Id"
             for item in entity_framework
         )
         assert any(item["wrapper_mode"] == "inline_sql" for item in entity_framework)
@@ -1414,8 +1784,48 @@ def test_static_analyzer_host_emits_dapper_and_entity_framework_sp_facts() -> No
         }
         assert ("Dapper", "usp_default") in proven
         assert ("Dapper", "usp_alternate") in proven
-        assert ("EntityFramework", "usp_saveorder") in proven
         assert all(invocation.procedure_name != "usp_unknown" for invocation in invocations)
+        entity_exec = next(
+            invocation
+            for invocation in invocations
+            if invocation.method_name == "EntityFramework"
+            and invocation.raw_command_text == "EXEC dbo.usp_SaveOrder @Id"
+        )
+        assert entity_exec.invocation_mode == "inline_sql"
+        assert entity_exec.procedure_name is None
+        assert entity_exec.evidence is InvocationEvidence.PROVEN
+        assert entity_exec.embedded_procedure_target is not None
+        assert entity_exec.embedded_procedure_target.procedure_name == "usp_saveorder"
+        assert entity_exec.embedded_procedure_target.evidence is InvocationEvidence.PROVEN
+
+
+def test_static_analyzer_host_classifies_comment_prefixed_adapter_text_as_inline() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "CommentedAdapterFixture.cs"
+        source_path.write_text(
+            "using System.Data;\n"
+            "public class CommentedAdapterFixture {\n"
+            "    private IDbConnection connection;\n"
+            "    private void Run() {\n"
+            "        connection.Query<int>(\"/* generated */ SELECT 1\");\n"
+            "        connection.Query<int>(\"-- generated\\nMERGE SOrder AS target USING SOrderStage AS source ON 1 = 0;\");\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        adapter_invocations = [
+            item
+            for item in result["db_invocations"]
+            if item.get("invocation_kind") == "dapper"
+        ]
+
+        assert len(adapter_invocations) == 2
+        assert all(item["wrapper_mode"] == "inline_sql" for item in adapter_invocations)
 
 
 def test_gateway_classifies_source_wrapper_sp_and_inline_modes() -> None:
