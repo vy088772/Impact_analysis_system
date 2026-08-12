@@ -59,13 +59,19 @@ from .execution_path_builder import build_compact_execution_path_payload, build_
 from .graph_queries import query_table_accesses
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
-from .scan_store import cache_status, get_or_scan, has_cache, save_scan
+from .scan_store import cache_status, cached_commit, get_or_scan, has_cache, save_scan
 from . import sql_cache_store
 from . import flow_chain_builder
 from .contract_preflight import (
     load_contract_registry,
     load_system_contract_selector,
     run_contract_preflight,
+)
+from .contract_transaction import (
+    ContractTransactionError,
+    DEFAULT_CATALOG_PATH as CONTRACT_TRANSACTION_CATALOG_PATH,
+    DEFAULT_REGISTRY_PATH as CONTRACT_TRANSACTION_REGISTRY_PATH,
+    commit_staged_contract_transaction,
 )
 
 
@@ -2164,6 +2170,55 @@ def _mark_contract_preflight_failed(
     return marked
 
 
+_ONBOARDING_STATUSES_ELIGIBLE_FOR_COMMIT = frozenset({"created", "reused"})
+
+
+def _contract_revision_reference(
+    preflight_registry: Optional[Mapping[str, Any]],
+    formal_selector: Any,
+) -> Dict[str, Any]:
+    """Build the Analysis Manifest's Contract Revision Reference for a run.
+
+    Historical manifests must never change meaning when a later refresh
+    changes the registry, so this only reports the fingerprint/status/report
+    references the current run actually used -- it never rewrites a prior
+    manifest.
+    """
+    contracts = (
+        (preflight_registry or {}).get("contracts", {})
+        if isinstance(preflight_registry, Mapping)
+        else {}
+    )
+    if isinstance(formal_selector, str):
+        names = [formal_selector] if formal_selector else []
+    elif isinstance(formal_selector, (list, tuple)):
+        names = [str(item) for item in formal_selector if str(item)]
+    else:
+        names = []
+    references: Dict[str, Any] = {}
+    for name in names:
+        entry = contracts.get(name) if isinstance(contracts, Mapping) else None
+        if not isinstance(entry, Mapping):
+            continue
+        references[name] = {
+            "contract_fingerprint": str(entry.get("contract_fingerprint") or ""),
+            "signature_version": str(entry.get("signature_version") or ""),
+            "contract_status": str(entry.get("status") or ""),
+            "implementation_snapshot": (
+                list(entry.get("implementation_snapshots") or [])[-1]
+                if entry.get("implementation_snapshots")
+                else None
+            ),
+            "comparison_report_reference": str(entry.get("comparison_report") or ""),
+            "system_binding_revision": (
+                entry.get("lifecycle", {}).get("revision")
+                if isinstance(entry.get("lifecycle"), Mapping)
+                else None
+            ),
+        }
+    return references
+
+
 def _select_refresh_files(
     file_paths: Iterable[str],
     root: Path,
@@ -2352,6 +2407,35 @@ def refresh_source(
             preflight.reason if preflight.failed else ""
         ),
     )
+
+    # Registry/catalog writes happen only after formal classification and
+    # wrapper reconciliation above have already succeeded, and only for a
+    # staged proposal complete enough to reuse or create a contract.
+    contract_transaction_summary: Dict[str, Any] = {"status": "not_required"}
+    if (
+        not partial
+        and str(database or "").strip()
+        and preflight.onboarding_status in _ONBOARDING_STATUSES_ELIGIBLE_FOR_COMMIT
+    ):
+        try:
+            contract_transaction_summary = commit_staged_contract_transaction(
+                staged_registry=preflight.staged_registry or {"contracts": {}},
+                staged_selector=preflight.staged_selector,
+                system_id=database,
+                registry_path=CONTRACT_TRANSACTION_REGISTRY_PATH,
+                catalog_path=CONTRACT_TRANSACTION_CATALOG_PATH,
+                source_revision={
+                    "scan_root": str(root),
+                    "source_commit": cached_commit(root) or "",
+                },
+            )
+        except ContractTransactionError as exc:
+            contract_transaction_summary = {
+                "status": "failed",
+                "error_code": exc.code,
+                "error": str(exc),
+            }
+
     database_invocation_count = len(scan.iter_formal_sp_invocations())
     inline_table_fact_count = len(scan.table_relations)
     return {
@@ -2367,6 +2451,13 @@ def refresh_source(
         "updated_files": list(dict.fromkeys(updated_files)),
         "removed_files": list(dict.fromkeys(removed_files)),
         "wrapper_summary": wrapper_summary,
+        "contract_transaction": contract_transaction_summary,
+        "analysis_manifest": {
+            "contract_revision_reference": _contract_revision_reference(
+                preflight.formal_registry,
+                preflight.formal_selector,
+            ),
+        },
         # Deprecated aliases retained for existing clients during migration.
         "sp_relations": database_invocation_count,
         "table_relations": inline_table_fact_count,
