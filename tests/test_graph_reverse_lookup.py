@@ -311,6 +311,19 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
         "evidence_reason",
         "source_snapshot_identity",
         "source_provenance",
+        "invocation_mode",
+        "terminal_sink",
+        "connection_source",
+        "method_semantics",
+        "command_text_kind",
+        "command_text_literal",
+        "contract_fingerprint",
+        "contract_signature_version",
+        "signature_version",
+        "contract_lifecycle_status",
+        "contract_status",
+        "implementation_snapshot_reference",
+        "comparison_report_reference",
     )
 
     def values(item):

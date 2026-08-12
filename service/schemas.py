@@ -300,6 +300,19 @@ class SPMatchProgram(BaseModel):
     source_provenance: Dict[str, Any] = Field(default_factory=dict)
     evidence_status: str = "unresolved"
     evidence_reason: str = ""
+    invocation_mode: str = ""
+    terminal_sink: str = ""
+    connection_source: str = ""
+    method_semantics: str = ""
+    command_text_kind: str = ""
+    command_text_literal: str = ""
+    contract_fingerprint: str = ""
+    contract_signature_version: str = ""
+    signature_version: str = ""
+    contract_lifecycle_status: str = ""
+    contract_status: str = ""
+    implementation_snapshot_reference: str = ""
+    comparison_report_reference: str = ""
 
 
 class FindBySPResponse(BaseModel):
@@ -396,6 +409,19 @@ class TableMatchProgram(BaseModel):
     source_provenance: Dict[str, Any] = Field(default_factory=dict)
     evidence_status: str = "unresolved"
     evidence_reason: str = ""
+    invocation_mode: str = ""
+    terminal_sink: str = ""
+    connection_source: str = ""
+    method_semantics: str = ""
+    command_text_kind: str = ""
+    command_text_literal: str = ""
+    contract_fingerprint: str = ""
+    contract_signature_version: str = ""
+    signature_version: str = ""
+    contract_lifecycle_status: str = ""
+    contract_status: str = ""
+    implementation_snapshot_reference: str = ""
+    comparison_report_reference: str = ""
 
 
 class FindByTableResponse(BaseModel):
