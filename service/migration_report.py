@@ -147,6 +147,53 @@ def compare_legacy_gateway(
     }
 
 
+def build_cutover_report(
+    gateway_records: Iterable[DbInvocation],
+    *,
+    legacy_records: Iterable[object] = (),
+    source_root: Optional[str | Path] = None,
+    source_kinds: Optional[Mapping[tuple[str, int, int], str]] = None,
+) -> dict[str, Any]:
+    """Summarize evidence, review candidates, contract lifecycle, and legacy
+    difference for one scan so maintainers can decide on legacy retirement."""
+    records = list(gateway_records)
+    legacy_migration = compare_legacy_gateway(
+        legacy_records,
+        records,
+        source_root=source_root,
+        source_kinds=source_kinds,
+    )
+
+    evidence_summary: dict[str, int] = defaultdict(int)
+    for record in records:
+        evidence_summary[_evidence_value(record.evidence)] += 1
+
+    review_candidate_count = sum(
+        1 for record in records if record.wrapper_review_candidate
+    )
+
+    contract_lifecycle_summary: dict[str, int] = defaultdict(int)
+    for record in records:
+        contract_lifecycle_summary[record.contract_lifecycle_status] += 1
+
+    legacy_only_detections = legacy_migration["summary"]["dropped_count"]
+    unresolved_count = evidence_summary.get(InvocationEvidence.UNRESOLVED.value, 0)
+
+    return {
+        "report_version": 1,
+        "evidence_summary": dict(evidence_summary),
+        "review_candidate_count": review_candidate_count,
+        "contract_lifecycle_summary": dict(contract_lifecycle_summary),
+        "legacy_migration": legacy_migration,
+        "cutover_signals": {
+            "legacy_only_detections": legacy_only_detections,
+            "unresolved_count": unresolved_count,
+            "review_candidate_count": review_candidate_count,
+            "ready_for_legacy_retirement": legacy_only_detections == 0,
+        },
+    }
+
+
 def render_migration_report_markdown(report: Mapping[str, Any]) -> str:
     """Render a compact reviewable Markdown report from comparator output."""
     summary = report.get("summary", {})
