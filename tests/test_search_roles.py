@@ -1,10 +1,15 @@
 # 搜尋包含 Roles 資料表的 SP
+from pathlib import Path
 import sys
-sys.path.insert(0, r'D:\pratice\Python\Impact_analysis_system')
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from code_analyzer.project_scanner import ProjectScanner
 
-scanner = ProjectScanner(r'D:\PUR\TTPUR')
+scanner = ProjectScanner(
+    str(PROJECT_ROOT / 'data' / 'repos' / 'System_Dept_1' / 'Y-DOCs' / 'TTPUR')
+)
 scanner.initialize_databases(['PUR'])
 
 analyzer = scanner.sql_analyzers['PUR']
