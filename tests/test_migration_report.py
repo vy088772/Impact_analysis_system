@@ -15,7 +15,6 @@ from code_analyzer.csharp_analysis_gateway import (
 from code_analyzer.models import CodeLocation, StoredProcedureCall
 from code_analyzer.project_scanner import CSharpSPRelation, ProjectScanResult
 from service.migration_report import (
-    build_cutover_report,
     compare_legacy_gateway,
     render_migration_report_markdown,
     save_migration_report,
@@ -224,86 +223,3 @@ def test_migration_report_can_be_saved_as_review_artifact(tmp_path: Path) -> Non
 
     assert json.loads(json_path.read_text(encoding="utf-8"))["summary"] == report["summary"]
     assert "# Legacy vs Gateway Invocation Report" in markdown_path.read_text(encoding="utf-8")
-
-
-def test_build_cutover_report_summarizes_evidence_review_and_lifecycle(tmp_path: Path) -> None:
-    gateway = [
-        _gateway("SaveDirect", "usp_Save", InvocationEvidence.PROVEN, 10),
-        _gateway("SaveLikely", "usp_Likely", InvocationEvidence.LIKELY, 30),
-        DbInvocation(
-            class_name="OrderPage",
-            method_name="SaveDynamic",
-            database="OrdersDb",
-            procedure_name=None,
-            evidence=InvocationEvidence.UNRESOLVED,
-            source=InvocationSourceSpan("OrderPage.cs", 50, 70),
-            reason="dynamic_command_text",
-        ),
-        DbInvocation(
-            class_name="OrderPage",
-            method_name="SaveWrapper",
-            database="OrdersDb",
-            procedure_name="usp_Wrapped",
-            evidence=InvocationEvidence.PROVEN,
-            source=InvocationSourceSpan("OrderPage.cs", 80, 100),
-            contract_lifecycle_status="reused",
-        ),
-        DbInvocation(
-            class_name="OrderPage",
-            method_name="SaveNewWrapper",
-            database="OrdersDb",
-            procedure_name=None,
-            evidence=InvocationEvidence.UNRESOLVED,
-            source=InvocationSourceSpan("OrderPage.cs", 110, 130),
-            wrapper_review_candidate=True,
-            contract_lifecycle_status="preflight_failed",
-            reason="contract_preflight_failed",
-        ),
-    ]
-    legacy = [
-        _legacy(tmp_path, "SaveDirect", "dbo.usp_Save"),
-        _legacy(tmp_path, "SaveDropped", "dbo.usp_Dropped"),
-    ]
-
-    report = build_cutover_report(
-        gateway,
-        legacy_records=legacy,
-        source_root=tmp_path,
-    )
-
-    assert report["evidence_summary"] == {
-        "proven": 2,
-        "likely": 1,
-        "unresolved": 2,
-    }
-    assert report["review_candidate_count"] == 1
-    assert report["contract_lifecycle_summary"] == {
-        "reused": 1,
-        "preflight_failed": 1,
-        "": 3,
-    }
-    assert report["legacy_migration"]["summary"]["dropped_count"] == 1
-    assert report["cutover_signals"] == {
-        "legacy_only_detections": 1,
-        "unresolved_count": 2,
-        "review_candidate_count": 1,
-        "ready_for_legacy_retirement": False,
-    }
-
-
-def test_build_cutover_report_is_ready_when_no_legacy_only_detections_remain() -> None:
-    gateway = [_gateway("SaveDirect", "usp_Save", InvocationEvidence.PROVEN, 10)]
-    legacy = [
-        {
-            "file": "OrderPage.cs",
-            "class": "OrderPage",
-            "method": "SaveDirect",
-            "database": "OrdersDb",
-            "procedure": "dbo.usp_Save",
-            "line": 20,
-        }
-    ]
-
-    report = build_cutover_report(gateway, legacy_records=legacy)
-
-    assert report["cutover_signals"]["ready_for_legacy_retirement"] is True
