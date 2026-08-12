@@ -1,3 +1,4 @@
+# python -m pip install -r requirements.txt
 # ========================================
 # 核心套件（必需）
 # ========================================
@@ -10,7 +11,7 @@ openpyxl==3.1.2           # Excel 讀寫
 # 視覺化（必需）
 # ========================================
 networkx==3.2.1           # 依賴關係圖
-matplotlib==3.8.2         # 基本繪圖
+matplotlib==3.11.1        # 基本繪圖
 
 # ========================================
 # 工具套件（必需）
@@ -22,7 +23,7 @@ python-dotenv==1.0.0      # 環境變數
 # ========================================
 # 資料庫連線（必需）
 # ========================================
-pyodbc==5.0.1             # MS SQL 連線
+pyodbc==5.3.0             # MS SQL 連線
 
 # ========================================
 # 增強套件（可選）
@@ -43,7 +44,6 @@ fastapi>=0.110           # HTTP API 框架（Python 3.14 需較新版）
 uvicorn>=0.29            # ASGI 伺服器
 pydantic>=2.6            # 資料模型驗證
 
-# 安裝指令：
-pip install beautifulsoup4 sqlparse pandas openpyxl networkx matplotlib tqdm colorama python-dotenv pyodbc regex fastapi uvicorn
+
 
 
