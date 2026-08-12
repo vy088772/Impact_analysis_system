@@ -15,6 +15,7 @@ from code_analyzer.csharp_analysis_gateway import (
 from code_analyzer.models import CodeLocation, StoredProcedureCall
 from code_analyzer.project_scanner import CSharpSPRelation, ProjectScanResult
 from service.migration_report import (
+    build_cutover_report,
     compare_legacy_gateway,
     render_migration_report_markdown,
     save_migration_report,
@@ -32,7 +33,15 @@ def _legacy(root: Path, method: str, procedure: str) -> CSharpSPRelation:
     )
 
 
-def _gateway(method: str, procedure: str, evidence: InvocationEvidence, offset: int) -> DbInvocation:
+def _gateway(
+    method: str,
+    procedure: str,
+    evidence: InvocationEvidence,
+    offset: int,
+    *,
+    contract_lifecycle_status: str = "",
+    wrapper_review_candidate: bool = False,
+) -> DbInvocation:
     return DbInvocation(
         class_name="OrderPage",
         method_name=method,
@@ -41,6 +50,8 @@ def _gateway(method: str, procedure: str, evidence: InvocationEvidence, offset: 
         evidence=evidence,
         source=InvocationSourceSpan("OrderPage.cs", offset, offset + 20),
         procedure_schema="dbo",
+        contract_lifecycle_status=contract_lifecycle_status,
+        wrapper_review_candidate=wrapper_review_candidate,
     )
 
 
@@ -223,3 +234,91 @@ def test_migration_report_can_be_saved_as_review_artifact(tmp_path: Path) -> Non
 
     assert json.loads(json_path.read_text(encoding="utf-8"))["summary"] == report["summary"]
     assert "# Legacy vs Gateway Invocation Report" in markdown_path.read_text(encoding="utf-8")
+
+
+def test_build_cutover_report_aggregates_evidence_review_and_lifecycle_status() -> None:
+    gateway = [
+        _gateway(
+            "SaveProven",
+            "usp_Sample",
+            InvocationEvidence.PROVEN,
+            0,
+            contract_lifecycle_status="reused",
+        ),
+        _gateway(
+            "SaveLikely",
+            "usp_Sample",
+            InvocationEvidence.LIKELY,
+            20,
+            contract_lifecycle_status="new",
+        ),
+        _gateway(
+            "SaveUnresolved",
+            "usp_Sample",
+            InvocationEvidence.UNRESOLVED,
+            40,
+            contract_lifecycle_status="review_candidate",
+            wrapper_review_candidate=True,
+        ),
+    ]
+
+    report = build_cutover_report(gateway)
+
+    assert report["evidence_summary"] == {"proven": 1, "likely": 1, "unresolved": 1}
+    assert report["review_candidate_count"] == 1
+    assert report["contract_lifecycle_summary"] == {
+        "reused": 1,
+        "new": 1,
+        "review_candidate": 1,
+    }
+
+
+def test_build_cutover_report_evidence_summary_lists_zero_counts_explicitly() -> None:
+    """A status with zero occurrences must still appear (at 0), so a
+    maintainer can tell "zero unresolved" apart from "not measured"."""
+    gateway = [_gateway("SaveProven", "usp_Sample", InvocationEvidence.PROVEN, 0)]
+
+    report = build_cutover_report(gateway)
+
+    assert report["evidence_summary"] == {"proven": 1, "likely": 0, "unresolved": 0}
+
+
+def test_build_cutover_report_includes_legacy_diff_without_merging_into_formal_evidence(
+    tmp_path: Path,
+) -> None:
+    """Legacy-only detections show up in the migration diff for review but
+    never contribute to evidence, review-candidate, or lifecycle counts."""
+    legacy_only = {
+        "file": "Legacy.cs",
+        "class": "LegacyPage",
+        "method": "SaveLegacyOnly",
+        "database": "OrdersDb",
+        "procedure": "dbo.usp_LegacyOnly",
+        "line": 5,
+    }
+    gateway = [_gateway("SaveDirect", "usp_Sample", InvocationEvidence.PROVEN, 0)]
+
+    report = build_cutover_report(gateway, legacy_records=[legacy_only], source_root=tmp_path)
+
+    assert report["legacy_migration"]["summary"]["dropped_count"] == 1
+    assert report["legacy_migration"]["dropped"][0]["legacy"]["procedure"] == "dbo.usp_legacyonly"
+    assert report["legacy_only_detections"] == 1
+    assert sum(report["evidence_summary"].values()) == len(gateway)
+    assert report["review_candidate_count"] == 0
+    assert report["contract_lifecycle_summary"] == {}
+
+
+def test_cutover_report_can_be_saved_as_review_artifact(tmp_path: Path) -> None:
+    report = build_cutover_report(
+        [_gateway("SaveDirect", "usp_Sample", InvocationEvidence.PROVEN, 0)]
+    )
+
+    json_path = save_migration_report(report, tmp_path / "cutover.json")
+    markdown_path = save_migration_report(report, tmp_path / "cutover.md")
+
+    saved = json.loads(json_path.read_text(encoding="utf-8"))
+    assert saved["evidence_summary"] == report["evidence_summary"]
+    rendered = markdown_path.read_text(encoding="utf-8")
+    assert "# Migration Cutover Report" in rendered
+    assert "proven" in rendered
+    assert "legacy_only_detections" in rendered

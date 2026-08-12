@@ -147,6 +147,79 @@ def compare_legacy_gateway(
     }
 
 
+def build_cutover_report(
+    gateway_records: Iterable[DbInvocation],
+    *,
+    legacy_records: Iterable[object] = (),
+    source_root: Optional[str | Path] = None,
+    source_kinds: Optional[Mapping[tuple[str, int, int], str]] = None,
+) -> dict[str, Any]:
+    """Summarize evidence, review candidates, contract lifecycle, and legacy
+    difference for one scan so maintainers can decide on legacy retirement.
+
+    ``evidence_summary`` always reports all three ``InvocationEvidence``
+    statuses (even at zero) so a maintainer can tell "zero unresolved" apart
+    from "not measured". ``contract_lifecycle_summary`` only lists statuses
+    that were actually observed, since lifecycle status is an open-ended
+    string, not a fixed enum.
+    """
+    records = list(gateway_records)
+    legacy_migration = compare_legacy_gateway(
+        legacy_records,
+        records,
+        source_root=source_root,
+        source_kinds=source_kinds,
+    )
+
+    evidence_summary: dict[str, int] = {status.value: 0 for status in InvocationEvidence}
+    review_candidate_count = 0
+    contract_lifecycle_summary: dict[str, int] = defaultdict(int)
+    for record in records:
+        evidence_summary[_evidence_value(record.evidence)] += 1
+        if record.wrapper_review_candidate:
+            review_candidate_count += 1
+        if record.contract_lifecycle_status:
+            contract_lifecycle_summary[record.contract_lifecycle_status] += 1
+
+    return {
+        "report_version": 1,
+        "evidence_summary": evidence_summary,
+        "review_candidate_count": review_candidate_count,
+        "contract_lifecycle_summary": dict(contract_lifecycle_summary),
+        "legacy_only_detections": legacy_migration["summary"]["dropped_count"],
+        "legacy_migration": legacy_migration,
+    }
+
+
+def render_cutover_report_markdown(report: Mapping[str, Any]) -> str:
+    """Render a maintainer-facing Markdown summary from a cutover report."""
+    lines = [
+        "# Migration Cutover Report",
+        "",
+        *_count_table("Evidence", report.get("evidence_summary", {})),
+        "",
+        *_count_table("Contract lifecycle", report.get("contract_lifecycle_summary", {})),
+        "",
+        *_count_table(
+            "Metric",
+            {
+                "review_candidate_count": report.get("review_candidate_count", 0),
+                "legacy_only_detections": report.get("legacy_only_detections", 0),
+            },
+        ),
+        "",
+    ]
+    lines.append(render_migration_report_markdown(report.get("legacy_migration", {})))
+    return "\n".join(lines)
+
+
+def _count_table(label: str, counts: Mapping[str, int]) -> list[str]:
+    lines = [f"| {label} | Count |", "|---|---:|"]
+    for key, count in sorted(counts.items()):
+        lines.append(f"| {key} | {count} |")
+    return lines
+
+
 def render_migration_report_markdown(report: Mapping[str, Any]) -> str:
     """Render a compact reviewable Markdown report from comparator output."""
     summary = report.get("summary", {})
@@ -208,7 +281,11 @@ def save_migration_report(
     if selected_format == "json":
         content = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     elif selected_format == "markdown":
-        content = render_migration_report_markdown(report)
+        content = (
+            render_cutover_report_markdown(report)
+            if "legacy_migration" in report
+            else render_migration_report_markdown(report)
+        )
     else:
         raise ValueError("migration report format must be json or markdown")
     destination.parent.mkdir(parents=True, exist_ok=True)
