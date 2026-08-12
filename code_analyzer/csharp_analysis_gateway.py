@@ -14,6 +14,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set
 
+from .external_wrapper_contracts import (
+    CONTRACT_SIGNATURE_SCHEMA_VERSION,
+    compute_contract_fingerprint,
+)
+
 
 class InvocationEvidence(Enum):
     """Confidence level of a detected Database Invocation."""
@@ -88,6 +93,15 @@ class WrapperReconciliation:
     overload_candidate_facts: tuple[Mapping[str, Any], ...] = ()
     receiver_construction_facts: tuple[str, ...] = ()
     receiver_assignment_facts: tuple[str, ...] = ()
+    contract_fingerprint: str = ""
+    contract_signature_version: str = ""
+    contract_lifecycle_status: str = ""
+    implementation_snapshot_reference: str = ""
+    comparison_report_reference: str = ""
+    source_contract_conflict: bool = False
+    source_contract_conflict_reason: str = ""
+    source_contract_semantics: str = ""
+    source_contract_sink: str = ""
 
     @property
     def active_contract(self) -> bool:
@@ -131,6 +145,17 @@ class WrapperReconciliation:
             "overload_candidate_facts": [dict(item) for item in self.overload_candidate_facts],
             "receiver_construction_facts": list(self.receiver_construction_facts),
             "receiver_assignment_facts": list(self.receiver_assignment_facts),
+            "contract_fingerprint": self.contract_fingerprint,
+            "contract_signature_version": self.contract_signature_version,
+            "signature_version": self.contract_signature_version,
+            "contract_lifecycle_status": self.contract_lifecycle_status,
+            "contract_status": self.contract_lifecycle_status,
+            "implementation_snapshot_reference": self.implementation_snapshot_reference,
+            "comparison_report_reference": self.comparison_report_reference,
+            "source_contract_conflict": self.source_contract_conflict,
+            "source_contract_conflict_reason": self.source_contract_conflict_reason,
+            "source_contract_semantics": self.source_contract_semantics,
+            "source_contract_sink": self.source_contract_sink,
         }
 
 
@@ -204,6 +229,15 @@ class DbInvocation:
     wrapper_method_semantics: str = ""
     wrapper_overload_candidates: tuple[str, ...] = ()
     wrapper_overload_candidate_facts: tuple[Mapping[str, Any], ...] = ()
+    contract_fingerprint: str = ""
+    contract_signature_version: str = ""
+    contract_lifecycle_status: str = ""
+    implementation_snapshot_reference: str = ""
+    comparison_report_reference: str = ""
+    source_contract_conflict: bool = False
+    source_contract_conflict_reason: str = ""
+    source_contract_semantics: str = ""
+    source_contract_sink: str = ""
     embedded_target: Optional[EmbeddedProcedureTarget] = None
     procedure_name_hint: Optional[str] = None
     command_text_source: Optional[InvocationSourceSpan] = None
@@ -318,6 +352,17 @@ WRAPPER_EVIDENCE_FIELDS = (
     "wrapper_method_semantics",
     "wrapper_overload_candidates",
     "wrapper_overload_candidate_facts",
+    "contract_fingerprint",
+    "contract_signature_version",
+    "signature_version",
+    "contract_lifecycle_status",
+    "contract_status",
+    "implementation_snapshot_reference",
+    "comparison_report_reference",
+    "source_contract_conflict",
+    "source_contract_conflict_reason",
+    "source_contract_semantics",
+    "source_contract_sink",
 )
 
 
@@ -441,6 +486,21 @@ def wrapper_observation_fields(
         "overload_candidate_facts": [
             dict(item) for item in classification["overload_candidate_facts"]
         ],
+        "contract_fingerprint": classification["contract_fingerprint"],
+        "contract_signature_version": classification["contract_signature_version"],
+        "signature_version": classification["contract_signature_version"],
+        "contract_lifecycle_status": classification["contract_lifecycle_status"],
+        "contract_status": classification["contract_lifecycle_status"],
+        "implementation_snapshot_reference": classification[
+            "implementation_snapshot_reference"
+        ],
+        "comparison_report_reference": classification["comparison_report_reference"],
+        "source_contract_conflict": classification["source_contract_conflict"],
+        "source_contract_conflict_reason": classification[
+            "source_contract_conflict_reason"
+        ],
+        "source_contract_semantics": classification["source_contract_semantics"],
+        "source_contract_sink": classification["source_contract_sink"],
         "receiver_expression": (
             evidence.receiver_expression if evidence is not None else ""
         ),
@@ -627,6 +687,17 @@ def invocation_wrapper_evidence_fields(invocation: DbInvocation) -> Dict[str, An
             "wrapper_overload_candidate_facts": [
                 dict(item) for item in invocation.wrapper_overload_candidate_facts
             ],
+            "contract_fingerprint": invocation.contract_fingerprint,
+            "contract_signature_version": invocation.contract_signature_version,
+            "signature_version": invocation.contract_signature_version,
+            "contract_lifecycle_status": invocation.contract_lifecycle_status,
+            "contract_status": invocation.contract_lifecycle_status,
+            "implementation_snapshot_reference": invocation.implementation_snapshot_reference,
+            "comparison_report_reference": invocation.comparison_report_reference,
+            "source_contract_conflict": invocation.source_contract_conflict,
+            "source_contract_conflict_reason": invocation.source_contract_conflict_reason,
+            "source_contract_semantics": invocation.source_contract_semantics,
+            "source_contract_sink": invocation.source_contract_sink,
         }
     )
     return fields
@@ -705,6 +776,11 @@ def external_wrapper_contract_candidates(
     candidates = []
     for contract in _load_external_wrapper_contracts().values():
         if contract.get("auto_select") is not True:
+            if contract.get("legacy_auto_select_compatibility") is not True:
+                continue
+        if (
+            "status" in contract or "lifecycle" in contract
+        ) and contract.get("legacy_auto_select_compatibility") is not True:
             continue
         receiver_types = contract.get("receiver_types", [])
         if _receiver_type_matches_contract(receiver_type, receiver_types):
@@ -864,6 +940,115 @@ def _wrapper_contract_receiver_matches(
     return _receiver_type_matches_contract(receiver_type, receiver_types)
 
 
+def _contract_identity_facts(contract: Mapping[str, Any]) -> Dict[str, str]:
+    explicit_fingerprint = _text_fact(contract.get("contract_fingerprint"))
+    fingerprint = explicit_fingerprint
+    if not fingerprint:
+        try:
+            fingerprint = compute_contract_fingerprint(contract)
+        except (TypeError, ValueError):
+            fingerprint = ""
+    signature_version = _text_fact(
+        contract.get("signature_version")
+        or contract.get("contract_signature_version")
+        or CONTRACT_SIGNATURE_SCHEMA_VERSION
+    )
+    lifecycle = contract.get("lifecycle")
+    lifecycle_status = _text_fact(contract.get("status"))
+    if not lifecycle_status and isinstance(lifecycle, Mapping):
+        lifecycle_status = _text_fact(lifecycle.get("status"))
+    if not lifecycle_status:
+        lifecycle_status = "accepted" if explicit_fingerprint else "legacy_unverified"
+    snapshot = contract.get("implementation_snapshot")
+    snapshots = contract.get("implementation_snapshots")
+    snapshot_reference = _text_fact(
+        contract.get("implementation_snapshot_reference")
+        or contract.get("snapshot_reference")
+    )
+    if not snapshot_reference and isinstance(snapshot, Mapping):
+        snapshot_reference = _text_fact(
+            snapshot.get("snapshot_identity")
+            or snapshot.get("artifact_identity")
+        )
+    if not snapshot_reference and isinstance(snapshots, (list, tuple)) and snapshots:
+        first_snapshot = snapshots[0]
+        if isinstance(first_snapshot, Mapping):
+            snapshot_reference = _text_fact(
+                first_snapshot.get("snapshot_identity")
+                or first_snapshot.get("artifact_identity")
+            )
+        else:
+            snapshot_reference = _text_fact(first_snapshot)
+    report = contract.get("comparison_report")
+    report_reference = _text_fact(
+        contract.get("comparison_report_reference")
+        or contract.get("comparison_report_ref")
+    )
+    if not report_reference:
+        if isinstance(report, Mapping):
+            report_reference = _text_fact(
+                report.get("comparison_report_reference") or report.get("latest_reference")
+            )
+        else:
+            report_reference = _text_fact(report)
+    return {
+        "contract_fingerprint": fingerprint,
+        "signature_version": signature_version,
+        "contract_lifecycle_status": lifecycle_status,
+        "implementation_snapshot_reference": snapshot_reference,
+        "comparison_report_reference": report_reference,
+    }
+
+
+def _source_contract_conflict_facts(
+    contract: Optional[Mapping[str, Any]],
+    *,
+    receiver_type: str,
+    implementation_identity: str,
+    wrapper_method: str,
+    method_facts: Mapping[str, Any],
+    source_semantics: str,
+    source_sink: str,
+) -> Dict[str, Any]:
+    contract_receiver_identity = implementation_identity or receiver_type
+    if not contract or not _wrapper_contract_receiver_matches(
+        contract,
+        contract_receiver_identity,
+    ):
+        return {}
+    method_contract, _, _ = _wrapper_contract_method(
+        contract,
+        wrapper_method,
+        method_identity=_text_fact(method_facts.get("method_identity")),
+        method_arity=method_facts.get("method_arity"),
+        parameter_types=method_facts.get("parameter_types", ()),
+    )
+    if method_contract is None:
+        return {}
+    contract_mode = _text_fact(method_contract.get("mode")).casefold()
+    contract_semantics = {
+        "inline_sql": "fixed_inline_sql",
+        "stored_procedure": "fixed_stored_procedure",
+        "call_site": "call_site",
+    }.get(contract_mode, _normalize_wrapper_method_semantics(contract_mode))
+    contract_sink = _known_terminal_sink(
+        method_contract.get("sink") or method_contract.get("terminal_sink")
+    ) or _text_fact(method_contract.get("sink") or method_contract.get("terminal_sink"))
+    reasons: list[str] = []
+    if source_semantics and contract_semantics and source_semantics != contract_semantics:
+        reasons.append("method_semantics_conflict")
+    if source_sink and contract_sink and _known_terminal_sink(source_sink) != contract_sink:
+        reasons.append("terminal_sink_conflict")
+    identity = _contract_identity_facts(contract)
+    return {
+        **identity,
+        "source_contract_conflict": bool(reasons),
+        "source_contract_conflict_reason": ";".join(reasons),
+        "source_contract_semantics": contract_semantics,
+        "source_contract_sink": contract_sink,
+    }
+
+
 def _text_fact(value: object) -> str:
     return str(value or "").strip()
 
@@ -943,6 +1128,17 @@ def wrapper_observation_identity(observation: Mapping[str, Any]) -> tuple[Any, .
         _text_fact(observation.get("terminal_sink")),
         _text_facts(observation.get("receiver_construction_facts")),
         _text_facts(observation.get("receiver_assignment_facts")),
+        _text_fact(observation.get("contract_fingerprint")),
+        _text_fact(
+            observation.get("contract_signature_version")
+            or observation.get("signature_version")
+        ),
+        _text_fact(
+            observation.get("contract_lifecycle_status")
+            or observation.get("contract_status")
+        ),
+        _text_fact(observation.get("implementation_snapshot_reference")),
+        _text_fact(observation.get("comparison_report_reference")),
     )
 
 
@@ -1450,7 +1646,15 @@ class CSharpAnalysisGateway:
         return [
             contract
             for contract in self._external_wrapper_contracts.values()
-            if contract.get("auto_select") is True
+            if (
+                contract.get("auto_select") is True
+                or contract.get("legacy_auto_select_compatibility") is True
+            )
+            and (
+                "status" not in contract
+                and "lifecycle" not in contract
+                or contract.get("legacy_auto_select_compatibility") is True
+            )
             and _receiver_type_matches_contract(
                 receiver_type,
                 contract.get("receiver_types", []),
@@ -1493,6 +1697,22 @@ class CSharpAnalysisGateway:
         source_sink = method_facts["terminal_sink"] or _text_fact(
             _first_fact(raw, "wrapper_terminal_sink", "terminal_sink", "sink")
         )
+        source_contract: Optional[Mapping[str, Any]] = None
+        if explicit_contract is None:
+            source_contract = self._external_wrapper_contract or None
+        elif isinstance(explicit_contract, str):
+            source_contract = self._load_contract(explicit_contract)
+        elif isinstance(explicit_contract, Mapping):
+            source_contract = explicit_contract
+        source_contract_facts = _source_contract_conflict_facts(
+            source_contract,
+            receiver_type=receiver_type,
+            implementation_identity=binding["implementation_identity"],
+            wrapper_method=wrapper_method,
+            method_facts=method_facts,
+            source_semantics=method_semantics,
+            source_sink=source_sink,
+        )
 
         def result(
             *,
@@ -1509,7 +1729,9 @@ class CSharpAnalysisGateway:
             review_candidate: bool = False,
             stored_procedure_mode: bool = False,
             mode_reason: str = "",
+            contract_identity_facts: Optional[Mapping[str, Any]] = None,
         ) -> WrapperReconciliation:
+            identity = dict(contract_identity_facts or {})
             return WrapperReconciliation(
                 wrapper_kind=wrapper_kind,
                 status=status,
@@ -1556,6 +1778,29 @@ class CSharpAnalysisGateway:
                 ),
                 receiver_construction_facts=binding["construction_facts"],
                 receiver_assignment_facts=binding["assignment_facts"],
+                contract_fingerprint=_text_fact(identity.get("contract_fingerprint")),
+                contract_signature_version=_text_fact(
+                    identity.get("signature_version")
+                    or identity.get("contract_signature_version")
+                ),
+                contract_lifecycle_status=_text_fact(
+                    identity.get("contract_lifecycle_status")
+                    or identity.get("contract_status")
+                ),
+                implementation_snapshot_reference=_text_fact(
+                    identity.get("implementation_snapshot_reference")
+                ),
+                comparison_report_reference=_text_fact(
+                    identity.get("comparison_report_reference")
+                ),
+                source_contract_conflict=bool(identity.get("source_contract_conflict")),
+                source_contract_conflict_reason=_text_fact(
+                    identity.get("source_contract_conflict_reason")
+                ),
+                source_contract_semantics=_text_fact(
+                    identity.get("source_contract_semantics")
+                ),
+                source_contract_sink=_text_fact(identity.get("source_contract_sink")),
             )
 
         def source_mode() -> tuple[bool, str]:
@@ -1585,6 +1830,7 @@ class CSharpAnalysisGateway:
                     reason=method_facts["reason"],
                     review_candidate=True,
                     mode_reason="wrapper_mode_unresolved",
+                    contract_identity_facts=source_contract_facts,
                 )
             if not binding["implementation_identity"]:
                 return result(
@@ -1597,6 +1843,7 @@ class CSharpAnalysisGateway:
                     reason="receiver_binding_unresolved",
                     review_candidate=True,
                     mode_reason="wrapper_mode_unresolved",
+                    contract_identity_facts=source_contract_facts,
                 )
             stored_procedure_mode, mode_reason = source_mode()
             return result(
@@ -1607,6 +1854,7 @@ class CSharpAnalysisGateway:
                 contract_sink=source_sink,
                 stored_procedure_mode=stored_procedure_mode,
                 mode_reason=mode_reason,
+                contract_identity_facts=source_contract_facts,
             )
 
         explicit_name = ""
@@ -1646,7 +1894,11 @@ class CSharpAnalysisGateway:
             ]
             selection_source = "explicit"
         elif receiver_type_contract_candidates is None:
-            candidates = list(self._contract_candidates(receiver_type))
+            candidates = list(
+                self._contract_candidates(
+                    binding["implementation_identity"] or receiver_type
+                )
+            )
             selection_source = "auto_receiver_type"
         else:
             candidates = [
@@ -1689,7 +1941,9 @@ class CSharpAnalysisGateway:
 
         contract = candidates[0]
         contract_name = str(contract.get("name") or explicit_name).strip()
-        if not _wrapper_contract_receiver_matches(contract, receiver_type):
+        contract_identity_facts = _contract_identity_facts(contract)
+        contract_receiver_identity = binding["implementation_identity"] or receiver_type
+        if not _wrapper_contract_receiver_matches(contract, contract_receiver_identity):
             return result(
                 wrapper_kind="external_wrapper",
                 status="receiver_mismatch",
@@ -1700,6 +1954,7 @@ class CSharpAnalysisGateway:
                 review_candidate=True,
                 stored_procedure_mode=attempted_sp_mode,
                 mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
+                contract_identity_facts=contract_identity_facts,
             )
 
         observed_method_identity = _text_fact(
@@ -1735,6 +1990,7 @@ class CSharpAnalysisGateway:
                 review_candidate=True,
                 stored_procedure_mode=attempted_sp_mode,
                 mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
+                contract_identity_facts=contract_identity_facts,
             )
 
         contract_mode = str(method_contract.get("mode") or "")
@@ -1785,6 +2041,7 @@ class CSharpAnalysisGateway:
             candidate_contracts=candidate_names,
             stored_procedure_mode=stored_procedure_mode,
             mode_reason=mode_reason,
+            contract_identity_facts=contract_identity_facts,
         )
 
     def resolve_direct_invocations(
@@ -2590,6 +2847,15 @@ class CSharpAnalysisGateway:
                 wrapper_method_semantics=reconciliation.method_semantics,
                 wrapper_overload_candidates=reconciliation.overload_candidates,
                 wrapper_overload_candidate_facts=reconciliation.overload_candidate_facts,
+                contract_fingerprint=reconciliation.contract_fingerprint,
+                contract_signature_version=reconciliation.contract_signature_version,
+                contract_lifecycle_status=reconciliation.contract_lifecycle_status,
+                implementation_snapshot_reference=reconciliation.implementation_snapshot_reference,
+                comparison_report_reference=reconciliation.comparison_report_reference,
+                source_contract_conflict=reconciliation.source_contract_conflict,
+                source_contract_conflict_reason=reconciliation.source_contract_conflict_reason,
+                source_contract_semantics=reconciliation.source_contract_semantics,
+                source_contract_sink=reconciliation.source_contract_sink,
                 embedded_target=embedded_target,
             )
 

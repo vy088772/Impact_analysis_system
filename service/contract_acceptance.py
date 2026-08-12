@@ -12,6 +12,12 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
+from code_analyzer.external_wrapper_contracts import (
+    ContractSnapshotError,
+    compare_implementation_snapshot,
+    versioned_contract_from_proposal,
+)
+
 from . import analyze_service, scan_store
 
 
@@ -21,8 +27,11 @@ DEFAULT_CATALOG_PATH = PROJECT_ROOT.parent / "llamaindex-spec-rag" / "catalog" /
 ALLOWED_MODES = frozenset({"stored_procedure", "inline_sql", "call_site"})
 ALLOWED_SINKS = {
     "executenonquery": "ExecuteNonQuery",
+    "executenonqueryasync": "ExecuteNonQueryAsync",
     "executereader": "ExecuteReader",
+    "executereaderasync": "ExecuteReaderAsync",
     "executescalar": "ExecuteScalar",
+    "executescalarasync": "ExecuteScalarAsync",
     "fill": "Fill",
     "fillasync": "FillAsync",
 }
@@ -111,13 +120,13 @@ def _validate_receiver_types(value: Any, contract_name: str) -> list[str]:
     return receivers
 
 
-def _validate_methods(value: Any, contract_name: str) -> dict[str, dict[str, str]]:
+def _validate_methods(value: Any, contract_name: str) -> dict[str, Any]:
     if not isinstance(value, Mapping) or not value:
         _error(
             "incomplete_method_semantics",
             f"contract {contract_name!r} 必須宣告含 approved mode 與 sink 的 methods",
         )
-    methods: dict[str, dict[str, str]] = {}
+    methods: dict[str, Any] = {}
     seen: dict[str, str] = {}
     for raw_method, raw_semantics in value.items():
         if not isinstance(raw_method, str):
@@ -132,52 +141,75 @@ def _validate_methods(value: Any, contract_name: str) -> dict[str, dict[str, str
                 f"method identity 不可重複（不分大小寫）：{method}",
                 [seen[folded], method],
             )
-        if not isinstance(raw_semantics, Mapping):
+        overload_values = (
+            list(raw_semantics)
+            if isinstance(raw_semantics, (list, tuple))
+            else [raw_semantics]
+        )
+        if not overload_values or any(not isinstance(item, Mapping) for item in overload_values):
             _error(
                 "incomplete_method_semantics",
                 f"method {contract_name}.{method} 缺少 approved mode/sink",
             )
-        mode = str(
-            raw_semantics.get("mode")
-            or raw_semantics.get("approved_mode")
-            or ""
-        ).strip().casefold()
-        sink_value = str(
-            raw_semantics.get("sink")
-            or raw_semantics.get("approved_sink")
-            or ""
-        ).strip()
-        if not mode or not sink_value:
-            _error(
-                "incomplete_method_semantics",
-                f"method {contract_name}.{method} 必須同時提供 approved mode 與 sink",
-            )
-        if mode not in ALLOWED_MODES:
-            _error("invalid_contract_mode", f"不允許的 contract mode：{mode}")
-        sink = ALLOWED_SINKS.get(sink_value.casefold())
-        if sink is None:
-            _error("invalid_contract_sink", f"不允許的 contract sink：{sink_value}")
-        raw_default_mode = str(
-            raw_semantics.get("default_mode")
-            or raw_semantics.get("default_command_type")
-            or ""
-        ).strip().casefold().replace("-", "_").replace(" ", "_")
-        default_mode = {
-            "text": "inline_sql",
-            "default_text": "inline_sql",
-            "inline_sql": "inline_sql",
-            "stored_procedure": "stored_procedure",
-        }.get(raw_default_mode, "")
-        if raw_default_mode and not default_mode:
-            _error("invalid_contract_default_mode", f"不允許的 contract default mode：{raw_default_mode}")
-        if default_mode and mode != "call_site":
-            _error(
-                "invalid_contract_default_mode",
-                f"只有 call_site method 可以宣告 default mode：{contract_name}.{method}",
-            )
-        methods[method] = {"mode": mode, "sink": sink}
-        if default_mode:
-            methods[method]["default_mode"] = default_mode
+        normalized_overloads: list[dict[str, Any]] = []
+        for semantics in overload_values:
+            mode = str(
+                semantics.get("mode")
+                or semantics.get("approved_mode")
+                or ""
+            ).strip().casefold()
+            sink_value = str(
+                semantics.get("sink")
+                or semantics.get("approved_sink")
+                or ""
+            ).strip()
+            if not mode or not sink_value:
+                _error(
+                    "incomplete_method_semantics",
+                    f"method {contract_name}.{method} 必須同時提供 approved mode 與 sink",
+                )
+            if mode not in ALLOWED_MODES:
+                _error("invalid_contract_mode", f"不允許的 contract mode：{mode}")
+            sink = ALLOWED_SINKS.get(sink_value.casefold())
+            if sink is None:
+                _error("invalid_contract_sink", f"不允許的 contract sink：{sink_value}")
+            raw_default_mode = str(
+                semantics.get("default_mode")
+                or semantics.get("default_command_type")
+                or ""
+            ).strip().casefold().replace("-", "_").replace(" ", "_")
+            default_mode = {
+                "text": "inline_sql",
+                "default_text": "inline_sql",
+                "inline_sql": "inline_sql",
+                "stored_procedure": "stored_procedure",
+            }.get(raw_default_mode, "")
+            if raw_default_mode and not default_mode:
+                _error("invalid_contract_default_mode", f"不允許的 contract default mode：{raw_default_mode}")
+            if default_mode and mode != "call_site":
+                _error(
+                    "invalid_contract_default_mode",
+                    f"只有 call_site method 可以宣告 default mode：{contract_name}.{method}",
+                )
+            normalized_semantics: dict[str, Any] = {"mode": mode, "sink": sink}
+            if default_mode:
+                normalized_semantics["default_mode"] = default_mode
+            for optional_key in (
+                "method_identity",
+                "method_arity",
+                "parameter_types",
+                "argument_roles",
+                "branch_rules",
+                "connection_behavior_boundary",
+            ):
+                if optional_key in semantics:
+                    normalized_semantics[optional_key] = copy.deepcopy(semantics[optional_key])
+            normalized_overloads.append(normalized_semantics)
+        methods[method] = (
+            normalized_overloads
+            if isinstance(raw_semantics, (list, tuple))
+            else normalized_overloads[0]
+        )
         seen[folded] = method
     return methods
 
@@ -212,7 +244,7 @@ def _normalize_proposal(proposal: Mapping[str, Any]) -> dict[str, Any]:
         }
     normalized_methods = _validate_methods(methods, name)
     auto_select_provided = "auto_select" in candidate
-    auto_select = candidate.get("auto_select", True)
+    auto_select = candidate.get("auto_select", False)
     if not isinstance(auto_select, bool):
         _error("invalid_auto_select", f"contract {name!r} 的 auto_select 必須是 boolean")
     return {
@@ -255,17 +287,26 @@ def _validate_contract_registry(entries: Mapping[str, Any]) -> None:
             receiver_key = _receiver_type_key(receiver)
             owner = receiver_owners.get(receiver_key)
             if owner is not None and owner != name:
-                _error(
-                    "duplicate_receiver_contract",
-                    f"receiver type 不可由多個 contract 擁有：{receiver}",
-                    [owner, name],
+                owner_contract = entries.get(owner, {})
+                versioned = bool(
+                    contract.get("contract_fingerprint")
+                    and owner_contract.get("contract_fingerprint")
                 )
+                if not versioned:
+                    _error(
+                        "duplicate_receiver_contract",
+                        f"receiver type 不可由多個 contract 擁有：{receiver}",
+                        [owner, name],
+                    )
+                continue
             receiver_owners[receiver_key] = name
 
 
 def _prepare_registry(
     registry_payload: Mapping[str, Any],
     proposal: Mapping[str, Any],
+    *,
+    allow_legacy_mutation: bool = True,
 ) -> tuple[dict[str, Any], str, bool, str]:
     before_entries = _contract_entries(registry_payload)
     _validate_contract_registry(before_entries)
@@ -308,12 +349,21 @@ def _prepare_registry(
         existing_name = matched_name
         receiver_reuse = True
 
+    if existing_name is not None and before_entries[existing_name].get("contract_fingerprint"):
+        _error(
+            "immutable_contract",
+            f"accepted contract {existing_name!r} 必須以新的 fingerprint revision 更新",
+            [str(before_entries[existing_name].get("contract_fingerprint"))],
+        )
     if existing_name is None:
         active_name = proposal_name
         merged_contract = {
             "auto_select": normalized["auto_select"],
             "receiver_types": normalized["receiver_types"],
             "methods": normalized["methods"],
+            "status": "legacy_unverified",
+            "lifecycle": {"status": "legacy_unverified"},
+            "legacy_auto_select_compatibility": True,
         }
         reused = False
         reuse_reason = "new_contract"
@@ -340,6 +390,14 @@ def _prepare_registry(
             ),
             "receiver_types": merged_receivers,
             "methods": merged_methods,
+            "status": str(
+                before_entries[existing_name].get("status") or "legacy_unverified"
+            ),
+            "lifecycle": copy.deepcopy(
+                before_entries[existing_name].get(
+                    "lifecycle", {"status": "legacy_unverified"}
+                )
+            ),
         }
         _validated_active_contract(active_name, merged_contract)
         reused = True
@@ -352,9 +410,156 @@ def _prepare_registry(
     after_entries = copy.deepcopy(before_entries)
     after_entries[active_name] = merged_contract
     _validate_contract_registry(after_entries)
+    if existing_name is not None and not allow_legacy_mutation:
+        _error(
+            "legacy_contract_requires_explicit_binding",
+            f"legacy contract {existing_name!r} 只能在 explicit binding 下相容更新",
+            [existing_name],
+        )
     after_payload = copy.deepcopy(dict(registry_payload))
     after_payload["contracts"] = after_entries
     return after_payload, active_name, reused, reuse_reason
+
+
+def _proposal_name(proposal: Mapping[str, Any]) -> str:
+    candidate = proposal.get("contract")
+    if isinstance(candidate, Mapping):
+        proposal = candidate
+    raw_name = proposal.get("name")
+    if raw_name is None:
+        raw_name = proposal.get("contract_name")
+    return str(raw_name or "").strip()
+
+
+def _append_comparison_report(
+    payload: Mapping[str, Any],
+    report: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    after_payload = copy.deepcopy(dict(payload))
+    reports = after_payload.get("comparison_reports")
+    if not isinstance(reports, dict):
+        reports = {}
+    base_reference = str(report.get("comparison_report_reference") or "comparison")
+    reference = base_reference
+    revision = 2
+    while reference in reports:
+        reference = f"{base_reference}-{revision}"
+        revision += 1
+    stored_report = copy.deepcopy(dict(report))
+    stored_report["comparison_report_reference"] = reference
+    stored_report["latest_reference"] = reference
+    stored_report["history_reference"] = reference
+    reports[reference] = stored_report
+    history = after_payload.get("comparison_report_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(reference)
+    after_payload["comparison_reports"] = reports
+    after_payload["comparison_report_latest"] = reference
+    after_payload["comparison_report_history"] = history
+    return after_payload, stored_report
+
+
+def _prepare_versioned_registry(
+    registry_payload: Mapping[str, Any],
+    proposal: Mapping[str, Any],
+) -> tuple[dict[str, Any], str, bool, str, dict[str, Any]]:
+    before_entries = _contract_entries(registry_payload)
+    _validate_contract_registry(before_entries)
+    try:
+        versioned_entry, report = versioned_contract_from_proposal(proposal)
+    except ContractSnapshotError as exc:
+        _error("incomplete_implementation_snapshot", str(exc), exc.reasons)
+
+    fingerprint = str(versioned_entry["contract_fingerprint"])
+    existing_fingerprint_name = next(
+        (
+            name
+            for name, contract in before_entries.items()
+            if str(contract.get("contract_fingerprint") or "") == fingerprint
+        ),
+        None,
+    )
+    if existing_fingerprint_name is not None:
+        candidate = (
+            proposal.get("contract")
+            if isinstance(proposal.get("contract"), Mapping)
+            else proposal
+        )
+        snapshot = next(
+            (
+                candidate.get(key)
+                for key in (
+                    "implementation_snapshot",
+                    "verified_implementation_snapshot",
+                    "snapshot",
+                    "source_implementation_snapshot",
+                    "source_snapshot",
+                )
+                if isinstance(candidate.get(key), Mapping)
+            ),
+            {},
+        )
+        comparison_report = compare_implementation_snapshot(
+            snapshot,
+            before_entries[existing_fingerprint_name],
+        )
+        after_payload, comparison_report = _append_comparison_report(
+            registry_payload,
+            comparison_report,
+        )
+        existing_entry = copy.deepcopy(
+            after_payload["contracts"][existing_fingerprint_name]
+        )
+        existing_report_refs = existing_entry.get("comparison_reports")
+        existing_history = (
+            list(existing_report_refs.get("history", []))
+            if isinstance(existing_report_refs, Mapping)
+            else []
+        )
+        if not existing_history and existing_entry.get("comparison_report"):
+            existing_history.append(str(existing_entry["comparison_report"]))
+        existing_history.append(comparison_report["comparison_report_reference"])
+        existing_entry["comparison_report"] = comparison_report[
+            "comparison_report_reference"
+        ]
+        existing_entry["comparison_reports"] = {
+            "latest": comparison_report["latest_reference"],
+            "history": existing_history,
+        }
+        after_payload["contracts"][existing_fingerprint_name] = existing_entry
+        return (
+            after_payload,
+            existing_fingerprint_name,
+            True,
+            "existing_contract_reused_by_fingerprint",
+            comparison_report,
+        )
+
+    base_name = _proposal_name(proposal)
+    if not base_name or not _CONTRACT_NAME_PATTERN.fullmatch(base_name):
+        _error("invalid_contract_name", f"contract name 無效：{base_name!r}")
+    existing_name = _find_casefold(before_entries, base_name)
+    active_name = base_name
+    if existing_name is not None:
+        active_name = f"{existing_name}-{fingerprint[:12]}"
+    while _find_casefold(before_entries, active_name) is not None:
+        active_name = f"{base_name}-{fingerprint[:16]}"
+        if _find_casefold(before_entries, active_name) is not None:
+            active_name = f"{base_name}-{fingerprint}"
+
+    after_payload, report = _append_comparison_report(registry_payload, report)
+    versioned_entry = copy.deepcopy(versioned_entry)
+    versioned_entry["comparison_report"] = report["comparison_report_reference"]
+    versioned_entry["comparison_reports"] = {
+        "latest": report["latest_reference"],
+        "history": [report["history_reference"]],
+    }
+    after_entries = copy.deepcopy(before_entries)
+    after_entries[active_name] = versioned_entry
+    _validate_contract_registry(after_entries)
+    after_payload["contracts"] = after_entries
+    return after_payload, active_name, False, "new_immutable_contract_revision", report
 
 
 def _json_text(payload: Mapping[str, Any]) -> str:
@@ -563,10 +768,34 @@ def accept_external_wrapper_contract(
     registry_file = Path(registry_path)
     catalog_file = Path(catalog_path)
     before_registry = load_contract_registry(registry_file)
-    after_registry, active_name, reused, reuse_reason = _prepare_registry(
-        before_registry,
-        proposal,
+    candidate = proposal.get("contract") if isinstance(proposal.get("contract"), Mapping) else proposal
+    has_snapshot = any(
+        isinstance(candidate.get(key), Mapping)
+        for key in (
+            "implementation_snapshot",
+            "verified_implementation_snapshot",
+            "snapshot",
+            "source_implementation_snapshot",
+            "source_snapshot",
+        )
     )
+    comparison_report: Optional[dict[str, Any]] = None
+    if has_snapshot:
+        (
+            after_registry,
+            active_name,
+            reused,
+            reuse_reason,
+            comparison_report,
+        ) = _prepare_versioned_registry(before_registry, proposal)
+    else:
+        after_registry, active_name, reused, reuse_reason = _prepare_registry(
+            before_registry,
+            proposal,
+            allow_legacy_mutation=(
+                not apply or bool(str(requested_selector or "").strip())
+            ),
+        )
 
     normalized_system_id = str(system_id or "").strip()
     normalized_selector = str(requested_selector or "").strip()
@@ -584,15 +813,22 @@ def accept_external_wrapper_contract(
         if not normalized_system_id:
             _error("system_id_required", "requested selector 必須搭配明確 system_id")
         before_catalog = _read_json(catalog_file, "catalog")
+        catalog_selector = normalized_selector
+        if (
+            has_snapshot
+            and _find_casefold(after_registry["contracts"], catalog_selector) is None
+            and catalog_selector.casefold() == _proposal_name(proposal).casefold()
+        ):
+            catalog_selector = active_name
         after_catalog = _catalog_after_selector(
             before_catalog,
             normalized_system_id,
-            normalized_selector,
+            catalog_selector,
             after_registry["contracts"],
         )
         selector_contract_name = _find_casefold(
             after_registry["contracts"],
-            normalized_selector,
+            catalog_selector,
         ) or ""
         catalog_diff = _diff(catalog_file, before_catalog, after_catalog)
 
@@ -600,7 +836,7 @@ def accept_external_wrapper_contract(
     reclassification = reclassify_cached_scans(
         scan_roots,
         after_registry["contracts"],
-        explicit_contract=selector_contract_name,
+        explicit_contract=selector_contract_name or (active_name if has_snapshot else ""),
         database=normalized_system_id,
     )
 
@@ -646,6 +882,20 @@ def accept_external_wrapper_contract(
         "applied": bool(apply),
         "written_files": written_files,
         "git_commit": False,
+        "contract_fingerprint": (
+            comparison_report["contract_fingerprint"]
+            if comparison_report is not None
+            else str(after_registry["contracts"].get(active_name, {}).get("contract_fingerprint") or "")
+        ),
+        "contract_status": str(
+            after_registry["contracts"].get(active_name, {}).get("status") or ""
+        ),
+        "signature_version": (
+            comparison_report["signature_version"]
+            if comparison_report is not None
+            else str(after_registry["contracts"].get(active_name, {}).get("signature_version") or "")
+        ),
+        "comparison_report": comparison_report,
     }
 
 

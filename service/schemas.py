@@ -216,6 +216,10 @@ class WrapperContractAcceptanceResponse(BaseModel):
     applied: bool = False
     written_files: List[str] = Field(default_factory=list)
     git_commit: bool = False
+    contract_fingerprint: str = ""
+    contract_status: str = ""
+    signature_version: str = ""
+    comparison_report: Dict[str, Any] = Field(default_factory=dict)
 
 
 # Compatibility aliases for callers that use the longer resource name.
