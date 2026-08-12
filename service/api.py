@@ -107,7 +107,13 @@ def refresh(req: RefreshRequest) -> RefreshResponse:
     }
     try:
         refresh_kwargs = {"program_names": req.program_names}
-        if req.wrapper_contract.strip():
+        selector = req.wrapper_contract
+        selector_is_set = (
+            bool(selector)
+            if not isinstance(selector, str)
+            else bool(selector.strip())
+        )
+        if selector_is_set:
             refresh_kwargs["wrapper_contract"] = req.wrapper_contract
         if req.system.strip():
             refresh_kwargs["database"] = req.system.strip()

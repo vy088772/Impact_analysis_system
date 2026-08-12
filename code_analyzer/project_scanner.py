@@ -125,6 +125,9 @@ class ProjectScanResult:
     source_snapshots: Dict[str, SourceSnapshot] = field(default_factory=dict)
     db_invocations: Dict[str, List[Dict]] = field(default_factory=dict)
     connection_sources: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    contract_preflight_proposals: List[Dict] = field(default_factory=list)
+    contract_proposals: List[Dict] = field(default_factory=list)
+    verified_implementation_snapshots: List[Dict] = field(default_factory=list)
     
     # View 層分析結果（依框架偵測結果選擇性填入；未偵測到對應框架時維持空清單）
     aspx_results: List[FileAnalysisResult] = field(default_factory=list)    # .aspx / .ascx
@@ -153,6 +156,13 @@ class ProjectScanResult:
     def __setstate__(self, state):
         self.__dict__.update(state)
         self.legacy_sp_relations = []
+        self.contract_preflight_proposals = getattr(
+            self, "contract_preflight_proposals", []
+        )
+        self.contract_proposals = getattr(self, "contract_proposals", [])
+        self.verified_implementation_snapshots = getattr(
+            self, "verified_implementation_snapshots", []
+        )
 
     @staticmethod
     def _is_formal_sp_invocation(record: Dict) -> bool:

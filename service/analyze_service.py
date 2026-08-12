@@ -62,6 +62,11 @@ from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import cache_status, get_or_scan, has_cache, save_scan
 from . import sql_cache_store
 from . import flow_chain_builder
+from .contract_preflight import (
+    load_contract_registry,
+    load_system_contract_selector,
+    run_contract_preflight,
+)
 
 
 class PathEvidenceError(ValueError):
@@ -241,6 +246,13 @@ def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
             )
         merged.db_invocations.update(getattr(s, "db_invocations", {}))
         merged.connection_sources.update(getattr(s, "connection_sources", {}))
+        merged.contract_preflight_proposals.extend(
+            getattr(s, "contract_preflight_proposals", []) or []
+        )
+        merged.contract_proposals.extend(getattr(s, "contract_proposals", []) or [])
+        merged.verified_implementation_snapshots.extend(
+            getattr(s, "verified_implementation_snapshots", []) or []
+        )
         merged.aspx_results.extend(s.aspx_results)
         merged.razor_results.extend(s.razor_results)
         merged.vue_results.extend(s.vue_results)
@@ -503,7 +515,10 @@ def _rated_execution_invocations(
     raw_by_file = getattr(scan, "db_invocations", {})
     external_wrapper_contract = load_external_wrapper_contract(
         getattr(req, "wrapper_contract", "")
+        if isinstance(getattr(req, "wrapper_contract", ""), str)
+        else ""
     )
+    contract_registry = load_contract_registry()
 
     for file_result in matched_files:
         file_key = str(Path(file_result.file_path).resolve())
@@ -522,6 +537,7 @@ def _rated_execution_invocations(
                 ),
             ),
             external_wrapper_contract=external_wrapper_contract,
+            external_wrapper_contracts=contract_registry,
         )
         relative_path = _rel(file_result.file_path, root)
         for invocation in gateway.resolve_direct_invocations(
@@ -1851,9 +1867,11 @@ def _refresh_wrapper_location(
 def reconcile_refresh_wrappers(
     scans: Iterable[ProjectScanResult],
     *,
-    explicit_contract: str = "",
+    explicit_contract: Any = "",
     contract_registry: Optional[Mapping[str, Any]] = None,
     database: str = "",
+    contract_preflight: Optional[Mapping[str, Any]] = None,
+    contract_preflight_failure_reason: str = "",
 ) -> Dict[str, object]:
     """Reconcile raw wrapper facts from already completed source scans.
 
@@ -1865,7 +1883,16 @@ def reconcile_refresh_wrappers(
     observations_by_key: Dict[tuple, Dict[str, object]] = {}
     scan_summaries: List[Dict[str, object]] = []
     total_wrapper_calls = 0
-    normalized_contract = str(explicit_contract or "").strip()
+    if isinstance(explicit_contract, str):
+        normalized_contract: Any = explicit_contract.strip()
+    elif isinstance(explicit_contract, (list, tuple)):
+        normalized_contract = [
+            str(item).strip()
+            for item in explicit_contract
+            if isinstance(item, str) and str(item).strip()
+        ]
+    else:
+        normalized_contract = explicit_contract
     catalog = load_sp_catalog(database)
 
     for scan in scans:
@@ -1903,6 +1930,15 @@ def reconcile_refresh_wrappers(
                     source_snapshot_hash=snapshot_hash,
                     explicit_contract=normalized_contract or None,
                 )
+                if (
+                    contract_preflight_failure_reason
+                    and observation.get("wrapper_kind") == "external_wrapper"
+                    and observation.get("source_available") is not True
+                ):
+                    observation = _mark_contract_preflight_failed(
+                        observation,
+                        contract_preflight_failure_reason,
+                    )
                 evidence_status = str(observation["evidence_status"])
                 evidence_reason = str(observation["evidence_reason"])
                 wrapper_class = str(record.get("wrapper_class_name") or "").strip()
@@ -2066,6 +2102,13 @@ def reconcile_refresh_wrappers(
         "observations": observations,
         "review_items": review_items,
         "review_reasons": review_reasons,
+        "contract_preflight": dict(contract_preflight or {}),
+        "contract_onboarding_status": str(
+            (contract_preflight or {}).get("contract_onboarding_status") or ""
+        ),
+        "contract_preflight_failed": bool(
+            (contract_preflight or {}).get("contract_preflight_failed")
+        ),
         "totals": {
             "wrapper_calls": total_wrapper_calls,
             "observation_groups": len(observations),
@@ -2103,6 +2146,22 @@ def reconcile_refresh_wrappers(
             "review_candidates": len(review_items),
         },
     }
+
+
+def _mark_contract_preflight_failed(
+    observation: Mapping[str, Any],
+    reason: str,
+) -> Dict[str, Any]:
+    marked = dict(observation)
+    marked.update(
+        {
+            "contract_preflight_status": "failed",
+            "contract_preflight_failed": True,
+            "contract_preflight_reason": reason,
+            "preflight_failure_reason": reason,
+        }
+    )
+    return marked
 
 
 def _select_refresh_files(
@@ -2221,7 +2280,7 @@ def refresh_programs(root: Path, program_names: List[str]) -> ProgramRefreshResu
 def refresh_source(
     source: dict,
     program_names: List[str] | None = None,
-    wrapper_contract: str = "",
+    wrapper_contract: Any = "",
     database: str = "",
 ) -> dict:
     """Pull source and refresh either the whole system or selected programs."""
@@ -2270,10 +2329,28 @@ def refresh_source(
         matched_programs = list(dict.fromkeys(matched_programs))
         not_found = [name for name in requested if name not in matched_programs]
 
+    configured_selector = wrapper_contract
+    if configured_selector is None or (
+        isinstance(configured_selector, str) and not configured_selector.strip()
+    ):
+        configured_selector = load_system_contract_selector(database)
+    registry = load_contract_registry()
+    preflight = run_contract_preflight(
+        scans,
+        selector=configured_selector,
+        registry=registry,
+        allow_onboarding=not partial,
+    )
+    preflight_summary = preflight.to_dict()
     wrapper_summary = reconcile_refresh_wrappers(
         scans,
-        explicit_contract=wrapper_contract,
+        explicit_contract=preflight.formal_selector,
+        contract_registry=preflight.formal_registry or {"contracts": {}},
         database=database,
+        contract_preflight=preflight_summary,
+        contract_preflight_failure_reason=(
+            preflight.reason if preflight.failed else ""
+        ),
     )
     database_invocation_count = len(scan.iter_formal_sp_invocations())
     inline_table_fact_count = len(scan.table_relations)

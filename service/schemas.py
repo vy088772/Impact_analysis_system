@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import Any, List, Dict, Union
 from pydantic import BaseModel, Field
 
+WrapperContractSelector = Union[str, List[str], None]
+
 
 class AzureSource(BaseModel):
     """原始碼來源（由 spec-rag 從 system_catalog.json 的 azure 區塊解析後帶入）。
@@ -30,7 +32,7 @@ class AzureSource(BaseModel):
 class AnalyzeRequest(BaseModel):
     """POST /analyze 請求。"""
     system: str = ""                         # RAG 命中的系統 id（僅供記錄/快取鍵）
-    wrapper_contract: str = ""                # 選用的外部 wrapper contract 名稱
+    wrapper_contract: WrapperContractSelector = ""  # 外部 wrapper contract selector
     source: AzureSource = Field(default_factory=AzureSource)
     program_names: List[str]                 # 要分析的程式名清單
     include_snippets: bool = True            # 是否回傳程式碼片段（S2b 實作）
@@ -50,7 +52,7 @@ class PathEvidenceRequest(BaseModel):
     """POST /path_evidence 請求。"""
     path_id: str
     system: str = ""
-    wrapper_contract: str = ""
+    wrapper_contract: WrapperContractSelector = ""
     source: AzureSource = Field(default_factory=AzureSource)
     program_names: List[str] = Field(default_factory=list)
     database: str = ""
@@ -170,7 +172,7 @@ class AnalyzeResponse(BaseModel):
 class RefreshRequest(BaseModel):
     """POST /refresh 請求：更新某系統的程式碼並重新解析。"""
     system: str = ""
-    wrapper_contract: str = ""                # 選用的外部 wrapper contract selector
+    wrapper_contract: WrapperContractSelector = ""  # 外部 wrapper contract selector
     source: AzureSource = Field(default_factory=AzureSource)
     program_names: List[str] = Field(default_factory=list)
 
@@ -236,7 +238,7 @@ class FindBySPRequest(BaseModel):
     """
     source: AzureSource = Field(default_factory=AzureSource)
     sp_name: str                              # 要反查的 SP 名稱（不分大小寫比對）
-    wrapper_contract: str = ""                # 選用的外部 wrapper contract 名稱
+    wrapper_contract: WrapperContractSelector = ""  # 外部 wrapper contract selector
     database: str = ""                        # SQL execution graph cache key，通常是 system_id
     cache_only: bool = True                   # True → repo 未 clone 過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
@@ -318,7 +320,7 @@ class FindByTableRequest(BaseModel):
     """
     source: AzureSource = Field(default_factory=AzureSource)
     table_name: str                           # 要反查的資料表名稱（可含或不含 schema 前綴，不分大小寫比對）
-    wrapper_contract: str = ""                # 選用的外部 wrapper contract 名稱
+    wrapper_contract: WrapperContractSelector = ""  # 外部 wrapper contract selector
     cache_only: bool = True                   # True → repo 未 clone/分析過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
     database: str = ""                        # 選填：資料庫快取鍵（通常是 spec-rag 的 system_id）。
@@ -458,7 +460,7 @@ class FlowChainRequest(BaseModel):
     嘗試呼叫），不觸發 Azure clone。
     """
     source: AzureSource = Field(default_factory=AzureSource)
-    wrapper_contract: str = ""                # 選用的外部 wrapper contract 名稱
+    wrapper_contract: WrapperContractSelector = ""  # 外部 wrapper contract selector
     direction: str = "forward"                # "forward" | "backward"
     program_name: str = ""                    # forward 用：要分析的程式名
     anchor_method: str = ""                   # forward 用：錨點方法名稱

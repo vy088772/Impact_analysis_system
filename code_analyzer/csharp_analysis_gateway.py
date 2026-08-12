@@ -1668,7 +1668,7 @@ class CSharpAnalysisGateway:
         *,
         scan_root: str = "",
         source_wrapper_available: Optional[bool] = None,
-        explicit_contract: Optional[Mapping[str, Any] | str] = None,
+        explicit_contract: Optional[Mapping[str, Any] | str | List[str] | tuple[str, ...]] = None,
         receiver_type_contract_candidates: Optional[Iterable[Mapping[str, Any]]] = None,
     ) -> WrapperReconciliation:
         """Classify one raw wrapper fact before rating its database evidence.
@@ -1858,8 +1858,11 @@ class CSharpAnalysisGateway:
             )
 
         explicit_name = ""
+        explicit_names: tuple[str, ...] = ()
         explicit_selected = False
+        explicit_missing = False
         selected_contract: Optional[Mapping[str, Any]] = None
+        selected_contracts: list[Mapping[str, Any]] = []
         if explicit_contract is None:
             selected_contract = self._external_wrapper_contract or None
             explicit_name = self._wrapper_contract_name
@@ -1872,14 +1875,34 @@ class CSharpAnalysisGateway:
             selected_contract = explicit_contract
             explicit_name = str(explicit_contract.get("name") or "").strip()
             explicit_selected = True
+        elif isinstance(explicit_contract, (list, tuple)):
+            names = sorted(
+                {
+                    str(item).strip()
+                    for item in explicit_contract
+                    if isinstance(item, str) and str(item).strip()
+                },
+                key=str.casefold,
+            )
+            explicit_names = tuple(names)
+            explicit_selected = bool(explicit_names)
+            for name in explicit_names:
+                contract = self._load_contract(name)
+                if contract is None:
+                    explicit_missing = True
+                else:
+                    selected_contracts.append(contract)
 
         attempted_sp_mode = raw_mode == "stored_procedure"
-        if explicit_selected and selected_contract is None:
+        if explicit_selected and (
+            selected_contract is None and not selected_contracts
+            or explicit_missing
+        ):
             return result(
                 wrapper_kind="external_wrapper",
                 status="unresolved_contract",
                 selection_source="explicit",
-                candidate_contracts=(explicit_name,),
+                candidate_contracts=explicit_names or (explicit_name,),
                 reason="configured_contract_not_found",
                 review_candidate=True,
                 stored_procedure_mode=attempted_sp_mode,
@@ -1887,10 +1910,8 @@ class CSharpAnalysisGateway:
             )
 
         if explicit_selected:
-            candidates = [
-                candidate
-                for candidate in (selected_contract,)
-                if candidate is not None
+            candidates = selected_contracts or [
+                candidate for candidate in (selected_contract,) if candidate is not None
             ]
             selection_source = "explicit"
         elif receiver_type_contract_candidates is None:
@@ -1908,6 +1929,65 @@ class CSharpAnalysisGateway:
             ]
             selection_source = "auto_receiver_type"
 
+        selected_candidate_names = tuple(
+            str(candidate.get("name") or "").strip()
+            for candidate in candidates
+            if str(candidate.get("name") or "").strip()
+        )
+        if explicit_names and len(candidates) > 1:
+            contract_receiver_identity = binding["implementation_identity"] or receiver_type
+            receiver_matches = [
+                candidate
+                for candidate in candidates
+                if _wrapper_contract_receiver_matches(
+                    candidate,
+                    contract_receiver_identity,
+                )
+            ]
+            if not receiver_matches:
+                return result(
+                    wrapper_kind="external_wrapper",
+                    status="receiver_mismatch",
+                    selection_source="explicit",
+                    candidate_contracts=selected_candidate_names,
+                    reason="receiver_type_does_not_match_contract",
+                    review_candidate=True,
+                    stored_procedure_mode=attempted_sp_mode,
+                    mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
+                )
+            if len(receiver_matches) > 1:
+                method_matches: list[Mapping[str, Any]] = []
+                for candidate in receiver_matches:
+                    method_contract, _, _ = _wrapper_contract_method(
+                        candidate,
+                        wrapper_method,
+                        method_identity=_text_fact(
+                            _first_fact(raw, "wrapper_method_identity", "method_identity")
+                        ),
+                        method_arity=method_facts["method_arity"],
+                        parameter_types=method_facts["parameter_types"],
+                    )
+                    if method_contract is not None:
+                        method_matches.append(candidate)
+                if method_matches:
+                    candidates = method_matches
+                else:
+                    return result(
+                        wrapper_kind="external_wrapper",
+                        status="unresolved_method",
+                        selection_source="explicit",
+                        candidate_contracts=tuple(
+                            str(candidate.get("name") or "").strip()
+                            for candidate in receiver_matches
+                            if str(candidate.get("name") or "").strip()
+                        ),
+                        reason="method_not_in_contract",
+                        review_candidate=True,
+                        stored_procedure_mode=attempted_sp_mode,
+                        mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
+                    )
+            else:
+                candidates = receiver_matches
         candidate_names = tuple(
             str(candidate.get("name") or "").strip()
             for candidate in candidates
@@ -1917,7 +1997,9 @@ class CSharpAnalysisGateway:
             return result(
                 wrapper_kind="external_wrapper",
                 status="ambiguous_contract",
-                selection_source="ambiguous_receiver_type",
+                selection_source=(
+                    "explicit" if explicit_selected else "ambiguous_receiver_type"
+                ),
                 candidate_contracts=candidate_names,
                 reason="multiple_contracts_match_receiver_type",
                 review_candidate=True,
@@ -2050,7 +2132,7 @@ class CSharpAnalysisGateway:
         raw_invocations: List[dict],
         *,
         scan_root: str = "",
-        explicit_contract: Optional[Mapping[str, Any] | str] = None,
+        explicit_contract: Optional[Mapping[str, Any] | str | List[str] | tuple[str, ...]] = None,
     ) -> List[DbInvocation]:
         """Turn raw Roslyn direct-SqlClient facts into evidence-rated Database Invocations."""
         results: List[DbInvocation] = []
@@ -2157,7 +2239,7 @@ class CSharpAnalysisGateway:
         *,
         scan_root: str = "",
         source_snapshot_hash: str = "",
-        explicit_contract: Optional[Mapping[str, Any] | str] = None,
+        explicit_contract: Optional[Mapping[str, Any] | str | List[str] | tuple[str, ...]] = None,
     ) -> Dict[str, Any]:
         """Return one wrapper observation with classification and evidence parity."""
         classification = self.reconcile_wrapper(
@@ -2184,7 +2266,7 @@ class CSharpAnalysisGateway:
         raw: dict,
         *,
         scan_root: str = "",
-        explicit_contract: Optional[Mapping[str, Any] | str] = None,
+        explicit_contract: Optional[Mapping[str, Any] | str | List[str] | tuple[str, ...]] = None,
     ) -> Optional[DbInvocation]:
         invocation_kind = str(raw.get("invocation_kind") or "").casefold()
         if invocation_kind == "source_wrapper":
@@ -2752,7 +2834,7 @@ class CSharpAnalysisGateway:
         raw: dict,
         *,
         scan_root: str = "",
-        explicit_contract: Optional[Mapping[str, Any] | str] = None,
+        explicit_contract: Optional[Mapping[str, Any] | str | List[str] | tuple[str, ...]] = None,
     ) -> Optional[DbInvocation]:
         reconciliation = self.reconcile_wrapper(
             relative_path,
