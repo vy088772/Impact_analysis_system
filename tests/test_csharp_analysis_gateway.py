@@ -1319,6 +1319,98 @@ def test_adapter_invocations_use_catalog_evidence_and_unknown_mode_stays_unresol
     assert invocations[-1].reason == "adapter_mode_unresolved"
 
 
+def test_adapter_stored_procedure_preserves_common_invocation_metadata() -> None:
+    """Adapter SP calls retain the same mode, sink, and command facts as direct calls."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    raw_invocations = [
+        _raw_invocation(
+            command_text="usp_SaveOrder",
+            invocation_kind="dapper",
+            wrapper_mode="stored_procedure",
+            terminal_sink="ExecuteNonQuery",
+        ),
+        _raw_invocation(
+            command_text="usp_SaveOrder",
+            invocation_kind="entity_framework",
+            wrapper_mode="stored_procedure",
+            terminal_sink="ExecuteNonQuery",
+        ),
+    ]
+
+    invocations = gateway.resolve_direct_invocations("f.cs", raw_invocations)
+
+    assert [
+        (
+            invocation.invocation_mode,
+            invocation.method_semantics,
+            invocation.command_type_mode,
+            invocation.terminal_sink,
+            invocation.procedure_name,
+            invocation.evidence,
+        )
+        for invocation in invocations
+    ] == [
+        (
+            "stored_procedure",
+            "fixed_stored_procedure",
+            "stored_procedure",
+            "ExecuteNonQuery",
+            "usp_saveorder",
+            InvocationEvidence.PROVEN,
+        ),
+        (
+            "stored_procedure",
+            "fixed_stored_procedure",
+            "stored_procedure",
+            "ExecuteNonQuery",
+            "usp_saveorder",
+            InvocationEvidence.PROVEN,
+        ),
+    ]
+
+
+def test_direct_and_adapter_unknown_terminal_sinks_stay_unresolved() -> None:
+    """Only the shared terminal-sink vocabulary can produce rated invocations."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocations = gateway.resolve_direct_invocations(
+        "f.cs",
+        [
+            _raw_invocation(
+                command_text="usp_SaveOrder",
+                terminal_sink="ExecuteMystery",
+            ),
+            _raw_invocation(
+                command_text="usp_SaveOrder",
+                invocation_kind="dapper",
+                wrapper_mode="stored_procedure",
+                terminal_sink="ExecuteMystery",
+            ),
+            _raw_invocation(
+                command_text="usp_SaveOrder",
+                invocation_kind="dapper",
+                wrapper_mode="unknown",
+                command_type_stored_procedure=True,
+                terminal_sink="ExecuteNonQuery",
+            ),
+        ],
+    )
+
+    assert [invocation.evidence for invocation in invocations] == [
+        InvocationEvidence.UNRESOLVED,
+        InvocationEvidence.UNRESOLVED,
+        InvocationEvidence.UNRESOLVED,
+    ]
+    assert [invocation.reason for invocation in invocations] == [
+        "terminal_sink_unresolved",
+        "terminal_sink_unresolved",
+        "adapter_mode_unresolved",
+    ]
+
+
 def test_unknown_adapter_connection_with_cross_database_name_is_unresolved() -> None:
     catalog = SpCatalog.from_databases({
         "OrdersDb": ["usp_SaveOrder"],
@@ -1799,6 +1891,196 @@ def test_static_analyzer_host_emits_dapper_and_entity_framework_sp_facts() -> No
         assert entity_exec.embedded_procedure_target.evidence is InvocationEvidence.PROVEN
 
 
+def test_static_analyzer_host_preserves_ado_net_fill_as_terminal_sink() -> None:
+    """SqlDataAdapter.Fill remains a first-class sink for the command it executes."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "AdoAdapterFixture.cs"
+        source_path.write_text(
+            "using System.Data;\n"
+            "using System.Data.SqlClient;\n"
+            "public class AdoAdapterFixture {\n"
+            "    private void Load(SqlConnection conn) {\n"
+            "        var command = new SqlCommand(\"usp_Load\", conn);\n"
+            "        command.CommandType = CommandType.StoredProcedure;\n"
+            "        var table = new DataTable();\n"
+            "        var adapter = new SqlDataAdapter(command);\n"
+            "        adapter.Fill(table);\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 1
+        assert raw_invocations[0]["command_text"] == "usp_Load"
+        assert raw_invocations[0]["command_type_mode"] == "stored_procedure"
+        assert raw_invocations[0]["terminal_sink"] == "Fill"
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_Load"]}),
+            connection_sources={"conn": "OrdersDb"},
+        )
+        invocation = gateway.resolve_direct_invocations(
+            "AdoAdapterFixture.cs",
+            raw_invocations,
+        )[0]
+
+        assert invocation.invocation_mode == "stored_procedure"
+        assert invocation.procedure_name == "usp_load"
+        assert invocation.terminal_sink == "Fill"
+        assert invocation.evidence is InvocationEvidence.PROVEN
+
+
+def test_static_analyzer_host_analyzes_adapter_constructor_text_for_tables_and_datasets() -> None:
+    """ADO.NET adapter constructors enter the same inline invocation shape for DataTable and DataSet fills."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "AdoAdapterConstructorFixture.cs"
+        source_path.write_text(
+            "using System.Data;\n"
+            "using System.Data.SqlClient;\n"
+            "public class AdoAdapterConstructorFixture {\n"
+            "    private void LoadTable(SqlConnection conn) {\n"
+            "        var adapter = new SqlDataAdapter(\"SELECT 1\", conn);\n"
+            "        var table = new DataTable();\n"
+            "        adapter.Fill(table);\n"
+            "    }\n"
+            "    private void LoadDataSet(SqlConnection conn) {\n"
+            "        var adapter = new SqlDataAdapter(\"UPDATE SOrder SET Status = 1\", conn);\n"
+            "        var dataSet = new DataSet();\n"
+            "        adapter.Fill(dataSet);\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert {item["command_text"] for item in raw_invocations} == {
+            "SELECT 1",
+            "UPDATE SOrder SET Status = 1",
+        }
+        assert all(item["invocation_kind"] == "direct_sqlclient" for item in raw_invocations)
+        assert all(item["command_type_mode"] == "default_text" for item in raw_invocations)
+        assert all(item["terminal_sink"] == "Fill" for item in raw_invocations)
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": []}),
+            connection_sources={"conn": "OrdersDb"},
+        )
+        invocations = gateway.resolve_direct_invocations(
+            "AdoAdapterConstructorFixture.cs",
+            raw_invocations,
+        )
+
+        assert {
+            invocation.raw_command_text: (
+                invocation.invocation_mode,
+                invocation.terminal_sink,
+                invocation.evidence,
+            )
+            for invocation in invocations
+        } == {
+            "SELECT 1": ("inline_sql", "Fill", InvocationEvidence.PROVEN),
+            "UPDATE SOrder SET Status = 1": (
+                "inline_sql",
+                "Fill",
+                InvocationEvidence.PROVEN,
+            ),
+        }
+
+
+def test_static_analyzer_host_analyzes_fluent_adapter_fill() -> None:
+    """A fluent adapter constructor still exposes Fill as the terminal sink."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "FluentAdapterFixture.cs"
+        source_path.write_text(
+            "using System.Data;\n"
+            "using System.Data.SqlClient;\n"
+            "public class FluentAdapterFixture {\n"
+            "    private void Load(SqlConnection conn) {\n"
+            "        new SqlDataAdapter(\"SELECT 1\", conn).Fill(new DataTable());\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+
+        assert len(result["db_invocations"]) == 1
+        raw = result["db_invocations"][0]
+        assert raw["command_text"] == "SELECT 1"
+        assert raw["terminal_sink"] == "Fill"
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": []}),
+            connection_sources={"conn": "OrdersDb"},
+        )
+        invocation = gateway.resolve_direct_invocations(
+            "FluentAdapterFixture.cs",
+            result["db_invocations"],
+        )[0]
+
+        assert invocation.invocation_mode == "inline_sql"
+        assert invocation.terminal_sink == "Fill"
+        assert invocation.evidence is InvocationEvidence.PROVEN
+
+
+def test_static_analyzer_host_links_select_command_assigned_to_adapter() -> None:
+    """An adapter configured through SelectCommand still preserves Fill sink evidence."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "AssignedAdapterFixture.cs"
+        source_path.write_text(
+            "using System.Data;\n"
+            "using System.Data.SqlClient;\n"
+            "public class AssignedAdapterFixture {\n"
+            "    private void Load(SqlConnection conn) {\n"
+            "        var command = new SqlCommand(\"usp_Load\", conn);\n"
+            "        command.CommandType = CommandType.StoredProcedure;\n"
+            "        var adapter = new SqlDataAdapter();\n"
+            "        adapter.SelectCommand = command;\n"
+            "        adapter.Fill(new DataSet());\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+
+        assert len(result["db_invocations"]) == 1
+        raw = result["db_invocations"][0]
+        assert raw["command_text"] == "usp_Load"
+        assert raw["terminal_sink"] == "Fill"
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_Load"]}),
+            connection_sources={"conn": "OrdersDb"},
+        )
+        invocation = gateway.resolve_direct_invocations(
+            "AssignedAdapterFixture.cs",
+            result["db_invocations"],
+        )[0]
+
+        assert invocation.invocation_mode == "stored_procedure"
+        assert invocation.procedure_name == "usp_load"
+        assert invocation.terminal_sink == "Fill"
+        assert invocation.evidence is InvocationEvidence.PROVEN
+
+
 def test_static_analyzer_host_classifies_comment_prefixed_adapter_text_as_inline() -> None:
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
@@ -1826,6 +2108,74 @@ def test_static_analyzer_host_classifies_comment_prefixed_adapter_text_as_inline
 
         assert len(adapter_invocations) == 2
         assert all(item["wrapper_mode"] == "inline_sql" for item in adapter_invocations)
+
+
+def test_static_analyzer_host_resolves_entity_framework_branch_and_sp_modes() -> None:
+    """EF adapters retain finite command text branches and explicit SP mode."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "EntityFrameworkBranchFixture.cs"
+        source_path.write_text(
+            "using System.Data;\n"
+            "public class EntityFrameworkBranchFixture {\n"
+            "    private DbContext context;\n"
+            "    private void Run(bool alternate) {\n"
+            "        var sql = \"SELECT 1\";\n"
+            "        if (alternate)\n"
+            "            sql = \"UPDATE SOrder SET Status = 1\";\n"
+            "        context.Database.ExecuteSqlRaw(sql);\n"
+            "        context.Database.ExecuteSqlRaw(\"usp_Save\", commandType: CommandType.StoredProcedure);\n"
+            "        context.Database.ExecuteSqlRaw(\"usp_Unknown\", commandType: commandType);\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            item
+            for item in result["db_invocations"]
+            if item.get("invocation_kind") == "entity_framework"
+        ]
+
+        assert {item["command_text"] for item in raw_invocations} >= {
+            "SELECT 1",
+            "UPDATE SOrder SET Status = 1",
+            "usp_Save",
+            "usp_Unknown",
+        }
+        raw_by_text = {item["command_text"]: item for item in raw_invocations}
+        assert raw_by_text["SELECT 1"]["wrapper_mode"] == "inline_sql"
+        assert raw_by_text["UPDATE SOrder SET Status = 1"]["wrapper_mode"] == "inline_sql"
+        assert raw_by_text["usp_Save"]["wrapper_mode"] == "stored_procedure"
+        assert raw_by_text["usp_Unknown"]["wrapper_mode"] == "unknown"
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_Save"]}),
+            connection_sources={"context.Database": "OrdersDb"},
+        )
+        invocations = gateway.resolve_direct_invocations(
+            "EntityFrameworkBranchFixture.cs",
+            raw_invocations,
+        )
+        by_text = {invocation.raw_command_text: invocation for invocation in invocations}
+
+        for command_text in ("SELECT 1", "UPDATE SOrder SET Status = 1"):
+            invocation = by_text[command_text]
+            assert invocation.invocation_mode == "inline_sql"
+            assert invocation.evidence is InvocationEvidence.PROVEN
+
+        stored = by_text["usp_Save"]
+        assert stored.invocation_mode == "stored_procedure"
+        assert stored.procedure_name == "usp_save"
+        assert stored.evidence is InvocationEvidence.PROVEN
+
+        unresolved = by_text["usp_Unknown"]
+        assert unresolved.invocation_mode == "unresolved"
+        assert unresolved.reason == "adapter_mode_unresolved"
+        assert unresolved.evidence is InvocationEvidence.UNRESOLVED
 
 
 def test_gateway_classifies_source_wrapper_sp_and_inline_modes() -> None:
@@ -2394,6 +2744,85 @@ public class SQLObjectPage {
             identity.startswith("Vendor.One.SQLObject.Ambiguous(")
             for identity in ambiguous.wrapper_overload_candidates
         )
+
+
+def test_source_sqlobject_optional_mode_defaults_table_and_dataset_to_text() -> None:
+    """SQLObject call-site methods use their source default Text when mode is omitted."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    source = """
+using System.Data;
+using System.Data.SqlClient;
+
+public class SQLObject {
+    private readonly SqlConnection connection;
+    public SQLObject(SqlConnection connection) { this.connection = connection; }
+
+    public object CreateTable(string commandText, string mode = "Text") {
+        var command = new SqlCommand(commandText, connection);
+        command.CommandType = mode == "SP"
+            ? CommandType.StoredProcedure
+            : CommandType.Text;
+        return command.ExecuteReader();
+    }
+
+    public object CreateDataSet(string commandText, string mode = "Text") {
+        var command = new SqlCommand(commandText, connection);
+        command.CommandType = mode == "SP"
+            ? CommandType.StoredProcedure
+            : CommandType.Text;
+        return command.ExecuteReader();
+    }
+}
+
+public class SQLObjectDefaultPage {
+    private void Run(SqlConnection connection) {
+        var obj = new SQLObject(connection);
+        obj.CreateTable("usp_DefaultTable");
+        obj.CreateDataSet("usp_DefaultDataSet");
+        obj.CreateTable("usp_ExplicitTable", "SP");
+    }
+}
+"""
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "SQLObjectDefaultFixture.cs"
+        source_path.write_text(source, encoding="utf-8")
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            item
+            for item in result["db_invocations"]
+            if item.get("invocation_kind") == "source_wrapper"
+        ]
+
+        assert len(raw_invocations) == 3
+        raw_by_text = {item["command_text"]: item for item in raw_invocations}
+        assert raw_by_text["usp_DefaultTable"]["wrapper_mode"] == "inline_sql"
+        assert raw_by_text["usp_DefaultDataSet"]["wrapper_mode"] == "inline_sql"
+        assert raw_by_text["usp_ExplicitTable"]["wrapper_mode"] == "stored_procedure"
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_ExplicitTable"]}),
+            connection_sources={"connection": "OrdersDb"},
+        )
+        invocations = gateway.resolve_direct_invocations(
+            "SQLObjectDefaultFixture.cs",
+            raw_invocations,
+        )
+        by_text = {invocation.raw_command_text: invocation for invocation in invocations}
+
+        for command_text in ("usp_DefaultTable", "usp_DefaultDataSet"):
+            invocation = by_text[command_text]
+            assert invocation.invocation_mode == "inline_sql"
+            assert invocation.method_semantics == "call_site"
+            assert invocation.procedure_name is None
+            assert invocation.evidence is InvocationEvidence.PROVEN
+
+        explicit = by_text["usp_ExplicitTable"]
+        assert explicit.invocation_mode == "stored_procedure"
+        assert explicit.procedure_name == "usp_explicittable"
+        assert explicit.evidence is InvocationEvidence.PROVEN
 
 
 def test_static_analyzer_host_traces_source_wrapper_across_files() -> None:
@@ -4202,6 +4631,46 @@ def test_external_wrapper_call_site_contract_requires_stored_procedure_mode() ->
     assert invocations[2].reason == "wrapper_mode_unresolved"
 
 
+def test_external_wrapper_call_site_contract_uses_declared_default_text_mode() -> None:
+    """A contract-declared default Text mode applies only when the mode is omitted."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    contract = {
+        "name": "sqlobject-default-text",
+        "receiver_types": ["SQLObject"],
+        "methods": {
+            "CreateTable": {
+                "mode": "call_site",
+                "default_mode": "inline_sql",
+                "sink": "ExecuteReader",
+            }
+        },
+    }
+
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        command_text="usp_SaveOrder",
+        command_type_stored_procedure=False,
+        wrapper_method_name="CreateTable",
+        wrapper_receiver_type="SQLObject",
+        wrapper_source_available=False,
+        terminal_sink="ExecuteReader",
+        connection_expression="conn",
+    )
+
+    invocation = gateway.resolve_direct_invocations(
+        "SqlObjectPage.cs",
+        [raw],
+        explicit_contract=contract,
+    )[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.method_semantics == "call_site"
+    assert invocation.procedure_name is None
+    assert invocation.raw_command_text == "usp_SaveOrder"
+    assert invocation.evidence is InvocationEvidence.PROVEN
+
+
 def test_external_wrapper_create_dataset_call_site_contract_handles_all_modes() -> None:
     """CreateDataSet uses its call-site mode to distinguish SP and inline SQL."""
     catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
@@ -5010,6 +5479,68 @@ def test_static_analyzer_host_applies_external_sqlobject_wrapper_contract() -> N
         assert observations["DynamicData"]["wrapper_status"] == "auto_selected"
         assert observations["DynamicData"]["evidence_status"] == "unresolved"
         assert observations["DynamicData"]["evidence_reason"] == "dynamic_command_text"
+
+
+def test_static_analyzer_host_applies_sqlobject_default_text_without_sp_mode() -> None:
+    """SQLObject table and dataset calls need explicit SP evidence to enter SP mode."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "SqlObjectDefaultPage.cs"
+        source_path.write_text(
+            "public class SqlObjectDefaultPage {\n"
+            "    private void Run(string mode) {\n"
+            "        SQLObject obj = GetExternalSqlObject();\n"
+            "        obj.CreateTable(\"usp_DefaultTable\", null, \"table\");\n"
+            "        obj.CreateDataSet(\"usp_DefaultDataSet\");\n"
+            "        obj.CreateTable(\"usp_ExplicitTable\", null, \"table\", \"SP\");\n"
+            "        obj.CreateDataSet(\"usp_DynamicMode\", mode);\n"
+            "    }\n"
+            "    private object GetExternalSqlObject() { return null; }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            item
+            for item in result["db_invocations"]
+            if item.get("invocation_kind") == "source_wrapper"
+        ]
+        raw_by_text = {item["command_text"]: item for item in raw_invocations}
+
+        assert raw_by_text["usp_DefaultTable"]["wrapper_mode"] == "inline_sql"
+        assert raw_by_text["usp_DefaultDataSet"]["wrapper_mode"] == "inline_sql"
+        assert raw_by_text["usp_ExplicitTable"]["wrapper_mode"] == "stored_procedure"
+        assert raw_by_text["usp_DynamicMode"]["wrapper_mode"] == "unknown"
+
+        gateway = CSharpAnalysisGateway(
+            SpCatalog.from_databases({"OrdersDb": ["usp_ExplicitTable"]}),
+            connection_sources={"obj": "OrdersDb"},
+            external_wrapper_contract=_sqlobject_wrapper_contract(),
+        )
+        invocations = gateway.resolve_direct_invocations(
+            "SqlObjectDefaultPage.cs",
+            raw_invocations,
+        )
+        by_text = {invocation.raw_command_text: invocation for invocation in invocations}
+
+        for command_text in ("usp_DefaultTable", "usp_DefaultDataSet"):
+            invocation = by_text[command_text]
+            assert invocation.invocation_mode == "inline_sql"
+            assert invocation.procedure_name is None
+            assert invocation.evidence is InvocationEvidence.PROVEN
+
+        explicit = by_text["usp_ExplicitTable"]
+        assert explicit.invocation_mode == "stored_procedure"
+        assert explicit.procedure_name == "usp_explicittable"
+        assert explicit.evidence is InvocationEvidence.PROVEN
+
+        dynamic = by_text["usp_DynamicMode"]
+        assert dynamic.invocation_mode == "unresolved"
+        assert dynamic.reason == "wrapper_mode_unresolved"
+        assert dynamic.evidence is InvocationEvidence.UNRESOLVED
 
 
 def test_static_analyzer_host_preserves_external_inline_non_prefix_and_dynamic_facts() -> None:

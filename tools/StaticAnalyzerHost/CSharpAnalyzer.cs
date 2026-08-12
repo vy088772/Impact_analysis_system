@@ -38,6 +38,10 @@ internal static class CSharpAnalyzer
             .ToList();
         dbInvocations.AddRange(WrapperAnalyzer.Analyze(root, sourceRoots));
         dbInvocations.AddRange(AdapterAnalyzer.Analyze(root, sourceRoots));
+        dbInvocations.AddRange(root.DescendantNodes()
+            .OfType<ObjectCreationExpressionSyntax>()
+            .Where(creation => IsDataAdapterType(creation.Type))
+            .SelectMany(DirectSqlClientAnalyzer.AnalyzeAdapter));
 
         return new CSharpAnalysis(
             Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
@@ -60,6 +64,15 @@ internal static class CSharpAnalyzer
         var lastSegment = typeName.Split('.').Last();
         return lastSegment == "SqlCommand";
     }
+
+    internal static bool IsDataAdapterType(TypeSyntax type)
+        => type.ToString().Split('.').Last() is
+            "DbDataAdapter" or
+            "SqlDataAdapter" or
+            "OleDbDataAdapter" or
+            "OdbcDataAdapter" or
+            "NpgsqlDataAdapter" or
+            "MySqlDataAdapter";
 
     internal static string GetTypeIdentity(TypeDeclarationSyntax? typeDeclaration)
     {
@@ -408,6 +421,142 @@ internal static class DirectSqlClientAnalyzer
             .ToList();
     }
 
+    internal static IReadOnlyList<DirectSqlInvocation> AnalyzeAdapter(
+        ObjectCreationExpressionSyntax creation)
+    {
+        var method = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+        if (method is null)
+            return Array.Empty<DirectSqlInvocation>();
+
+        var adapterVariable = ResolveVariableName(creation);
+        InvocationExpressionSyntax? fluentFill = null;
+        if (creation.Parent is MemberAccessExpressionSyntax fluentMember
+            && fluentMember.Expression == creation
+            && fluentMember.Name.Identifier.Text is "Fill" or "FillAsync"
+            && fluentMember.Parent is InvocationExpressionSyntax fluentInvocation
+            && fluentInvocation.Expression == fluentMember)
+        {
+            fluentFill = fluentInvocation;
+        }
+        if (string.IsNullOrWhiteSpace(adapterVariable) && fluentFill is null)
+            return Array.Empty<DirectSqlInvocation>();
+
+        var arguments = creation.ArgumentList?.Arguments ?? default;
+        var commandTextExpression = arguments.ElementAtOrDefault(0)?.Expression;
+        if (commandTextExpression is null || IsSqlCommandExpression(commandTextExpression, method))
+            return Array.Empty<DirectSqlInvocation>();
+
+        var fillSinks = fluentFill is not null
+            ? new List<InvocationExpressionSyntax> { fluentFill }
+            : method.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(invocation => invocation.Expression is MemberAccessExpressionSyntax member
+                    && member.Expression.ToString().Trim() == adapterVariable
+                    && member.Name.Identifier.Text is "Fill" or "FillAsync"
+                    && invocation.SpanStart > creation.SpanStart)
+                .OrderBy(invocation => invocation.SpanStart)
+                .ToList();
+        if (fillSinks.Count == 0)
+            return Array.Empty<DirectSqlInvocation>();
+
+        var className = method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault()?.Identifier.Text ?? "";
+        var connectionExpression = arguments.ElementAtOrDefault(1)?.Expression?.ToString().Trim();
+        var relevantStatements = new List<StatementSyntax>();
+        var creationStatement = creation.FirstAncestorOrSelf<StatementSyntax>();
+        if (creationStatement is not null)
+            relevantStatements.Add(creationStatement);
+        relevantStatements.AddRange(
+            fillSinks.Select(sink => sink.FirstAncestorOrSelf<StatementSyntax>())
+                .Where(statement => statement is not null)
+                .Cast<StatementSyntax>());
+        var fallbackSpan = (SyntaxNode?)creation.FirstAncestorOrSelf<StatementSyntax>() ?? creation;
+        var startOffset = relevantStatements.Count > 0
+            ? relevantStatements.Min(statement => statement.SpanStart)
+            : fallbackSpan.SpanStart;
+        var endOffset = relevantStatements.Count > 0
+            ? relevantStatements.Max(statement => statement.Span.End)
+            : fallbackSpan.Span.End;
+
+        return ReadCommandTextCandidates(
+                commandTextExpression,
+                method,
+                creation,
+                creation.SpanStart)
+            .Select(candidate =>
+            {
+                var terminalSinkResolution = ResolveTerminalSink(
+                    fillSinks,
+                    candidate.BranchContext);
+                return CreateInvocation(
+                    className,
+                    method.Identifier.Text,
+                    candidate,
+                    false,
+                    connectionExpression,
+                    startOffset,
+                    endOffset,
+                    adapterVariable,
+                    creation.Type.ToString(),
+                    candidate.ArgumentExpression,
+                    terminalSinkResolution.Name,
+                    commandTypeMode: "default_text",
+                    branchContext: SyntaxBranchAnalyzer.Combine(
+                        candidate.BranchContext,
+                        terminalSinkResolution.BranchContext));
+            })
+            .GroupBy(invocation => (
+                invocation.CommandTextKind,
+                invocation.CommandText,
+                invocation.ConnectionExpression,
+                invocation.StartOffset,
+                invocation.EndOffset,
+                BranchContext: string.Join("\u001f", invocation.BranchContext ?? Array.Empty<string>())))
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    private static bool IsSqlCommandExpression(
+        ExpressionSyntax expression,
+        MethodDeclarationSyntax method)
+    {
+        if (expression is ObjectCreationExpressionSyntax creation)
+            return CSharpAnalyzer.IsSqlCommandType(creation.Type);
+
+        var name = expression switch
+        {
+            IdentifierNameSyntax identifier => identifier.Identifier.Text,
+            MemberAccessExpressionSyntax member => member.ToString().Trim(),
+            _ => "",
+        };
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        if (method.ParameterList.Parameters.Any(parameter =>
+            parameter.Identifier.Text == name
+            && parameter.Type is not null
+            && CSharpAnalyzer.IsSqlCommandType(parameter.Type)))
+            return true;
+
+        if (method.DescendantNodes().OfType<VariableDeclarationSyntax>().Any(declaration =>
+            declaration.Variables.Any(variable => variable.Identifier.Text == name)
+            && (CSharpAnalyzer.IsSqlCommandType(declaration.Type)
+                || declaration.Type.ToString() == "var"
+                && declaration.Variables.Any(variable =>
+                    variable.Identifier.Text == name
+                    && variable.Initializer?.Value is ObjectCreationExpressionSyntax creation
+                    && CSharpAnalyzer.IsSqlCommandType(creation.Type)))))
+            return true;
+
+        var receiverName = name.StartsWith("this.", StringComparison.Ordinal)
+            ? name[5..]
+            : name;
+        var containingClass = method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+        return containingClass?.DescendantNodes()
+            .OfType<FieldDeclarationSyntax>()
+            .Any(field => CSharpAnalyzer.IsSqlCommandType(field.Declaration.Type)
+                && field.Declaration.Variables.Any(variable => variable.Identifier.Text == receiverName)) is true;
+    }
+
     private static DirectSqlInvocation CreateInvocation(
         string className,
         string methodName,
@@ -469,12 +618,39 @@ internal static class DirectSqlClientAnalyzer
         if (string.IsNullOrWhiteSpace(variableName))
             return Array.Empty<InvocationExpressionSyntax>();
 
+        var adapterVariables = method.DescendantNodes()
+            .OfType<ObjectCreationExpressionSyntax>()
+            .Where(adapter => CSharpAnalyzer.IsDataAdapterType(adapter.Type))
+            .Select(ResolveVariableName)
+            .Where(adapterVariable => !string.IsNullOrWhiteSpace(adapterVariable))
+            .Cast<string>()
+            .Where(adapterVariable => method.DescendantNodes()
+                .OfType<ObjectCreationExpressionSyntax>()
+                .Where(adapter => ResolveVariableName(adapter) == adapterVariable)
+                .Any(adapter => adapter.ArgumentList?.Arguments.Any(argument =>
+                    argument.Expression.ToString().Trim() == variableName) is true)
+                || method.DescendantNodes()
+                    .OfType<AssignmentExpressionSyntax>()
+                    .Any(assignment => assignment.Left is MemberAccessExpressionSyntax member
+                        && member.Name.Identifier.Text == "SelectCommand"
+                        && member.Expression.ToString().Trim() == adapterVariable
+                        && assignment.Right.ToString().Trim() == variableName))
+            .ToHashSet(StringComparer.Ordinal);
+
         return method.DescendantNodes()
             .OfType<InvocationExpressionSyntax>()
             .Where(call => call.Expression is MemberAccessExpressionSyntax member
                 && member.Expression.ToString() == variableName
                 && IsTerminalSink(member.Name.Identifier.Text)
                 && call.SpanStart > creationStart)
+            .OrderBy(call => call.SpanStart)
+            .Concat(adapterVariables.SelectMany(adapterVariable => method.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(call => call.Expression is MemberAccessExpressionSyntax member
+                    && member.Expression.ToString().Trim() == adapterVariable
+                    && member.Name.Identifier.Text is "Fill" or "FillAsync"
+                    && call.SpanStart > creationStart)))
+            .DistinctBy(call => call.SpanStart)
             .OrderBy(call => call.SpanStart)
             .ToList();
     }
@@ -714,7 +890,7 @@ internal static class AdapterAnalyzer
                     invocations.AddRange(AnalyzeDapperCall(call, method, className, member));
                 else if (EntityFrameworkMethods.Contains(methodName)
                     && LooksLikeEntityFrameworkReceiver(member.Expression, method, call.SpanStart))
-                    invocations.Add(AnalyzeEntityFrameworkCall(call, method, className, member));
+                    invocations.AddRange(AnalyzeEntityFrameworkCall(call, method, className, member));
             }
         }
         return invocations;
@@ -753,33 +929,68 @@ internal static class AdapterAnalyzer
             .ToList();
     }
 
-    private static DirectSqlInvocation AnalyzeEntityFrameworkCall(
+    private static IReadOnlyList<DirectSqlInvocation> AnalyzeEntityFrameworkCall(
         InvocationExpressionSyntax call,
         MethodDeclarationSyntax method,
         string className,
         MemberAccessExpressionSyntax member)
     {
         var expression = call.ArgumentList.Arguments.ElementAtOrDefault(0)?.Expression;
-        var (kind, text, mode) = ReadEntityFrameworkCommandText(expression);
-        return new DirectSqlInvocation(
-            className,
-            method.Identifier.Text,
-            kind,
-            text,
-            mode == "stored_procedure",
-            member.Expression.ToString().Trim(),
-            call.SpanStart,
-            call.Span.End,
-            InvocationKind: "entity_framework",
-            WrapperMode: mode,
-            MethodChain: new[] { method.Identifier.Text, member.Name.Identifier.Text },
-            BranchContext: SyntaxBranchAnalyzer.GetBranchContext(call),
-            TerminalSink: ResolveTerminalSink(member.Name.Identifier.Text),
-            CommandTextSourceStartOffset: expression?.SpanStart ?? call.SpanStart,
-            CommandTextSourceEndOffset: expression?.Span.End ?? call.Span.End,
-            CommandTextProvenance: expression is LiteralExpressionSyntax
-                ? "literal_expression"
-                : "dynamic_expression");
+        var callContext = SyntaxBranchAnalyzer.GetBranchContext(call);
+        var connectionExpression = member.Expression.ToString().Trim();
+        return ReadCommandTextCandidates(expression, method, call, call.SpanStart)
+            .Select(candidate =>
+            {
+                var mode = ResolveEntityFrameworkMode(
+                    call.ArgumentList.Arguments,
+                    candidate.CommandText);
+                return new DirectSqlInvocation(
+                    className,
+                    method.Identifier.Text,
+                    candidate.CommandTextKind,
+                    candidate.CommandText,
+                    mode == "stored_procedure",
+                    connectionExpression,
+                    call.SpanStart,
+                    call.Span.End,
+                    InvocationKind: "entity_framework",
+                    WrapperMode: mode,
+                    MethodChain: new[] { method.Identifier.Text, member.Name.Identifier.Text },
+                    BranchContext: SyntaxBranchAnalyzer.Combine(
+                        callContext,
+                        candidate.BranchContext),
+                    TerminalSink: ResolveTerminalSink(member.Name.Identifier.Text),
+                    CommandTypeMode: mode switch
+                    {
+                        "stored_procedure" => "stored_procedure",
+                        "inline_sql" => "text",
+                        _ => "unknown",
+                    },
+                    CommandTextSourceStartOffset: candidate.SourceStartOffset,
+                    CommandTextSourceEndOffset: candidate.SourceEndOffset,
+                    CommandTextProvenance: candidate.ValueProvenance);
+            })
+            .ToList();
+    }
+
+    private static string ResolveEntityFrameworkMode(
+        SeparatedSyntaxList<ArgumentSyntax> arguments,
+        string? commandText)
+    {
+        var commandTypeArgument = arguments.FirstOrDefault(argument =>
+            argument.NameColon?.Name.Identifier.Text.Equals("commandType", StringComparison.OrdinalIgnoreCase) == true);
+        if (commandTypeArgument is not null)
+        {
+            if (IsCommandType(commandTypeArgument.Expression, "StoredProcedure"))
+                return "stored_procedure";
+            if (IsCommandType(commandTypeArgument.Expression, "Text"))
+                return "inline_sql";
+            return "unknown";
+        }
+
+        return commandText is not null && LooksLikeInlineSql(commandText)
+            ? "inline_sql"
+            : "unknown";
     }
 
     private static string ResolveTerminalSink(string methodName)
@@ -812,15 +1023,6 @@ internal static class AdapterAnalyzer
             && LooksLikeInlineSql(text))
             return "inline_sql";
         return "unknown";
-    }
-
-    private static (string Kind, string? Text, string Mode) ReadEntityFrameworkCommandText(
-        ExpressionSyntax? expression)
-    {
-        if (expression is LiteralExpressionSyntax { Token.Value: string text })
-            return ("literal", text, LooksLikeInlineSql(text) ? "inline_sql" : "unknown");
-
-        return ("dynamic", null, "unknown");
     }
 
     private static bool IsCommandType(ExpressionSyntax expression, string memberName)
@@ -1674,7 +1876,36 @@ internal static class WrapperAnalyzer
         if (methodName.Equals("CreateReader", StringComparison.OrdinalIgnoreCase)
             || methodName.Equals("GetFirstValue", StringComparison.OrdinalIgnoreCase))
             return "inline_sql";
+        if (methodName.Equals("CreateTable", StringComparison.OrdinalIgnoreCase)
+            || methodName.Equals("CreateDataSet", StringComparison.OrdinalIgnoreCase))
+        {
+            var resolvedMode = ResolveUnknownCallMode(call, caller);
+            return resolvedMode != "unknown"
+                ? resolvedMode
+                : HasDynamicSqlObjectModeArgument(call, caller)
+                    ? "unknown"
+                    : "inline_sql";
+        }
         return ResolveUnknownCallMode(call, caller);
+    }
+
+    private static bool HasDynamicSqlObjectModeArgument(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax caller)
+    {
+        var commandTextExpression = ResolveExternalCommandTextArgument(call);
+        return call.ArgumentList.Arguments
+            .Where(argument => commandTextExpression is null
+                || argument.Expression.SpanStart != commandTextExpression.SpanStart)
+            .Any(argument =>
+                argument.NameColon?.Name.Identifier.Text.Equals(
+                    "mode",
+                    StringComparison.OrdinalIgnoreCase) is true
+                || argument.Expression is InterpolatedStringExpressionSyntax
+                || argument.Expression is IdentifierNameSyntax identifier
+                    && IsStringIdentifier(identifier.Identifier.Text, caller)
+                || argument.Expression is MemberAccessExpressionSyntax member
+                    && IsStringMember(member, caller));
     }
 
     private static string ResolveUnknownCallMode(
@@ -1865,6 +2096,9 @@ internal static class WrapperAnalyzer
             classDeclarations.Add(classDeclaration);
         var parameters = method.ParameterList.Parameters.Select(parameter => parameter.Identifier.Text).ToList();
         var parameterTypes = ResolveParameterTypes(method, knownTypeIdentities);
+        var requiredParameterCount = method.ParameterList.Parameters.Count(parameter =>
+            parameter.Default is null
+            && !parameter.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.ParamsKeyword)));
         var commandTextExpression = command.ArgumentList?.Arguments.ElementAtOrDefault(0)?.Expression;
         var connectionExpression = command.ArgumentList?.Arguments.ElementAtOrDefault(1)?.Expression?.ToString().Trim();
         var commandTextAssignments = GetCommandPropertyAssignments(
@@ -1924,6 +2158,7 @@ internal static class WrapperAnalyzer
             method.Identifier.Text,
             parameters,
             parameterTypes,
+            requiredParameterCount,
             commandTextParameterIndex,
             modeParameterIndex,
             connectionExpression,
@@ -2018,8 +2253,10 @@ internal static class WrapperAnalyzer
                 binding,
                 "implementation_not_found");
 
+        var argumentCount = call.ArgumentList.Arguments.Count;
         var matchingArity = candidates
-            .Where(wrapper => wrapper.Parameters.Count == call.ArgumentList.Arguments.Count)
+            .Where(wrapper => wrapper.RequiredParameterCount <= argumentCount
+                && argumentCount <= wrapper.Parameters.Count)
             .ToList();
         if (matchingArity.Count == 0)
             return new WrapperResolution(candidates, binding, "overload_not_found");
@@ -2038,23 +2275,29 @@ internal static class WrapperAnalyzer
                 .Where(wrapper =>
                 {
                     var arguments = MapInvocationArguments(call, wrapper.Parameters);
-                    if (arguments.Any(argument => argument is null))
-                        return false;
-                    var argumentTypes = arguments
-                        .Select(argument => InferArgumentType(
-                            argument!,
+                    var providedArguments = arguments
+                        .Select((argument, index) => (Argument: argument, Index: index))
+                        .Where(item => item.Argument is not null)
+                        .ToList();
+                    var argumentTypes = providedArguments
+                        .Select(item => InferArgumentType(
+                            item.Argument!,
                             caller,
                             call.SpanStart,
                             knownTypeIdentities))
                         .ToList();
                     return argumentTypes.All(type => !string.IsNullOrEmpty(type))
-                        && ParameterTypesMatch(wrapper.ParameterTypes, argumentTypes);
+                        && providedArguments
+                            .Select((item, index) => (item.Index, Type: argumentTypes[index]))
+                            .All(item => TypeNamesMatch(
+                                wrapper.ParameterTypes[item.Index],
+                                item.Type!));
                 })
                 .ToList();
             if (matchingParameterTypes.Count == 0
                 && candidates.All(candidate =>
-                    MapInvocationArguments(call, candidate.Parameters)
-                        .All(argument => argument is not null)))
+                    candidate.RequiredParameterCount <= argumentCount
+                    && argumentCount <= candidate.Parameters.Count))
                 return new WrapperResolution(candidates, binding, "overload_not_found");
             if (matchingParameterTypes.Count > 0)
                 candidates = matchingParameterTypes;
@@ -2437,23 +2680,6 @@ internal static class WrapperAnalyzer
         return null;
     }
 
-    private static bool ParameterTypesMatch(
-        IReadOnlyList<string> parameterTypes,
-        IReadOnlyList<string?> argumentTypes)
-    {
-        if (parameterTypes.Count != argumentTypes.Count)
-            return false;
-        for (var index = 0; index < parameterTypes.Count; index++)
-        {
-            if (string.IsNullOrWhiteSpace(parameterTypes[index])
-                || string.IsNullOrWhiteSpace(argumentTypes[index]))
-                return false;
-            if (!TypeNamesMatch(parameterTypes[index], argumentTypes[index]!))
-                return false;
-        }
-        return true;
-    }
-
     private static bool TypeNamesMatch(string expected, string actual)
     {
         var normalizedExpected = NormalizeTypeName(expected);
@@ -2645,6 +2871,8 @@ internal static class WrapperAnalyzer
             call,
             wrapper.Parameters,
             wrapper.ModeParameterIndex);
+        if (argument is null)
+            return "inline_sql";
         if (argument is LiteralExpressionSyntax literal)
         {
             if (literal.IsKind(SyntaxKind.TrueLiteralExpression))
@@ -3168,6 +3396,7 @@ internal static class WrapperAnalyzer
         string MethodName,
         IReadOnlyList<string> Parameters,
         IReadOnlyList<string> ParameterTypes,
+        int RequiredParameterCount,
         int CommandTextParameterIndex,
         int ModeParameterIndex,
         string? ConnectionExpression,

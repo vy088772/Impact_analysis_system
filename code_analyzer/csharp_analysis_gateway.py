@@ -1048,6 +1048,17 @@ def _normalize_wrapper_method_semantics(value: object) -> str:
     return normalized
 
 
+def _wrapper_contract_default_mode(candidate: Mapping[str, Any]) -> str:
+    normalized = _text_fact(
+        _first_fact(candidate, "default_mode", "default_command_type")
+    ).casefold().replace("-", "_").replace(" ", "_")
+    if normalized in {"inline_sql", "text", "default_text"}:
+        return "inline_sql"
+    if normalized in {"stored_procedure", "storedprocedure"}:
+        return "stored_procedure"
+    return ""
+
+
 def _wrapper_method_identity(candidate: Mapping[str, Any]) -> str:
     explicit = _text_fact(
         _first_fact(candidate, "method_identity", "wrapper_method_identity", "identity")
@@ -1740,6 +1751,17 @@ class CSharpAnalysisGateway:
         elif contract_mode_key == "call_site" and raw_mode == "stored_procedure":
             stored_procedure_mode = True
             mode_reason = ""
+        elif contract_mode_key == "call_site" and raw_mode in {"", "default_text"}:
+            default_mode = _wrapper_contract_default_mode(method_contract)
+            if default_mode == "inline_sql":
+                stored_procedure_mode = False
+                mode_reason = "inline_sql"
+            elif default_mode == "stored_procedure":
+                stored_procedure_mode = True
+                mode_reason = ""
+            else:
+                stored_procedure_mode = False
+                mode_reason = "call_site_requires_explicit_stored_procedure_mode"
         elif contract_mode_key == "call_site":
             stored_procedure_mode = False
             mode_reason = "call_site_requires_explicit_stored_procedure_mode"
@@ -1956,7 +1978,7 @@ class CSharpAnalysisGateway:
                 ),
                 **metadata,
             )
-        if not metadata["terminal_sink"]:
+        if not _known_terminal_sink(metadata["terminal_sink"]):
             return DbInvocation(
                 class_name,
                 method_name,
@@ -2067,7 +2089,7 @@ class CSharpAnalysisGateway:
                 embedded_target=embedded_target,
                 **metadata,
             )
-        if not metadata["terminal_sink"]:
+        if not _known_terminal_sink(metadata["terminal_sink"]):
             return DbInvocation(
                 class_name,
                 method_name,
@@ -2278,11 +2300,18 @@ class CSharpAnalysisGateway:
                 if command_text_literal is not None
                 else None
             ),
-            "terminal_sink": str(
-                raw.get("terminal_sink")
-                or raw.get("wrapper_terminal_sink")
-                or ""
-            ).strip(),
+            "terminal_sink": (
+                _known_terminal_sink(
+                    raw.get("terminal_sink")
+                    or raw.get("wrapper_terminal_sink")
+                    or ""
+                )
+                or str(
+                    raw.get("terminal_sink")
+                    or raw.get("wrapper_terminal_sink")
+                    or ""
+                ).strip()
+            ),
             "receiver_type": str(
                 raw.get("receiver_type")
                 or raw.get("wrapper_receiver_type")
@@ -2321,9 +2350,15 @@ class CSharpAnalysisGateway:
         branch_context = self._branch_context(raw)
         database = self._resolve_database(raw.get("connection_expression"))
         method_chain = tuple(raw.get("method_chain") or ())
+        metadata_raw = dict(raw)
+        if not _text_fact(metadata_raw.get("command_type_mode")):
+            metadata_raw["command_type_mode"] = {
+                "inline_sql": "text",
+                "stored_procedure": "stored_procedure",
+            }.get(mode, "unknown")
         if mode == "inline_sql":
             metadata = self._invocation_metadata(
-                raw,
+                metadata_raw,
                 database=database,
                 method_semantics="fixed_inline_sql",
                 invocation_mode="inline_sql",
@@ -2338,7 +2373,7 @@ class CSharpAnalysisGateway:
                 and raw.get("command_text")
                 else None
             )
-            if not metadata["terminal_sink"]:
+            if not _known_terminal_sink(metadata["terminal_sink"]):
                 return DbInvocation(
                     class_name,
                     method_name,
@@ -2379,7 +2414,13 @@ class CSharpAnalysisGateway:
                 embedded_target=embedded_target,
                 **metadata,
             )
-        if mode != "stored_procedure" and raw.get("command_type_stored_procedure") is not True:
+        if mode != "stored_procedure":
+            metadata = self._invocation_metadata(
+                metadata_raw,
+                database=database,
+                method_semantics="unresolved",
+                invocation_mode="unresolved",
+            )
             return DbInvocation(
                 class_name,
                 method_name,
@@ -2390,6 +2431,38 @@ class CSharpAnalysisGateway:
                 "adapter_mode_unresolved",
                 method_chain=method_chain,
                 branch_context=branch_context,
+                raw_command_text=(
+                    str(raw["command_text"])
+                    if raw.get("command_text_kind") == "literal"
+                    and raw.get("command_text")
+                    else None
+                ),
+                **metadata,
+            )
+        metadata = self._invocation_metadata(
+            metadata_raw,
+            database=database,
+            method_semantics="fixed_stored_procedure",
+            invocation_mode="stored_procedure",
+        )
+        if not _known_terminal_sink(metadata["terminal_sink"]):
+            return DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                "terminal_sink_unresolved",
+                method_chain=method_chain,
+                branch_context=branch_context,
+                raw_command_text=(
+                    str(raw["command_text"])
+                    if raw.get("command_text_kind") == "literal"
+                    and raw.get("command_text")
+                    else None
+                ),
+                **metadata,
             )
         if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
             return DbInvocation(
@@ -2402,6 +2475,7 @@ class CSharpAnalysisGateway:
                 "dynamic_command_text",
                 method_chain=method_chain,
                 branch_context=branch_context,
+                **metadata,
             )
         return self._rate_literal_candidate(
             class_name,
@@ -2412,6 +2486,7 @@ class CSharpAnalysisGateway:
             method_chain=method_chain,
             branch_context=branch_context,
             connection_resolution_reason=self._connection_source_unresolved_reason(raw),
+            metadata=metadata,
         )
 
     def _resolve_wrapper_invocation(
@@ -2594,6 +2669,12 @@ class CSharpAnalysisGateway:
                             InvocationEvidence.UNRESOLVED,
                             source,
                             "wrapper_mode_unresolved",
+                            raw_command_text=(
+                                str(raw["command_text"])
+                                if raw.get("command_text_kind") == "literal"
+                                and raw.get("command_text")
+                                else None
+                            ),
                             **metadata,
                             **common,
                         ))

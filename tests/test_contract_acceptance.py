@@ -182,6 +182,35 @@ def test_sqlobject_receiver_reuse_preserves_existing_auto_select(tmp_path) -> No
     assert "CreateTable" in contracts["sqlobject"]["methods"]
 
 
+def test_contract_acceptance_preserves_fill_sink_and_default_text_mode(tmp_path) -> None:
+    registry_path = tmp_path / "external_wrapper_contracts.json"
+    registry_path.write_text(json.dumps({"contracts": {}}), encoding="utf-8")
+
+    result = accept_external_wrapper_contract(
+        {
+            "name": "sqlobject-adapter",
+            "receiver_types": ["SQLObject"],
+            "methods": {
+                "CreateTable": {
+                    "mode": "call_site",
+                    "default_mode": "inline_sql",
+                    "sink": "Fill",
+                }
+            },
+        },
+        registry_path=registry_path,
+    )
+
+    method = result["registry_diff"]["after"]["contracts"]["sqlobject-adapter"]["methods"][
+        "CreateTable"
+    ]
+    assert method == {
+        "mode": "call_site",
+        "default_mode": "inline_sql",
+        "sink": "Fill",
+    }
+
+
 def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, tmp_path) -> None:
     root = tmp_path / "Orders"
     source_file = root / "OrderPage.aspx.cs"

@@ -103,7 +103,9 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # structured facts (bound implementation, receiver type, method name, arity,
 # parameter types) instead of opaque identity strings; old cached candidates
 # lack this shape.
-_CACHE_VERSION = 26
+# v27：adapter raw facts now include EF branch candidates, ADO.NET Fill sinks,
+# constructor-based adapter calls, and source-wrapper optional-arity semantics.
+_CACHE_VERSION = 27
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

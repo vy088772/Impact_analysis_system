@@ -23,6 +23,8 @@ ALLOWED_SINKS = {
     "executenonquery": "ExecuteNonQuery",
     "executereader": "ExecuteReader",
     "executescalar": "ExecuteScalar",
+    "fill": "Fill",
+    "fillasync": "FillAsync",
 }
 _CONTRACT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _IDENTIFIER_PATH_PATTERN = re.compile(
@@ -155,7 +157,27 @@ def _validate_methods(value: Any, contract_name: str) -> dict[str, dict[str, str
         sink = ALLOWED_SINKS.get(sink_value.casefold())
         if sink is None:
             _error("invalid_contract_sink", f"不允許的 contract sink：{sink_value}")
+        raw_default_mode = str(
+            raw_semantics.get("default_mode")
+            or raw_semantics.get("default_command_type")
+            or ""
+        ).strip().casefold().replace("-", "_").replace(" ", "_")
+        default_mode = {
+            "text": "inline_sql",
+            "default_text": "inline_sql",
+            "inline_sql": "inline_sql",
+            "stored_procedure": "stored_procedure",
+        }.get(raw_default_mode, "")
+        if raw_default_mode and not default_mode:
+            _error("invalid_contract_default_mode", f"不允許的 contract default mode：{raw_default_mode}")
+        if default_mode and mode != "call_site":
+            _error(
+                "invalid_contract_default_mode",
+                f"只有 call_site method 可以宣告 default mode：{contract_name}.{method}",
+            )
         methods[method] = {"mode": mode, "sink": sink}
+        if default_mode:
+            methods[method]["default_mode"] = default_mode
         seen[folded] = method
     return methods
 

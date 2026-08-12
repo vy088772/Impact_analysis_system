@@ -24,10 +24,12 @@
         },
         "CreateTable": {
           "mode": "call_site",
+          "default_mode": "inline_sql",
           "sink": "ExecuteReader"
         },
         "CreateDataSet": {
           "mode": "call_site",
+          "default_mode": "inline_sql",
           "sink": "ExecuteReader"
         }
       }
