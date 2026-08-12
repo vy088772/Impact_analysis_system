@@ -56,7 +56,7 @@ def test_static_analyzer_host_contract() -> None:
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     assert host.project_path == HOST_PROJECT
     version = host.ensure_ready()
-    assert version["contract_version"] == 1
+    assert version["contract_version"] == 2
     assert set(version["commands"]) == {"csharp", "sql"}
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -66,7 +66,7 @@ def test_static_analyzer_host_contract() -> None:
             encoding="utf-8",
         )
         csharp = host.analyze_csharp(source_path)
-        assert csharp["contract_version"] == 1
+        assert csharp["contract_version"] == 2
         assert csharp["methods"] == [
             {
                 "class_name": "Example",
@@ -77,7 +77,7 @@ def test_static_analyzer_host_contract() -> None:
         ]
 
         sql = host.analyze_sql(source_path)
-        assert sql["contract_version"] == 1
+        assert sql["contract_version"] == 2
         assert sql["operations"] == []
 
 

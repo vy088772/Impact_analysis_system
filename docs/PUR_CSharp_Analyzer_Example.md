@@ -170,13 +170,13 @@ gvData_Sorting -> BindData
 
 ## 4. `StaticAnalyzerHost` raw output
 
-`StaticAnalyzerHost` 是 repository-owned 的 Roslyn analyzer。對這個檔案執行 `analyze_csharp()` 後，回傳 `contract_version=1`、15 個 method source span，以及 2 個 raw `db_invocations`。
+`StaticAnalyzerHost` 是 repository-owned 的 Roslyn analyzer。對這個檔案執行 `analyze_csharp()` 後，回傳 `contract_version=2`、15 個 method source span，以及 2 個 raw `db_invocations`。
 
 方法 span 的形狀如下，offset 是 source snapshot 的 UTF-16 offset：
 
 ```json
 {
-  "contract_version": 1,
+  "contract_version": 2,
   "source_id": "f2966c07576d3b23d823b6edbf4f65439c96f32f0a00cf1f47b34c2e0b8456f6",
   "methods": [
     {"class_name": "PUR_SOQry", "method_name": "Page_Load", "start_offset": 425, "end_offset": 675},

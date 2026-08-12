@@ -27,6 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from code_analyzer.csharp_analysis_gateway import (  # noqa: E402
     CSharpAnalysisGateway,
     SpCatalog,
+    wrapper_observation_identity,
 )
 from config.settings import settings  # noqa: E402
 from service import analyze_service, repo_manager, scan_store  # noqa: E402
@@ -265,6 +266,7 @@ def _scan_report(
                 observation["classification_reason"],
                 observation["evidence_status"],
                 observation["evidence_reason"],
+                wrapper_observation_identity(observation),
             )
             group = groups.get(group_key)
             if group is None:

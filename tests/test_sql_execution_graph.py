@@ -201,7 +201,7 @@ END;
 
         result = host.analyze_sql(source_path)
 
-    assert result["contract_version"] == 1
+    assert result["contract_version"] == 2
     operations = result["operations"]
     assert [operation["operation_type"] for operation in operations] == [
         "SELECT",

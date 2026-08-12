@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 _MAX_HOST_COMMAND_CHARS = 24_000
 _MAX_HOST_FILES_PER_BATCH = 10
 

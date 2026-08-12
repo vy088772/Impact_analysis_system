@@ -1,6 +1,7 @@
 {
   "contracts": {
     "sqlobject": {
+      "auto_select": true,
       "receiver_types": [
         "SQLObject"
       ],

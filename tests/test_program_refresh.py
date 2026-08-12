@@ -868,6 +868,7 @@ def test_partial_refresh_keeps_wrapper_source_lookup_inside_each_root(monkeypatc
                                 "method_name": "Save",
                                 "wrapper_method_name": "Execute",
                                 "wrapper_receiver_type": "DbWrapper",
+                                    "receiver_implementation_identity": "DbWrapper",
                                 "wrapper_source_available": has_local_wrapper,
                                 "wrapper_mode": "stored_procedure",
                                 "command_text_kind": "literal",

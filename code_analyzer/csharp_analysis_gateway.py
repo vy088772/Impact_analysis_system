@@ -51,6 +51,17 @@ class WrapperReconciliation:
     review_candidate: bool = False
     stored_procedure_mode: bool = False
     mode_reason: str = ""
+    implementation_identity: str = ""
+    assembly_identity: str = ""
+    assembly_revision: str = ""
+    method_identity: str = ""
+    method_arity: Optional[int] = None
+    parameter_types: tuple[str, ...] = ()
+    method_semantics: str = ""
+    overload_candidates: tuple[str, ...] = ()
+    overload_candidate_facts: tuple[Mapping[str, Any], ...] = ()
+    receiver_construction_facts: tuple[str, ...] = ()
+    receiver_assignment_facts: tuple[str, ...] = ()
 
     @property
     def active_contract(self) -> bool:
@@ -83,6 +94,17 @@ class WrapperReconciliation:
             "active_contract": self.active_contract,
             "stored_procedure_mode": self.stored_procedure_mode,
             "mode_reason": self.mode_reason,
+            "implementation_identity": self.implementation_identity,
+            "assembly_identity": self.assembly_identity,
+            "assembly_revision": self.assembly_revision,
+            "method_identity": self.method_identity,
+            "method_arity": self.method_arity,
+            "parameter_types": list(self.parameter_types),
+            "method_semantics": self.method_semantics,
+            "overload_candidates": list(self.overload_candidates),
+            "overload_candidate_facts": [dict(item) for item in self.overload_candidate_facts],
+            "receiver_construction_facts": list(self.receiver_construction_facts),
+            "receiver_assignment_facts": list(self.receiver_assignment_facts),
         }
 
 
@@ -132,8 +154,30 @@ class DbInvocation:
     receiver_type: str = ""
     receiver_name: str = ""
     connection_expression: str = ""
+    connection_expression_candidates: tuple[str, ...] = ()
     connection_source: Optional[str] = None
     provenance: str = ""
+    implementation_identity: str = ""
+    assembly_identity: str = ""
+    assembly_revision: str = ""
+    method_identity: str = ""
+    method_arity: Optional[int] = None
+    parameter_types: tuple[str, ...] = ()
+    overload_candidates: tuple[str, ...] = ()
+    overload_candidate_facts: tuple[Mapping[str, Any], ...] = ()
+    receiver_expression: str = ""
+    binding_provenance: str = ""
+    receiver_construction_facts: tuple[str, ...] = ()
+    receiver_assignment_facts: tuple[str, ...] = ()
+    wrapper_implementation_identity: str = ""
+    wrapper_assembly_identity: str = ""
+    wrapper_assembly_revision: str = ""
+    wrapper_method_identity: str = ""
+    wrapper_method_arity: Optional[int] = None
+    wrapper_parameter_types: tuple[str, ...] = ()
+    wrapper_method_semantics: str = ""
+    wrapper_overload_candidates: tuple[str, ...] = ()
+    wrapper_overload_candidate_facts: tuple[Mapping[str, Any], ...] = ()
 
     @property
     def wrapper_classification_status(self) -> str:
@@ -195,8 +239,30 @@ WRAPPER_EVIDENCE_FIELDS = (
     "terminal_sink",
     "receiver_name",
     "connection_expression",
+    "connection_expression_candidates",
     "connection_source",
     "provenance",
+    "implementation_identity",
+    "assembly_identity",
+    "assembly_revision",
+    "method_identity",
+    "method_arity",
+    "parameter_types",
+    "overload_candidates",
+    "overload_candidate_facts",
+    "receiver_expression",
+    "binding_provenance",
+    "receiver_construction_facts",
+    "receiver_assignment_facts",
+    "wrapper_implementation_identity",
+    "wrapper_assembly_identity",
+    "wrapper_assembly_revision",
+    "wrapper_method_identity",
+    "wrapper_method_arity",
+    "wrapper_parameter_types",
+    "wrapper_method_semantics",
+    "wrapper_overload_candidates",
+    "wrapper_overload_candidate_facts",
 )
 
 
@@ -230,6 +296,20 @@ def wrapper_observation_fields(
         "source_snapshot_hash": snapshot_hash,
         "source_snapshot_identity": snapshot_hash,
     }
+    method_semantics = (
+        evidence.method_semantics
+        if evidence is not None
+        else classification["method_semantics"]
+    )
+    invocation_mode = (
+        evidence.invocation_mode
+        if evidence is not None
+        else "stored_procedure"
+        if classification["stored_procedure_mode"]
+        else "inline_sql"
+        if classification["mode_reason"] == "inline_sql"
+        else "unresolved"
+    )
     return {
         "wrapper_kind": classification["wrapper_kind"],
         "wrapper_status": classification["status"],
@@ -293,6 +373,61 @@ def wrapper_observation_fields(
         "source_snapshot_hash": snapshot_hash,
         "source_snapshot_identity": snapshot_hash,
         "source_provenance": source_provenance,
+        "implementation_identity": classification["implementation_identity"],
+        "assembly_identity": classification["assembly_identity"],
+        "assembly_revision": classification["assembly_revision"],
+        "method_identity": classification["method_identity"],
+        "method_arity": classification["method_arity"],
+        "parameter_types": list(classification["parameter_types"]),
+        "overload_candidates": list(classification["overload_candidates"]),
+        "overload_candidate_facts": [
+            dict(item) for item in classification["overload_candidate_facts"]
+        ],
+        "receiver_expression": (
+            evidence.receiver_expression if evidence is not None else ""
+        ),
+        "binding_provenance": (
+            evidence.binding_provenance if evidence is not None else ""
+        ),
+        "receiver_construction_facts": (
+            list(evidence.receiver_construction_facts)
+            if evidence is not None
+            else list(classification["receiver_construction_facts"])
+        ),
+        "receiver_assignment_facts": (
+            list(evidence.receiver_assignment_facts)
+            if evidence is not None
+            else list(classification["receiver_assignment_facts"])
+        ),
+        "method_semantics": method_semantics,
+        "invocation_mode": invocation_mode,
+        "command_text_kind": evidence.command_text_kind if evidence is not None else "",
+        "command_type_mode": evidence.command_type_mode if evidence is not None else "",
+        "command_text_argument": (
+            evidence.command_text_argument if evidence is not None else ""
+        ),
+        "command_text_literal": (
+            evidence.command_text_literal if evidence is not None else None
+        ),
+        "literal_value": evidence.literal_value if evidence is not None else None,
+        "raw_command_text": evidence.raw_command_text if evidence is not None else None,
+        "terminal_sink": evidence.terminal_sink if evidence is not None else "",
+        "receiver_name": evidence.receiver_name if evidence is not None else "",
+        "connection_expression": (
+            evidence.connection_expression if evidence is not None else ""
+        ),
+        "connection_expression_candidates": (
+            list(evidence.connection_expression_candidates)
+            if evidence is not None
+            else []
+        ),
+        "connection_source": (
+            evidence.connection_source if evidence is not None else database
+        ),
+        "branch_context": (
+            list(evidence.branch_context) if evidence is not None else []
+        ),
+        "provenance": evidence.provenance if evidence is not None else "",
     }
 
 
@@ -344,8 +479,36 @@ def invocation_wrapper_evidence_fields(invocation: DbInvocation) -> Dict[str, An
             ),
             "receiver_name": invocation.receiver_name,
             "connection_expression": invocation.connection_expression,
+            "connection_expression_candidates": list(
+                invocation.connection_expression_candidates
+            ),
             "connection_source": invocation.connection_source or invocation.database,
             "provenance": invocation.provenance,
+            "implementation_identity": invocation.implementation_identity,
+            "assembly_identity": invocation.assembly_identity,
+            "assembly_revision": invocation.assembly_revision,
+            "method_identity": invocation.method_identity,
+            "method_arity": invocation.method_arity,
+            "parameter_types": list(invocation.parameter_types),
+            "overload_candidates": list(invocation.overload_candidates),
+            "overload_candidate_facts": [
+                dict(item) for item in invocation.overload_candidate_facts
+            ],
+            "receiver_expression": invocation.receiver_expression,
+            "binding_provenance": invocation.binding_provenance,
+            "receiver_construction_facts": list(invocation.receiver_construction_facts),
+            "receiver_assignment_facts": list(invocation.receiver_assignment_facts),
+            "wrapper_implementation_identity": invocation.wrapper_implementation_identity,
+            "wrapper_assembly_identity": invocation.wrapper_assembly_identity,
+            "wrapper_assembly_revision": invocation.wrapper_assembly_revision,
+            "wrapper_method_identity": invocation.wrapper_method_identity,
+            "wrapper_method_arity": invocation.wrapper_method_arity,
+            "wrapper_parameter_types": list(invocation.wrapper_parameter_types),
+            "wrapper_method_semantics": invocation.wrapper_method_semantics,
+            "wrapper_overload_candidates": list(invocation.wrapper_overload_candidates),
+            "wrapper_overload_candidate_facts": [
+                dict(item) for item in invocation.wrapper_overload_candidate_facts
+            ],
         }
     )
     return fields
@@ -393,12 +556,32 @@ def load_external_wrapper_contract(contract_name: str) -> Optional[Dict[str, Any
     )
 
 
+def _normalize_type_identity(value: object) -> str:
+    normalized = str(value or "").strip()
+    if normalized.startswith("global::"):
+        normalized = normalized[len("global::") :]
+    return normalized.casefold()
+
+
+def _receiver_type_matches_contract(
+    receiver_type: str,
+    receiver_types: object,
+) -> bool:
+    if not receiver_type or not isinstance(receiver_types, (list, tuple, set)):
+        return False
+    normalized_receiver = _normalize_type_identity(receiver_type)
+    return bool(normalized_receiver) and any(
+        normalized_receiver == _normalize_type_identity(candidate)
+        for candidate in receiver_types
+        if _normalize_type_identity(candidate)
+    )
+
+
 def external_wrapper_contract_candidates(
     receiver_type: str,
 ) -> List[Dict[str, Any]]:
     """Return auto-selectable contracts matching one receiver type."""
-    normalized_receiver = str(receiver_type or "").strip().split(".")[-1].casefold()
-    if not normalized_receiver:
+    if not _normalize_type_identity(receiver_type):
         return []
 
     candidates = []
@@ -406,12 +589,7 @@ def external_wrapper_contract_candidates(
         if contract.get("auto_select") is not True:
             continue
         receiver_types = contract.get("receiver_types", [])
-        if not isinstance(receiver_types, list):
-            continue
-        if any(
-            normalized_receiver == str(candidate).split(".")[-1].casefold()
-            for candidate in receiver_types
-        ):
+        if _receiver_type_matches_contract(receiver_type, receiver_types):
             candidates.append(contract)
     return candidates
 
@@ -431,23 +609,133 @@ def load_external_wrapper_contract_for_receiver(
 def _wrapper_contract_method(
     contract: Optional[Mapping[str, Any]],
     method_name: str,
-) -> Optional[Mapping[str, Any]]:
+    *,
+    method_identity: str = "",
+    method_arity: Optional[int] = None,
+    parameter_types: Iterable[str] = (),
+) -> tuple[Optional[Mapping[str, Any]], str, tuple[Mapping[str, Any], ...]]:
     if contract is None:
-        return None
+        return None, "method_not_in_contract", ()
     methods = contract.get("methods", {})
-    if not isinstance(methods, Mapping):
-        return None
     folded_name = str(method_name or "").casefold()
-    if not folded_name:
-        return None
-    return next(
-        (
-            value
-            for name, value in methods.items()
-            if str(name).casefold() == folded_name and isinstance(value, Mapping)
-        ),
-        None,
+    if not folded_name or not isinstance(methods, Mapping):
+        return None, "method_not_in_contract", ()
+
+    named_methods: List[Mapping[str, Any]] = []
+    for name, value in methods.items():
+        if str(name).casefold() != folded_name:
+            continue
+        values = value if isinstance(value, (list, tuple)) else (value,)
+        named_methods.extend(
+            dict(candidate)
+            for candidate in values
+            if isinstance(candidate, Mapping)
+        )
+
+    if not named_methods:
+        return None, "method_not_in_contract", ()
+
+    observed_identity = _normalize_type_identity(method_identity)
+    observed_parameters = tuple(
+        _normalize_type_identity(item) for item in parameter_types if str(item).strip()
     )
+
+    def candidate_matches(candidate: Mapping[str, Any]) -> bool:
+        candidate_identity = _normalize_type_identity(
+            _first_fact(candidate, "method_identity", "identity")
+        )
+        if observed_identity and candidate_identity:
+            if observed_identity == candidate_identity:
+                return True
+            return False
+        if observed_identity and not candidate_identity:
+            candidate_parameters = tuple(
+                _normalize_type_identity(item)
+                for item in _text_facts(
+                    _first_fact(candidate, "parameter_types", "parameters")
+                )
+            )
+            candidate_arity = _optional_int_fact(
+                _first_fact(candidate, "method_arity", "arity")
+            )
+            if candidate_arity is None and candidate_parameters:
+                candidate_arity = len(candidate_parameters)
+            if method_arity is not None and candidate_arity != method_arity:
+                return False
+            if observed_parameters and candidate_parameters != observed_parameters:
+                return False
+            return bool(method_arity is not None or observed_parameters)
+
+        candidate_arity = _optional_int_fact(
+            _first_fact(candidate, "method_arity", "arity")
+        )
+        candidate_parameters = tuple(
+            _normalize_type_identity(item)
+            for item in _text_facts(
+                _first_fact(candidate, "parameter_types", "parameters")
+            )
+        )
+        if candidate_arity is None and candidate_parameters:
+            candidate_arity = len(candidate_parameters)
+        if method_arity is not None:
+            if candidate_arity is None or candidate_arity != method_arity:
+                return False
+        if observed_parameters:
+            if not candidate_parameters or candidate_parameters != observed_parameters:
+                return False
+        return method_arity is not None or bool(observed_parameters)
+
+    if len(named_methods) == 1:
+        candidate = named_methods[0]
+        has_signature = bool(
+            _text_fact(_first_fact(candidate, "method_identity", "identity"))
+            or _optional_int_fact(_first_fact(candidate, "method_arity", "arity"))
+            is not None
+            or _text_facts(_first_fact(candidate, "parameter_types", "parameters"))
+        )
+        observed_signature = bool(
+            observed_identity or method_arity is not None or observed_parameters
+        )
+        if not has_signature:
+            # A signature-less contract entry can't confirm it is the observed overload.
+            if observed_signature:
+                return None, "ambiguous_overload", tuple(named_methods)
+            return candidate, "", tuple(named_methods)
+        if candidate_matches(candidate):
+            return candidate, "", tuple(named_methods)
+        return None, "overload_not_found", tuple(named_methods)
+
+    if not observed_identity and method_arity is None and not observed_parameters:
+        return None, "ambiguous_overload", tuple(named_methods)
+
+    matching = tuple(candidate for candidate in named_methods if candidate_matches(candidate))
+    if len(matching) == 1:
+        return matching[0], "", tuple(named_methods)
+    if len(matching) > 1:
+        return None, "ambiguous_overload", tuple(named_methods)
+    return None, "overload_not_found", tuple(named_methods)
+
+
+def _wrapper_contract_method_identity(
+    candidate: Mapping[str, Any],
+    method_name: str,
+) -> str:
+    explicit_identity = _text_fact(
+        _first_fact(candidate, "method_identity", "wrapper_method_identity", "identity")
+    )
+    if explicit_identity:
+        return explicit_identity
+    parameter_types = _text_facts(
+        _first_fact(candidate, "parameter_types", "parameters")
+    )
+    if parameter_types:
+        return f"{method_name}({', '.join(parameter_types)})"
+    method_arity = _optional_int_fact(
+        _first_fact(candidate, "method_arity", "arity")
+    )
+    if method_arity is not None:
+        return f"{method_name}/{method_arity}"
+    return method_name
 
 
 def _wrapper_contract_receiver_matches(
@@ -455,15 +743,362 @@ def _wrapper_contract_receiver_matches(
     receiver_type: str,
 ) -> bool:
     receiver_types = contract.get("receiver_types", [])
-    if not receiver_type or not receiver_types:
-        return True
-    if not isinstance(receiver_types, (list, tuple, set)):
-        return False
-    normalized_receiver = receiver_type.split(".")[-1].casefold()
-    return any(
-        normalized_receiver == str(candidate).split(".")[-1].casefold()
-        for candidate in receiver_types
+    return _receiver_type_matches_contract(receiver_type, receiver_types)
+
+
+def _text_fact(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _text_facts(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value.strip(),) if value.strip() else ()
+    if not isinstance(value, (list, tuple, set)):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+_KNOWN_TERMINAL_SINKS = {
+    "executenonquery": "ExecuteNonQuery",
+    "executenonqueryasync": "ExecuteNonQueryAsync",
+    "executereader": "ExecuteReader",
+    "executereaderasync": "ExecuteReaderAsync",
+    "executescalar": "ExecuteScalar",
+    "executescalarasync": "ExecuteScalarAsync",
+    "fill": "Fill",
+    "fillasync": "FillAsync",
+}
+
+
+def _known_terminal_sink(value: object) -> str:
+    sink = _text_fact(value)
+    return _KNOWN_TERMINAL_SINKS.get(sink.casefold(), "")
+
+
+def _optional_int_fact(value: object) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def wrapper_observation_identity(observation: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Return the source/method identity that must remain distinct in reports."""
+    return (
+        _text_fact(
+            observation.get("implementation_identity")
+            or observation.get("wrapper_implementation_identity")
+        ),
+        _text_fact(observation.get("assembly_identity") or observation.get("wrapper_assembly_identity")),
+        _text_fact(observation.get("assembly_revision") or observation.get("wrapper_assembly_revision")),
+        _text_fact(observation.get("receiver_type") or observation.get("wrapper_receiver_type")),
+        _text_fact(observation.get("receiver_expression")),
+        _text_fact(observation.get("binding_provenance")),
+        _text_fact(observation.get("method_identity") or observation.get("wrapper_method_identity")),
+        _optional_int_fact(
+            observation.get("method_arity")
+            if observation.get("method_arity") is not None
+            else observation.get("wrapper_method_arity")
+        ),
+        _text_facts(
+            observation.get("parameter_types")
+            or observation.get("wrapper_parameter_types")
+        ),
+        _text_fact(
+            observation.get("method_semantics")
+            or observation.get("wrapper_method_semantics")
+        ),
+        _text_fact(observation.get("connection_expression")),
+        _text_fact(
+            observation.get("connection_source")
+            or observation.get("database")
+        ),
+        _text_facts(observation.get("connection_expression_candidates")),
+        _text_facts(observation.get("database_candidates")),
+        _text_facts(
+            observation.get("overload_candidates")
+            or observation.get("wrapper_overload_candidates")
+        ),
+        _text_fact(observation.get("invocation_mode")),
+        _text_fact(observation.get("terminal_sink")),
+        _text_facts(observation.get("receiver_construction_facts")),
+        _text_facts(observation.get("receiver_assignment_facts")),
     )
+
+
+def _first_fact(source: Mapping[str, Any], *keys: str) -> object:
+    for key in keys:
+        value = source.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _receiver_binding_facts(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    binding_value = _first_fact(
+        raw,
+        "receiver_binding",
+        "implementation_binding",
+        "bound_implementation",
+    )
+    if isinstance(binding_value, Mapping):
+        binding = binding_value
+    elif binding_value is not None:
+        binding = {"implementation_identity": binding_value}
+    else:
+        binding = {}
+
+    return {
+        "expression": _text_fact(
+            _first_fact(binding, "expression", "receiver_expression")
+            or _first_fact(raw, "receiver_expression", "receiver_name", "receiver")
+        ),
+        "implementation_identity": _text_fact(
+            _first_fact(
+                binding,
+                "implementation_identity",
+                "concrete_implementation",
+                "type_identity",
+                "concrete_type",
+                "type",
+            )
+            or _first_fact(
+                raw,
+                "receiver_implementation_identity",
+                "wrapper_implementation_identity",
+                "implementation_identity",
+                "concrete_implementation",
+                "wrapper_class_identity",
+            )
+        ),
+        "assembly_identity": _text_fact(
+            _first_fact(binding, "assembly_identity", "assembly")
+            or _first_fact(raw, "wrapper_assembly_identity", "assembly_identity")
+        ),
+        "assembly_revision": _text_fact(
+            _first_fact(binding, "assembly_revision", "revision", "version")
+            or _first_fact(raw, "wrapper_assembly_revision", "assembly_revision")
+        ),
+        "provenance": _text_fact(
+            _first_fact(binding, "provenance", "source_provenance")
+            or _first_fact(raw, "binding_provenance", "receiver_binding_provenance")
+        ),
+        "construction_facts": _text_facts(
+            _first_fact(
+                binding,
+                "construction_facts",
+                "receiver_construction_facts",
+            )
+            or _first_fact(raw, "receiver_construction_facts")
+        ),
+        "assignment_facts": _text_facts(
+            _first_fact(
+                binding,
+                "assignment_facts",
+                "receiver_assignment_facts",
+            )
+            or _first_fact(raw, "receiver_assignment_facts")
+        ),
+    }
+
+
+def _normalize_wrapper_method_semantics(value: object) -> str:
+    normalized = _text_fact(value).casefold().replace("-", "_").replace(" ", "_")
+    if normalized in {
+        "fixed_text",
+        "text",
+        "inline_sql",
+        "fixed_inline_sql",
+        "commandtype_text",
+        "fixed_commandtype_text",
+    }:
+        return "fixed_inline_sql"
+    if normalized in {
+        "fixed_stored_procedure",
+        "stored_procedure",
+        "storedprocedure",
+        "commandtype_stored_procedure",
+        "fixed_commandtype_stored_procedure",
+    }:
+        return "fixed_stored_procedure"
+    if normalized in {"call_site", "callsite", "call_site_selected"}:
+        return "call_site"
+    if normalized in {"", "unknown", "unresolved", "wrapper_mode_unresolved"}:
+        return "unresolved"
+    return normalized
+
+
+def _wrapper_method_identity(candidate: Mapping[str, Any]) -> str:
+    explicit = _text_fact(
+        _first_fact(candidate, "method_identity", "wrapper_method_identity", "identity")
+    )
+    if explicit:
+        return explicit
+    method_name = _text_fact(_first_fact(candidate, "method_name", "wrapper_method_name"))
+    implementation = _text_fact(
+        _first_fact(
+            candidate,
+            "implementation_identity",
+            "wrapper_implementation_identity",
+            "type_identity",
+        )
+    )
+    parameter_types = _text_facts(
+        _first_fact(candidate, "parameter_types", "wrapper_parameter_types", "parameters")
+    )
+    if method_name and implementation:
+        return f"{implementation}.{method_name}({', '.join(parameter_types)})"
+    if method_name:
+        return f"{method_name}({', '.join(parameter_types)})"
+    return ""
+
+
+def _wrapper_candidate_fact(candidate: Mapping[str, Any]) -> Dict[str, Any]:
+    """Normalize one overload candidate's bound-implementation/signature facts.
+
+    Kept structured (not collapsed into an identity string) so an ambiguous
+    overload still exposes each candidate's arity and parameter types.
+    """
+    parameter_types = _text_facts(
+        _first_fact(candidate, "parameter_types", "wrapper_parameter_types", "parameters")
+    )
+    method_arity = _optional_int_fact(_first_fact(candidate, "method_arity", "arity"))
+    if method_arity is None and parameter_types:
+        method_arity = len(parameter_types)
+    return {
+        "method_identity": _wrapper_method_identity(candidate),
+        "implementation_identity": _text_fact(
+            _first_fact(
+                candidate,
+                "implementation_identity",
+                "wrapper_implementation_identity",
+                "type_identity",
+            )
+        ),
+        "receiver_type": _text_fact(
+            _first_fact(candidate, "receiver_type", "wrapper_receiver_type")
+        ),
+        "method_name": _text_fact(_first_fact(candidate, "method_name", "wrapper_method_name")),
+        "method_arity": method_arity,
+        "parameter_types": parameter_types,
+    }
+
+
+def _wrapper_method_facts(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    raw_candidates = _first_fact(
+        raw,
+        "wrapper_method_candidates",
+        "wrapper_overload_candidates",
+        "method_candidates",
+        "overload_candidates",
+    )
+    candidates = []
+    if isinstance(raw_candidates, (list, tuple)):
+        for candidate in raw_candidates:
+            if isinstance(candidate, Mapping):
+                candidates.append(dict(candidate))
+            elif isinstance(candidate, str) and candidate.strip():
+                candidates.append({"method_identity": candidate.strip()})
+    candidate_names = tuple(
+        identity
+        for identity in (_wrapper_method_identity(candidate) for candidate in candidates)
+        if identity
+    )
+    candidate_facts = tuple(_wrapper_candidate_fact(candidate) for candidate in candidates)
+
+    method_name = _text_fact(_first_fact(raw, "wrapper_method_name", "method_name"))
+    method_arity = _optional_int_fact(
+        _first_fact(raw, "wrapper_method_arity", "method_arity", "arity")
+    )
+    parameter_types = _text_facts(
+        _first_fact(raw, "wrapper_parameter_types", "parameter_types", "parameter_type_names")
+    )
+    matching = [
+        candidate
+        for candidate in candidates
+        if not _text_fact(_first_fact(candidate, "method_name", "wrapper_method_name"))
+        or _text_fact(_first_fact(candidate, "method_name", "wrapper_method_name")).casefold()
+        == method_name.casefold()
+    ]
+    if method_arity is not None and matching:
+        exact_arity = [
+            candidate
+            for candidate in matching
+            if (
+                _optional_int_fact(_first_fact(candidate, "method_arity", "arity"))
+                == method_arity
+                or (
+                    _optional_int_fact(_first_fact(candidate, "method_arity", "arity")) is None
+                    and len(_text_facts(_first_fact(candidate, "parameter_types", "parameters")))
+                    == method_arity
+                )
+            )
+        ]
+        if exact_arity:
+            matching = exact_arity
+    if parameter_types and matching:
+        normalized_parameters = tuple(item.casefold() for item in parameter_types)
+        exact_parameters = [
+            candidate
+            for candidate in matching
+            if tuple(
+                item.casefold()
+                for item in _text_facts(
+                    _first_fact(candidate, "parameter_types", "wrapper_parameter_types", "parameters")
+                )
+            )
+            == normalized_parameters
+        ]
+        if exact_parameters:
+            matching = exact_parameters
+
+    selected = matching[0] if len(matching) == 1 else None
+    reason = ""
+    if raw.get("wrapper_overload_ambiguous") is True:
+        reason = "ambiguous_overload"
+    elif candidates and len(matching) > 1:
+        reason = "ambiguous_overload"
+    elif candidates and not matching:
+        reason = "overload_not_found"
+
+    selected_or_raw: Mapping[str, Any] = selected or raw
+    selected_arity = _optional_int_fact(
+        _first_fact(selected_or_raw, "wrapper_method_arity", "method_arity", "arity")
+    )
+    selected_parameters = _text_facts(
+        _first_fact(
+            selected_or_raw,
+            "wrapper_parameter_types",
+            "parameter_types",
+            "parameter_type_names",
+            "parameters",
+        )
+    )
+    if selected_arity is None and selected_parameters:
+        selected_arity = len(selected_parameters)
+    selected_identity = _wrapper_method_identity(selected_or_raw)
+    selected_semantics = _normalize_wrapper_method_semantics(
+        _first_fact(selected_or_raw, "wrapper_method_semantics", "method_semantics", "semantics")
+    )
+    selected_sink = _text_fact(
+        _first_fact(selected_or_raw, "wrapper_terminal_sink", "terminal_sink", "sink")
+    )
+    explicit_reason = _text_fact(raw.get("wrapper_unresolved_reason"))
+    if explicit_reason:
+        reason = explicit_reason
+    return {
+        "method_identity": selected_identity,
+        "method_arity": selected_arity,
+        "parameter_types": selected_parameters,
+        "method_semantics": selected_semantics,
+        "terminal_sink": selected_sink,
+        "candidate_names": candidate_names,
+        "candidate_facts": candidate_facts,
+        "reason": reason,
+        "selected": selected,
+    }
 
 
 def normalize_procedure_name(raw_name: str) -> str:
@@ -578,17 +1213,15 @@ class CSharpAnalysisGateway:
     def _contract_candidates(self, receiver_type: str) -> List[Dict[str, Any]]:
         if self._external_wrapper_contracts is None:
             return external_wrapper_contract_candidates(receiver_type)
-        normalized_receiver = str(receiver_type or "").strip().split(".")[-1].casefold()
-        if not normalized_receiver:
+        if not _normalize_type_identity(receiver_type):
             return []
         return [
             contract
             for contract in self._external_wrapper_contracts.values()
             if contract.get("auto_select") is True
-            and isinstance(contract.get("receiver_types", []), list)
-            and any(
-                normalized_receiver == str(candidate).split(".")[-1].casefold()
-                for candidate in contract.get("receiver_types", [])
+            and _receiver_type_matches_contract(
+                receiver_type,
+                contract.get("receiver_types", []),
             )
         ]
 
@@ -610,6 +1243,9 @@ class CSharpAnalysisGateway:
         """
         receiver_type = str(raw.get("wrapper_receiver_type") or "").strip()
         wrapper_method = str(raw.get("wrapper_method_name") or "").strip()
+        binding = _receiver_binding_facts(raw)
+        method_facts = _wrapper_method_facts(raw)
+        method_semantics = method_facts["method_semantics"]
         source_available = (
             raw.get("wrapper_source_available") is True
             if source_wrapper_available is None
@@ -622,6 +1258,9 @@ class CSharpAnalysisGateway:
         )
         raw_mode = str(raw.get("wrapper_mode") or "").strip().casefold()
         root = str(scan_root or "")
+        source_sink = method_facts["terminal_sink"] or _text_fact(
+            _first_fact(raw, "wrapper_terminal_sink", "terminal_sink", "sink")
+        )
 
         def result(
             *,
@@ -632,6 +1271,8 @@ class CSharpAnalysisGateway:
             contract_mode: str = "",
             contract_sink: str = "",
             candidate_contracts: Iterable[str] = (),
+            overload_candidates: Optional[Iterable[str]] = None,
+            overload_candidate_facts: Optional[Iterable[Mapping[str, Any]]] = None,
             reason: str = "",
             review_candidate: bool = False,
             stored_procedure_mode: bool = False,
@@ -656,22 +1297,82 @@ class CSharpAnalysisGateway:
                 review_candidate=review_candidate,
                 stored_procedure_mode=stored_procedure_mode,
                 mode_reason=mode_reason,
+                implementation_identity=binding["implementation_identity"],
+                assembly_identity=binding["assembly_identity"],
+                assembly_revision=binding["assembly_revision"],
+                method_identity=method_facts["method_identity"],
+                method_arity=method_facts["method_arity"],
+                parameter_types=method_facts["parameter_types"],
+                method_semantics=method_semantics,
+                overload_candidates=tuple(
+                    method_facts["candidate_names"]
+                    if overload_candidates is None
+                    else (
+                        str(item).strip()
+                        for item in overload_candidates
+                        if str(item).strip()
+                    )
+                ),
+                overload_candidate_facts=tuple(
+                    method_facts["candidate_facts"]
+                    if overload_candidate_facts is None
+                    else (
+                        dict(item)
+                        for item in overload_candidate_facts
+                        if isinstance(item, Mapping)
+                    )
+                ),
+                receiver_construction_facts=binding["construction_facts"],
+                receiver_assignment_facts=binding["assignment_facts"],
             )
 
         def source_mode() -> tuple[bool, str]:
-            if raw_mode == "inline_sql":
+            if method_semantics == "fixed_inline_sql":
                 return False, "inline_sql"
-            if raw_mode == "stored_procedure":
+            if method_semantics == "fixed_stored_procedure":
+                return True, ""
+            if method_semantics == "call_site" and raw_mode == "inline_sql":
+                return False, "inline_sql"
+            if method_semantics == "call_site" and raw_mode == "stored_procedure":
                 return True, ""
             return False, "wrapper_mode_unresolved"
 
         if source_available:
+            if method_facts["reason"]:
+                return result(
+                    wrapper_kind="source_wrapper",
+                    status=(
+                        "ambiguous_overload"
+                        if method_facts["reason"] == "ambiguous_overload"
+                        else "unresolved_method"
+                    ),
+                    selection_source="source_code",
+                    contract_mode=str(raw.get("wrapper_mode") or ""),
+                    contract_sink=source_sink,
+                    candidate_contracts=(),
+                    reason=method_facts["reason"],
+                    review_candidate=True,
+                    mode_reason="wrapper_mode_unresolved",
+                )
+            if not binding["implementation_identity"]:
+                return result(
+                    wrapper_kind="source_wrapper",
+                    status="unresolved_method",
+                    selection_source="source_code",
+                    contract_mode=str(raw.get("wrapper_mode") or ""),
+                    contract_sink=source_sink,
+                    candidate_contracts=(),
+                    reason="receiver_binding_unresolved",
+                    review_candidate=True,
+                    mode_reason="wrapper_mode_unresolved",
+                )
             stored_procedure_mode, mode_reason = source_mode()
             return result(
                 wrapper_kind="source_wrapper",
                 status="source_wrapper",
                 selection_source="source_code",
                 contract_mode=str(raw.get("wrapper_mode") or ""),
+                contract_sink=source_sink,
                 stored_procedure_mode=stored_procedure_mode,
                 mode_reason=mode_reason,
             )
@@ -769,15 +1470,36 @@ class CSharpAnalysisGateway:
                 mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
             )
 
-        method_contract = _wrapper_contract_method(contract, wrapper_method)
+        observed_method_identity = _text_fact(
+            _first_fact(raw, "wrapper_method_identity", "method_identity")
+        )
+        method_contract, method_reason, method_candidates = _wrapper_contract_method(
+            contract,
+            wrapper_method,
+            method_identity=observed_method_identity,
+            method_arity=method_facts["method_arity"],
+            parameter_types=method_facts["parameter_types"],
+        )
+        method_candidate_names = tuple(
+            _wrapper_contract_method_identity(candidate, wrapper_method)
+            for candidate in method_candidates
+        )
         if method_contract is None:
             return result(
                 wrapper_kind="external_wrapper",
-                status="unresolved_method",
+                status=(
+                    "ambiguous_overload"
+                    if method_reason == "ambiguous_overload"
+                    else "unresolved_method"
+                ),
                 selection_source=selection_source,
                 contract=contract_name,
                 candidate_contracts=candidate_names,
-                reason="method_not_in_contract",
+                overload_candidates=method_candidate_names,
+                overload_candidate_facts=tuple(
+                    _wrapper_candidate_fact(candidate) for candidate in method_candidates
+                ),
+                reason=method_reason,
                 review_candidate=True,
                 stored_procedure_mode=attempted_sp_mode,
                 mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
@@ -785,12 +1507,15 @@ class CSharpAnalysisGateway:
 
         contract_mode = str(method_contract.get("mode") or "")
         contract_mode_key = contract_mode.casefold()
-        if raw_mode == "inline_sql" or contract_mode_key == "inline_sql":
+        if contract_mode_key == "inline_sql":
             stored_procedure_mode = False
             mode_reason = "inline_sql"
         elif contract_mode_key == "stored_procedure":
             stored_procedure_mode = True
             mode_reason = ""
+        elif contract_mode_key == "call_site" and raw_mode == "inline_sql":
+            stored_procedure_mode = False
+            mode_reason = "inline_sql"
         elif contract_mode_key == "call_site" and raw_mode == "stored_procedure":
             stored_procedure_mode = True
             mode_reason = ""
@@ -800,6 +1525,12 @@ class CSharpAnalysisGateway:
         else:
             stored_procedure_mode = False
             mode_reason = "wrapper_mode_unresolved"
+
+        method_semantics = {
+            "inline_sql": "fixed_inline_sql",
+            "stored_procedure": "fixed_stored_procedure",
+            "call_site": "call_site",
+        }.get(contract_mode_key, method_semantics)
 
         return result(
             wrapper_kind="external_wrapper",
@@ -961,6 +1692,7 @@ class CSharpAnalysisGateway:
             raw["command_text"],
             source,
             branch_context=branch_context,
+            connection_resolution_reason=self._connection_source_unresolved_reason(raw),
             metadata=metadata,
         )
 
@@ -1087,7 +1819,11 @@ class CSharpAnalysisGateway:
                 if command_text_literal is not None
                 else None
             ),
-            "terminal_sink": str(raw.get("terminal_sink") or "").strip(),
+            "terminal_sink": str(
+                raw.get("terminal_sink")
+                or raw.get("wrapper_terminal_sink")
+                or ""
+            ).strip(),
             "receiver_type": str(
                 raw.get("receiver_type")
                 or raw.get("wrapper_receiver_type")
@@ -1098,10 +1834,19 @@ class CSharpAnalysisGateway:
                 or raw.get("receiver")
                 or ""
             ),
+            "receiver_construction_facts": _text_facts(
+                raw.get("receiver_construction_facts")
+            ),
+            "receiver_assignment_facts": _text_facts(
+                raw.get("receiver_assignment_facts")
+            ),
             "connection_expression": str(
                 raw.get("connection_expression")
                 or raw.get("connection_variable")
                 or ""
+            ),
+            "connection_expression_candidates": _text_facts(
+                raw.get("connection_expression_candidates")
             ),
             "connection_source": database,
             "provenance": str(raw.get("provenance") or "static_analyzer_host"),
@@ -1149,6 +1894,7 @@ class CSharpAnalysisGateway:
             source,
             method_chain=tuple(raw.get("method_chain") or ()),
             branch_context=branch_context,
+            connection_resolution_reason=self._connection_source_unresolved_reason(raw),
         )
 
     def _resolve_wrapper_invocation(
@@ -1165,9 +1911,11 @@ class CSharpAnalysisGateway:
             scan_root=scan_root,
             explicit_contract=explicit_contract,
         )
-        mode = str(raw.get("wrapper_mode") or "").casefold()
-        if mode == "inline_sql" or reconciliation.mode_reason == "inline_sql":
-            return None
+        raw = dict(raw)
+        if not _text_fact(raw.get("terminal_sink")):
+            raw["terminal_sink"] = _text_fact(
+                raw.get("wrapper_terminal_sink") or reconciliation.contract_sink
+            )
 
         source = reconciliation.source_span
         class_name = raw["class_name"]
@@ -1206,6 +1954,36 @@ class CSharpAnalysisGateway:
                 wrapper_source_available=reconciliation.source_available,
                 wrapper_stored_procedure_mode=reconciliation.stored_procedure_mode,
                 external_wrapper_method=external_wrapper_method,
+                implementation_identity=reconciliation.implementation_identity,
+                assembly_identity=reconciliation.assembly_identity,
+                assembly_revision=reconciliation.assembly_revision,
+                method_identity=reconciliation.method_identity,
+                method_arity=reconciliation.method_arity,
+                parameter_types=reconciliation.parameter_types,
+                overload_candidates=reconciliation.overload_candidates,
+                overload_candidate_facts=reconciliation.overload_candidate_facts,
+                receiver_construction_facts=reconciliation.receiver_construction_facts,
+                receiver_assignment_facts=reconciliation.receiver_assignment_facts,
+                receiver_expression=str(
+                    raw.get("receiver_expression")
+                    or raw.get("receiver_name")
+                    or raw.get("receiver")
+                    or ""
+                ),
+                binding_provenance=str(
+                    raw.get("binding_provenance")
+                    or raw.get("receiver_binding_provenance")
+                    or ""
+                ),
+                wrapper_implementation_identity=reconciliation.implementation_identity,
+                wrapper_assembly_identity=reconciliation.assembly_identity,
+                wrapper_assembly_revision=reconciliation.assembly_revision,
+                wrapper_method_identity=reconciliation.method_identity,
+                wrapper_method_arity=reconciliation.method_arity,
+                wrapper_parameter_types=reconciliation.parameter_types,
+                wrapper_method_semantics=reconciliation.method_semantics,
+                wrapper_overload_candidates=reconciliation.overload_candidates,
+                wrapper_overload_candidate_facts=reconciliation.overload_candidate_facts,
             )
 
         common = {
@@ -1215,8 +1993,38 @@ class CSharpAnalysisGateway:
         }
 
         if not source_available:
+            if reconciliation.status == "ambiguous_overload":
+                metadata = self._invocation_metadata(
+                    raw,
+                    database=database,
+                    method_semantics=reconciliation.method_semantics or "unresolved",
+                    invocation_mode="unresolved",
+                )
+                return annotate(DbInvocation(
+                    class_name,
+                    method_name,
+                    database,
+                    None,
+                    InvocationEvidence.UNRESOLVED,
+                    source,
+                    "ambiguous_overload",
+                    raw_command_text=(
+                        str(raw["command_text"])
+                        if raw.get("command_text_kind") == "literal"
+                        and raw.get("command_text")
+                        else None
+                    ),
+                    **metadata,
+                    **common,
+                ))
             if reconciliation.status in {"explicit_selected", "auto_selected"}:
-                if not reconciliation.contract_sink:
+                if not _known_terminal_sink(raw.get("terminal_sink")):
+                    metadata = self._invocation_metadata(
+                        raw,
+                        database=database,
+                        method_semantics=reconciliation.method_semantics,
+                        invocation_mode="unresolved",
+                    )
                     return annotate(DbInvocation(
                         class_name,
                         method_name,
@@ -1225,20 +2033,65 @@ class CSharpAnalysisGateway:
                         InvocationEvidence.UNRESOLVED,
                         source,
                         "wrapper_contract_sink_unresolved",
+                        **metadata,
                         **common,
                     ))
                 if not reconciliation.stored_procedure_mode:
+                    if reconciliation.mode_reason != "inline_sql":
+                        metadata = self._invocation_metadata(
+                            raw,
+                            database=database,
+                            method_semantics=reconciliation.method_semantics,
+                            invocation_mode="unresolved",
+                        )
+                        return annotate(DbInvocation(
+                            class_name,
+                            method_name,
+                            database,
+                            None,
+                            InvocationEvidence.UNRESOLVED,
+                            source,
+                            "wrapper_mode_unresolved",
+                            **metadata,
+                            **common,
+                        ))
+                    metadata = self._invocation_metadata(
+                        raw,
+                        database=database,
+                        method_semantics=reconciliation.method_semantics,
+                        invocation_mode="inline_sql",
+                    )
+                    if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
+                        return annotate(DbInvocation(
+                            class_name,
+                            method_name,
+                            database,
+                            None,
+                            InvocationEvidence.UNRESOLVED,
+                            source,
+                            "dynamic_command_text",
+                            **metadata,
+                            **common,
+                        ))
                     return annotate(DbInvocation(
                         class_name,
                         method_name,
                         database,
                         None,
-                        InvocationEvidence.UNRESOLVED,
+                        InvocationEvidence.PROVEN,
                         source,
-                        "wrapper_mode_unresolved",
+                        "inline_sql",
+                        raw_command_text=str(raw["command_text"]),
+                        **metadata,
                         **common,
                     ))
                 if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
+                    metadata = self._invocation_metadata(
+                        raw,
+                        database=database,
+                        method_semantics=reconciliation.method_semantics,
+                        invocation_mode="stored_procedure",
+                    )
                     return annotate(DbInvocation(
                         class_name,
                         method_name,
@@ -1247,6 +2100,7 @@ class CSharpAnalysisGateway:
                         InvocationEvidence.UNRESOLVED,
                         source,
                         "dynamic_command_text",
+                        **metadata,
                         **common,
                     ))
 
@@ -1256,6 +2110,13 @@ class CSharpAnalysisGateway:
                     database,
                     raw["command_text"],
                     source,
+                    connection_resolution_reason=self._connection_source_unresolved_reason(raw),
+                    metadata=self._invocation_metadata(
+                        raw,
+                        database=database,
+                        method_semantics=reconciliation.method_semantics,
+                        invocation_mode="stored_procedure",
+                    ),
                     **common,
                 )
                 return annotate(rated)
@@ -1279,10 +2140,45 @@ class CSharpAnalysisGateway:
                 "wrapper_source_unavailable",
                 procedure_schema,
                 raw_command_text=raw.get("command_text") if procedure_name else None,
+                **self._invocation_metadata(
+                    raw,
+                    database=database,
+                    method_semantics=reconciliation.method_semantics,
+                    invocation_mode=(
+                        "stored_procedure"
+                        if reconciliation.stored_procedure_mode
+                        else "unresolved"
+                    ),
+                ),
                 **common,
             ))
 
-        if raw.get("wrapper_reaches_stored_procedure_sink") is not True:
+        if reconciliation.review_candidate and reconciliation.reason:
+            metadata = self._invocation_metadata(
+                raw,
+                database=database,
+                method_semantics=reconciliation.method_semantics or "unresolved",
+                invocation_mode="unresolved",
+            )
+            return annotate(DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                reconciliation.reason,
+                raw_command_text=(
+                    str(raw["command_text"])
+                    if raw.get("command_text_kind") == "literal"
+                    and raw.get("command_text")
+                    else None
+                ),
+                **metadata,
+                **common,
+            ))
+
+        if not _known_terminal_sink(raw.get("terminal_sink")):
             return annotate(DbInvocation(
                 class_name,
                 method_name,
@@ -1291,9 +2187,21 @@ class CSharpAnalysisGateway:
                 InvocationEvidence.UNRESOLVED,
                 source,
                 "wrapper_sink_unresolved",
+                **self._invocation_metadata(
+                    raw,
+                    database=database,
+                    method_semantics=reconciliation.method_semantics,
+                    invocation_mode="unresolved",
+                ),
                 **common,
             ))
-        if not reconciliation.stored_procedure_mode:
+        if reconciliation.mode_reason == "wrapper_mode_unresolved":
+            metadata = self._invocation_metadata(
+                raw,
+                database=database,
+                method_semantics=reconciliation.method_semantics,
+                invocation_mode="unresolved",
+            )
             return annotate(DbInvocation(
                 class_name,
                 method_name,
@@ -1302,10 +2210,54 @@ class CSharpAnalysisGateway:
                 InvocationEvidence.UNRESOLVED,
                 source,
                 "wrapper_mode_unresolved",
+                raw_command_text=(
+                    str(raw["command_text"])
+                    if raw.get("command_text_kind") == "literal"
+                    and raw.get("command_text")
+                    else None
+                ),
+                **metadata,
+                **common,
+            ))
+        if not reconciliation.stored_procedure_mode:
+            metadata = self._invocation_metadata(
+                raw,
+                database=database,
+                method_semantics=reconciliation.method_semantics,
+                invocation_mode="inline_sql",
+            )
+            if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
+                return annotate(DbInvocation(
+                    class_name,
+                    method_name,
+                    database,
+                    None,
+                    InvocationEvidence.UNRESOLVED,
+                    source,
+                    "dynamic_command_text",
+                    **metadata,
+                    **common,
+                ))
+            return annotate(DbInvocation(
+                class_name,
+                method_name,
+                database,
+                None,
+                InvocationEvidence.PROVEN,
+                source,
+                "inline_sql",
+                raw_command_text=str(raw["command_text"]),
+                **metadata,
                 **common,
             ))
 
         if raw.get("command_text_kind") != "literal" or not raw.get("command_text"):
+            metadata = self._invocation_metadata(
+                raw,
+                database=database,
+                method_semantics=reconciliation.method_semantics,
+                invocation_mode="stored_procedure",
+            )
             return annotate(DbInvocation(
                 class_name,
                 method_name,
@@ -1314,6 +2266,7 @@ class CSharpAnalysisGateway:
                 InvocationEvidence.UNRESOLVED,
                 source,
                 "dynamic_command_text",
+                **metadata,
                 **common,
             ))
 
@@ -1323,6 +2276,13 @@ class CSharpAnalysisGateway:
             database,
             raw["command_text"],
             source,
+            connection_resolution_reason=self._connection_source_unresolved_reason(raw),
+            metadata=self._invocation_metadata(
+                raw,
+                database=database,
+                method_semantics=reconciliation.method_semantics,
+                invocation_mode="stored_procedure",
+            ),
             **common,
         ))
 
@@ -1336,6 +2296,7 @@ class CSharpAnalysisGateway:
         method_chain: tuple[str, ...] = (),
         branch_context: tuple[str, ...] = (),
         method_class_chain: tuple[str, ...] = (),
+        connection_resolution_reason: str = "",
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> DbInvocation:
         metadata = dict(metadata or {})
@@ -1375,6 +2336,23 @@ class CSharpAnalysisGateway:
             )
 
         matches = self._catalog.databases_containing(normalized_name, procedure_schema)
+        if connection_resolution_reason:
+            return DbInvocation(
+                class_name,
+                method_name,
+                None,
+                normalized_name,
+                InvocationEvidence.UNRESOLVED,
+                source,
+                connection_resolution_reason,
+                procedure_schema,
+                method_chain,
+                branch_context,
+                method_class_chain=method_class_chain,
+                database_candidates=tuple(matches),
+                raw_command_text=command_text,
+                **metadata,
+            )
         if len(matches) == 1:
             return DbInvocation(
                 class_name,
@@ -1409,6 +2387,19 @@ class CSharpAnalysisGateway:
             raw_command_text=command_text,
             **metadata,
         )
+
+    @staticmethod
+    def _connection_source_unresolved_reason(raw: Mapping[str, Any]) -> str:
+        candidates = _text_facts(raw.get("connection_expression_candidates"))
+        if len(candidates) > 1:
+            return "ambiguous_connection_source"
+        if candidates:
+            return "connection_source_unresolved"
+        if "connection_expression" in raw and not str(
+            raw.get("connection_expression") or ""
+        ).strip():
+            return "connection_source_unresolved"
+        return ""
 
     def _resolve_database(self, connection_expression: object) -> Optional[str]:
         if not connection_expression:

@@ -30,6 +30,7 @@ from code_analyzer.csharp_analysis_gateway import (
     invocation_wrapper_evidence_fields,
     load_external_wrapper_contract,
     normalize_procedure_name,
+    wrapper_observation_identity,
 )
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 
@@ -1919,6 +1920,7 @@ def reconcile_refresh_wrappers(
                     observation["classification_reason"],
                     evidence_status,
                     evidence_reason,
+                    wrapper_observation_identity(observation),
                     (
                         observation["source_span"]["relative_path"],
                         observation["source_span"]["start_offset"],

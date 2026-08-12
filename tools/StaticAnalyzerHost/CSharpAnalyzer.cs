@@ -17,7 +17,7 @@ internal static class CSharpAnalyzer
             string.Equals(sourceFile.InputPath, inputPath, StringComparison.OrdinalIgnoreCase))?.Root
             ?? CSharpSyntaxTree.ParseText(source, path: inputPath).GetCompilationUnitRoot();
         var sourceRoots = sourceFiles.Select(sourceFile => sourceFile.Root).ToList();
-        var wrapperMethods = WrapperAnalyzer.FindUsedWrapperMethods(sourceRoots);
+        var usedWrapperMethodIdentities = WrapperAnalyzer.FindUsedWrapperMethodIdentities(sourceRoots);
         var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Select(method => new MethodSourceSpan(
             method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault()?.Identifier.Text ?? "",
             method.Identifier.Text,
@@ -28,10 +28,12 @@ internal static class CSharpAnalyzer
             .Where(creation => IsSqlCommandType(creation.Type))
             .SelectMany(creation =>
             {
-                var typeIdentity = GetTypeIdentity(
-                    creation.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault());
+                var methodIdentity = WrapperAnalyzer.GetMethodIdentity(
+                    creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault(),
+                    WrapperAnalyzer.GetKnownTypeIdentities(sourceRoots));
                 return DirectSqlClientAnalyzer.Analyze(creation)
-                    .Where(invocation => !wrapperMethods.Contains((typeIdentity, invocation.MethodName)));
+                    .Where(_ => methodIdentity is null
+                        || !usedWrapperMethodIdentities.Contains(methodIdentity));
             })
             .ToList();
         dbInvocations.AddRange(WrapperAnalyzer.Analyze(root, sourceRoots));
@@ -59,16 +61,16 @@ internal static class CSharpAnalyzer
         return lastSegment == "SqlCommand";
     }
 
-    internal static string GetTypeIdentity(ClassDeclarationSyntax? classDeclaration)
+    internal static string GetTypeIdentity(TypeDeclarationSyntax? typeDeclaration)
     {
-        if (classDeclaration is null)
+        if (typeDeclaration is null)
             return "";
 
-        var namespaceParts = classDeclaration.Ancestors()
+        var namespaceParts = typeDeclaration.Ancestors()
             .OfType<BaseNamespaceDeclarationSyntax>()
             .Reverse()
             .Select(namespaceDeclaration => namespaceDeclaration.Name.ToString());
-        var typeParts = classDeclaration.AncestorsAndSelf()
+        var typeParts = typeDeclaration.AncestorsAndSelf()
             .OfType<TypeDeclarationSyntax>()
             .Reverse()
             .Select(typeDeclaration => typeDeclaration.Identifier.Text);
@@ -78,15 +80,93 @@ internal static class CSharpAnalyzer
     internal static string QualifyTypeIdentity(string typeName, MethodDeclarationSyntax caller)
     {
         var normalizedTypeName = typeName.Trim().Replace("global::", "", StringComparison.Ordinal);
-        if (normalizedTypeName.Contains('.', StringComparison.Ordinal))
+        if (normalizedTypeName is "bool" or "byte" or "sbyte" or "char" or "decimal"
+            or "double" or "float" or "int" or "long" or "nint" or "nuint"
+            or "object" or "short" or "string" or "uint" or "ulong" or "ushort"
+            or "void")
             return normalizedTypeName;
+        return TypeIdentityCandidates(normalizedTypeName, caller).First();
+    }
 
+    internal static IReadOnlyList<string> ResolveKnownTypeIdentities(
+        string typeName,
+        MethodDeclarationSyntax caller,
+        IReadOnlyCollection<string> knownTypeIdentities)
+    {
+        var normalizedKnownTypes = knownTypeIdentities
+            .Where(type => !string.IsNullOrWhiteSpace(type))
+            .Select(type => type.Trim().Replace("global::", "", StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (normalizedKnownTypes.Count == 0)
+            return new[] { QualifyTypeIdentity(typeName, caller) };
+
+        var candidates = TypeIdentityCandidates(typeName, caller);
+        var matches = candidates
+            .SelectMany(candidate => normalizedKnownTypes
+                .Where(type => string.Equals(type, candidate, StringComparison.Ordinal)))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (matches.Count > 0)
+            return matches;
+        return new[] { QualifyTypeIdentity(typeName, caller) };
+    }
+
+    private static IReadOnlyList<string> TypeIdentityCandidates(
+        string normalizedTypeName,
+        MethodDeclarationSyntax caller)
+    {
         var namespaceParts = caller.Ancestors()
             .OfType<BaseNamespaceDeclarationSyntax>()
             .Reverse()
             .Select(namespaceDeclaration => namespaceDeclaration.Name.ToString())
             .ToList();
-        return string.Join(".", namespaceParts.Append(normalizedTypeName));
+        var candidates = new List<string>();
+        if (namespaceParts.Count > 0)
+            candidates.Add(string.Join(".", namespaceParts.Append(normalizedTypeName)));
+
+        var root = caller.SyntaxTree.GetRoot();
+        var usingDirectives = root.DescendantNodes()
+            .OfType<UsingDirectiveSyntax>()
+            .ToList();
+        if (normalizedTypeName.Contains('.', StringComparison.Ordinal))
+        {
+            var separator = normalizedTypeName.IndexOf('.', StringComparison.Ordinal);
+            var qualifier = normalizedTypeName[..separator];
+            var remainder = normalizedTypeName[(separator + 1)..];
+            var aliasCandidates = usingDirectives
+                .Where(usingDirective => usingDirective.Alias is not null
+                    && usingDirective.Name is not null
+                    && string.Equals(
+                        usingDirective.Alias.Name.ToString(),
+                        qualifier,
+                        StringComparison.Ordinal))
+                .Select(usingDirective => $"{usingDirective.Name}.{remainder}")
+                .ToList();
+            return aliasCandidates
+                .Append(normalizedTypeName)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+        }
+
+        foreach (var usingDirective in usingDirectives)
+        {
+            if (usingDirective.Alias is not null)
+            {
+                var alias = usingDirective.Alias.Name.ToString();
+                if (string.Equals(alias, normalizedTypeName, StringComparison.Ordinal))
+                    candidates.Add(usingDirective.Name?.ToString() ?? normalizedTypeName);
+                continue;
+            }
+            if (usingDirective.Name is not null)
+                candidates.Add($"{usingDirective.Name}.{normalizedTypeName}");
+        }
+
+        candidates.Add(normalizedTypeName);
+        return candidates
+            .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
     }
 }
 
@@ -534,11 +614,27 @@ internal static class AdapterAnalyzer
         "FromSqlInterpolated",
     };
 
+    internal static bool IsRecognizedAdapterInvocation(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax method)
+    {
+        if (call.Expression is not MemberAccessExpressionSyntax member)
+            return false;
+
+        var methodName = member.Name.Identifier.Text;
+        return DapperMethods.Contains(methodName)
+            && LooksLikeDapperReceiver(member.Expression, method, call.SpanStart)
+            || EntityFrameworkMethods.Contains(methodName)
+            && LooksLikeEntityFrameworkReceiver(member.Expression, method, call.SpanStart);
+    }
+
     internal static List<DirectSqlInvocation> Analyze(
         CompilationUnitSyntax root,
         IEnumerable<CompilationUnitSyntax> sourceRoots)
     {
-        var wrapperDefinitions = WrapperAnalyzer.GetDefinitions(sourceRoots);
+        var roots = sourceRoots.ToList();
+        var wrapperDefinitions = WrapperAnalyzer.GetDefinitions(roots);
+        var knownTypeIdentities = WrapperAnalyzer.GetKnownTypeIdentities(roots);
         var invocations = new List<DirectSqlInvocation>();
         foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
         {
@@ -547,7 +643,12 @@ internal static class AdapterAnalyzer
             {
                 if (call.Expression is not MemberAccessExpressionSyntax member)
                     continue;
-                if (WrapperAnalyzer.IsSourceWrapperInvocation(call, method, wrapperDefinitions))
+                if (WrapperAnalyzer.IsSourceWrapperInvocation(
+                    call,
+                    method,
+                    wrapperDefinitions,
+                    knownTypeIdentities,
+                    roots))
                     continue;
 
                 var methodName = member.Name.Identifier.Text;
@@ -865,7 +966,35 @@ internal sealed record DirectSqlInvocation(
     string? CommandTextArgument = null,
     string? CommandTextLiteral = null,
     string? TerminalSink = null,
-    string? CommandTypeMode = null);
+    string? CommandTypeMode = null,
+    string? ReceiverExpression = null,
+    string? ReceiverImplementationIdentity = null,
+    string? ReceiverAssemblyIdentity = null,
+    string? ReceiverAssemblyRevision = null,
+    string? ReceiverBindingProvenance = null,
+    IReadOnlyList<string>? ReceiverConstructionFacts = null,
+    IReadOnlyList<string>? ReceiverAssignmentFacts = null,
+    string? WrapperImplementationIdentity = null,
+    string? WrapperAssemblyIdentity = null,
+    string? WrapperAssemblyRevision = null,
+    string? WrapperMethodIdentity = null,
+    int? WrapperMethodArity = null,
+    IReadOnlyList<string>? WrapperParameterTypes = null,
+    string? WrapperMethodSemantics = null,
+    string? WrapperTerminalSink = null,
+    IReadOnlyList<WrapperOverloadCandidateFact>? WrapperOverloadCandidates = null,
+    bool WrapperOverloadAmbiguous = false,
+    string? WrapperUnresolvedReason = null,
+    IReadOnlyList<string>? ConnectionExpressionCandidates = null);
+
+/// <summary>One ambiguous/unavailable overload candidate's bound-implementation and signature facts.</summary>
+internal sealed record WrapperOverloadCandidateFact(
+    string? ImplementationIdentity,
+    string? ReceiverType,
+    string MethodName,
+    int? MethodArity,
+    IReadOnlyList<string> ParameterTypes,
+    string MethodIdentity);
 
 internal static class SyntaxBranchAnalyzer
 {
@@ -940,18 +1069,84 @@ internal static class WrapperAnalyzer
     internal static bool IsSourceWrapperInvocation(
         InvocationExpressionSyntax call,
         MethodDeclarationSyntax caller,
-        IReadOnlyList<WrapperDefinition> wrappers)
+        IReadOnlyList<WrapperDefinition> wrappers,
+        IReadOnlyCollection<string> knownTypeIdentities,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots)
     {
         var callerTypeIdentity = CSharpAnalyzer.GetTypeIdentity(
             caller.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault());
-        return ResolveDefinition(call, caller, callerTypeIdentity, wrappers) is not null;
+        var resolution = ResolveDefinition(
+            call,
+            caller,
+            callerTypeIdentity,
+            wrappers,
+            sourceRoots,
+            knownTypeIdentities);
+        var methodName = call.Expression switch
+        {
+            MemberAccessExpressionSyntax member => member.Name.Identifier.Text,
+            IdentifierNameSyntax identifier => identifier.Identifier.Text,
+            _ => "",
+        };
+        var sourceCandidates = wrappers
+            .Where(wrapper => wrapper.MethodName == methodName)
+            .ToList();
+        if (resolution is null || sourceCandidates.Count == 0)
+            return false;
+        if (resolution.Candidates.Count > 0)
+            return true;
+        if (!string.Equals(
+                resolution.Reason,
+                "receiver_binding_unresolved",
+                StringComparison.Ordinal))
+            return false;
+        return sourceCandidates.Any(wrapper => ReceiverTypeMayBeWrapper(
+            resolution.Binding.ReceiverType,
+            wrapper,
+            sourceRoots,
+            knownTypeIdentities));
     }
 
-    internal static IReadOnlySet<(string ClassName, string MethodName)> FindUsedWrapperMethods(
+    private static bool ReceiverTypeMayBeWrapper(
+        string receiverType,
+        WrapperDefinition wrapper,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots,
+        IReadOnlyCollection<string> knownTypeIdentities)
+    {
+        if (string.IsNullOrWhiteSpace(receiverType))
+            return false;
+        if (string.Equals(receiverType, wrapper.TypeIdentity, StringComparison.Ordinal))
+            return true;
+
+        return sourceRoots
+            .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<TypeDeclarationSyntax>())
+            .Where(typeDeclaration => string.Equals(
+                CSharpAnalyzer.GetTypeIdentity(typeDeclaration),
+                wrapper.TypeIdentity,
+                StringComparison.Ordinal))
+            .SelectMany(typeDeclaration => typeDeclaration
+                .DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.Identifier.Text == wrapper.MethodName))
+            .Any(method => method.Ancestors()
+                .OfType<TypeDeclarationSyntax>()
+                .FirstOrDefault()?
+                .BaseList?
+                .Types
+                .Select(baseType => CSharpAnalyzer.ResolveKnownTypeIdentities(
+                    baseType.Type.ToString(),
+                    method,
+                    knownTypeIdentities))
+                .SelectMany(types => types)
+                .Contains(receiverType, StringComparer.Ordinal) is true);
+    }
+
+    internal static IReadOnlySet<string> FindUsedWrapperMethodIdentities(
         IEnumerable<CompilationUnitSyntax> sourceRoots)
     {
         var roots = sourceRoots.ToList();
         var wrappers = GetDefinitions(roots);
+        var knownTypeIdentities = GetKnownTypeIdentities(roots);
         return roots
             .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<MethodDeclarationSyntax>())
             .SelectMany(method =>
@@ -960,18 +1155,57 @@ internal static class WrapperAnalyzer
                     method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault());
                 return method.DescendantNodes()
                     .OfType<InvocationExpressionSyntax>()
-                        .Select(call => ResolveDefinition(call, method, callerTypeIdentity, wrappers));
+                            .Select(call => ResolveDefinition(
+                                call,
+                                method,
+                                callerTypeIdentity,
+                                wrappers,
+                                roots,
+                                knownTypeIdentities))
+                        .Where(resolution => resolution is not null)
+                        .SelectMany(resolution => resolution!.Candidates);
             })
-            .Where(definition => definition is not null)
-                    .Select(definition => (definition!.TypeIdentity, definition.MethodName))
+                        .Select(definition => definition.MethodIdentity)
             .ToHashSet();
     }
+
+                internal static string? GetMethodIdentity(
+                    MethodDeclarationSyntax? method,
+                    IReadOnlyCollection<string> knownTypeIdentities)
+                {
+                    if (method is null)
+                        return null;
+                    var classDeclaration = method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+                    var typeIdentity = CSharpAnalyzer.GetTypeIdentity(classDeclaration);
+                    if (string.IsNullOrWhiteSpace(typeIdentity))
+                        return null;
+                    return BuildMethodIdentity(
+                        typeIdentity,
+                        method.Identifier.Text,
+                        ResolveParameterTypes(method, knownTypeIdentities));
+                }
+
+                private static IReadOnlyList<string> ResolveParameterTypes(
+                    MethodDeclarationSyntax method,
+                    IReadOnlyCollection<string> knownTypeIdentities)
+                    => method.ParameterList.Parameters
+                        .Select(parameter => parameter.Type is null
+                            ? ""
+                            : CSharpAnalyzer.ResolveKnownTypeIdentities(
+                                parameter.Type.ToString(),
+                                method,
+                                knownTypeIdentities) is [var parameterType]
+                                ? parameterType
+                                : parameter.Type.ToString().Trim())
+                        .ToList();
 
     internal static List<DirectSqlInvocation> Analyze(
         CompilationUnitSyntax root,
         IEnumerable<CompilationUnitSyntax> sourceRoots)
     {
-        var wrappers = GetDefinitions(sourceRoots);
+        var roots = sourceRoots.ToList();
+        var wrappers = GetDefinitions(roots);
+        var knownTypeIdentities = GetKnownTypeIdentities(roots);
 
         var invocations = new List<DirectSqlInvocation>();
         foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
@@ -981,36 +1215,108 @@ internal static class WrapperAnalyzer
                 method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault());
             foreach (var call in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                var wrapper = ResolveDefinition(call, method, callerTypeIdentity, wrappers);
-                if (wrapper is null)
+                var resolution = ResolveDefinition(
+                    call,
+                    method,
+                    callerTypeIdentity,
+                    wrappers,
+                    roots,
+                    knownTypeIdentities);
+                var sourceWrapperInvocation = IsSourceWrapperInvocation(
+                    call,
+                    method,
+                    wrappers,
+                    knownTypeIdentities,
+                    roots);
+                if (resolution is not null
+                    && sourceWrapperInvocation
+                    && (resolution.Candidates.Count == 0
+                        || !string.IsNullOrEmpty(resolution.Reason)))
                 {
+                    invocations.Add(CreateUnavailableSourceCandidate(
+                        call,
+                        method,
+                        callerClass,
+                        resolution));
+                    continue;
+                }
+                if (resolution is null || resolution.Candidates.Count == 0)
+                {
+                    if (AdapterAnalyzer.IsRecognizedAdapterInvocation(call, method))
+                        continue;
                     var unavailable = CreateUnavailableCandidate(call, method, callerClass);
                     if (unavailable is not null)
                         invocations.Add(unavailable);
                     continue;
                 }
 
-                var mode = ResolveMode(call, wrapper);
-                if (mode == "inline_sql")
+                if (!resolution.IsUnique)
+                {
+                    invocations.Add(CreateAmbiguousInvocation(
+                        call,
+                        method,
+                        callerClass,
+                        resolution));
                     continue;
+                }
 
-                var (commandTextKind, commandText) = ReadCommandText(call, wrapper);
-                invocations.Add(new DirectSqlInvocation(
-                    callerClass,
-                    method.Identifier.Text,
-                    commandTextKind,
-                    commandText,
-                    mode == "stored_procedure",
-                    ResolveCallConnectionExpression(call, wrapper, method),
-                    call.SpanStart,
-                    call.Span.End,
-                    "source_wrapper",
-                    wrapper.ClassName,
-                    wrapper.MethodName,
-                    true,
-                    wrapper.ReachesStoredProcedureSink,
-                    mode,
-                    new[] { method.Identifier.Text, wrapper.MethodName }));
+                var wrapper = resolution.Candidates[0];
+
+                var mode = ResolveMode(call, wrapper);
+
+                var connectionExpression = ResolveCallConnectionExpression(
+                    call,
+                    wrapper,
+                    method,
+                    roots,
+                    knownTypeIdentities);
+                foreach (var commandTextCandidate in ReadWrapperCommandTextCandidates(
+                    call,
+                    wrapper,
+                    method))
+                {
+                    invocations.Add(new DirectSqlInvocation(
+                        callerClass,
+                        method.Identifier.Text,
+                        commandTextCandidate.CommandTextKind,
+                        commandTextCandidate.CommandText,
+                        mode == "stored_procedure",
+                        connectionExpression.Expression,
+                        call.SpanStart,
+                        call.Span.End,
+                        "source_wrapper",
+                        wrapper.ClassName,
+                        wrapper.MethodName,
+                        true,
+                        wrapper.ReachesStoredProcedureSink,
+                        mode,
+                        new[] { method.Identifier.Text, wrapper.MethodName },
+                        BranchContext: SyntaxBranchAnalyzer.Combine(
+                            SyntaxBranchAnalyzer.GetBranchContext(call),
+                            commandTextCandidate.BranchContext),
+                        WrapperReceiverType: resolution.Binding.ReceiverType,
+                        ReceiverType: resolution.Binding.ReceiverType,
+                        ReceiverName: resolution.Binding.Expression,
+                        CommandTextArgument: commandTextCandidate.ArgumentExpression,
+                        CommandTextLiteral: commandTextCandidate.CommandText,
+                        TerminalSink: wrapper.TerminalSink,
+                        CommandTypeMode: ResolveCommandTypeMode(wrapper),
+                        ReceiverExpression: resolution.Binding.Expression,
+                        ReceiverImplementationIdentity: resolution.Binding.ImplementationIdentity,
+                        ReceiverBindingProvenance: "source",
+                        ReceiverConstructionFacts: resolution.Binding.ConstructionFacts,
+                        ReceiverAssignmentFacts: resolution.Binding.AssignmentFacts,
+                        WrapperImplementationIdentity: wrapper.TypeIdentity,
+                        WrapperMethodIdentity: wrapper.MethodIdentity,
+                        WrapperMethodArity: wrapper.Parameters.Count,
+                        WrapperParameterTypes: wrapper.ParameterTypes,
+                        WrapperMethodSemantics: wrapper.MethodSemantics,
+                        WrapperTerminalSink: wrapper.TerminalSink,
+                        WrapperAssemblyIdentity: wrapper.AssemblyIdentity,
+                        WrapperAssemblyRevision: wrapper.AssemblyRevision,
+                        WrapperUnresolvedReason: wrapper.UnresolvedReason,
+                        ConnectionExpressionCandidates: connectionExpression.Candidates));
+                }
             }
         }
 
@@ -1019,12 +1325,135 @@ internal static class WrapperAnalyzer
 
     internal static List<WrapperDefinition> GetDefinitions(
         IEnumerable<CompilationUnitSyntax> sourceRoots)
-        => sourceRoots.SelectMany(sourceRoot => sourceRoot.DescendantNodes()
-            .OfType<MethodDeclarationSyntax>()
-            .Select(CreateDefinition)
+    {
+        var roots = sourceRoots.ToList();
+        var methods = roots
+            .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<MethodDeclarationSyntax>())
+            .ToList();
+        var knownTypeIdentities = GetKnownTypeIdentities(roots);
+        return methods
+            .Select(method => CreateDefinition(method, roots, knownTypeIdentities))
             .Where(definition => definition is not null)
             .Select(definition => definition!)
-        ).ToList();
+            .ToList();
+    }
+
+    internal static IReadOnlyList<string> GetKnownTypeIdentities(
+        IEnumerable<CompilationUnitSyntax> sourceRoots)
+        => sourceRoots
+            .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<TypeDeclarationSyntax>())
+            .Select(CSharpAnalyzer.GetTypeIdentity)
+            .Where(typeIdentity => !string.IsNullOrWhiteSpace(typeIdentity))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    private static (ExpressionSyntax? Argument, string? Literal) ResolveCommandTextArgument(
+        InvocationExpressionSyntax call,
+        IReadOnlyList<WrapperDefinition> candidates)
+    {
+        var arguments = candidates
+            .Select(candidate => ResolveInvocationArgument(
+                call,
+                candidate.Parameters,
+                candidate.CommandTextParameterIndex))
+            .Where(argument => argument is not null)
+            .GroupBy(argument => argument!.ToString(), StringComparer.Ordinal)
+            .Select(group => group.First()!)
+            .ToList();
+        if (arguments.Count == 1)
+        {
+            var argument = arguments[0];
+            return (
+                argument,
+                argument is LiteralExpressionSyntax { Token.Value: string text }
+                    ? text
+                    : null);
+        }
+
+        var literals = candidates
+            .Select(candidate => candidate.CommandTextLiteral)
+            .Where(literal => !string.IsNullOrWhiteSpace(literal))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return literals.Count == 1 ? (null, literals[0]) : (null, null);
+    }
+
+    /// <summary>Each unresolved/ambiguous overload candidate's own bound-implementation and signature facts.</summary>
+    private static List<WrapperOverloadCandidateFact> BuildOverloadCandidateFacts(
+        WrapperResolution resolution)
+        => resolution.Candidates
+            .Select(candidate => new WrapperOverloadCandidateFact(
+                candidate.TypeIdentity,
+                resolution.Binding.ReceiverType,
+                candidate.MethodName,
+                candidate.Parameters.Count,
+                candidate.ParameterTypes,
+                candidate.MethodIdentity))
+            .DistinctBy(fact => fact.MethodIdentity, StringComparer.Ordinal)
+            .ToList();
+
+    private static DirectSqlInvocation CreateUnavailableSourceCandidate(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax caller,
+        string callerClass,
+        WrapperResolution resolution)
+    {
+        var methodName = call.Expression switch
+        {
+            MemberAccessExpressionSyntax member => member.Name.Identifier.Text,
+            IdentifierNameSyntax identifier => identifier.Identifier.Text,
+            _ => "",
+        };
+        var commandTextResolution = ResolveCommandTextArgument(call, resolution.Candidates);
+        var commandText = commandTextResolution.Argument;
+        var literalText = commandTextResolution.Literal;
+        var commandTextKind = literalText is not null ? "literal" : "dynamic";
+        var candidateFacts = BuildOverloadCandidateFacts(resolution);
+        var selectedCandidate = resolution.Candidates.Count == 1
+            ? resolution.Candidates[0]
+            : null;
+        return new DirectSqlInvocation(
+            callerClass,
+            caller.Identifier.Text,
+            commandTextKind,
+            literalText,
+            false,
+            null,
+            call.SpanStart,
+            call.Span.End,
+            "source_wrapper",
+            selectedCandidate?.ClassName,
+            methodName,
+            true,
+            false,
+            "unknown",
+            new[] { caller.Identifier.Text, methodName },
+            SyntaxBranchAnalyzer.GetBranchContext(call),
+            resolution.Binding.ReceiverType,
+            resolution.Binding.ReceiverType,
+            resolution.Binding.Expression,
+            commandText?.ToString().Trim(),
+            literalText,
+            selectedCandidate?.TerminalSink,
+            "unknown",
+            resolution.Binding.Expression,
+            resolution.Binding.ImplementationIdentity,
+            selectedCandidate?.AssemblyIdentity,
+            selectedCandidate?.AssemblyRevision,
+            "source",
+            resolution.Binding.ConstructionFacts,
+            resolution.Binding.AssignmentFacts,
+            selectedCandidate?.TypeIdentity,
+            selectedCandidate?.AssemblyIdentity,
+            selectedCandidate?.AssemblyRevision,
+            selectedCandidate?.MethodIdentity,
+            selectedCandidate?.Parameters.Count,
+            selectedCandidate?.ParameterTypes,
+            "unresolved",
+            selectedCandidate?.TerminalSink,
+            candidateFacts,
+            WrapperUnresolvedReason: resolution.Reason);
+    }
 
     private static DirectSqlInvocation? CreateUnavailableCandidate(
         InvocationExpressionSyntax call,
@@ -1034,55 +1463,35 @@ internal static class WrapperAnalyzer
         if (call.Expression is not MemberAccessExpressionSyntax member)
             return null;
 
-        var commandText = call.ArgumentList.Arguments.ElementAtOrDefault(0)?.Expression;
+        var commandText = ResolveExternalCommandTextArgument(call);
+        if (!LooksLikeCommandTextExpression(commandText, caller))
+            return null;
+
         var mode = ResolveExternalSqlObjectMode(call, caller);
-        if (mode == "inline_sql")
-            return null;
-
-        if (mode == "stored_procedure")
-        {
-            if (commandText is LiteralExpressionSyntax { Token.Value: string literalText })
-            {
-                if (LooksLikeInlineSql(literalText))
-                    return null;
-
-                return CreateUnavailableInvocation(
-                    caller,
-                    callerClass,
-                    member,
-                    "literal",
-                    literalText,
-                    true,
-                    mode,
-                    call);
-            }
-
-            return CreateUnavailableInvocation(
-                caller,
-                callerClass,
-                member,
-                "dynamic",
-                null,
-                true,
-                mode,
-                call);
-        }
-
-        if (commandText is not LiteralExpressionSyntax { Token.Value: string text }
-            || LooksLikeInlineSql(text))
-            return null;
-        if (mode == "unknown" && !LooksLikeProcedureName(text))
-            return null;
+        var literalText = commandText is LiteralExpressionSyntax { Token.Value: string text }
+            ? text
+            : null;
 
         return CreateUnavailableInvocation(
             caller,
             callerClass,
             member,
-            "literal",
-            text,
-            false,
+            literalText is null ? "dynamic" : "literal",
+            literalText,
+            mode == "stored_procedure",
             mode,
             call);
+    }
+
+    private static ExpressionSyntax? ResolveExternalCommandTextArgument(
+        InvocationExpressionSyntax call)
+    {
+        var named = call.ArgumentList.Arguments.FirstOrDefault(argument =>
+            argument.NameColon?.Name.Identifier.Text.Equals(
+                "commandText",
+                StringComparison.OrdinalIgnoreCase) is true);
+        return named?.Expression
+            ?? call.ArgumentList.Arguments.ElementAtOrDefault(0)?.Expression;
     }
 
     private static DirectSqlInvocation CreateUnavailableInvocation(
@@ -1181,9 +1590,7 @@ internal static class WrapperAnalyzer
         InvocationExpressionSyntax call,
         MethodDeclarationSyntax caller)
     {
-        var commandTextExpression = call.ArgumentList.Arguments
-            .ElementAtOrDefault(0)
-            ?.Expression;
+        var commandTextExpression = ResolveExternalCommandTextArgument(call);
         if (!LooksLikeCommandTextExpression(commandTextExpression, caller))
             return "unknown";
 
@@ -1305,11 +1712,38 @@ internal static class WrapperAnalyzer
             || bare.StartsWith("proc", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static WrapperDefinition? CreateDefinition(MethodDeclarationSyntax method)
+    private sealed record ReceiverBinding(
+        string Expression,
+        string ReceiverType,
+        string ImplementationIdentity,
+        IReadOnlyList<string> CandidateImplementations,
+        IReadOnlyList<string> ConstructionFacts,
+        IReadOnlyList<string> AssignmentFacts)
     {
-        var command = method.DescendantNodes()
+        internal bool IsAmbiguous => CandidateImplementations.Count > 1;
+    }
+
+    private sealed record WrapperResolution(
+        IReadOnlyList<WrapperDefinition> Candidates,
+        ReceiverBinding Binding,
+        string Reason = "")
+    {
+        internal bool IsUnique
+            => Candidates.Count == 1
+            && !Binding.IsAmbiguous
+            && string.IsNullOrEmpty(Reason);
+    }
+
+    private static WrapperDefinition? CreateDefinition(
+        MethodDeclarationSyntax method,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots,
+        IReadOnlyCollection<string> knownTypeIdentities)
+    {
+        var commands = method.DescendantNodes()
             .OfType<ObjectCreationExpressionSyntax>()
-            .FirstOrDefault(creation => CSharpAnalyzer.IsSqlCommandType(creation.Type));
+            .Where(creation => CSharpAnalyzer.IsSqlCommandType(creation.Type))
+            .ToList();
+        var command = commands.FirstOrDefault();
         if (command is null)
             return null;
 
@@ -1317,61 +1751,142 @@ internal static class WrapperAnalyzer
         if (commandVariable is null)
             return null;
 
-        var commandTypeAssignments = method.DescendantNodes()
-            .OfType<AssignmentExpressionSyntax>()
-            .Where(assignment => IsMemberAssignment(assignment, commandVariable, "CommandType"))
-            .ToList();
-        if (!commandTypeAssignments.Any(assignment => ContainsStoredProcedureMember(assignment.Right)))
-            return null;
-
+        var commandTypeAssignments = GetCommandPropertyAssignments(
+            method,
+            command,
+            commandVariable,
+            "CommandType");
+        var terminalSinkInvocations = ResolveTerminalSinkInvocations(method, commandVariable);
+        if (terminalSinkInvocations.Count > 0)
+        {
+            commandTypeAssignments = commandTypeAssignments
+                .Where(assignment => terminalSinkInvocations.Any(sink =>
+                    assignment.SpanStart < sink.SpanStart
+                    && (SyntaxBranchAnalyzer.IsCompatible(
+                            SyntaxBranchAnalyzer.GetBranchContext(assignment),
+                            SyntaxBranchAnalyzer.GetBranchContext(sink))
+                        || SyntaxBranchAnalyzer.IsCompatible(
+                            SyntaxBranchAnalyzer.GetBranchContext(sink),
+                            SyntaxBranchAnalyzer.GetBranchContext(assignment)))))
+                .ToList();
+        }
         var classDeclaration = method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
         var className = classDeclaration?.Identifier.Text ?? "";
         var typeIdentity = CSharpAnalyzer.GetTypeIdentity(classDeclaration);
+        var classDeclarations = sourceRoots
+            .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<ClassDeclarationSyntax>())
+            .Where(candidate => CSharpAnalyzer.GetTypeIdentity(candidate) == typeIdentity)
+            .DistinctBy(candidate => (candidate.SyntaxTree?.FilePath ?? "", candidate.SpanStart))
+            .ToList();
+        if (classDeclaration is not null && !classDeclarations.Contains(classDeclaration))
+            classDeclarations.Add(classDeclaration);
         var parameters = method.ParameterList.Parameters.Select(parameter => parameter.Identifier.Text).ToList();
+        var parameterTypes = ResolveParameterTypes(method, knownTypeIdentities);
         var commandTextExpression = command.ArgumentList?.Arguments.ElementAtOrDefault(0)?.Expression;
         var connectionExpression = command.ArgumentList?.Arguments.ElementAtOrDefault(1)?.Expression?.ToString().Trim();
-        foreach (var assignment in method.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        var commandTextAssignments = GetCommandPropertyAssignments(
+            method,
+            command,
+            commandVariable,
+            "CommandText");
+        if (terminalSinkInvocations.Count > 0)
         {
-            if (assignment.Left is not MemberAccessExpressionSyntax member
-                || member.Expression.ToString().Trim() != commandVariable)
-                continue;
-            if (member.Name.Identifier.Text == "CommandText")
-                commandTextExpression = assignment.Right;
-            else if (member.Name.Identifier.Text == "Connection")
-                connectionExpression = assignment.Right.ToString().Trim();
+            commandTextAssignments = commandTextAssignments
+                .Where(assignment => terminalSinkInvocations.Any(sink =>
+                    assignment.SpanStart < sink.SpanStart
+                    && (SyntaxBranchAnalyzer.IsCompatible(
+                            SyntaxBranchAnalyzer.GetBranchContext(assignment),
+                            SyntaxBranchAnalyzer.GetBranchContext(sink))
+                        || SyntaxBranchAnalyzer.IsCompatible(
+                            SyntaxBranchAnalyzer.GetBranchContext(sink),
+                            SyntaxBranchAnalyzer.GetBranchContext(assignment)))))
+                .ToList();
         }
-        var commandTextParameter = commandTextExpression is IdentifierNameSyntax identifier
-            ? identifier.Identifier.Text
-            : null;
+        foreach (var assignment in commandTextAssignments)
+        {
+            commandTextExpression = assignment.Right;
+        }
+        foreach (var assignment in GetCommandPropertyAssignments(
+            method,
+            command,
+            commandVariable,
+            "Connection"))
+        {
+            connectionExpression = assignment.Right.ToString().Trim();
+        }
+
+        var commandTextParameter = ResolveCommandTextParameterName(
+            commandTextExpression,
+            parameters);
         var commandTextParameterIndex = parameters.IndexOf(commandTextParameter ?? "");
         var modeParameter = FindModeParameter(method, commandTypeAssignments, parameters);
         var modeParameterIndex = parameters.IndexOf(modeParameter ?? "");
-        var alwaysStoredProcedure = modeParameter is null && commandTypeAssignments
-            .Any(assignment => ContainsStoredProcedureMember(assignment.Right)
-                && assignment.FirstAncestorOrSelf<IfStatementSyntax>() is null
-                && assignment.FirstAncestorOrSelf<ConditionalExpressionSyntax>() is null);
+        var methodSemantics = commands.Count > 1
+            ? "unresolved"
+            : ResolveMethodSemantics(commandTypeAssignments, modeParameter);
+        var terminalSink = commands.Count > 1
+            ? null
+            : ResolveTerminalSinkName(method, commandVariable);
+        var unresolvedReason = commands.Count > 1
+            ? "multiple_sql_commands"
+            : null;
         var constructorConnectionParameterIndex = FindConstructorConnectionParameterIndex(
-            classDeclaration,
+            classDeclarations,
             connectionExpression);
+        var methodIdentity = BuildMethodIdentity(typeIdentity, method.Identifier.Text, parameterTypes);
 
         return new WrapperDefinition(
             typeIdentity,
             className,
             method.Identifier.Text,
             parameters,
+            parameterTypes,
             commandTextParameterIndex,
             modeParameterIndex,
             connectionExpression,
-            alwaysStoredProcedure,
-            ReachesStoredProcedureSink(method, commandVariable),
-            constructorConnectionParameterIndex);
+            methodSemantics == "fixed_stored_procedure",
+            terminalSink is not null,
+            terminalSink,
+            constructorConnectionParameterIndex,
+            methodIdentity,
+            methodSemantics,
+            commandTextExpression is LiteralExpressionSyntax { Token.Value: string literal }
+                ? literal
+                : null,
+            "",
+            "",
+            unresolvedReason);
     }
 
-    private static WrapperDefinition? ResolveDefinition(
+    private static string? ResolveCommandTextParameterName(
+        ExpressionSyntax? expression,
+        IReadOnlyList<string> parameters)
+    {
+        var identifier = expression switch
+        {
+            IdentifierNameSyntax direct => direct.Identifier.Text,
+            InvocationExpressionSyntax
+            {
+                Expression: MemberAccessExpressionSyntax
+                {
+                    Expression: IdentifierNameSyntax receiver,
+                    Name.Identifier.Text: "ToString",
+                },
+            } => receiver.Identifier.Text,
+            _ => null,
+        };
+        return identifier is not null && parameters.Contains(identifier)
+            ? identifier
+            : null;
+    }
+
+    private static WrapperResolution? ResolveDefinition(
         InvocationExpressionSyntax call,
         MethodDeclarationSyntax caller,
         string callerTypeIdentity,
-        IReadOnlyList<WrapperDefinition> wrappers)
+        IReadOnlyList<WrapperDefinition> wrappers,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots,
+        IReadOnlyCollection<string> knownTypeIdentities)
     {
         var methodName = call.Expression switch
         {
@@ -1382,63 +1897,671 @@ internal static class WrapperAnalyzer
         if (string.IsNullOrEmpty(methodName))
             return null;
 
-        var receiverType = call.Expression is MemberAccessExpressionSyntax memberAccess
-            ? ResolveReceiverType(memberAccess.Expression.ToString(), caller)
-            : callerTypeIdentity;
-        var candidates = wrappers
+        var binding = call.Expression is MemberAccessExpressionSyntax memberAccess
+            ? ResolveReceiverBinding(
+                memberAccess.Expression,
+                caller,
+                call.SpanStart,
+                sourceRoots,
+                knownTypeIdentities)
+            : new ReceiverBinding(
+                "this",
+                callerTypeIdentity,
+                callerTypeIdentity,
+                string.IsNullOrEmpty(callerTypeIdentity)
+                    ? Array.Empty<string>()
+                    : new[] { callerTypeIdentity },
+                Array.Empty<string>(),
+                Array.Empty<string>());
+        var methodCandidates = wrappers
             .Where(wrapper => wrapper.MethodName == methodName)
-            .Where(wrapper => string.IsNullOrEmpty(receiverType)
-                || wrapper.TypeIdentity == receiverType
-                || wrapper.ClassName == receiverType)
             .ToList();
-        if (candidates.Count == 0 && !string.IsNullOrEmpty(receiverType))
+        if (methodCandidates.Count == 0)
+            return new WrapperResolution(Array.Empty<WrapperDefinition>(), binding);
+        if (binding.CandidateImplementations.Count == 0)
+            return new WrapperResolution(
+                Array.Empty<WrapperDefinition>(),
+                binding,
+                "receiver_binding_unresolved");
+
+        var candidates = methodCandidates
+            .Where(wrapper => binding.CandidateImplementations.Contains(
+                wrapper.TypeIdentity,
+                StringComparer.Ordinal))
+            .ToList();
+        if (candidates.Count == 0)
+            return new WrapperResolution(
+                Array.Empty<WrapperDefinition>(),
+                binding,
+                "implementation_not_found");
+
+        var matchingArity = candidates
+            .Where(wrapper => wrapper.Parameters.Count == call.ArgumentList.Arguments.Count)
+            .ToList();
+        if (matchingArity.Count == 0)
+            return new WrapperResolution(candidates, binding, "overload_not_found");
+        candidates = matchingArity;
+
+        var allArgumentTypesKnown = call.ArgumentList.Arguments
+            .Select(argument => InferArgumentType(
+                argument.Expression,
+                caller,
+                call.SpanStart,
+                knownTypeIdentities))
+            .All(type => !string.IsNullOrEmpty(type));
+        if (allArgumentTypesKnown)
         {
-            var simpleTypeName = receiverType.Split('.').Last();
-            candidates = wrappers
-                .Where(wrapper => wrapper.MethodName == methodName && wrapper.ClassName == simpleTypeName)
+            var matchingParameterTypes = candidates
+                .Where(wrapper =>
+                {
+                    var arguments = MapInvocationArguments(call, wrapper.Parameters);
+                    if (arguments.Any(argument => argument is null))
+                        return false;
+                    var argumentTypes = arguments
+                        .Select(argument => InferArgumentType(
+                            argument!,
+                            caller,
+                            call.SpanStart,
+                            knownTypeIdentities))
+                        .ToList();
+                    return argumentTypes.All(type => !string.IsNullOrEmpty(type))
+                        && ParameterTypesMatch(wrapper.ParameterTypes, argumentTypes);
+                })
                 .ToList();
+            if (matchingParameterTypes.Count == 0
+                && candidates.All(candidate =>
+                    MapInvocationArguments(call, candidate.Parameters)
+                        .All(argument => argument is not null)))
+                return new WrapperResolution(candidates, binding, "overload_not_found");
+            if (matchingParameterTypes.Count > 0)
+                candidates = matchingParameterTypes;
         }
 
-        if (candidates.Count > 1)
-        {
-            var matchingArity = candidates
-                .Where(wrapper => wrapper.Parameters.Count == call.ArgumentList.Arguments.Count)
-                .ToList();
-            if (matchingArity.Count == 1)
-                return matchingArity[0];
-        }
-        return candidates.Count == 1 ? candidates[0] : null;
+        return new WrapperResolution(candidates, binding);
     }
 
-    private static string? ResolveReceiverType(string receiver, MethodDeclarationSyntax caller)
+    private static ReceiverBinding ResolveReceiverBinding(
+        ExpressionSyntax receiverExpression,
+        MethodDeclarationSyntax caller,
+        int position,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots,
+        IReadOnlyCollection<string> knownTypeIdentities)
     {
-        receiver = receiver.Trim();
-        if (receiver.StartsWith("this.", StringComparison.Ordinal))
-            receiver = receiver[5..];
+        var expression = receiverExpression.ToString().Trim();
+        var receiverName = GetReceiverName(receiverExpression);
+        if (receiverExpression is ObjectCreationExpressionSyntax creation)
+        {
+            var typeIdentities = CSharpAnalyzer.ResolveKnownTypeIdentities(
+                creation.Type.ToString(),
+                caller,
+                knownTypeIdentities);
+            var typeIdentity = typeIdentities.Count == 1
+                ? typeIdentities[0]
+                : CSharpAnalyzer.QualifyTypeIdentity(creation.Type.ToString(), caller);
+            return new ReceiverBinding(
+                expression,
+                typeIdentity,
+                typeIdentities.Count == 1 ? typeIdentity : "",
+                typeIdentities,
+                new[] { creation.ToString().Trim() },
+                Array.Empty<string>());
+        }
 
-        var local = caller.DescendantNodes()
-            .OfType<VariableDeclaratorSyntax>()
-            .FirstOrDefault(variable => variable.Identifier.Text == receiver);
-        if (local?.Initializer?.Value is ObjectCreationExpressionSyntax creation)
-            return CSharpAnalyzer.QualifyTypeIdentity(creation.Type.ToString(), caller);
+        if (string.IsNullOrEmpty(receiverName))
+            return new ReceiverBinding(expression, "", "", Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
+
+        var declaredTypes = new List<string>();
+        var concreteTypes = new List<string>();
+        var constructionFacts = new List<string>();
+        var assignmentFacts = new List<string>();
+
+        void AddConcreteTypes(string typeName)
+            => concreteTypes.AddRange(CSharpAnalyzer.ResolveKnownTypeIdentities(
+                typeName,
+                caller,
+                knownTypeIdentities));
+
+        foreach (var declaration in caller.DescendantNodes().OfType<VariableDeclarationSyntax>())
+        {
+            foreach (var variable in declaration.Variables.Where(
+                variable => variable.Identifier.Text == receiverName
+                    && variable.SpanStart < position))
+            {
+                var declaredTypeIdentities = declaration.Type.ToString().Equals(
+                    "var",
+                    StringComparison.Ordinal)
+                    ? variable.Initializer?.Value is ObjectCreationExpressionSyntax createdValue
+                        ? CSharpAnalyzer.ResolveKnownTypeIdentities(
+                            createdValue.Type.ToString(),
+                            caller,
+                            knownTypeIdentities)
+                        : Array.Empty<string>()
+                    : CSharpAnalyzer.ResolveKnownTypeIdentities(
+                        declaration.Type.ToString(),
+                        caller,
+                        knownTypeIdentities);
+                declaredTypes.AddRange(declaredTypeIdentities);
+                if (variable.Initializer?.Value is ObjectCreationExpressionSyntax created)
+                {
+                    constructionFacts.Add(created.ToString().Trim());
+                    AddConcreteTypes(created.Type.ToString());
+                }
+            }
+        }
+
+        foreach (var assignment in caller.DescendantNodes().OfType<AssignmentExpressionSyntax>()
+            .Where(assignment => assignment.SpanStart < position
+                && IsReceiverAssignment(assignment, receiverName)))
+        {
+            assignmentFacts.Add(assignment.ToString().Trim());
+            if (assignment.Right is ObjectCreationExpressionSyntax assignedCreation)
+            {
+                AddConcreteTypes(assignedCreation.Type.ToString());
+                constructionFacts.Add(assignedCreation.ToString().Trim());
+            }
+        }
+
+        var parameter = caller.ParameterList.Parameters.FirstOrDefault(
+            item => item.Identifier.Text == receiverName && item.Type is not null);
+        if (parameter?.Type is not null)
+            declaredTypes.AddRange(CSharpAnalyzer.ResolveKnownTypeIdentities(
+                parameter.Type.ToString(),
+                caller,
+                knownTypeIdentities));
 
         var containingClass = caller.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
-        var field = containingClass?.DescendantNodes()
-            .OfType<FieldDeclarationSyntax>()
-            .FirstOrDefault(declaration => declaration.Declaration.Variables.Any(variable => variable.Identifier.Text == receiver));
-        return field is null
-            ? null
-            : CSharpAnalyzer.QualifyTypeIdentity(field.Declaration.Type.ToString(), caller);
+        var callerTypeIdentity = CSharpAnalyzer.GetTypeIdentity(containingClass);
+        var classDeclarations = sourceRoots
+            .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<ClassDeclarationSyntax>())
+            .Where(candidate => CSharpAnalyzer.GetTypeIdentity(candidate) == callerTypeIdentity)
+            .DistinctBy(candidate => (candidate.SyntaxTree?.FilePath ?? "", candidate.SpanStart))
+            .ToList();
+        if (containingClass is not null && !classDeclarations.Contains(containingClass))
+            classDeclarations.Add(containingClass);
+
+        if (classDeclarations.Count > 0)
+        {
+            var callerHasLocalReceiver = caller.ParameterList.Parameters.Any(
+                    parameter => parameter.Identifier.Text == receiverName)
+                || caller.DescendantNodes().OfType<VariableDeclarationSyntax>().Any(
+                    declaration => declaration.Variables.Any(
+                        variable => variable.Identifier.Text == receiverName));
+            var hasClassMemberReceiver = classDeclarations
+                .SelectMany(classDeclaration => classDeclaration.DescendantNodes())
+                .OfType<FieldDeclarationSyntax>()
+                .Any(field => field.Declaration.Variables.Any(
+                    variable => variable.Identifier.Text == receiverName))
+                || classDeclarations
+                    .SelectMany(classDeclaration => classDeclaration.DescendantNodes())
+                    .OfType<PropertyDeclarationSyntax>()
+                    .Any(property => property.Identifier.Text == receiverName);
+
+            if (!callerHasLocalReceiver && hasClassMemberReceiver)
+            {
+                foreach (var field in classDeclarations
+                    .SelectMany(classDeclaration => classDeclaration.DescendantNodes())
+                    .OfType<FieldDeclarationSyntax>()
+                    .Where(field => field.Declaration.Variables.Any(
+                        variable => variable.Identifier.Text == receiverName)))
+                {
+                    declaredTypes.AddRange(CSharpAnalyzer.ResolveKnownTypeIdentities(
+                        field.Declaration.Type.ToString(),
+                        caller,
+                        knownTypeIdentities));
+                    foreach (var variable in field.Declaration.Variables.Where(
+                        variable => variable.Identifier.Text == receiverName))
+                    {
+                        if (variable.Initializer?.Value is ObjectCreationExpressionSyntax created)
+                        {
+                            constructionFacts.Add(created.ToString().Trim());
+                            AddConcreteTypes(created.Type.ToString());
+                        }
+                    }
+                }
+
+                foreach (var assignment in classDeclarations
+                    .SelectMany(classDeclaration => classDeclaration.DescendantNodes())
+                    .OfType<AssignmentExpressionSyntax>()
+                    .Where(assignment => IsFieldReceiverAssignment(assignment, receiverName)))
+                {
+                    assignmentFacts.Add(assignment.ToString().Trim());
+                    if (assignment.Right is ObjectCreationExpressionSyntax assignedCreation)
+                    {
+                        AddConcreteTypes(assignedCreation.Type.ToString());
+                        constructionFacts.Add(assignedCreation.ToString().Trim());
+                    }
+                }
+            }
+
+            var property = classDeclarations
+                .SelectMany(classDeclaration => classDeclaration.DescendantNodes())
+                .OfType<PropertyDeclarationSyntax>()
+                .FirstOrDefault(item => item.Identifier.Text == receiverName);
+            if (property is not null)
+            {
+                declaredTypes.AddRange(CSharpAnalyzer.ResolveKnownTypeIdentities(
+                    property.Type.ToString(),
+                    caller,
+                    knownTypeIdentities));
+                if (property.Initializer?.Value is ObjectCreationExpressionSyntax initialized)
+                {
+                    constructionFacts.Add(initialized.ToString().Trim());
+                    AddConcreteTypes(initialized.Type.ToString());
+                }
+                if (property.ExpressionBody?.Expression is ObjectCreationExpressionSyntax returned)
+                {
+                    constructionFacts.Add(returned.ToString().Trim());
+                    AddConcreteTypes(returned.Type.ToString());
+                }
+            }
+        }
+
+        var distinctDeclaredTypes = declaredTypes
+            .Where(type => !string.IsNullOrWhiteSpace(type))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var implementationTypes = concreteTypes
+            .Where(type => !string.IsNullOrWhiteSpace(type))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var receiverType = distinctDeclaredTypes.Count == 1
+            ? distinctDeclaredTypes[0]
+            : implementationTypes.Count == 1
+            ? implementationTypes[0]
+            : "";
+        var implementationIdentity = implementationTypes.Count == 1
+            ? implementationTypes[0]
+            : "";
+        return new ReceiverBinding(
+            expression,
+            receiverType,
+            implementationIdentity,
+            implementationTypes,
+            constructionFacts.Distinct(StringComparer.Ordinal).ToList(),
+            assignmentFacts.Distinct(StringComparer.Ordinal).ToList());
     }
+
+    private static string? ResolveDeclaredType(
+        VariableDeclarationSyntax declaration,
+        VariableDeclaratorSyntax variable,
+        MethodDeclarationSyntax caller,
+        IReadOnlyCollection<string> knownTypeIdentities)
+    {
+        if (!declaration.Type.ToString().Equals("var", StringComparison.Ordinal))
+        {
+            var declaredTypes = CSharpAnalyzer.ResolveKnownTypeIdentities(
+                declaration.Type.ToString(),
+                caller,
+                knownTypeIdentities);
+            return declaredTypes.Count == 1 ? declaredTypes[0] : null;
+        }
+        if (variable.Initializer?.Value is not ObjectCreationExpressionSyntax creation)
+            return null;
+        var createdTypes = CSharpAnalyzer.ResolveKnownTypeIdentities(
+            creation.Type.ToString(),
+            caller,
+            knownTypeIdentities);
+        return createdTypes.Count == 1 ? createdTypes[0] : null;
+    }
+
+    private static bool IsReceiverAssignment(AssignmentExpressionSyntax assignment, string receiverName)
+    {
+        var left = assignment.Left.ToString().Trim();
+        return left == receiverName || left == $"this.{receiverName}";
+    }
+
+    private static string? GetReceiverName(ExpressionSyntax expression)
+    {
+        if (expression is IdentifierNameSyntax identifier)
+            return identifier.Identifier.Text;
+        if (expression is MemberAccessExpressionSyntax member)
+        {
+            if (member.Expression is ThisExpressionSyntax)
+                return member.Name.Identifier.Text;
+            return GetReceiverName(member.Expression);
+        }
+        return null;
+    }
+
+    private static string ResolveMethodSemantics(
+        IReadOnlyList<AssignmentExpressionSyntax> commandTypeAssignments,
+        string? modeParameter)
+    {
+        if (commandTypeAssignments.Count == 0)
+            return "fixed_inline_sql";
+
+        var effectiveAssignments = SyntaxBranchAnalyzer.RemoveShadowedAssignments(
+            commandTypeAssignments.Select(assignment => (
+                Assignment: (SyntaxNode)assignment,
+                Value: assignment.Right)));
+        var modes = new HashSet<string>(StringComparer.Ordinal);
+        var conditional = false;
+        foreach (var item in effectiveAssignments)
+        {
+            var assignment = item.Assignment;
+            var value = item.Value;
+            if (ContainsStoredProcedureMember(value))
+                modes.Add("stored_procedure");
+            if (ContainsTextMember(value))
+                modes.Add("inline_sql");
+            if (!ContainsStoredProcedureMember(value)
+                && !ContainsTextMember(value))
+                modes.Add("unresolved");
+            conditional |= value.DescendantNodesAndSelf()
+                .OfType<ConditionalExpressionSyntax>()
+                .Any()
+                || assignment.FirstAncestorOrSelf<IfStatementSyntax>() is not null;
+        }
+
+        if (modeParameter is not null
+            && modes.Contains("stored_procedure")
+            && (modes.Contains("inline_sql") || conditional))
+            return "call_site";
+        if (modes.SetEquals(new[] { "stored_procedure" }) && !conditional)
+            return "fixed_stored_procedure";
+        if (modes.All(mode => mode == "inline_sql"))
+            return "fixed_inline_sql";
+        return "unresolved";
+    }
+
+    private static string ResolveCommandTypeMode(WrapperDefinition wrapper)
+        => wrapper.MethodSemantics switch
+        {
+            "fixed_stored_procedure" => "stored_procedure",
+            "fixed_inline_sql" => "text",
+            "call_site" => "unknown",
+            _ => "unknown",
+        };
+
+    private static string BuildMethodIdentity(
+        string typeIdentity,
+        string methodName,
+        IReadOnlyList<string> parameterTypes)
+        => $"{typeIdentity}.{methodName}({string.Join(",", parameterTypes)})";
+
+    private static string? InferArgumentType(
+        ExpressionSyntax expression,
+        MethodDeclarationSyntax caller,
+        int position,
+        IReadOnlyCollection<string> knownTypeIdentities)
+    {
+        if (expression is LiteralExpressionSyntax literal)
+        {
+            if (literal.Token.Value is string)
+                return "string";
+            if (literal.IsKind(SyntaxKind.TrueLiteralExpression)
+                || literal.IsKind(SyntaxKind.FalseLiteralExpression))
+                return "bool";
+            if (literal.IsKind(SyntaxKind.NullLiteralExpression))
+                return null;
+            if (literal.Token.Value is int)
+                return "int";
+            if (literal.Token.Value is long)
+                return "long";
+            if (literal.Token.Value is double)
+                return "double";
+        }
+
+        if (expression is ObjectCreationExpressionSyntax creation)
+        {
+            var createdTypes = CSharpAnalyzer.ResolveKnownTypeIdentities(
+                creation.Type.ToString(),
+                caller,
+                knownTypeIdentities);
+            return createdTypes.Count == 1 ? createdTypes[0] : null;
+        }
+        if (expression is CastExpressionSyntax cast)
+        {
+            var castTypes = CSharpAnalyzer.ResolveKnownTypeIdentities(
+                cast.Type.ToString(),
+                caller,
+                knownTypeIdentities);
+            return castTypes.Count == 1 ? castTypes[0] : null;
+        }
+        if (expression is IdentifierNameSyntax identifier)
+        {
+            var parameter = caller.ParameterList.Parameters.FirstOrDefault(
+                item => item.Identifier.Text == identifier.Identifier.Text);
+            if (parameter?.Type is not null)
+            {
+                if (parameter.Type.ToString().Equals("dynamic", StringComparison.Ordinal))
+                    return null;
+                var parameterTypes = CSharpAnalyzer.ResolveKnownTypeIdentities(
+                    parameter.Type.ToString(),
+                    caller,
+                    knownTypeIdentities);
+                return parameterTypes.Count == 1 ? parameterTypes[0] : null;
+            }
+
+            foreach (var declaration in caller.DescendantNodes().OfType<VariableDeclarationSyntax>()
+                .Where(declaration => declaration.SpanStart < position))
+            {
+                var variable = declaration.Variables.FirstOrDefault(
+                    item => item.Identifier.Text == identifier.Identifier.Text);
+                if (variable is null)
+                    continue;
+                var declared = ResolveDeclaredType(
+                    declaration,
+                    variable,
+                    caller,
+                    knownTypeIdentities);
+                if (declared is not null)
+                    return declared.Equals("dynamic", StringComparison.Ordinal)
+                        ? null
+                        : declared;
+            }
+        }
+        return null;
+    }
+
+    private static bool ParameterTypesMatch(
+        IReadOnlyList<string> parameterTypes,
+        IReadOnlyList<string?> argumentTypes)
+    {
+        if (parameterTypes.Count != argumentTypes.Count)
+            return false;
+        for (var index = 0; index < parameterTypes.Count; index++)
+        {
+            if (string.IsNullOrWhiteSpace(parameterTypes[index])
+                || string.IsNullOrWhiteSpace(argumentTypes[index]))
+                return false;
+            if (!TypeNamesMatch(parameterTypes[index], argumentTypes[index]!))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool TypeNamesMatch(string expected, string actual)
+    {
+        var normalizedExpected = NormalizeTypeName(expected);
+        var normalizedActual = NormalizeTypeName(actual);
+        return normalizedExpected == normalizedActual;
+    }
+
+    private static string NormalizeTypeName(string typeName)
+        => typeName.Trim().Replace("global::", "", StringComparison.Ordinal).TrimEnd('?');
+
+    private static IReadOnlyList<InvocationExpressionSyntax> ResolveTerminalSinkInvocations(
+        MethodDeclarationSyntax method,
+        string commandVariable)
+    {
+        var sinkInvocations = method.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => invocation.Expression is MemberAccessExpressionSyntax member
+                && member.Expression.ToString().Trim() == commandVariable
+                && IsAdoNetCommandExecutionMethod(member.Name.Identifier.Text))
+            .ToList();
+
+        var adapterVariables = method.DescendantNodes()
+            .OfType<ObjectCreationExpressionSyntax>()
+            .Where(creation => creation.Type.ToString().Split('.').Last() is
+                "DbDataAdapter" or
+                "SqlDataAdapter" or
+                "OleDbDataAdapter" or
+                "OdbcDataAdapter" or
+                "NpgsqlDataAdapter" or
+                "MySqlDataAdapter")
+            .Where(creation => creation.ArgumentList?.Arguments.Any(argument =>
+                argument.Expression.ToString().Trim() == commandVariable) is true)
+            .Select(ResolveVariableName)
+            .Where(variable => !string.IsNullOrWhiteSpace(variable))
+            .Cast<string>()
+            .ToHashSet(StringComparer.Ordinal);
+
+        sinkInvocations.AddRange(method.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => invocation.Expression is MemberAccessExpressionSyntax member
+                && adapterVariables.Contains(member.Expression.ToString().Trim())
+                && member.Name.Identifier.Text is "Fill" or "FillAsync"));
+
+        return sinkInvocations
+            .DistinctBy(invocation => invocation.SpanStart)
+            .ToList();
+    }
+
+    private static string? ResolveTerminalSinkName(
+        MethodDeclarationSyntax method,
+        string commandVariable)
+    {
+        var sinkNames = ResolveTerminalSinkInvocations(method, commandVariable)
+            .Select(invocation => ((MemberAccessExpressionSyntax)invocation.Expression).Name.Identifier.Text)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return sinkNames.Count == 1 ? sinkNames[0] : null;
+    }
+
+    private static DirectSqlInvocation CreateAmbiguousInvocation(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax caller,
+        string callerClass,
+        WrapperResolution resolution)
+    {
+        var methodName = call.Expression switch
+        {
+            MemberAccessExpressionSyntax member => member.Name.Identifier.Text,
+            IdentifierNameSyntax identifier => identifier.Identifier.Text,
+            _ => "",
+        };
+        var commandTextResolution = ResolveCommandTextArgument(call, resolution.Candidates);
+        var argument = commandTextResolution.Argument;
+        var commandText = commandTextResolution.Literal;
+        var commandTextKind = commandText is not null ? "literal" : "dynamic";
+        var candidateFacts = BuildOverloadCandidateFacts(resolution);
+        var sinkNames = resolution.Candidates
+            .Select(candidate => candidate.TerminalSink)
+            .Where(sink => !string.IsNullOrWhiteSpace(sink))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var implementationIdentities = resolution.Candidates
+            .Select(candidate => candidate.TypeIdentity)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return new DirectSqlInvocation(
+            callerClass,
+            caller.Identifier.Text,
+            commandTextKind,
+            commandText,
+            false,
+            resolution.Binding.Expression,
+            call.SpanStart,
+            call.Span.End,
+            "source_wrapper",
+            implementationIdentities.Count == 1 ? resolution.Candidates[0].ClassName : null,
+            methodName,
+            true,
+            false,
+            "unknown",
+            new[] { caller.Identifier.Text, methodName },
+            SyntaxBranchAnalyzer.GetBranchContext(call),
+            resolution.Binding.ReceiverType,
+            resolution.Binding.ReceiverType,
+            resolution.Binding.Expression,
+            argument?.ToString(),
+            commandText,
+            sinkNames.Count == 1 ? sinkNames[0] : null,
+            "unknown",
+            ReceiverExpression: resolution.Binding.Expression,
+            ReceiverImplementationIdentity: resolution.Binding.ImplementationIdentity,
+            ReceiverBindingProvenance: "source",
+            ReceiverConstructionFacts: resolution.Binding.ConstructionFacts,
+            ReceiverAssignmentFacts: resolution.Binding.AssignmentFacts,
+            WrapperImplementationIdentity: implementationIdentities.Count == 1
+                ? implementationIdentities[0]
+                : null,
+            WrapperMethodSemantics: "unresolved",
+            WrapperOverloadCandidates: candidateFacts,
+            WrapperOverloadAmbiguous: true,
+            WrapperTerminalSink: sinkNames.Count == 1 ? sinkNames[0] : null);
+    }
+
+    private static IReadOnlyList<ExpressionSyntax?> MapInvocationArguments(
+        InvocationExpressionSyntax call,
+        IReadOnlyList<string> parameterNames)
+    {
+        var mapped = new ExpressionSyntax?[parameterNames.Count];
+        var assigned = new bool[parameterNames.Count];
+        var nextPositionalIndex = 0;
+
+        foreach (var argument in call.ArgumentList.Arguments)
+        {
+            var namedParameter = argument.NameColon?.Name.Identifier.Text;
+            var parameterIndex = -1;
+            if (!string.IsNullOrEmpty(namedParameter))
+            {
+                for (var index = 0; index < parameterNames.Count; index++)
+                {
+                    if (string.Equals(
+                            parameterNames[index],
+                            namedParameter,
+                            StringComparison.Ordinal))
+                    {
+                        parameterIndex = index;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                while (nextPositionalIndex < assigned.Length
+                    && assigned[nextPositionalIndex])
+                    nextPositionalIndex++;
+                parameterIndex = nextPositionalIndex;
+                nextPositionalIndex++;
+            }
+
+            if (parameterIndex < 0 || parameterIndex >= mapped.Length)
+                continue;
+            if (assigned[parameterIndex])
+                continue;
+            mapped[parameterIndex] = argument.Expression;
+            assigned[parameterIndex] = true;
+        }
+
+        return mapped;
+    }
+
+    private static ExpressionSyntax? ResolveInvocationArgument(
+        InvocationExpressionSyntax call,
+        IReadOnlyList<string> parameterNames,
+        int parameterIndex)
+        => parameterIndex < 0
+            ? null
+            : MapInvocationArguments(call, parameterNames)
+                .ElementAtOrDefault(parameterIndex);
 
     private static string ResolveMode(InvocationExpressionSyntax call, WrapperDefinition wrapper)
     {
-        if (wrapper.AlwaysStoredProcedure)
+        if (wrapper.MethodSemantics == "fixed_stored_procedure")
             return "stored_procedure";
+        if (wrapper.MethodSemantics == "fixed_inline_sql")
+            return "inline_sql";
         if (wrapper.ModeParameterIndex < 0)
             return "unknown";
 
-        var argument = call.ArgumentList.Arguments.ElementAtOrDefault(wrapper.ModeParameterIndex)?.Expression;
+        var argument = ResolveInvocationArgument(
+            call,
+            wrapper.Parameters,
+            wrapper.ModeParameterIndex);
         if (argument is LiteralExpressionSyntax literal)
         {
             if (literal.IsKind(SyntaxKind.TrueLiteralExpression))
@@ -1459,15 +2582,119 @@ internal static class WrapperAnalyzer
         return "unknown";
     }
 
-    private static (string Kind, string? Text) ReadCommandText(
+    private static IReadOnlyList<WrapperCommandTextCandidate> ReadWrapperCommandTextCandidates(
         InvocationExpressionSyntax call,
-        WrapperDefinition wrapper)
+        WrapperDefinition wrapper,
+        MethodDeclarationSyntax caller)
     {
-        var argument = call.ArgumentList.Arguments.ElementAtOrDefault(wrapper.CommandTextParameterIndex)?.Expression;
-        if (argument is LiteralExpressionSyntax { Token.Value: string literalValue })
-            return ("literal", literalValue);
-        return ("dynamic", null);
+        if (wrapper.CommandTextParameterIndex < 0)
+            return new[]
+            {
+                CreateWrapperCommandTextCandidate(
+                    wrapper.CommandTextLiteral,
+                    wrapper.CommandTextLiteral,
+                    call),
+            };
+
+        var argument = ResolveInvocationArgument(
+            call,
+            wrapper.Parameters,
+            wrapper.CommandTextParameterIndex);
+        return ReadWrapperCommandTextCandidates(
+            argument,
+            caller,
+            call,
+            call.SpanStart,
+            argument?.ToString());
     }
+
+    private static IReadOnlyList<WrapperCommandTextCandidate> ReadWrapperCommandTextCandidates(
+        ExpressionSyntax? expression,
+        MethodDeclarationSyntax caller,
+        SyntaxNode anchor,
+        int position,
+        string? originalArgumentExpression,
+        bool resolveVariables = true)
+    {
+        if (resolveVariables && expression is IdentifierNameSyntax identifier)
+        {
+            var assignments = caller.DescendantNodes()
+                .OfType<AssignmentExpressionSyntax>()
+                .Where(assignment => assignment.Left is IdentifierNameSyntax left
+                    && left.Identifier.Text == identifier.Identifier.Text
+                    && assignment.SpanStart < position)
+                .Select(assignment => (
+                    Assignment: (SyntaxNode)assignment,
+                    Value: assignment.Right));
+            var declarations = caller.DescendantNodes()
+                .OfType<VariableDeclaratorSyntax>()
+                .Where(declaration => declaration.Identifier.Text == identifier.Identifier.Text
+                    && declaration.Initializer is not null
+                    && declaration.SpanStart < position)
+                .Select(declaration => (
+                    Assignment: (SyntaxNode)declaration,
+                    Value: declaration.Initializer!.Value));
+            var resolved = SyntaxBranchAnalyzer.RemoveShadowedAssignments(
+                    assignments.Concat(declarations))
+                .SelectMany(item => ReadWrapperCommandTextCandidates(
+                    item.Value,
+                    caller,
+                    item.Assignment,
+                    item.Assignment.SpanStart,
+                    originalArgumentExpression,
+                    resolveVariables: false))
+                .ToList();
+            if (resolved.Count > 0)
+                return resolved;
+        }
+
+        if (expression is ConditionalExpressionSyntax conditional)
+        {
+            return ReadWrapperCommandTextCandidates(
+                    conditional.WhenTrue,
+                    caller,
+                    conditional.WhenTrue,
+                    position,
+                    originalArgumentExpression,
+                    resolveVariables)
+                .Concat(ReadWrapperCommandTextCandidates(
+                    conditional.WhenFalse,
+                    caller,
+                    conditional.WhenFalse,
+                    position,
+                    originalArgumentExpression,
+                    resolveVariables))
+                .ToList();
+        }
+
+        return new[]
+        {
+            CreateWrapperCommandTextCandidate(
+                expression is LiteralExpressionSyntax { Token.Value: string text } ? text : null,
+                originalArgumentExpression ?? expression?.ToString(),
+                anchor),
+        };
+    }
+
+    private static WrapperCommandTextCandidate CreateWrapperCommandTextCandidate(
+        string? commandText,
+        string? argumentExpression,
+        SyntaxNode anchor)
+        => new(
+            commandText is null ? "dynamic" : "literal",
+            commandText,
+            argumentExpression,
+            SyntaxBranchAnalyzer.GetBranchContext(anchor));
+
+    private sealed record WrapperCommandTextCandidate(
+        string CommandTextKind,
+        string? CommandText,
+        string? ArgumentExpression,
+        IReadOnlyList<string> BranchContext);
+
+    private sealed record ConnectionResolution(
+        string? Expression,
+        IReadOnlyList<string> Candidates);
 
     private static string? FindModeParameter(
         MethodDeclarationSyntax method,
@@ -1540,10 +2767,49 @@ internal static class WrapperAnalyzer
             && member.Expression.ToString() == variableName
             && member.Name.Identifier.Text == memberName;
 
+    private static List<AssignmentExpressionSyntax> GetCommandPropertyAssignments(
+        MethodDeclarationSyntax method,
+        ObjectCreationExpressionSyntax command,
+        string commandVariable,
+        string propertyName)
+    {
+        var assignments = method.DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>()
+            .Where(assignment => IsMemberAssignment(assignment, commandVariable, propertyName))
+            .ToList();
+        if (command.Initializer is not null)
+        {
+            assignments.AddRange(command.Initializer.Expressions
+                .OfType<AssignmentExpressionSyntax>()
+                .Where(assignment => assignment.Left is IdentifierNameSyntax identifier
+                    && identifier.Identifier.Text == propertyName));
+        }
+        return assignments
+            .OrderBy(assignment => assignment.SpanStart)
+            .ToList();
+    }
+
     private static bool ContainsStoredProcedureMember(ExpressionSyntax expression)
+        => ContainsCommandTypeMember(expression, "StoredProcedure");
+
+    private static bool ContainsTextMember(ExpressionSyntax expression)
+        => ContainsCommandTypeMember(expression, "Text");
+
+    private static bool ContainsCommandTypeMember(
+        ExpressionSyntax expression,
+        string memberName)
         => expression.DescendantNodesAndSelf()
             .OfType<MemberAccessExpressionSyntax>()
-            .Any(member => member.Name.Identifier.Text == "StoredProcedure");
+            .Any(member => member.Name.Identifier.Text == memberName
+                && IsCommandTypeIdentity(member.Expression));
+
+    private static bool IsCommandTypeIdentity(ExpressionSyntax expression)
+    {
+        var normalized = expression.ToString()
+            .Trim()
+            .Replace("global::", "", StringComparison.Ordinal);
+        return normalized is "CommandType" or "System.Data.CommandType";
+    }
 
     private static string? ResolveVariableName(ObjectCreationExpressionSyntax creation)
     {
@@ -1554,43 +2820,228 @@ internal static class WrapperAnalyzer
         return null;
     }
 
-    private static string? ResolveCallConnectionExpression(
+    private static ConnectionResolution ResolveCallConnectionExpression(
         InvocationExpressionSyntax call,
         WrapperDefinition wrapper,
-        MethodDeclarationSyntax caller)
+        MethodDeclarationSyntax caller,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots,
+        IReadOnlyCollection<string> knownTypeIdentities)
     {
         if (call.Expression is not MemberAccessExpressionSyntax member)
-            return wrapper.ConnectionExpression;
+            return new(null, Array.Empty<string>());
 
-        var receiver = member.Expression.ToString().Trim();
+        var receiverExpression = member.Expression;
+        if (receiverExpression is ObjectCreationExpressionSyntax directCreation)
+        {
+            if (!IsWrapperConstruction(
+                    directCreation,
+                    wrapper,
+                    caller,
+                    knownTypeIdentities))
+                return new(null, Array.Empty<string>());
+            var expression = ReadConnectionArgument(
+                directCreation,
+                wrapper.ConstructorConnectionParameterIndex);
+            return new(expression, Array.Empty<string>());
+        }
+
+        var receiver = receiverExpression.ToString().Trim();
+        var receiverName = GetReceiverName(receiverExpression);
+        if (string.IsNullOrWhiteSpace(receiverName))
+            return new(null, Array.Empty<string>());
         if (wrapper.ConstructorConnectionParameterIndex < 0)
-            return receiver;
+            return new(null, Array.Empty<string>());
 
-        var creation = caller.DescendantNodes()
-            .OfType<VariableDeclaratorSyntax>()
-            .Where(variable => variable.Identifier.Text == receiver)
-            .Select(variable => variable.Initializer?.Value)
+        var candidates = new List<(string Scope, string? Expression)>();
+        void AddCandidate(ObjectCreationExpressionSyntax creation, string scope)
+        {
+            if (!IsWrapperConstruction(creation, wrapper, caller, knownTypeIdentities))
+                return;
+            candidates.Add((scope, ReadConnectionArgument(
+                creation,
+                wrapper.ConstructorConnectionParameterIndex)));
+        }
+
+        foreach (var creation in caller.DescendantNodes()
             .OfType<ObjectCreationExpressionSyntax>()
-            .FirstOrDefault(candidate => LastTypeSegment(candidate.Type.ToString()) == wrapper.ClassName);
-        var argument = creation?.ArgumentList?.Arguments.ElementAtOrDefault(
-            wrapper.ConstructorConnectionParameterIndex)?.Expression;
-        if (argument is LiteralExpressionSyntax literal && literal.IsKind(SyntaxKind.NullLiteralExpression))
-            return receiver;
-        return argument?.ToString().Trim() ?? receiver;
+            .Where(candidate => candidate.SyntaxTree != call.SyntaxTree
+                || candidate.SpanStart < call.SpanStart)
+            .Where(candidate => IsReceiverConstruction(candidate, receiverName)))
+        {
+            AddCandidate(creation, $"caller:{caller.SpanStart}");
+        }
+
+        var containingClass = caller.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+        var callerTypeIdentity = CSharpAnalyzer.GetTypeIdentity(containingClass);
+        var classDeclarations = sourceRoots
+            .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<ClassDeclarationSyntax>())
+            .Where(candidate => CSharpAnalyzer.GetTypeIdentity(candidate) == callerTypeIdentity)
+            .DistinctBy(candidate => (candidate.SyntaxTree?.FilePath ?? "", candidate.SpanStart))
+            .ToList();
+        if (containingClass is not null
+            && !classDeclarations.Contains(containingClass))
+            classDeclarations.Add(containingClass);
+        var callerHasLocalReceiver = caller.ParameterList.Parameters.Any(
+                parameter => parameter.Identifier.Text == receiverName)
+            || caller.DescendantNodes().OfType<VariableDeclarationSyntax>().Any(
+                declaration => declaration.Variables.Any(
+                    variable => variable.Identifier.Text == receiverName));
+        var hasClassMemberReceiver = classDeclarations
+            .SelectMany(classDeclaration => classDeclaration.DescendantNodes())
+            .OfType<FieldDeclarationSyntax>()
+            .Any(field => field.Declaration.Variables.Any(
+                variable => variable.Identifier.Text == receiverName)) is true
+            || classDeclarations
+                .SelectMany(classDeclaration => classDeclaration.DescendantNodes())
+                .OfType<PropertyDeclarationSyntax>()
+                .Any(property => property.Identifier.Text == receiverName) is true;
+        if (!callerHasLocalReceiver && hasClassMemberReceiver)
+        {
+            foreach (var field in classDeclarations
+                .SelectMany(classDeclaration => classDeclaration.DescendantNodes())
+                .OfType<FieldDeclarationSyntax>()
+                .Where(field => field.Declaration.Variables.Any(
+                    variable => variable.Identifier.Text == receiverName)))
+            {
+                foreach (var variable in field.Declaration.Variables.Where(
+                    variable => variable.Identifier.Text == receiverName))
+                {
+                    if (variable.Initializer?.Value is ObjectCreationExpressionSyntax creation)
+                        AddCandidate(creation, $"field:{field.SpanStart}");
+                }
+            }
+
+            foreach (var assignment in classDeclarations
+                .SelectMany(classDeclaration => classDeclaration.DescendantNodes())
+                .OfType<AssignmentExpressionSyntax>()
+                .Where(candidate => IsFieldReceiverAssignment(candidate, receiverName)))
+            {
+                if (assignment.Right is not ObjectCreationExpressionSyntax creation)
+                    continue;
+                var scope = assignment.Ancestors()
+                    .OfType<MethodDeclarationSyntax>()
+                    .Select(method => $"method:{method.SpanStart}")
+                    .FirstOrDefault()
+                    ?? assignment.Ancestors()
+                        .OfType<ConstructorDeclarationSyntax>()
+                        .Select(constructor => $"constructor:{constructor.SpanStart}")
+                        .FirstOrDefault()
+                    ?? $"assignment:{assignment.SpanStart}";
+                AddCandidate(creation, scope);
+            }
+
+            foreach (var property in classDeclarations
+                .SelectMany(classDeclaration => classDeclaration.DescendantNodes())
+                .OfType<PropertyDeclarationSyntax>()
+                .Where(property => property.Identifier.Text == receiverName))
+            {
+                if (property.Initializer?.Value is ObjectCreationExpressionSyntax initialized)
+                    AddCandidate(initialized, $"property:{property.SpanStart}");
+                if (property.ExpressionBody?.Expression is ObjectCreationExpressionSyntax returned)
+                    AddCandidate(returned, $"property:{property.SpanStart}");
+            }
+        }
+
+        if (candidates.Count == 0)
+            return new(null, Array.Empty<string>());
+
+        var distinctCandidates = candidates.Distinct().ToList();
+        if (distinctCandidates.Count == 1 && distinctCandidates[0].Expression is not null)
+            return new(distinctCandidates[0].Expression, Array.Empty<string>());
+
+        var candidateFacts = distinctCandidates
+            .Select(candidate =>
+                $"{candidate.Scope}:{candidate.Expression ?? "<null>"}")
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return new(null, candidateFacts);
+    }
+
+    private static bool IsWrapperConstruction(
+        ObjectCreationExpressionSyntax creation,
+        WrapperDefinition wrapper,
+        MethodDeclarationSyntax caller,
+        IReadOnlyCollection<string> knownTypeIdentities)
+    {
+        var candidateMethod = creation.Ancestors()
+            .OfType<MethodDeclarationSyntax>()
+            .FirstOrDefault() ?? caller;
+        return CSharpAnalyzer.ResolveKnownTypeIdentities(
+                creation.Type.ToString(),
+                candidateMethod,
+                knownTypeIdentities)
+            .Contains(wrapper.TypeIdentity, StringComparer.Ordinal);
+    }
+
+    private static string? ReadConnectionArgument(
+        ObjectCreationExpressionSyntax creation,
+        int parameterIndex)
+    {
+        var argument = creation.ArgumentList?.Arguments.ElementAtOrDefault(parameterIndex)?.Expression;
+        if (argument is null
+            || argument is LiteralExpressionSyntax literal
+                && literal.IsKind(SyntaxKind.NullLiteralExpression))
+            return null;
+        var expression = argument.ToString().Trim();
+        return string.IsNullOrWhiteSpace(expression) ? null : expression;
+    }
+
+    private static bool IsReceiverConstruction(
+        ObjectCreationExpressionSyntax creation,
+        string receiver)
+    {
+        if (creation.Parent is EqualsValueClauseSyntax
+            {
+                Parent: VariableDeclaratorSyntax declarator,
+            })
+            return declarator.Identifier.Text == receiver;
+        if (creation.Parent is AssignmentExpressionSyntax assignment)
+        {
+            var left = assignment.Left.ToString().Trim();
+            return left == receiver || left == $"this.{receiver}";
+        }
+        return false;
+    }
+
+    private static bool IsFieldReceiverAssignment(
+        AssignmentExpressionSyntax assignment,
+        string receiverName)
+    {
+        var left = assignment.Left.ToString().Trim();
+        if (left == $"this.{receiverName}")
+            return true;
+        if (left != receiverName)
+            return false;
+
+        var containingMethod = assignment.Ancestors()
+            .OfType<MethodDeclarationSyntax>()
+            .FirstOrDefault();
+        if (containingMethod is not null)
+        {
+            if (containingMethod.ParameterList.Parameters.Any(
+                    parameter => parameter.Identifier.Text == receiverName))
+                return false;
+            if (containingMethod.DescendantNodes().OfType<VariableDeclarationSyntax>().Any(
+                    declaration => declaration.Variables.Any(
+                        variable => variable.Identifier.Text == receiverName)))
+                return false;
+        }
+        return true;
     }
 
     private static int FindConstructorConnectionParameterIndex(
-        ClassDeclarationSyntax? classDeclaration,
+        IReadOnlyList<ClassDeclarationSyntax> classDeclarations,
         string? connectionExpression)
     {
-        if (classDeclaration is null || string.IsNullOrWhiteSpace(connectionExpression))
+        if (classDeclarations.Count == 0 || string.IsNullOrWhiteSpace(connectionExpression))
             return -1;
 
         var fieldName = connectionExpression.Trim();
         if (fieldName.StartsWith("this.", StringComparison.Ordinal))
             fieldName = fieldName[5..];
 
-        foreach (var constructor in classDeclaration.Members.OfType<ConstructorDeclarationSyntax>())
+        foreach (var constructor in classDeclarations
+            .SelectMany(classDeclaration => classDeclaration.Members.OfType<ConstructorDeclarationSyntax>()))
         {
             foreach (var assignment in constructor.DescendantNodes().OfType<AssignmentExpressionSyntax>())
             {
@@ -1610,29 +3061,31 @@ internal static class WrapperAnalyzer
         return -1;
     }
 
-    private static bool ReachesStoredProcedureSink(MethodDeclarationSyntax method, string commandVariable)
-        => method.DescendantNodes()
-            .OfType<InvocationExpressionSyntax>()
-            .Any(invocation => invocation.Expression is MemberAccessExpressionSyntax member
-                && member.Expression.ToString().Trim() == commandVariable
-                && IsAdoNetExecutionMethod(member.Name.Identifier.Text));
-
-    private static bool IsAdoNetExecutionMethod(string methodName)
-        => methodName.StartsWith("Execute", StringComparison.Ordinal)
-            || methodName.Equals("Fill", StringComparison.Ordinal);
-
-    private static string LastTypeSegment(string typeName)
-        => typeName.Split('.').Last().Trim();
+    private static bool IsAdoNetCommandExecutionMethod(string methodName)
+        => methodName is "ExecuteNonQuery"
+            or "ExecuteNonQueryAsync"
+            or "ExecuteReader"
+            or "ExecuteReaderAsync"
+            or "ExecuteScalar"
+            or "ExecuteScalarAsync";
 
     internal sealed record WrapperDefinition(
         string TypeIdentity,
         string ClassName,
         string MethodName,
         IReadOnlyList<string> Parameters,
+        IReadOnlyList<string> ParameterTypes,
         int CommandTextParameterIndex,
         int ModeParameterIndex,
         string? ConnectionExpression,
         bool AlwaysStoredProcedure,
         bool ReachesStoredProcedureSink,
-        int ConstructorConnectionParameterIndex);
+        string? TerminalSink,
+        int ConstructorConnectionParameterIndex,
+        string MethodIdentity,
+        string MethodSemantics,
+        string? CommandTextLiteral,
+        string AssemblyIdentity,
+        string AssemblyRevision,
+        string? UnresolvedReason);
 }

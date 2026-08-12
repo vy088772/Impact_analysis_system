@@ -96,7 +96,14 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # v21：external wrapper raw facts include receiver type metadata.
 # v22：unknown external wrapper mode inference no longer treats a boolean argument
 # on calls whose first argument is not command-text-shaped as stored-procedure mode.
-_CACHE_VERSION = 24
+# v25：StaticAnalyzerHost source-wrapper facts now include receiver implementation
+# binding, method identity/overload evidence, and fixed/call-site semantics; old
+# raw db_invocations cannot support the unified Database Invocation contract.
+# v26：ambiguous/unavailable overload candidates in raw db_invocations are now
+# structured facts (bound implementation, receiver type, method name, arity,
+# parameter types) instead of opaque identity strings; old cached candidates
+# lack this shape.
+_CACHE_VERSION = 26
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
