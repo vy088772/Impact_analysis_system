@@ -628,6 +628,9 @@ def _serialize_db_invocation(invocation: DbInvocation) -> Dict:
     }
     serialized.update(invocation_wrapper_evidence_fields(invocation))
     serialized["reason"] = invocation.reason
+    serialized["unresolved_reason"] = (
+        invocation.reason if invocation.evidence is not InvocationEvidence.PROVEN else ""
+    )
     serialized["source_span"] = {
         "relative_path": invocation.source.relative_path,
         "start_offset": invocation.source.start_offset,
@@ -646,7 +649,7 @@ def _wrapper_projection_fields(
     excluded = set(exclude)
     return {
         key: list(value) if isinstance(value, tuple) else value
-        for key in WRAPPER_EVIDENCE_FIELDS
+        for key in (*WRAPPER_EVIDENCE_FIELDS, "unresolved_reason")
         if key in source and key not in excluded
         for value in (source[key],)
     }
@@ -676,6 +679,7 @@ def _invocation_response_fields(invocation: DbInvocation) -> Dict:
             "branch_context",
             "source_span",
             "source_snapshot_hash",
+            "unresolved_reason",
         )
     }
     response.update(_wrapper_projection_fields(serialized))
@@ -900,7 +904,7 @@ def _materialize_path_evidence(
 
     wrapper_projection = _wrapper_projection_fields(
         path,
-        exclude=("evidence", "source_span", "source_snapshot_hash"),
+        exclude=("evidence", "source_span", "source_snapshot_hash", "unresolved_reason"),
     )
     return PathEvidenceResponse(
         path_id=str(path.get("path_id") or ""),

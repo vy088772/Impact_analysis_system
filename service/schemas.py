@@ -313,6 +313,7 @@ class SPMatchProgram(BaseModel):
     contract_status: str = ""
     implementation_snapshot_reference: str = ""
     comparison_report_reference: str = ""
+    unresolved_reason: str = ""
 
 
 class FindBySPResponse(BaseModel):
@@ -422,6 +423,7 @@ class TableMatchProgram(BaseModel):
     contract_status: str = ""
     implementation_snapshot_reference: str = ""
     comparison_report_reference: str = ""
+    unresolved_reason: str = ""
 
 
 class FindByTableResponse(BaseModel):

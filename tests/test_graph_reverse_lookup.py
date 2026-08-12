@@ -324,6 +324,8 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
         "contract_status",
         "implementation_snapshot_reference",
         "comparison_report_reference",
+        "procedure_name",
+        "unresolved_reason",
     )
 
     def values(item):

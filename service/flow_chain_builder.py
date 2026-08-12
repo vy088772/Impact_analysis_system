@@ -66,7 +66,7 @@ def _rel(file_path: str, root: Path) -> str:
 def _wrapper_projection_fields(source: Mapping[str, object]) -> dict[str, object]:
     return {
         key: list(value) if isinstance(value, tuple) else value
-        for key in WRAPPER_EVIDENCE_FIELDS
+        for key in (*WRAPPER_EVIDENCE_FIELDS, "unresolved_reason")
         if key in source
         for value in (source[key],)
     }
