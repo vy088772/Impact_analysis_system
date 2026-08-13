@@ -243,14 +243,8 @@ def _normalize_proposal(proposal: Mapping[str, Any]) -> dict[str, Any]:
             }
         }
     normalized_methods = _validate_methods(methods, name)
-    auto_select_provided = "auto_select" in candidate
-    auto_select = candidate.get("auto_select", False)
-    if not isinstance(auto_select, bool):
-        _error("invalid_auto_select", f"contract {name!r} 的 auto_select 必須是 boolean")
     return {
         "name": name,
-        "auto_select": auto_select,
-        "auto_select_provided": auto_select_provided,
         "receiver_types": receivers,
         "methods": normalized_methods,
     }
@@ -269,13 +263,11 @@ def _validated_active_contract(name: str, contract: Mapping[str, Any]) -> dict[s
     normalized = _normalize_proposal(
         {
             "name": name,
-            "auto_select": contract.get("auto_select", False),
             "receiver_types": contract.get("receiver_types"),
             "methods": contract.get("methods"),
         }
     )
     normalized.pop("name", None)
-    normalized.pop("auto_select_provided", None)
     return normalized
 
 
@@ -358,12 +350,10 @@ def _prepare_registry(
     if existing_name is None:
         active_name = proposal_name
         merged_contract = {
-            "auto_select": normalized["auto_select"],
             "receiver_types": normalized["receiver_types"],
             "methods": normalized["methods"],
             "status": "legacy_unverified",
             "lifecycle": {"status": "legacy_unverified"},
-            "legacy_auto_select_compatibility": True,
         }
         reused = False
         reuse_reason = "new_contract"
@@ -383,11 +373,6 @@ def _prepare_registry(
         merged_methods = dict(existing_contract["methods"])
         merged_methods.update(normalized["methods"])
         merged_contract = {
-            "auto_select": (
-                normalized["auto_select"]
-                if normalized["auto_select_provided"]
-                else existing_contract["auto_select"]
-            ),
             "receiver_types": merged_receivers,
             "methods": merged_methods,
             "status": str(
@@ -833,10 +818,14 @@ def accept_external_wrapper_contract(
         catalog_diff = _diff(catalog_file, before_catalog, after_catalog)
 
     registry_diff = _diff(registry_file, before_registry, after_registry)
+    # Reclassification preview is always bound to the one candidate contract
+    # under review (an explicit binding decision this workflow makes on the
+    # maintainer's behalf), never inferred from a receiver type name --
+    # auto-select is removed from the contract domain and runtime path.
     reclassification = reclassify_cached_scans(
         scan_roots,
         after_registry["contracts"],
-        explicit_contract=selector_contract_name or (active_name if has_snapshot else ""),
+        explicit_contract=selector_contract_name or active_name,
         database=normalized_system_id,
     )
 

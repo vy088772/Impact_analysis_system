@@ -383,7 +383,6 @@ def test_bound_implementation_identity_selects_only_its_matching_contract() -> N
         external_wrapper_contracts={
             "vendor-one": {
                 "name": "vendor-one",
-                "auto_select": True,
                 "receiver_types": ["Vendor.One.SQLObject"],
                 "methods": {
                     "Run": {
@@ -396,7 +395,6 @@ def test_bound_implementation_identity_selects_only_its_matching_contract() -> N
             },
             "vendor-two": {
                 "name": "vendor-two",
-                "auto_select": True,
                 "receiver_types": ["Vendor.Two.SQLObject"],
                 "methods": {
                     "Run": {
@@ -438,6 +436,56 @@ def test_bound_implementation_identity_selects_only_its_matching_contract() -> N
     assert invocation.evidence.value == "proven"
 
 
+def test_implementation_identity_without_assembly_identity_stays_unresolved() -> None:
+    """A traced implementation identity alone, without an assembly identity,
+    is not a genuine Receiver Implementation Binding (spec item 168) -- it
+    must not select a contract, the same as a bare receiver type name."""
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_Save"]}),
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contracts={
+            "vendor-two": {
+                "name": "vendor-two",
+                "receiver_types": ["Vendor.Two.SQLObject"],
+                "methods": {
+                    "Run": {
+                        "mode": "stored_procedure",
+                        "sink": "ExecuteNonQuery",
+                        "method_arity": 1,
+                        "parameter_types": ["System.String"],
+                    }
+                },
+            },
+        },
+    )
+    raw = {
+        "invocation_kind": "source_wrapper",
+        "class_name": "Page",
+        "method_name": "Save",
+        "wrapper_method_name": "Run",
+        "wrapper_receiver_type": "SQLObject",
+        "receiver_binding": {
+            "implementation_identity": "Vendor.Two.SQLObject",
+        },
+        "wrapper_source_available": False,
+        "wrapper_method_arity": 1,
+        "wrapper_parameter_types": ["System.String"],
+        "wrapper_mode": "stored_procedure",
+        "command_text_kind": "literal",
+        "command_text": "usp_Save",
+        "connection_expression": "conn",
+        "start_offset": 1,
+        "end_offset": 20,
+        "terminal_sink": "ExecuteNonQuery",
+    }
+
+    invocation = gateway.resolve_direct_invocations("Page.cs", [raw])[0]
+
+    assert invocation.wrapper_contract == ""
+    assert invocation.wrapper_unresolved_reason == "no_contract_matches_receiver_type"
+    assert invocation.evidence.value == "unresolved"
+
+
 def test_lifecycle_marked_legacy_contract_requires_explicit_selection() -> None:
     gateway = CSharpAnalysisGateway(
         SpCatalog.from_databases({"OrdersDb": ["usp_Save"]}),
@@ -445,7 +493,6 @@ def test_lifecycle_marked_legacy_contract_requires_explicit_selection() -> None:
         external_wrapper_contracts={
             "legacy": {
                 "name": "legacy",
-                "auto_select": True,
                 "status": "legacy_unverified",
                 "receiver_types": ["Vendor.Data.SQLObject"],
                 "methods": {

@@ -30,11 +30,22 @@ def _record(**overrides: object) -> dict:
     return record
 
 
-def test_sqlobject_receiver_auto_selects_reusable_contract() -> None:
+def test_sqlobject_receiver_without_configured_contract_stays_unresolved() -> None:
+    """auto-select and receiver-name inference are removed from the contract
+    domain and runtime path (spec item 70): a matching receiver_types entry
+    is not enough on its own without a configured/explicit contract."""
     result = discovery._classify_wrapper(_record())
 
-    assert result["status"] == "auto_selected"
-    assert result["selection_source"] == "auto_receiver_type"
+    assert result["status"] == "unresolved_contract"
+    assert result["selection_source"] == "unresolved_receiver_type"
+    assert result["contract"] == ""
+
+
+def test_sqlobject_receiver_with_configured_contract_resolves_explicitly() -> None:
+    result = discovery._classify_wrapper(_record(), "sqlobject")
+
+    assert result["status"] == "explicit_selected"
+    assert result["selection_source"] == "explicit"
     assert result["contract"] == "sqlobject"
     assert result["contract_mode"] == "stored_procedure"
 
@@ -113,12 +124,12 @@ def test_report_groups_calls_and_preserves_source_locations(tmp_path: Path, monk
     monkeypatch.setattr(discovery.scan_store, "get_or_scan", lambda root, refresh=False: scan)
 
     report = discovery.build_report(
-        [{"system_id": "Y-Docs_TTPUR", "root": tmp_path, "configured_contract": ""}]
+        [{"system_id": "Y-Docs_TTPUR", "root": tmp_path, "configured_contract": "sqlobject"}]
     )
 
     assert report["totals"]["wrapper_calls"] == 2
-    assert report["totals"]["auto_selected"] == 1
     observation = report["observations"][0]
+    assert observation["status"] == "explicit_selected"
     assert observation["calls"] == 2
     assert [location["line"] for location in observation["locations"]] == [42, 58]
     assert observation["locations"][0]["file"] == "PUR_SOMaintain.aspx.cs"

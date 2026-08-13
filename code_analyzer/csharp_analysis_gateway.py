@@ -766,40 +766,6 @@ def _receiver_type_matches_contract(
     )
 
 
-def external_wrapper_contract_candidates(
-    receiver_type: str,
-) -> List[Dict[str, Any]]:
-    """Return auto-selectable contracts matching one receiver type."""
-    if not _normalize_type_identity(receiver_type):
-        return []
-
-    candidates = []
-    for contract in _load_external_wrapper_contracts().values():
-        if contract.get("auto_select") is not True:
-            if contract.get("legacy_auto_select_compatibility") is not True:
-                continue
-        if (
-            "status" in contract or "lifecycle" in contract
-        ) and contract.get("legacy_auto_select_compatibility") is not True:
-            continue
-        receiver_types = contract.get("receiver_types", [])
-        if _receiver_type_matches_contract(receiver_type, receiver_types):
-            candidates.append(contract)
-    return candidates
-
-
-def load_external_wrapper_contract_for_receiver(
-    receiver_type: str,
-) -> Optional[Dict[str, Any]]:
-    """Auto-select one contract when a receiver type identifies it uniquely.
-
-    Automatic selection is intentionally conservative: contracts must opt in with
-    ``auto_select`` and exactly one contract may match the receiver type.
-    """
-    candidates = external_wrapper_contract_candidates(receiver_type)
-    return candidates[0] if len(candidates) == 1 else None
-
-
 def _wrapper_contract_method(
     contract: Optional[Mapping[str, Any]],
     method_name: str,
@@ -1638,26 +1604,37 @@ class CSharpAnalysisGateway:
             None,
         )
 
-    def _contract_candidates(self, receiver_type: str) -> List[Dict[str, Any]]:
-        if self._external_wrapper_contracts is None:
-            return external_wrapper_contract_candidates(receiver_type)
-        if not _normalize_type_identity(receiver_type):
+    def _contracts_by_implementation_identity(
+        self, binding: Mapping[str, str]
+    ) -> List[Dict[str, Any]]:
+        """Contracts matching a genuinely resolved Receiver Implementation
+        Binding (spec item 168): a receiver traced through construction and
+        relevant assignments to a concrete wrapper type *and* assembly
+        identity may select a contract. A bare receiver type name alone --
+        which carries no assembly identity -- may not; requiring both here
+        is what distinguishes this from matching on ``receiver_type``.
+
+        Contracts still under review (carrying a ``status``/``lifecycle``
+        from the onboarding workflow, e.g. ``legacy_unverified``) require a
+        fully explicit ``wrapper_contract`` selector regardless of binding.
+        """
+        implementation_identity = binding.get("implementation_identity", "")
+        if not _normalize_type_identity(implementation_identity):
             return []
+        if not _normalize_type_identity(binding.get("assembly_identity", "")):
+            return []
+        contracts = (
+            _load_external_wrapper_contracts()
+            if self._external_wrapper_contracts is None
+            else self._external_wrapper_contracts
+        )
         return [
             contract
-            for contract in self._external_wrapper_contracts.values()
-            if (
-                contract.get("auto_select") is True
-                or contract.get("legacy_auto_select_compatibility") is True
-            )
-            and (
-                "status" not in contract
-                and "lifecycle" not in contract
-                or contract.get("legacy_auto_select_compatibility") is True
-            )
+            for contract in contracts.values()
+            if "status" not in contract
+            and "lifecycle" not in contract
             and _receiver_type_matches_contract(
-                receiver_type,
-                contract.get("receiver_types", []),
+                implementation_identity, contract.get("receiver_types", [])
             )
         ]
 
@@ -1669,7 +1646,6 @@ class CSharpAnalysisGateway:
         scan_root: str = "",
         source_wrapper_available: Optional[bool] = None,
         explicit_contract: Optional[Mapping[str, Any] | str | List[str] | tuple[str, ...]] = None,
-        receiver_type_contract_candidates: Optional[Iterable[Mapping[str, Any]]] = None,
     ) -> WrapperReconciliation:
         """Classify one raw wrapper fact before rating its database evidence.
 
@@ -1909,25 +1885,25 @@ class CSharpAnalysisGateway:
                 mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
             )
 
+        # Contract selection has exactly two legitimate sources (spec item
+        # 70/168): an explicit selector, or a receiver traced through
+        # construction/assignment to a concrete implementation identity. A
+        # bare declared/observed receiver type name alone may never select a
+        # contract; without either source this stays an unresolved review
+        # candidate.
         if explicit_selected:
             candidates = selected_contracts or [
                 candidate for candidate in (selected_contract,) if candidate is not None
             ]
             selection_source = "explicit"
-        elif receiver_type_contract_candidates is None:
+        elif binding["implementation_identity"]:
             candidates = list(
-                self._contract_candidates(
-                    binding["implementation_identity"] or receiver_type
-                )
+                self._contracts_by_implementation_identity(binding)
             )
             selection_source = "auto_receiver_type"
         else:
-            candidates = [
-                candidate
-                for candidate in receiver_type_contract_candidates
-                if isinstance(candidate, Mapping)
-            ]
-            selection_source = "auto_receiver_type"
+            candidates = []
+            selection_source = "unresolved_receiver_type"
 
         selected_candidate_names = tuple(
             str(candidate.get("name") or "").strip()

@@ -28,7 +28,6 @@ def test_incomplete_proposal_is_rejected_without_writing_configuration(tmp_path)
             {
                 "contracts": {
                     "sqlobject": {
-                        "auto_select": True,
                         "receiver_types": ["SQLObject"],
                         "methods": {
                             "ExeProcNon": {
@@ -91,7 +90,6 @@ def test_existing_sqlobject_contract_is_reused_in_preview(tmp_path) -> None:
             {
                 "contracts": {
                     "sqlobject": {
-                        "auto_select": True,
                         "receiver_types": ["SQLObject"],
                         "methods": {
                             "ExeProcNon": {
@@ -137,14 +135,13 @@ def test_existing_sqlobject_contract_is_reused_in_preview(tmp_path) -> None:
     assert registry_path.read_bytes() == before
 
 
-def test_sqlobject_receiver_reuse_preserves_existing_auto_select(tmp_path) -> None:
+def test_sqlobject_receiver_reuse_merges_methods_by_receiver_type(tmp_path) -> None:
     registry_path = tmp_path / "external_wrapper_contracts.json"
     registry_path.write_text(
         json.dumps(
             {
                 "contracts": {
                     "sqlobject": {
-                        "auto_select": False,
                         "receiver_types": ["SQLObject"],
                         "methods": {
                             "ExeProcNon": {
@@ -178,7 +175,6 @@ def test_sqlobject_receiver_reuse_preserves_existing_auto_select(tmp_path) -> No
     assert result["reused"] is True
     assert result["reuse_reason"] == "existing_contract_reused_by_receiver_type"
     assert set(contracts) == {"sqlobject"}
-    assert contracts["sqlobject"]["auto_select"] is False
     assert "CreateTable" in contracts["sqlobject"]["methods"]
 
 
@@ -259,7 +255,6 @@ def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, 
         [root],
         {
             "orderhelper": {
-                "auto_select": True,
                 "receiver_types": ["OrderHelper"],
                 "methods": {
                     "RunProc": {
@@ -269,6 +264,7 @@ def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, 
                 },
             },
         },
+        explicit_contract="orderhelper",
         database="OrdersDb",
     )
 
@@ -277,7 +273,7 @@ def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, 
     assert result["source_snapshots_changed"] is False
     assert result["cache"] == [{"root": str(root), "status": "current", "source_commit": ""}]
     observation = result["wrapper_summary"]["observations"][0]
-    assert observation["status"] == "auto_selected"
+    assert observation["status"] == "explicit_selected"
     assert observation["contract"] == "orderhelper"
     assert observation["evidence_status"] == "proven"
     assert scan.db_invocations[str(source_file)] == [raw]
@@ -347,7 +343,7 @@ def test_registry_only_acceptance_keeps_database_evidence_unresolved(monkeypatch
     assert result["status"] == "preview"
     assert result["reclassification"]["analyzer_calls"] == 0
     observation = result["reclassification"]["wrapper_summary"]["observations"][0]
-    assert observation["status"] == "auto_selected"
+    assert observation["status"] == "explicit_selected"
     assert observation["evidence_status"] == "unresolved"
     assert observation["evidence_reason"] == "not_in_resolved_catalog"
     assert result["written_files"] == []
@@ -361,7 +357,6 @@ def test_apply_writes_registry_and_requested_system_selector_without_commit(tmp_
             {
                 "contracts": {
                     "sqlobject": {
-                        "auto_select": True,
                         "receiver_types": ["SQLObject"],
                         "methods": {
                             "ExeProcNon": {
@@ -422,7 +417,6 @@ def test_apply_write_failure_restores_both_configuration_files(monkeypatch, tmp_
             {
                 "contracts": {
                     "sqlobject": {
-                        "auto_select": True,
                         "receiver_types": ["SQLObject"],
                         "methods": {
                             "ExeProcNon": {
@@ -561,7 +555,6 @@ def test_requested_selector_drives_cached_reclassification(monkeypatch, tmp_path
             {
                 "contracts": {
                     "sqlobject": {
-                        "auto_select": True,
                         "receiver_types": ["SQLObject"],
                         "methods": {
                             "RunProc": {
@@ -592,7 +585,6 @@ def test_requested_selector_drives_cached_reclassification(monkeypatch, tmp_path
     result = accept_external_wrapper_contract(
         {
             "name": "orders_contract",
-            "auto_select": False,
             "receiver_types": ["OrderHelper"],
             "methods": {
                 "RunProc": {
@@ -627,7 +619,6 @@ def test_unknown_requested_selector_is_rejected_without_writing(tmp_path) -> Non
             {
                 "contracts": {
                     "sqlobject": {
-                        "auto_select": True,
                         "receiver_types": ["SQLObject"],
                         "methods": {
                             "ExeProcNon": {
@@ -682,7 +673,6 @@ def test_updating_contract_cannot_claim_another_contract_receiver(tmp_path) -> N
             {
                 "contracts": {
                     "sqlobject": {
-                        "auto_select": True,
                         "receiver_types": ["SQLObject"],
                         "methods": {
                             "ExeProcNon": {
@@ -692,7 +682,6 @@ def test_updating_contract_cannot_claim_another_contract_receiver(tmp_path) -> N
                         },
                     },
                     "otherhelper": {
-                        "auto_select": True,
                         "receiver_types": ["OtherHelper"],
                         "methods": {
                             "Run": {
@@ -738,7 +727,6 @@ def test_invalid_semantics_are_rejected(tmp_path) -> None:
             {
                 "contracts": {
                     "sqlobject": {
-                        "auto_select": True,
                         "receiver_types": ["SQLObject"],
                         "methods": {
                             "ExeProcNon": {
@@ -800,7 +788,6 @@ def test_invalid_existing_contract_is_rejected_without_writing(tmp_path) -> None
             {
                 "contracts": {
                     "broken": {
-                        "auto_select": True,
                         "receiver_types": ["BrokenHelper"],
                         "methods": {
                             "Run": {
@@ -878,7 +865,6 @@ def test_cached_reclassification_does_not_promote_new_source_facts(monkeypatch, 
         [root],
         {
             "orders_contract": {
-                "auto_select": True,
                 "receiver_types": ["OrderHelper"],
                 "methods": {
                     "RunProc": {

@@ -103,7 +103,10 @@ def test_wrapper_reconciliation_boundary_classifies_contract_sources_and_review_
     assert explicit.candidate_contracts == ("sqlobject",)
     assert explicit.method_semantics == "fixed_stored_procedure"
 
-    auto = gateway.reconcile_wrapper(
+    # A receiver type name alone cannot select a contract (spec item 70/168):
+    # without an explicit contract selector, a matching receiver_types entry
+    # is not enough -- this must stay an unresolved review candidate.
+    no_auto_select = gateway.reconcile_wrapper(
         "OrderPage.cs",
         _raw_invocation(
             invocation_kind="source_wrapper",
@@ -114,10 +117,11 @@ def test_wrapper_reconciliation_boundary_classifies_contract_sources_and_review_
         ),
         scan_root=source_root,
     )
-    assert auto.status == "auto_selected"
-    assert auto.selection_source == "auto_receiver_type"
-    assert auto.contract == "sqlobject"
-    assert auto.method_semantics == "fixed_stored_procedure"
+    assert no_auto_select.status == "unresolved_contract"
+    assert no_auto_select.selection_source == "unresolved_receiver_type"
+    assert no_auto_select.contract == ""
+    assert no_auto_select.review_candidate is True
+    assert no_auto_select.reason == "no_contract_matches_receiver_type"
 
     missing_method = gateway.reconcile_wrapper(
         "OrderPage.cs",
@@ -129,6 +133,7 @@ def test_wrapper_reconciliation_boundary_classifies_contract_sources_and_review_
             wrapper_mode="stored_procedure",
         ),
         scan_root=source_root,
+        explicit_contract=_sqlobject_wrapper_contract(),
     )
     assert missing_method.status == "unresolved_method"
     assert missing_method.contract == "sqlobject"
@@ -175,11 +180,53 @@ def test_wrapper_reconciliation_boundary_classifies_contract_sources_and_review_
     assert mismatched.candidate_contracts == ("sqlobject",)
 
 
-def test_external_contract_receiver_matching_requires_exact_qualified_identity() -> None:
+def test_external_contract_without_explicit_selector_never_auto_selects_by_receiver_name() -> None:
+    """auto_select and receiver-name inference are removed from the contract
+    domain and runtime path (spec item 70): a registry entry whose
+    receiver_types matches the observed receiver is never enough on its own
+    -- only an explicit contract selector may choose a contract."""
     registry = {
         "vendor-one": {
             "name": "vendor-one",
-            "auto_select": True,
+            "receiver_types": ["Vendor.One.SQLObject"],
+            "methods": {
+                "Execute": {
+                    "mode": "stored_procedure",
+                    "sink": "ExecuteNonQuery",
+                }
+            },
+        }
+    }
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contracts=registry,
+    )
+
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        wrapper_method_name="Execute",
+        wrapper_receiver_type="Vendor.One.SQLObject",
+        wrapper_source_available=False,
+        wrapper_mode="stored_procedure",
+    )
+    reconciliation = gateway.reconcile_wrapper("f.cs", raw)
+
+    assert reconciliation.status == "unresolved_contract"
+    assert reconciliation.selection_source == "unresolved_receiver_type"
+    assert reconciliation.reason == "no_contract_matches_receiver_type"
+    assert reconciliation.candidate_contracts == ()
+    assert gateway.resolve_direct_invocations("f.cs", [raw])[0].evidence is (
+        InvocationEvidence.UNRESOLVED
+    )
+
+
+def test_external_contract_explicit_selection_still_requires_exact_qualified_identity() -> None:
+    """Once a contract is explicitly selected, its receiver_types must still
+    match the observed receiver's exact qualified identity."""
+    registry = {
+        "vendor-one": {
+            "name": "vendor-one",
             "receiver_types": ["Vendor.One.SQLObject"],
             "methods": {
                 "Execute": {
@@ -202,14 +249,10 @@ def test_external_contract_receiver_matching_requires_exact_qualified_identity()
         wrapper_source_available=False,
         wrapper_mode="stored_procedure",
     )
-    reconciliation = gateway.reconcile_wrapper("f.cs", raw)
+    reconciliation = gateway.reconcile_wrapper("f.cs", raw, explicit_contract="vendor-one")
 
-    assert reconciliation.status == "unresolved_contract"
-    assert reconciliation.reason == "no_contract_matches_receiver_type"
-    assert reconciliation.candidate_contracts == ()
-    assert gateway.resolve_direct_invocations("f.cs", [raw])[0].evidence is (
-        InvocationEvidence.UNRESOLVED
-    )
+    assert reconciliation.status == "receiver_mismatch"
+    assert reconciliation.reason == "receiver_type_does_not_match_contract"
 
 
 def test_external_contract_without_receiver_identity_cannot_be_selected() -> None:
@@ -425,35 +468,58 @@ def test_ambiguous_source_overload_retains_structured_candidate_facts() -> None:
     assert invocation.wrapper_overload_candidate_facts == expected_facts
 
 
-def test_wrapper_reconciliation_boundary_keeps_ambiguity_and_mode_rules_machine_readable(
-    monkeypatch,
-) -> None:
+def test_wrapper_reconciliation_boundary_keeps_ambiguity_and_mode_rules_machine_readable() -> None:
     catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
     gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
-    monkeypatch.setattr(
-        gateway_module,
-        "external_wrapper_contract_candidates",
-        lambda _receiver_type: [
-            {"name": "sqlobject-v1", "receiver_types": ["SQLObject"]},
-            {"name": "sqlobject-v2", "receiver_types": ["SQLObject"]},
-        ],
-    )
 
-    ambiguous = gateway.reconcile_wrapper(
+    # Ambiguity is still detectable through an explicit multi-name selector
+    # (a caller-provided binding) -- not through receiver-name auto-select,
+    # which is removed from the contract domain and runtime path.
+    ambiguous_registry = {
+        "sqlobject-v1": {
+            "name": "sqlobject-v1",
+            "receiver_types": ["SQLObject"],
+            "methods": {"ExeProcNon": {"mode": "stored_procedure", "sink": "ExecuteNonQuery"}},
+        },
+        "sqlobject-v2": {
+            "name": "sqlobject-v2",
+            "receiver_types": ["SQLObject"],
+            "methods": {"ExeProcNon": {"mode": "stored_procedure", "sink": "ExecuteNonQuery"}},
+        },
+    }
+    ambiguous_gateway = CSharpAnalysisGateway(
+        catalog,
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contracts=ambiguous_registry,
+    )
+    ambiguous_raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        wrapper_method_name="ExeProcNon",
+        wrapper_receiver_type="SQLObject",
+        wrapper_source_available=False,
+        wrapper_mode="stored_procedure",
+    )
+    ambiguous = ambiguous_gateway.reconcile_wrapper(
         "SqlObjectPage.cs",
-        _raw_invocation(
-            invocation_kind="source_wrapper",
-            wrapper_method_name="ExeProcNon",
-            wrapper_receiver_type="SQLObject",
-            wrapper_source_available=False,
-            wrapper_mode="stored_procedure",
-        ),
+        ambiguous_raw,
+        explicit_contract=("sqlobject-v1", "sqlobject-v2"),
     )
     assert ambiguous.status == "ambiguous_contract"
     assert ambiguous.candidate_contracts == ("sqlobject-v1", "sqlobject-v2")
     assert ambiguous.review_candidate is True
     assert ambiguous.active_contract is False
     assert ambiguous.reason == "multiple_contracts_match_receiver_type"
+
+    ambiguous_invocation = ambiguous_gateway.resolve_direct_invocations(
+        "SqlObjectPage.cs",
+        [ambiguous_raw],
+        explicit_contract=("sqlobject-v1", "sqlobject-v2"),
+    )[0]
+    assert ambiguous_invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert ambiguous_invocation.wrapper_review_candidate is True
+    assert ambiguous_invocation.wrapper_unresolved_reason == (
+        "multiple_contracts_match_receiver_type"
+    )
 
     contract = _sqlobject_wrapper_contract()
     inline = gateway.reconcile_wrapper(
@@ -489,24 +555,6 @@ def test_wrapper_reconciliation_boundary_keeps_ambiguity_and_mode_rules_machine_
     assert call_site.contract_mode == "call_site"
     assert call_site.stored_procedure_mode is False
     assert call_site.mode_reason == "call_site_requires_explicit_stored_procedure_mode"
-
-    ambiguous_invocation = gateway.resolve_direct_invocations(
-        "SqlObjectPage.cs",
-        [
-            _raw_invocation(
-                invocation_kind="source_wrapper",
-                wrapper_method_name="ExeProcNon",
-                wrapper_receiver_type="SQLObject",
-                wrapper_source_available=False,
-                wrapper_mode="stored_procedure",
-            )
-        ],
-    )[0]
-    assert ambiguous_invocation.evidence is InvocationEvidence.UNRESOLVED
-    assert ambiguous_invocation.wrapper_review_candidate is True
-    assert ambiguous_invocation.wrapper_unresolved_reason == (
-        "multiple_contracts_match_receiver_type"
-    )
 
 
 def test_direct_invocation_evidence_honors_explicit_contract_selector() -> None:
@@ -551,12 +599,13 @@ def test_resolved_invocation_retains_wrapper_reconciliation_provenance(tmp_path:
             )
         ],
         scan_root=str(tmp_path),
+        explicit_contract="sqlobject",
     )[0]
     assert proven.evidence is InvocationEvidence.PROVEN
     assert proven.wrapper_kind == "external_wrapper"
-    assert proven.wrapper_status == "auto_selected"
-    assert proven.wrapper_classification_status == "auto_selected"
-    assert proven.wrapper_selection_source == "auto_receiver_type"
+    assert proven.wrapper_status == "explicit_selected"
+    assert proven.wrapper_classification_status == "explicit_selected"
+    assert proven.wrapper_selection_source == "explicit"
     assert proven.wrapper_contract == "sqlobject"
     assert proven.wrapper_contract_mode == "stored_procedure"
     assert proven.wrapper_contract_sink == "ExecuteNonQuery"
@@ -4477,10 +4526,64 @@ def test_external_fixed_contract_semantics_override_conflicting_raw_mode() -> No
     assert invocation.evidence is InvocationEvidence.PROVEN
 
 
-def test_external_wrapper_contract_auto_selects_unique_receiver_type() -> None:
-    """A unique receiver-backed contract should not require system catalog wiring."""
+def test_external_wrapper_contract_requires_explicit_selection_even_for_unique_receiver_type() -> None:
+    """A receiver type that uniquely matches one contract's receiver_types is
+    still not enough on its own: auto-select and receiver-name inference are
+    removed from the contract domain and runtime path (spec item 70).
+    Without an explicit selector the call must stay an unresolved review
+    candidate; only an explicit ``wrapper_contract`` selector can prove it."""
     catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
     gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        command_text="usp_SaveOrder",
+        wrapper_method_name="ExeProcNon",
+        wrapper_receiver_type="SQLObject",
+        wrapper_source_available=False,
+        wrapper_reaches_stored_procedure_sink=False,
+        wrapper_mode="stored_procedure",
+        connection_expression="conn",
+    )
+
+    unresolved = gateway.resolve_direct_invocations("SqlObjectPage.cs", [raw])
+
+    assert len(unresolved) == 1
+    assert unresolved[0].evidence is InvocationEvidence.UNRESOLVED
+    assert unresolved[0].wrapper_contract == ""
+    assert unresolved[0].wrapper_contract_source == "unresolved_receiver_type"
+    assert unresolved[0].wrapper_contract_candidates == ()
+
+    explicit = gateway.resolve_direct_invocations(
+        "SqlObjectPage.cs", [raw], explicit_contract="sqlobject"
+    )
+
+    assert len(explicit) == 1
+    assert explicit[0].evidence is InvocationEvidence.PROVEN
+    assert explicit[0].wrapper_contract == "sqlobject"
+    assert explicit[0].wrapper_contract_source == "explicit"
+    assert explicit[0].wrapper_receiver_type == "SQLObject"
+    assert explicit[0].wrapper_contract_candidates == ("sqlobject",)
+
+
+def test_external_wrapper_contract_ambiguity_stays_unresolved() -> None:
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    registry = {
+        "sqlobject-v1": {
+            "name": "sqlobject-v1",
+            "receiver_types": ["SQLObject"],
+            "methods": {"ExeProcNon": {"mode": "stored_procedure", "sink": "ExecuteNonQuery"}},
+        },
+        "sqlobject-v2": {
+            "name": "sqlobject-v2",
+            "receiver_types": ["SQLObject"],
+            "methods": {"ExeProcNon": {"mode": "stored_procedure", "sink": "ExecuteNonQuery"}},
+        },
+    }
+    gateway = CSharpAnalysisGateway(
+        catalog,
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contracts=registry,
+    )
 
     invocations = gateway.resolve_direct_invocations(
         "SqlObjectPage.cs",
@@ -4496,48 +4599,13 @@ def test_external_wrapper_contract_auto_selects_unique_receiver_type() -> None:
                 connection_expression="conn",
             )
         ],
-    )
-
-    assert len(invocations) == 1
-    assert invocations[0].evidence is InvocationEvidence.PROVEN
-    assert invocations[0].wrapper_contract == "sqlobject"
-    assert invocations[0].wrapper_contract_source == "auto_receiver_type"
-    assert invocations[0].wrapper_receiver_type == "SQLObject"
-    assert invocations[0].wrapper_contract_candidates == ("sqlobject",)
-
-
-def test_external_wrapper_contract_ambiguity_stays_unresolved(monkeypatch) -> None:
-    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
-    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
-    monkeypatch.setattr(
-        gateway_module,
-        "external_wrapper_contract_candidates",
-        lambda _receiver_type: [
-            {"name": "sqlobject-v1", "receiver_types": ["SQLObject"]},
-            {"name": "sqlobject-v2", "receiver_types": ["SQLObject"]},
-        ],
-    )
-
-    invocations = gateway.resolve_direct_invocations(
-        "SqlObjectPage.cs",
-        [
-            _raw_invocation(
-                invocation_kind="source_wrapper",
-                command_text="usp_SaveOrder",
-                wrapper_method_name="ExeProcNon",
-                wrapper_receiver_type="SQLObject",
-                wrapper_source_available=False,
-                wrapper_reaches_stored_procedure_sink=False,
-                wrapper_mode="stored_procedure",
-                connection_expression="conn",
-            )
-        ],
+        explicit_contract=("sqlobject-v1", "sqlobject-v2"),
     )
 
     assert len(invocations) == 1
     assert invocations[0].evidence is InvocationEvidence.UNRESOLVED
     assert invocations[0].wrapper_contract == ""
-    assert invocations[0].wrapper_contract_source == "ambiguous_receiver_type"
+    assert invocations[0].wrapper_contract_source == "explicit"
     assert invocations[0].wrapper_contract_candidates == (
         "sqlobject-v1",
         "sqlobject-v2",
@@ -5459,24 +5527,29 @@ def test_static_analyzer_host_applies_external_sqlobject_wrapper_contract() -> N
             SpCatalog.from_databases({"OrdersDb": ["usp_Enable", "usp_Save"]}),
             connection_sources={"obj": "OrdersDb"},
         )
+        # auto-select and receiver-name inference are removed from the
+        # contract domain and runtime path (spec item 70): the SQLObject
+        # contract must be selected explicitly, even though its
+        # receiver_types uniquely matches "SQLObject".
         observations = {
             invocation["method_name"]: gateway.reconcile_wrapper_observation(
                 "SqlObjectPage.cs",
                 invocation,
                 scan_root=temp_dir,
+                explicit_contract="sqlobject",
             )
             for invocation in raw_invocations
         }
         assert observations["EnableData"]["wrapper_receiver_type"] == "SQLObject"
-        assert observations["EnableData"]["wrapper_status"] == "auto_selected"
+        assert observations["EnableData"]["wrapper_status"] == "explicit_selected"
         assert observations["EnableData"]["evidence_status"] == "proven"
         assert observations["SaveData"]["wrapper_contract_mode"] == "call_site"
         assert observations["SaveData"]["stored_procedure_mode"] is True
         assert observations["SaveData"]["evidence_status"] == "proven"
-        assert observations["PreviewData"]["wrapper_status"] == "auto_selected"
+        assert observations["PreviewData"]["wrapper_status"] == "explicit_selected"
         assert observations["PreviewData"]["invocation_mode"] == "inline_sql"
         assert observations["PreviewData"]["evidence_status"] == "proven"
-        assert observations["DynamicData"]["wrapper_status"] == "auto_selected"
+        assert observations["DynamicData"]["wrapper_status"] == "explicit_selected"
         assert observations["DynamicData"]["evidence_status"] == "unresolved"
         assert observations["DynamicData"]["evidence_reason"] == "dynamic_command_text"
 

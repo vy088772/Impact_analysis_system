@@ -246,7 +246,6 @@ def test_explicit_selector_array_is_a_sorted_candidate_boundary() -> None:
         SpCatalog.from_databases({}),
         external_wrapper_contracts={
             "outside": {
-                "auto_select": True,
                 "receiver_types": ["Other.SQLObject"],
                 "methods": {"Run": {"mode": "stored_procedure", "sink": "ExecuteReader"}},
             },
@@ -334,7 +333,6 @@ def test_refresh_passes_valid_selector_boundary_to_reconciliation(monkeypatch, t
     registry = {
         "contracts": {
             "outside": {
-                "auto_select": True,
                 "receiver_types": ["SQLObject"],
                 "methods": {"Run": {"mode": "stored_procedure", "sink": "ExecuteReader"}},
             },
@@ -392,7 +390,6 @@ def test_incomplete_preflight_does_not_auto_select_or_promote_opaque_wrapper(
     registry = {
         "contracts": {
             "sqlobject": {
-                "auto_select": True,
                 "receiver_types": ["SQLObject"],
                 "methods": {"Run": {"mode": "stored_procedure", "sink": "ExecuteReader"}},
             }

@@ -657,7 +657,6 @@ def versioned_contract_from_proposal(proposal: Mapping[str, Any]) -> tuple[dict[
     methods = _snapshot_method_projection(snapshot_operations, provided_methods)
 
     entry = {
-        "auto_select": bool(candidate.get("auto_select", False)),
         "receiver_types": list(receiver_types),
         "methods": _normalized_method_projection(methods),
         "contract_fingerprint": report["contract_fingerprint"],
