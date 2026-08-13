@@ -13,11 +13,11 @@ internal static class Program
         try
         {
             if (args.Length == 0)
-                return Fail("usage: StaticAnalyzerHost <csharp|sql> --input <file> [--input <file> ...] | --version");
+                return Fail("usage: StaticAnalyzerHost <csharp|sql|decompile-wrapper> --input <file> [--input <file> ...] | --version");
 
             if (args.Length == 1 && args[0] == "--version")
             {
-                Write(new { contract_version = ContractVersion, host_version = "0.1.0", commands = new[] { "csharp", "sql" } });
+                Write(new { contract_version = ContractVersion, host_version = "0.1.0", commands = new[] { "csharp", "sql", "decompile-wrapper" } });
                 return 0;
             }
 
@@ -30,6 +30,11 @@ internal static class Program
             {
                 var inputs = ReadInputPaths(args);
                 return inputs.Count == 1 ? AnalyzeSql(inputs[0]) : Fail("sql accepts exactly one input file");
+            }
+            if (args[0] == "decompile-wrapper")
+            {
+                var decompileInputs = ReadDecompileWrapperInputs(args);
+                return DecompileWrapper(decompileInputs.CsprojPath, decompileInputs.ReceiverType);
             }
             return Fail($"unknown command: {args[0]}");
         }
@@ -69,6 +74,22 @@ internal static class Program
     {
         var analysis = SqlAnalyzer.Analyze(inputPath);
         Write(new { contract_version = ContractVersion, operations = analysis.Operations, parse_errors = analysis.ParseErrors });
+        return 0;
+    }
+
+    private static int DecompileWrapper(string csprojPath, string receiverType)
+    {
+        var classification = DecompiledWrapperClassifier.Classify(csprojPath, receiverType);
+        Write(new
+        {
+            contract_version = ContractVersion,
+            status = classification.Status,
+            dll_path = classification.DllPath,
+            assembly_identity = classification.AssemblyIdentity,
+            detail = classification.Detail,
+            translation_problem_methods = classification.TranslationProblemMethods,
+            wrapper_definitions = classification.WrapperDefinitions,
+        });
         return 0;
     }
 
@@ -127,6 +148,31 @@ internal static class Program
         if (inputPaths.Count == 0)
             throw new ArgumentException("csharp requires at least one --input path");
         return (inputPaths, sourceRoots);
+    }
+
+    private static (string CsprojPath, string ReceiverType) ReadDecompileWrapperInputs(string[] args)
+    {
+        string? csprojPath = null;
+        string? receiverType = null;
+        for (var index = 1; index < args.Length; index += 2)
+        {
+            if (index + 1 >= args.Length)
+                throw new ArgumentException("usage: StaticAnalyzerHost decompile-wrapper --csproj <file> --receiver-type <name>");
+            switch (args[index])
+            {
+                case "--csproj":
+                    csprojPath = args[index + 1];
+                    break;
+                case "--receiver-type":
+                    receiverType = args[index + 1];
+                    break;
+                default:
+                    throw new ArgumentException("expected --csproj or --receiver-type");
+            }
+        }
+        if (string.IsNullOrWhiteSpace(csprojPath) || string.IsNullOrWhiteSpace(receiverType))
+            throw new ArgumentException("decompile-wrapper requires --csproj and --receiver-type");
+        return (csprojPath, receiverType);
     }
 
     private static void Write(object value) => Console.WriteLine(JsonSerializer.Serialize(value, JsonOptions));

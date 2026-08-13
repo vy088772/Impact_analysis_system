@@ -109,6 +109,9 @@ class StaticAnalyzerHost:
     def analyze_sql(self, input_path: Path) -> dict[str, Any]:
         return self._run("sql", "--input", str(input_path))
 
+    def decompile_wrapper(self, csproj_path: Path, receiver_type: str) -> dict[str, Any]:
+        return self._run("decompile-wrapper", "--csproj", str(csproj_path), "--receiver-type", receiver_type)
+
     def _run(self, *args: str) -> dict[str, Any]:
         if not self.dll_path.exists():
             raise StaticAnalyzerHostError(f"StaticAnalyzerHost build output not found: {self.dll_path}")

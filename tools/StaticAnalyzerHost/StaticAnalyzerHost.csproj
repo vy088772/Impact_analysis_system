@@ -8,5 +8,9 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
     <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="161.9135.0" />
+    <PackageReference Include="ICSharpCode.Decompiler" Version="8.2.0.7535" />
+    <!-- Downloaded (not referenced) so the decompiler can resolve mscorlib etc. for
+         .NET Framework wrapper DLLs. See WrapperAssemblyDecompiler.ReferenceAssemblyDirectories. -->
+    <PackageDownload Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="[1.0.3]" />
   </ItemGroup>
 </Project>

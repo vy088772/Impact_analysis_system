@@ -1649,6 +1649,12 @@ internal static class WrapperAnalyzer
 
     internal static List<WrapperDefinition> GetDefinitions(
         IEnumerable<CompilationUnitSyntax> sourceRoots)
+        => GetDefinitions(sourceRoots, "", "");
+
+    internal static List<WrapperDefinition> GetDefinitions(
+        IEnumerable<CompilationUnitSyntax> sourceRoots,
+        string assemblyIdentity,
+        string assemblyRevision)
     {
         var roots = sourceRoots.ToList();
         var methods = roots
@@ -1656,7 +1662,12 @@ internal static class WrapperAnalyzer
             .ToList();
         var knownTypeIdentities = GetKnownTypeIdentities(roots);
         return methods
-            .Select(method => CreateDefinition(method, roots, knownTypeIdentities))
+            .Select(method => CreateDefinition(
+                method,
+                roots,
+                knownTypeIdentities,
+                assemblyIdentity,
+                assemblyRevision))
             .Where(definition => definition is not null)
             .Select(definition => definition!)
             .ToList();
@@ -2082,7 +2093,9 @@ internal static class WrapperAnalyzer
     private static WrapperDefinition? CreateDefinition(
         MethodDeclarationSyntax method,
         IReadOnlyList<CompilationUnitSyntax> sourceRoots,
-        IReadOnlyCollection<string> knownTypeIdentities)
+        IReadOnlyCollection<string> knownTypeIdentities,
+        string assemblyIdentity = "",
+        string assemblyRevision = "")
     {
         var commands = method.DescendantNodes()
             .OfType<ObjectCreationExpressionSyntax>()
@@ -2202,8 +2215,8 @@ internal static class WrapperAnalyzer
             commandTextExpression is LiteralExpressionSyntax { Token.Value: string literal }
                 ? literal
                 : null,
-            "",
-            "",
+            assemblyIdentity,
+            assemblyRevision,
             unresolvedReason);
     }
 
