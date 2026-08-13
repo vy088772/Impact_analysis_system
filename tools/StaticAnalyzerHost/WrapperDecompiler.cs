@@ -286,3 +286,125 @@ internal sealed record DecompiledWrapperClassification(
         IReadOnlyList<string> translationProblemMethods)
         => new("resolved", dllPath, assemblyIdentity, wrapperDefinitions, translationProblemMethods, null);
 }
+
+internal static class DecompiledWrapperProposalBuilder
+{
+    internal static IReadOnlyList<DecompiledWrapperProposal> Build(
+        DecompiledWrapperClassification classification,
+        string receiverTypeName)
+    {
+        if (!string.Equals(classification.Status, "resolved", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(classification.AssemblyIdentity)
+            || string.IsNullOrWhiteSpace(classification.DllPath))
+            return Array.Empty<DecompiledWrapperProposal>();
+
+        var behaviorSurfaceUnit = classification.WrapperDefinitions
+            .Select(definition => definition.TypeIdentity)
+            .FirstOrDefault(typeIdentity => !string.IsNullOrWhiteSpace(typeIdentity))
+            ?? receiverTypeName;
+        var assemblyIdentity = classification.AssemblyIdentity;
+        var relevantDefinitions = classification.WrapperDefinitions
+            .Where(definition => !string.IsNullOrWhiteSpace(definition.TerminalSink)
+                || !string.IsNullOrWhiteSpace(definition.UnresolvedReason))
+            .ToList();
+        var helperDefinitions = classification.WrapperDefinitions
+            .Where(definition => !relevantDefinitions.Contains(definition))
+            .ToList();
+        var snapshot = new DecompiledImplementationSnapshot(
+            $"{classification.DllPath}@sha256:{assemblyIdentity}",
+            assemblyIdentity,
+            assemblyIdentity,
+            behaviorSurfaceUnit,
+            relevantDefinitions
+                .Select(ToOperation)
+                .ToList(),
+            helperDefinitions
+                .Select(ToOperation)
+                .ToList(),
+            classification.TranslationProblemMethods,
+            true,
+            true,
+            helperDefinitions.All(definition => string.IsNullOrWhiteSpace(definition.UnresolvedReason)));
+        return new[]
+        {
+            new DecompiledWrapperProposal(
+                receiverTypeName,
+                new[] { behaviorSurfaceUnit },
+                snapshot),
+        };
+
+        ImplementationSnapshotOperation ToOperation(WrapperAnalyzer.WrapperDefinition definition)
+        {
+            var semantics = definition.MethodSemantics switch
+            {
+                "fixed_stored_procedure" => "stored_procedure",
+                "fixed_inline_sql" => "inline_sql",
+                _ => definition.MethodSemantics,
+            };
+            var argumentRoles = new Dictionary<string, int>();
+            if (definition.CommandTextParameterIndex >= 0)
+                argumentRoles["command_text"] = definition.CommandTextParameterIndex;
+            if (definition.ModeParameterIndex >= 0)
+                argumentRoles["command_type"] = definition.ModeParameterIndex;
+            if (definition.ConstructorConnectionParameterIndex >= 0)
+                argumentRoles["connection"] = definition.ConstructorConnectionParameterIndex;
+
+            return new ImplementationSnapshotOperation(
+                definition.MethodIdentity,
+                definition.MethodName,
+                definition.Parameters.Count,
+                definition.ParameterTypes,
+                argumentRoles,
+                definition.ConstructorConnectionParameterIndex >= 0
+                    ? "constructor_connection"
+                    : string.IsNullOrWhiteSpace(definition.ConnectionExpression)
+                        ? ""
+                        : "wrapper_connection",
+                semantics,
+                definition.TerminalSink,
+                !string.Equals(
+                    definition.UnresolvedReason,
+                    "decompiler_translation_problem",
+                    StringComparison.Ordinal),
+                !string.IsNullOrWhiteSpace(definition.UnresolvedReason)
+                    || string.Equals(semantics, "unresolved", StringComparison.Ordinal),
+                string.Equals(semantics, "unresolved", StringComparison.Ordinal),
+                definition.CommandTextLiteral,
+                definition.AssemblyRevision,
+                definition.UnresolvedReason);
+        }
+    }
+}
+
+internal sealed record DecompiledWrapperProposal(
+    string Name,
+    IReadOnlyList<string> ReceiverTypes,
+    DecompiledImplementationSnapshot ImplementationSnapshot);
+
+internal sealed record DecompiledImplementationSnapshot(
+    string ArtifactIdentity,
+    string AssemblyIdentity,
+    string AssemblyRevision,
+    string BehaviorSurfaceUnit,
+    IReadOnlyList<ImplementationSnapshotOperation> Methods,
+    IReadOnlyList<ImplementationSnapshotOperation> HelperOperations,
+    IReadOnlyList<string> TranslationProblemMethods,
+    bool PublicDatabaseOperationsComplete,
+    bool HelperOperationsComplete,
+    bool InheritedOperationsComplete);
+
+internal sealed record ImplementationSnapshotOperation(
+    string MethodIdentity,
+    string MethodName,
+    int MethodArity,
+    IReadOnlyList<string> ParameterTypes,
+    IReadOnlyDictionary<string, int> ArgumentRoles,
+    string ConnectionBehaviorBoundary,
+    string EffectiveCommandSemantics,
+    string? TerminalSink,
+    bool BodyComplete,
+    bool Unresolved,
+    bool SemanticsUnresolved,
+    string? CommandTextLiteral,
+    string AssemblyRevision,
+    string? UnresolvedReason);

@@ -304,6 +304,26 @@ def _snapshot_revisions(snapshot: Mapping[str, Any]) -> set[str]:
     return {revision for revision in revisions if revision}
 
 
+def _is_decompiler_translation_problem(
+    snapshot: Mapping[str, Any],
+    operation: Mapping[str, Any],
+) -> bool:
+    if _text(operation.get("unresolved_reason")) == "decompiler_translation_problem":
+        return True
+    if operation.get("decompiler_translation_problem") is True:
+        return True
+
+    method_names = {
+        _normalized_text(_operation_name(operation)),
+        _normalized_text(_first(operation, "method_name", "wrapper_method_name", "name")),
+    }
+    translation_problem_methods = {
+        _normalized_text(value)
+        for value in _text_values(snapshot.get("translation_problem_methods"))
+    }
+    return bool(method_names & translation_problem_methods)
+
+
 def validate_implementation_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     """Validate exact identity and completeness requirements for one snapshot."""
     reasons: list[str] = []
@@ -344,6 +364,8 @@ def validate_implementation_snapshot(snapshot: Mapping[str, Any]) -> dict[str, A
             continue
         operation_identity = _operation_name(operation) or "<unknown-operation>"
         operation_reasons_before = len(reasons)
+        if _is_decompiler_translation_problem(snapshot, operation):
+            reasons.append("decompiler_translation_problem")
         if operation.get("body_complete") is not True:
             reasons.append("method_body_incomplete")
         if operation.get("unresolved") is True or operation.get("semantics_unresolved") is True:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import sys
 import tempfile
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from code_analyzer.external_wrapper_contracts import validate_implementation_snapshot
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
+from service.contract_preflight import run_contract_preflight
 
 STC_CSPROJ = PROJECT_ROOT / "data" / "repos" / "System_Dept_1" / "STC" / "STC" / "STC.csproj"
 SQLFUNC_DLL = STC_CSPROJ.parent / "bin" / "SQLFunc.dll"
@@ -47,6 +50,26 @@ def test_decompile_wrapper_classifies_sqlfunc_dll_end_to_end() -> None:
     for definition in definitions:
         assert definition["assembly_identity"] == result["assembly_identity"]
         assert definition["unresolved_reason"] is None
+
+    proposals = result["contract_proposals"]
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal["name"] == "SQLFunc"
+    assert proposal["receiver_types"] == ["SQLFunc"]
+    snapshot = proposal["implementation_snapshot"]
+    assert snapshot["artifact_identity"].endswith(
+        f"@sha256:{result['assembly_identity']}"
+    )
+    assert snapshot["assembly_identity"] == result["assembly_identity"]
+    assert snapshot["assembly_revision"] == result["assembly_identity"]
+    assert snapshot["behavior_surface_unit"] == "SQLFunc"
+    assert validate_implementation_snapshot(snapshot)["complete"] is True
+    preflight = run_contract_preflight(
+        [SimpleNamespace(contract_proposals=result["contract_proposals"])],
+        registry={"contracts": {}},
+    )
+    assert preflight.onboarding_status == "created"
+    assert preflight.formal_selector == "sqlfunc"
 
     create_adapter = _definitions_by_method(definitions, "CreateAdapter")[0]
     assert create_adapter["method_semantics"] == "fixed_stored_procedure"

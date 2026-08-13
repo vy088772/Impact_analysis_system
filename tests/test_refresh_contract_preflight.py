@@ -15,6 +15,7 @@ from service.contract_preflight import (
     run_contract_preflight,
 )
 from code_analyzer.csharp_analysis_gateway import CSharpAnalysisGateway, SpCatalog
+from code_analyzer.external_wrapper_contracts import validate_implementation_snapshot
 from code_analyzer.project_scanner import ProjectScanResult
 from service import analyze_service
 
@@ -127,6 +128,48 @@ def test_complete_snapshot_is_staged_with_fingerprint_and_selector() -> None:
     entry = result.formal_registry["contracts"]["vendor"]
     assert entry["contract_fingerprint"] == result.proposals[0]["contract_fingerprint"]
     assert result.to_dict()["staged_selector"] == "vendor"
+
+
+def test_decompiled_snapshot_validation_accepts_complete_surface() -> None:
+    snapshot = _proposal("vendor", "Vendor.Data")["implementation_snapshot"]
+
+    validation = validate_implementation_snapshot(snapshot)
+
+    assert validation["complete"] is True
+    assert validation["unresolved_reasons"] == []
+
+
+def test_decompiled_snapshot_validation_reuses_existing_incomplete_reasons() -> None:
+    snapshot = _proposal("vendor", "Vendor.Data")["implementation_snapshot"]
+    snapshot["unknown_overloads"] = ["Vendor.Data.SQLObject.Run(?)"]
+    snapshot["methods"][0].pop("connection_behavior_boundary")
+    snapshot["methods"].append(
+        {
+            **snapshot["methods"][0],
+            "method_identity": "Vendor.Data.SQLObject.Read(System.String)",
+            "method_name": "Read",
+            "assembly_revision": "2.0.0",
+            "connection_behavior_boundary": "constructor_connection",
+        }
+    )
+
+    validation = validate_implementation_snapshot(snapshot)
+
+    assert validation["complete"] is False
+    assert "unknown_overload" in validation["unresolved_reasons"]
+    assert "connection_behavior_boundary_missing" in validation["unresolved_reasons"]
+    assert "mixed_assembly_revision" in validation["unresolved_reasons"]
+
+
+def test_decompiled_snapshot_validation_identifies_translation_problem() -> None:
+    snapshot = _proposal("vendor", "Vendor.Data")["implementation_snapshot"]
+    snapshot["methods"][0]["unresolved_reason"] = "decompiler_translation_problem"
+    snapshot["translation_problem_methods"] = ["Run"]
+
+    validation = validate_implementation_snapshot(snapshot)
+
+    assert validation["complete"] is False
+    assert "decompiler_translation_problem" in validation["unresolved_reasons"]
 
 
 def test_multiple_complete_proposals_are_sorted_and_equivalent_fingerprint_is_reused() -> None:
