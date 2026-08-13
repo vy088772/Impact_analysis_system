@@ -45,3 +45,15 @@ _Avoid_: wrapper method list, SP proof
 **Contract Preflight**:
 A preliminary evidence evaluation that determines whether source or verified external implementation facts can supply reusable wrapper semantics before formal Database Invocation classification. A preflight proposal is configuration interpretation, not procedure evidence.
 _Avoid_: formal invocation evidence, runtime discovery
+
+**Implementation Snapshot**:
+A structured record of one receiver's public database operations (method identity, argument roles, effective command semantics, terminal sink) captured from local source, a verified external assembly, or a decompiled external assembly, submitted as a candidate for Contract Preflight.
+_Avoid_: method inventory, observed call list
+
+**Verified Implementation Snapshot**:
+An Implementation Snapshot that has passed completeness validation — every relevant operation has a resolved body, mode, and sink, with a single exact assembly identity — and may therefore supply reusable wrapper semantics. Passing this bar does not itself prove a procedure target; it only qualifies the snapshot as evidence.
+_Avoid_: draft snapshot, decompiled output
+
+**Assembly Revision Boundary**:
+The identity scope within which every method fact in one Implementation Snapshot must originate from the same exact external assembly (the same byte-identical DLL, hashed rather than assumed from name/version alone for unsigned or unversioned assemblies). Facts from two different revisions are never combined into one snapshot.
+_Avoid_: assembly version, DLL name
