@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+from .decompilation_cache import DecompilationAttemptCache
 
 
 CONTRACT_VERSION = 2
@@ -109,8 +113,68 @@ class StaticAnalyzerHost:
     def analyze_sql(self, input_path: Path) -> dict[str, Any]:
         return self._run("sql", "--input", str(input_path))
 
-    def decompile_wrapper(self, csproj_path: Path, receiver_type: str) -> dict[str, Any]:
-        return self._run("decompile-wrapper", "--csproj", str(csproj_path), "--receiver-type", receiver_type)
+    def decompile_wrapper(
+        self,
+        csproj_path: Path,
+        receiver_type: str,
+        *,
+        rerun: bool = False,
+        cache_root: Path | None = None,
+    ) -> dict[str, Any]:
+        dll_path = _referenced_dll_path(csproj_path, receiver_type)
+        assembly_identity = _sha256_file(dll_path) if dll_path is not None else None
+        cache = DecompilationAttemptCache(cache_root)
+        cached_response = None
+        if assembly_identity is not None:
+            cached_response = cache.load(assembly_identity, receiver_type)
+        if cached_response is not None and not rerun:
+            return _with_decompilation_metadata(
+                cached_response,
+                assembly_identity,
+                cache_status="hit",
+                attempted=False,
+            )
+
+        host_args = [
+            "decompile-wrapper",
+            "--csproj",
+            str(csproj_path),
+            "--receiver-type",
+            receiver_type,
+            "--cache-root",
+            str(cache.host_root),
+        ]
+        if rerun:
+            host_args.append("--rerun")
+        response = self._run(*host_args)
+        host_cache_status = response.get("cache_status")
+        if cached_response is None and host_cache_status in {
+            "hit",
+            "bypassed",
+            "miss",
+            "not_applicable",
+        }:
+            cache_status = host_cache_status
+            host_attempt = response.get("decompilation_attempt")
+            attempted = (
+                bool(host_attempt.get("attempted"))
+                if isinstance(host_attempt, dict)
+                else assembly_identity is not None
+            )
+        else:
+            cache_status = "bypassed" if cached_response is not None else (
+                "miss" if assembly_identity is not None else "not_applicable"
+            )
+            attempted = assembly_identity is not None
+        response = _with_decompilation_metadata(
+            response,
+            assembly_identity,
+            cache_status=cache_status,
+            attempted=attempted,
+        )
+        if assembly_identity is not None:
+            cache.save(assembly_identity, receiver_type, response)
+        return response
 
     def _run(self, *args: str) -> dict[str, Any]:
         if not self.dll_path.exists():
@@ -158,3 +222,88 @@ class StaticAnalyzerHost:
         artifact_mtime = self.dll_path.stat().st_mtime
         source_paths = [self.project_path, *self.project_path.parent.rglob("*.cs")]
         return any(path.stat().st_mtime > artifact_mtime for path in source_paths)
+
+
+_NOT_ATTEMPTED_STATUSES = {
+    "csproj_not_found",
+    "csproj_unreadable",
+    "receiver_not_referenced",
+    "hint_path_missing",
+    "referenced_dll_missing",
+}
+
+
+def _referenced_dll_path(csproj_path: Path, receiver_type: str) -> Path | None:
+    try:
+        root = ET.parse(csproj_path).getroot()
+    except (OSError, ET.ParseError):
+        return None
+
+    for reference in root.iter():
+        if _xml_local_name(reference.tag) != "Reference":
+            continue
+        include = reference.attrib.get("Include", "")
+        if include.split(",", 1)[0].strip() != receiver_type:
+            continue
+        hint_path = next(
+            (
+                child.text
+                for child in reference
+                if _xml_local_name(child.tag) == "HintPath"
+            ),
+            None,
+        )
+        if not hint_path or not hint_path.strip():
+            return None
+        normalized_hint_path = hint_path.strip().replace("\\", "/")
+        dll_path = (csproj_path.parent / normalized_hint_path).resolve()
+        return dll_path if dll_path.is_file() else None
+    return None
+
+
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _sha256_file(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _with_decompilation_metadata(
+    response: dict[str, Any],
+    assembly_identity: str | None,
+    *,
+    cache_status: str,
+    attempted: bool,
+) -> dict[str, Any]:
+    result = dict(response)
+    outcome = _attempt_outcome(result)
+    result["attempt_outcome"] = outcome
+    result["cache_status"] = cache_status
+    result["decompilation_attempt"] = {
+        "attempted": attempted,
+        "outcome": outcome,
+        "cache_status": cache_status,
+        "assembly_identity": assembly_identity,
+    }
+    return result
+
+
+def _attempt_outcome(response: dict[str, Any]) -> str:
+    status = response.get("status")
+    if status in _NOT_ATTEMPTED_STATUSES:
+        return "not_attempted"
+    if status != "resolved":
+        return "incomplete"
+    definitions = response.get("wrapper_definitions") or []
+    translation_problems = response.get("translation_problem_methods") or []
+    if not definitions or translation_problems:
+        return "incomplete"
+    if any(definition.get("unresolved_reason") for definition in definitions):
+        return "incomplete"
+    return "complete"

@@ -69,6 +69,18 @@ internal sealed record AssemblyReferenceResolution(bool IsResolved, string? DllP
 // aborting the whole assembly or being silently dropped.
 internal static class WrapperAssemblyDecompiler
 {
+    internal static string? TryGetAssemblyIdentity(string dllPath)
+    {
+        try
+        {
+            return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(dllPath))).ToLowerInvariant();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     internal static WrapperDecompilationResult Decompile(string dllPath, string receiverTypeName)
     {
         byte[] bytes;

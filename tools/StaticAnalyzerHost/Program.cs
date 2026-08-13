@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 internal static class Program
 {
@@ -34,7 +35,11 @@ internal static class Program
             if (args[0] == "decompile-wrapper")
             {
                 var decompileInputs = ReadDecompileWrapperInputs(args);
-                return DecompileWrapper(decompileInputs.CsprojPath, decompileInputs.ReceiverType);
+                return DecompileWrapper(
+                    decompileInputs.CsprojPath,
+                    decompileInputs.ReceiverType,
+                    decompileInputs.ForceRerun,
+                    decompileInputs.CacheRoot);
             }
             return Fail($"unknown command: {args[0]}");
         }
@@ -77,10 +82,28 @@ internal static class Program
         return 0;
     }
 
-    private static int DecompileWrapper(string csprojPath, string receiverType)
+    private static int DecompileWrapper(
+        string csprojPath,
+        string receiverType,
+        bool forceRerun,
+        string? cacheRoot)
     {
+        var resolution = AssemblyReferenceResolver.Resolve(csprojPath, receiverType);
+        var assemblyIdentity = resolution.IsResolved
+            ? WrapperAssemblyDecompiler.TryGetAssemblyIdentity(resolution.DllPath!)
+            : null;
+        var cache = new DecompilationAttemptCache(cacheRoot);
+        JsonElement cachedResponse = default;
+        var hasCachedResponse = assemblyIdentity is not null
+            && cache.TryGet(assemblyIdentity, receiverType, out cachedResponse);
+        if (hasCachedResponse && !forceRerun)
+        {
+            Write(AddCacheMetadata(cachedResponse, "hit", false));
+            return 0;
+        }
+
         var classification = DecompiledWrapperClassifier.Classify(csprojPath, receiverType);
-        Write(new
+        var response = new
         {
             contract_version = ContractVersion,
             status = classification.Status,
@@ -90,8 +113,80 @@ internal static class Program
             translation_problem_methods = classification.TranslationProblemMethods,
             wrapper_definitions = classification.WrapperDefinitions,
             contract_proposals = DecompiledWrapperProposalBuilder.Build(classification, receiverType),
-        });
+        };
+        var cacheStatus = assemblyIdentity is null
+            ? "not_applicable"
+            : hasCachedResponse
+                ? "bypassed"
+                : "miss";
+        var enrichedResponse = AddCacheMetadata(
+            response,
+            cacheStatus,
+            assemblyIdentity is not null);
+        if (assemblyIdentity is not null)
+            cache.Save(assemblyIdentity, receiverType, enrichedResponse);
+        Write(enrichedResponse);
         return 0;
+    }
+
+    private static JsonElement AddCacheMetadata(
+        object response,
+        string cacheStatus,
+        bool attempted)
+    {
+        var node = JsonSerializer.SerializeToNode(response, JsonOptions)!.AsObject();
+        var outcome = AttemptOutcome(node);
+        return AddCacheMetadata(node, outcome, cacheStatus, attempted);
+    }
+
+    private static JsonElement AddCacheMetadata(
+        JsonElement response,
+        string cacheStatus,
+        bool attempted)
+    {
+        var node = JsonNode.Parse(response.GetRawText())!.AsObject();
+        var outcome = node["attempt_outcome"]?.GetValue<string>() ?? "incomplete";
+        return AddCacheMetadata(node, outcome, cacheStatus, attempted);
+    }
+
+    private static JsonElement AddCacheMetadata(
+        JsonObject response,
+        string outcome,
+        string cacheStatus,
+        bool attempted)
+    {
+        response["attempt_outcome"] = outcome;
+        response["cache_status"] = cacheStatus;
+        response["decompilation_attempt"] = new JsonObject
+        {
+            ["attempted"] = attempted,
+            ["outcome"] = outcome,
+            ["cache_status"] = cacheStatus,
+            ["assembly_identity"] = response["assembly_identity"]?.DeepClone(),
+        };
+        return JsonSerializer.SerializeToElement(response);
+    }
+
+    private static string AttemptOutcome(JsonObject response)
+    {
+        var status = response["status"]?.GetValue<string>();
+        if (status is "csproj_not_found"
+            or "csproj_unreadable"
+            or "receiver_not_referenced"
+            or "hint_path_missing"
+            or "referenced_dll_missing")
+            return "not_attempted";
+        if (status != "resolved")
+            return "incomplete";
+        var definitions = response["wrapper_definitions"]?.AsArray();
+        var translationProblems = response["translation_problem_methods"]?.AsArray();
+        if (definitions is null || definitions.Count == 0
+            || translationProblems is not null && translationProblems.Count > 0)
+            return "incomplete";
+        if (definitions.Any(definition =>
+                !string.IsNullOrWhiteSpace(definition?["unresolved_reason"]?.GetValue<string>())))
+            return "incomplete";
+        return "complete";
     }
 
     private static int Fail(string message)
@@ -151,29 +246,48 @@ internal static class Program
         return (inputPaths, sourceRoots);
     }
 
-    private static (string CsprojPath, string ReceiverType) ReadDecompileWrapperInputs(string[] args)
+    private static (string CsprojPath, string ReceiverType, bool ForceRerun, string? CacheRoot) ReadDecompileWrapperInputs(string[] args)
     {
         string? csprojPath = null;
         string? receiverType = null;
-        for (var index = 1; index < args.Length; index += 2)
+        string? cacheRoot = null;
+        var forceRerun = false;
+        for (var index = 1; index < args.Length;)
         {
-            if (index + 1 >= args.Length)
-                throw new ArgumentException("usage: StaticAnalyzerHost decompile-wrapper --csproj <file> --receiver-type <name>");
             switch (args[index])
             {
                 case "--csproj":
+                    RequireDecompileWrapperValue(args, index);
                     csprojPath = args[index + 1];
+                    index += 2;
                     break;
                 case "--receiver-type":
+                    RequireDecompileWrapperValue(args, index);
                     receiverType = args[index + 1];
+                    index += 2;
+                    break;
+                case "--cache-root":
+                    RequireDecompileWrapperValue(args, index);
+                    cacheRoot = args[index + 1];
+                    index += 2;
+                    break;
+                case "--rerun":
+                    forceRerun = true;
+                    index++;
                     break;
                 default:
-                    throw new ArgumentException("expected --csproj or --receiver-type");
+                    throw new ArgumentException("expected --csproj, --receiver-type, --cache-root, or --rerun");
             }
         }
         if (string.IsNullOrWhiteSpace(csprojPath) || string.IsNullOrWhiteSpace(receiverType))
             throw new ArgumentException("decompile-wrapper requires --csproj and --receiver-type");
-        return (csprojPath, receiverType);
+        return (csprojPath, receiverType, forceRerun, cacheRoot);
+    }
+
+    private static void RequireDecompileWrapperValue(string[] args, int index)
+    {
+        if (index + 1 >= args.Length)
+            throw new ArgumentException("decompile-wrapper option requires a value");
     }
 
     private static void Write(object value) => Console.WriteLine(JsonSerializer.Serialize(value, JsonOptions));
