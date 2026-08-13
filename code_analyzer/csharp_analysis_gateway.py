@@ -96,6 +96,7 @@ class WrapperReconciliation:
     contract_fingerprint: str = ""
     contract_signature_version: str = ""
     contract_lifecycle_status: str = ""
+    evidence_kind: str = ""
     implementation_snapshot_reference: str = ""
     comparison_report_reference: str = ""
     source_contract_conflict: bool = False
@@ -150,6 +151,7 @@ class WrapperReconciliation:
             "signature_version": self.contract_signature_version,
             "contract_lifecycle_status": self.contract_lifecycle_status,
             "contract_status": self.contract_lifecycle_status,
+            "evidence_kind": self.evidence_kind,
             "implementation_snapshot_reference": self.implementation_snapshot_reference,
             "comparison_report_reference": self.comparison_report_reference,
             "source_contract_conflict": self.source_contract_conflict,
@@ -232,6 +234,7 @@ class DbInvocation:
     contract_fingerprint: str = ""
     contract_signature_version: str = ""
     contract_lifecycle_status: str = ""
+    evidence_kind: str = ""
     implementation_snapshot_reference: str = ""
     comparison_report_reference: str = ""
     source_contract_conflict: bool = False
@@ -357,6 +360,7 @@ WRAPPER_EVIDENCE_FIELDS = (
     "signature_version",
     "contract_lifecycle_status",
     "contract_status",
+    "evidence_kind",
     "implementation_snapshot_reference",
     "comparison_report_reference",
     "source_contract_conflict",
@@ -491,6 +495,7 @@ def wrapper_observation_fields(
         "signature_version": classification["contract_signature_version"],
         "contract_lifecycle_status": classification["contract_lifecycle_status"],
         "contract_status": classification["contract_lifecycle_status"],
+        "evidence_kind": classification["evidence_kind"],
         "implementation_snapshot_reference": classification[
             "implementation_snapshot_reference"
         ],
@@ -601,6 +606,7 @@ def invocation_wrapper_evidence_fields(invocation: DbInvocation) -> Dict[str, An
         review_candidate=invocation.wrapper_review_candidate,
         stored_procedure_mode=invocation.wrapper_stored_procedure_mode,
         mode_reason=invocation.wrapper_mode_reason,
+        evidence_kind=invocation.evidence_kind,
     )
     fields = wrapper_observation_fields(
         reconciliation,
@@ -692,6 +698,7 @@ def invocation_wrapper_evidence_fields(invocation: DbInvocation) -> Dict[str, An
             "signature_version": invocation.contract_signature_version,
             "contract_lifecycle_status": invocation.contract_lifecycle_status,
             "contract_status": invocation.contract_lifecycle_status,
+            "evidence_kind": invocation.evidence_kind,
             "implementation_snapshot_reference": invocation.implementation_snapshot_reference,
             "comparison_report_reference": invocation.comparison_report_reference,
             "source_contract_conflict": invocation.source_contract_conflict,
@@ -961,6 +968,7 @@ def _contract_identity_facts(contract: Mapping[str, Any]) -> Dict[str, str]:
         "contract_fingerprint": fingerprint,
         "signature_version": signature_version,
         "contract_lifecycle_status": lifecycle_status,
+        "evidence_kind": _text_fact(contract.get("evidence_kind")),
         "implementation_snapshot_reference": snapshot_reference,
         "comparison_report_reference": report_reference,
     }
@@ -1729,6 +1737,7 @@ class CSharpAnalysisGateway:
                     identity.get("contract_lifecycle_status")
                     or identity.get("contract_status")
                 ),
+                evidence_kind=_text_fact(identity.get("evidence_kind")),
                 implementation_snapshot_reference=_text_fact(
                     identity.get("implementation_snapshot_reference")
                 ),
@@ -2866,6 +2875,7 @@ class CSharpAnalysisGateway:
                 contract_fingerprint=reconciliation.contract_fingerprint,
                 contract_signature_version=reconciliation.contract_signature_version,
                 contract_lifecycle_status=reconciliation.contract_lifecycle_status,
+                evidence_kind=reconciliation.evidence_kind,
                 implementation_snapshot_reference=reconciliation.implementation_snapshot_reference,
                 comparison_report_reference=reconciliation.comparison_report_reference,
                 source_contract_conflict=reconciliation.source_contract_conflict,

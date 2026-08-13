@@ -76,6 +76,8 @@ from .contract_transaction import (
     commit_staged_contract_transaction,
 )
 
+DECOMPILED_AUTO_EVIDENCE_KIND = "decompiled_auto"
+
 
 class PathEvidenceError(ValueError):
     """A path cannot be expanded from the current source or SQL snapshots."""
@@ -647,8 +649,13 @@ def _populate_decompilation_proposals(
                 current_proposals = []
                 scan.contract_proposals = current_proposals
             for proposal in proposals:
-                if isinstance(proposal, Mapping) and dict(proposal) not in current_proposals:
-                    current_proposals.append(dict(proposal))
+                if not isinstance(proposal, Mapping):
+                    continue
+                proposal_entry = dict(proposal)
+                if not str(proposal_entry.get("evidence_kind") or "").strip():
+                    proposal_entry["evidence_kind"] = DECOMPILED_AUTO_EVIDENCE_KIND
+                if proposal_entry not in current_proposals:
+                    current_proposals.append(proposal_entry)
             attempts.append(
                 _decompilation_attempt_record(
                     response,

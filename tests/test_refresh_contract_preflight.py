@@ -127,6 +127,7 @@ def test_complete_snapshot_is_staged_with_fingerprint_and_selector() -> None:
     assert result.formal_selector == "vendor"
     entry = result.formal_registry["contracts"]["vendor"]
     assert entry["contract_fingerprint"] == result.proposals[0]["contract_fingerprint"]
+    assert "evidence_kind" not in entry
     assert result.to_dict()["staged_selector"] == "vendor"
 
 
@@ -248,6 +249,55 @@ def test_refresh_consumes_staged_contract_for_opaque_wrapper(monkeypatch, tmp_pa
     assert observation["terminal_sink"] == "ExecuteNonQuery"
     assert observation["procedure_name"] == "usp_save"
     assert observation["contract_fingerprint"]
+    assert observation["evidence_kind"] == ""
+
+
+def test_decompiled_provenance_survives_preflight_and_wrapper_summary(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    root = tmp_path / "Orders"
+    source_file = root / "OrderPage.cs"
+    root.mkdir()
+    proposal = _proposal("vendor", "Vendor.Data")
+    proposal["evidence_kind"] = "decompiled_auto"
+    raw = {
+        "invocation_kind": "source_wrapper",
+        "class_name": "OrderPage",
+        "method_name": "Save",
+        "wrapper_method_name": "Run",
+        "wrapper_receiver_type": "Vendor.Data.SQLObject",
+        "wrapper_source_available": False,
+        "wrapper_method_arity": 1,
+        "wrapper_parameter_types": ["System.String"],
+        "wrapper_mode": "stored_procedure",
+        "command_text_kind": "literal",
+        "command_text": "usp_Save",
+        "connection_expression": "conn",
+        "start_offset": 1,
+        "end_offset": 20,
+    }
+    scan = ProjectScanResult(
+        project_root=str(root),
+        project_name="Orders",
+        scan_time=datetime.now(),
+        db_invocations={str(source_file): [raw]},
+        contract_proposals=[proposal],
+    )
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=True: [root])
+    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "load_contract_registry", lambda: {"contracts": {}})
+
+    result = analyze_service.refresh_source({"project": "p", "repo": "r"})
+
+    preflight = result["wrapper_summary"]["contract_preflight"]
+    entry = preflight["staged_registry"]["contracts"]["vendor"]
+    observation = result["wrapper_summary"]["observations"][0]
+    assert preflight["proposals"][0]["evidence_kind"] == "decompiled_auto"
+    assert entry["evidence_kind"] == "decompiled_auto"
+    assert entry["lifecycle"]["status"] == "accepted"
+    assert observation["evidence_kind"] == "decompiled_auto"
+    assert observation["contract_lifecycle_status"] == "accepted"
 
 
 def test_direct_inline_invocation_remains_outside_wrapper_preflight(monkeypatch, tmp_path) -> None:
@@ -398,6 +448,7 @@ def test_refresh_passes_valid_selector_boundary_to_reconciliation(monkeypatch, t
     assert observation["status"] == "explicit_selected"
     assert observation["contract"] == "alpha"
     assert observation["selection_source"] == "explicit"
+    assert observation["evidence_kind"] == ""
     assert result["wrapper_summary"]["contract_preflight"]["formal_selector"] == "alpha"
 
 

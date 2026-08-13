@@ -190,6 +190,13 @@ def test_full_refresh_decompiles_and_commits_complete_proposal(monkeypatch, tmp_
     assert decompilation["attempts"][0]["receiver_type"] == "SQLFunc"
     assert decompilation["attempts"][0]["reasons"] == []
     assert result["wrapper_summary"]["observations"][0]["status"] == "explicit_selected"
+    entry = result["wrapper_summary"]["contract_preflight"]["staged_registry"][
+        "contracts"
+    ]["sqlfunc"]
+    assert entry["evidence_kind"] == "decompiled_auto"
+    assert result["wrapper_summary"]["observations"][0]["evidence_kind"] == (
+        "decompiled_auto"
+    )
 
 
 def test_cached_decompilation_is_reported_as_cached_skip(monkeypatch, tmp_path) -> None:

@@ -342,7 +342,8 @@ internal static class DecompiledWrapperProposalBuilder
             new DecompiledWrapperProposal(
                 receiverTypeName,
                 new[] { behaviorSurfaceUnit },
-                snapshot),
+                snapshot,
+                "decompiled_auto"),
         };
 
         ImplementationSnapshotOperation ToOperation(WrapperAnalyzer.WrapperDefinition definition)
@@ -391,7 +392,8 @@ internal static class DecompiledWrapperProposalBuilder
 internal sealed record DecompiledWrapperProposal(
     string Name,
     IReadOnlyList<string> ReceiverTypes,
-    DecompiledImplementationSnapshot ImplementationSnapshot);
+    DecompiledImplementationSnapshot ImplementationSnapshot,
+    string EvidenceKind);
 
 internal sealed record DecompiledImplementationSnapshot(
     string ArtifactIdentity,

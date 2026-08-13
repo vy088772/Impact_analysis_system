@@ -649,6 +649,7 @@ def _snapshot_method_projection(
 def versioned_contract_from_proposal(proposal: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Build an immutable registry entry from a complete snapshot-backed proposal."""
     candidate = proposal.get("contract") if isinstance(proposal.get("contract"), Mapping) else proposal
+    evidence_kind = _text(candidate.get("evidence_kind") or proposal.get("evidence_kind"))
     snapshot = _first(candidate, "implementation_snapshot", "verified_implementation_snapshot", "snapshot")
     if snapshot is None:
         snapshot = _first(
@@ -693,6 +694,8 @@ def versioned_contract_from_proposal(proposal: Mapping[str, Any]) -> tuple[dict[
             "history": [report["history_reference"]],
         },
     }
+    if evidence_kind:
+        entry["evidence_kind"] = evidence_kind
     return entry, report
 
 

@@ -4,11 +4,11 @@
 
 **Blocked by:** 05.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `versioned_contract_from_proposal()` preserves an incoming `evidence_kind` (e.g. `decompiled_auto`) onto the registry entry instead of dropping it
-- [ ] A registry entry created from a decompiled snapshot is queryable/distinguishable by this marker from one created via local-source onboarding or explicit selection
-- [ ] `RefreshResponse`'s wrapper summary includes the provenance marker for each affected wrapper, requiring no `RefreshResponse` schema/type change (it's already an untyped dict)
-- [ ] A contract produced via local-source onboarding or explicit selector never carries the `decompiled_auto` marker
-- [ ] `CONTEXT.md` documents `contract_lifecycle_status` and clarifies it as distinct from the decompile-provenance marker
-- [ ] Tests assert the marker's presence end-to-end: registry entry → preflight result → wrapper summary, using the existing `test_refresh_contract_preflight.py` seam
+- [x] `versioned_contract_from_proposal()` preserves an incoming `evidence_kind` (e.g. `decompiled_auto`) onto the registry entry instead of dropping it
+- [x] A registry entry created from a decompiled snapshot is queryable/distinguishable by this marker from one created via local-source onboarding or explicit selection
+- [x] `RefreshResponse`'s wrapper summary includes the provenance marker for each affected wrapper, requiring no `RefreshResponse` schema/type change (it's already an untyped dict)
+- [x] A contract produced via local-source onboarding or explicit selector never carries the `decompiled_auto` marker
+- [x] `CONTEXT.md` documents `contract_lifecycle_status` and clarifies it as distinct from the decompile-provenance marker
+- [x] Tests assert the marker's presence end-to-end: registry entry → preflight result → wrapper summary, using the existing `test_refresh_contract_preflight.py` seam

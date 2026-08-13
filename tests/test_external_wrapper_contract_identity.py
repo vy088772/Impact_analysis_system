@@ -326,6 +326,7 @@ def test_external_invocation_retains_contract_revision_provenance() -> None:
         "contract_fingerprint": "fp-vendor",
         "signature_version": "contract-behavior-v1",
         "status": "accepted",
+        "evidence_kind": "decompiled_auto",
         "implementation_snapshot_reference": "snapshot-vendor-1",
         "comparison_report_reference": "comparison-vendor-1",
         "receiver_types": ["Vendor.Data.SQLObject"],
@@ -370,10 +371,12 @@ def test_external_invocation_retains_contract_revision_provenance() -> None:
     assert invocation.contract_fingerprint == "fp-vendor"
     assert invocation.contract_signature_version == "contract-behavior-v1"
     assert invocation.contract_lifecycle_status == "accepted"
+    assert invocation.evidence_kind == "decompiled_auto"
     assert invocation.implementation_snapshot_reference == "snapshot-vendor-1"
     assert invocation.comparison_report_reference == "comparison-vendor-1"
     assert fields["contract_fingerprint"] == "fp-vendor"
     assert fields["contract_status"] == "accepted"
+    assert fields["evidence_kind"] == "decompiled_auto"
 
 
 def test_bound_implementation_identity_without_selector_stays_unresolved() -> None:
