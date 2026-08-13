@@ -1729,6 +1729,114 @@ def test_gateway_detects_real_direct_sqlclient_invocation_via_static_analyzer_ho
         assert inline_sql.evidence is InvocationEvidence.PROVEN
 
 
+def test_static_analyzer_host_recognizes_numeric_command_type_cast_as_stored_procedure() -> None:
+    """A `(CommandType)4` cast is recognized the same as `CommandType.StoredProcedure`."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "NumericCommandType.cs"
+        source_path.write_text(
+            "public class NumericCommandType {\n"
+            "    private void Run() {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        var cmd = new SqlCommand(\"usp_DoThing\", conn);\n"
+            "        cmd.CommandType = (CommandType)4;\n"
+            "        cmd.ExecuteNonQuery();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 1
+        assert raw_invocations[0]["command_type_stored_procedure"] is True
+        assert raw_invocations[0]["command_type_mode"] == "stored_procedure"
+
+
+def test_static_analyzer_host_recognizes_numeric_command_type_cast_as_table_direct() -> None:
+    """A `(CommandType)512` cast resolves to `TableDirect` and is never misclassified as stored-procedure or text."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "NumericTableDirectCommandType.cs"
+        source_path.write_text(
+            "public class NumericTableDirectCommandType {\n"
+            "    private void Run() {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        var cmd = new SqlCommand(\"Foo\", conn);\n"
+            "        cmd.CommandType = (CommandType)512;\n"
+            "        cmd.ExecuteReader();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 1
+        assert raw_invocations[0]["command_type_stored_procedure"] is False
+        assert raw_invocations[0]["command_type_mode"] == "unknown"
+
+
+def test_static_analyzer_host_recognizes_numeric_command_type_cast_as_text() -> None:
+    """A `(CommandType)1` cast is recognized the same as `CommandType.Text`."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "NumericTextCommandType.cs"
+        source_path.write_text(
+            "public class NumericTextCommandType {\n"
+            "    private void Run() {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        var cmd = new SqlCommand(\"SELECT * FROM Foo\", conn);\n"
+            "        cmd.CommandType = (CommandType)1;\n"
+            "        cmd.ExecuteReader();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 1
+        assert raw_invocations[0]["command_type_stored_procedure"] is False
+        assert raw_invocations[0]["command_type_mode"] == "text"
+
+
+def test_static_analyzer_host_treats_unmapped_numeric_command_type_cast_as_unresolved() -> None:
+    """A numeric cast with no defined mapping (e.g. `(CommandType)999`) stays unresolved."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "UnmappedNumericCommandType.cs"
+        source_path.write_text(
+            "public class UnmappedNumericCommandType {\n"
+            "    private void Run() {\n"
+            "        var conn = new SqlConnection(\"x\");\n"
+            "        var cmd = new SqlCommand(\"usp_DoThing\", conn);\n"
+            "        cmd.CommandType = (CommandType)999;\n"
+            "        cmd.ExecuteNonQuery();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+        raw_invocations = result["db_invocations"]
+
+        assert len(raw_invocations) == 1
+        assert raw_invocations[0]["command_type_stored_procedure"] is False
+        assert raw_invocations[0]["command_type_mode"] == "unknown"
+
+
 def test_static_analyzer_host_emits_default_and_conditional_procedure_assignments() -> None:
     """A command text variable yields one raw fact for every reachable finite assignment."""
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
@@ -2568,6 +2676,48 @@ public class SettingsPage {
         )[0]
         assert invocation.evidence is InvocationEvidence.UNRESOLVED
         assert invocation.reason == "wrapper_mode_unresolved"
+
+
+def test_static_analyzer_host_recognizes_numeric_command_type_cast_in_wrapper_body() -> None:
+    """A wrapper's `(CommandType)4` assignment is recognized as a fixed stored-procedure wrapper."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    source = """
+using System.Data;
+using System.Data.SqlClient;
+
+public class NumericCommandTypeWrapper {
+    private readonly SqlConnection connection;
+    public NumericCommandTypeWrapper(SqlConnection connection) { this.connection = connection; }
+
+    public void Execute(string commandText) {
+        var command = new SqlCommand(commandText, connection);
+        command.CommandType = (CommandType)4;
+        command.ExecuteNonQuery();
+    }
+}
+
+public class NumericCommandTypePage {
+    private void Run(SqlConnection connection) {
+        var wrapper = new NumericCommandTypeWrapper(connection);
+        wrapper.Execute("usp_DoThing");
+    }
+}
+"""
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "NumericCommandTypeWrapperFixture.cs"
+        source_path.write_text(source, encoding="utf-8")
+        result = host.analyze_csharp(source_path)
+        raw_invocations = [
+            item
+            for item in result["db_invocations"]
+            if item.get("invocation_kind") == "source_wrapper"
+        ]
+
+        assert len(raw_invocations) == 1
+        assert raw_invocations[0]["wrapper_method_semantics"] == "fixed_stored_procedure"
 
 
 def test_source_backed_sqlobject_fixture_preserves_semantics_binding_and_overloads() -> None:

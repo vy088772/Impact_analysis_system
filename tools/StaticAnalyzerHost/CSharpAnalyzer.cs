@@ -4,6 +4,35 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
+/// <summary>Resolves `CommandType` member names from both named member access and numeric casts (e.g. `(CommandType)4`).</summary>
+internal static class CommandTypeCastRecognizer
+{
+    private static readonly IReadOnlyDictionary<int, string> NumericMembers = new Dictionary<int, string>
+    {
+        [1] = "Text",
+        [4] = "StoredProcedure",
+        [512] = "TableDirect",
+    };
+
+    internal static bool IsCommandTypeIdentity(ExpressionSyntax expression)
+    {
+        var normalized = expression.ToString()
+            .Trim()
+            .Replace("global::", "", StringComparison.Ordinal);
+        return normalized is "CommandType" or "System.Data.CommandType";
+    }
+
+    /// <summary>Returns the named member (e.g. "StoredProcedure") for a numeric cast to `CommandType`, or null if unmapped.</summary>
+    internal static string? ResolveNumericCastMember(ExpressionSyntax expression)
+    {
+        if (expression is not CastExpressionSyntax cast || !IsCommandTypeIdentity(cast.Type))
+            return null;
+        if (cast.Expression is not LiteralExpressionSyntax { Token.Value: int numeric })
+            return null;
+        return NumericMembers.TryGetValue(numeric, out var name) ? name : null;
+    }
+}
+
 internal static class CSharpAnalyzer
 {
     internal static CSharpAnalysis Analyze(string inputPath)
@@ -792,12 +821,14 @@ internal static class DirectSqlClientAnalyzer
                 ? "dynamic_expression"
                 : "literal_expression";
 
-    /// <summary>Matches only an exact `CommandType.StoredProcedure` member access, not any value containing the substring.</summary>
+    /// <summary>Matches an exact `CommandType.StoredProcedure` member access or an equivalent numeric cast, e.g. `(CommandType)4`.</summary>
     private static bool IsStoredProcedureCommandType(ExpressionSyntax expression)
-        => expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "StoredProcedure" };
+        => expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "StoredProcedure" }
+            || CommandTypeCastRecognizer.ResolveNumericCastMember(expression) == "StoredProcedure";
 
     private static bool IsTextCommandType(ExpressionSyntax expression)
-        => expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Text" };
+        => expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Text" }
+            || CommandTypeCastRecognizer.ResolveNumericCastMember(expression) == "Text";
 
     private sealed record CommandTextCandidate(
         string CommandTextKind,
@@ -3122,15 +3153,13 @@ internal static class WrapperAnalyzer
         => expression.DescendantNodesAndSelf()
             .OfType<MemberAccessExpressionSyntax>()
             .Any(member => member.Name.Identifier.Text == memberName
-                && IsCommandTypeIdentity(member.Expression));
+                && IsCommandTypeIdentity(member.Expression))
+            || expression.DescendantNodesAndSelf()
+                .OfType<CastExpressionSyntax>()
+                .Any(cast => CommandTypeCastRecognizer.ResolveNumericCastMember(cast) == memberName);
 
     private static bool IsCommandTypeIdentity(ExpressionSyntax expression)
-    {
-        var normalized = expression.ToString()
-            .Trim()
-            .Replace("global::", "", StringComparison.Ordinal);
-        return normalized is "CommandType" or "System.Data.CommandType";
-    }
+        => CommandTypeCastRecognizer.IsCommandTypeIdentity(expression);
 
     private static string? ResolveVariableName(ObjectCreationExpressionSyntax creation)
     {
