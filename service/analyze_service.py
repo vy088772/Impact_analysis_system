@@ -33,6 +33,7 @@ from code_analyzer.csharp_analysis_gateway import (
     wrapper_observation_identity,
 )
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
+from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 
 from .schemas import (
     AnalyzeRequest,
@@ -65,6 +66,7 @@ from . import flow_chain_builder
 from .contract_preflight import (
     load_contract_registry,
     load_system_contract_selector,
+    normalize_contract_selector,
     run_contract_preflight,
 )
 from .contract_transaction import (
@@ -269,6 +271,394 @@ def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
         merged.table_relations.extend(s.table_relations)
     merged.calculate_statistics()
     return merged
+
+
+def _wrapper_receiver_sources(
+    scan: ProjectScanResult,
+    *,
+    external_only: bool,
+) -> dict[str, list[str]]:
+    receiver_sources: dict[str, set[str]] = {}
+    raw_by_file = getattr(scan, "db_invocations", {}) or {}
+    if not isinstance(raw_by_file, Mapping):
+        return {}
+    for source_file, records in raw_by_file.items():
+        for record in records or ():
+            if not isinstance(record, Mapping):
+                continue
+            if str(record.get("invocation_kind") or "").casefold() != "source_wrapper":
+                continue
+            if external_only and record.get("wrapper_source_available") is True:
+                continue
+            receiver = str(record.get("wrapper_receiver_type") or "").strip()
+            if receiver:
+                receiver_sources.setdefault(receiver, set()).add(str(source_file))
+    return {
+        receiver: sorted(source_files, key=str.casefold)
+        for receiver, source_files in receiver_sources.items()
+    }
+
+
+def _external_wrapper_sources(scan: ProjectScanResult) -> dict[str, list[str]]:
+    return _wrapper_receiver_sources(scan, external_only=True)
+
+
+def _all_wrapper_receivers(scan: ProjectScanResult) -> set[str]:
+    return set(_wrapper_receiver_sources(scan, external_only=False))
+
+
+def _proposal_receiver_types(proposal: Mapping[str, Any]) -> set[str]:
+    values: set[str] = set()
+    receiver_types = proposal.get("receiver_types")
+    if isinstance(receiver_types, str):
+        values.add(receiver_types.strip())
+    elif isinstance(receiver_types, (list, tuple, set)):
+        values.update(str(value).strip() for value in receiver_types if str(value).strip())
+    for key in (
+        "receiver_type",
+        "implementation_identity",
+        "wrapper_implementation_identity",
+    ):
+        value = proposal.get(key)
+        if value is not None and str(value).strip():
+            values.add(str(value).strip())
+    snapshot = proposal.get("implementation_snapshot")
+    if isinstance(snapshot, Mapping):
+        for key in ("behavior_surface_unit", "implementation_identity"):
+            value = snapshot.get(key)
+            if value is not None and str(value).strip():
+                values.add(str(value).strip())
+    return values
+
+
+def _active_contract_receivers(registry: Mapping[str, Any]) -> set[str]:
+    contracts = registry.get("contracts", registry)
+    if not isinstance(contracts, Mapping):
+        return set()
+    receivers: set[str] = set()
+    for contract in contracts.values():
+        if isinstance(contract, Mapping):
+            receivers.update(_proposal_receiver_types(contract))
+    return receivers
+
+
+def _has_source_backed_wrapper_evidence(
+    scan: ProjectScanResult,
+    receiver_type: str,
+) -> bool:
+    raw_by_file = getattr(scan, "db_invocations", {}) or {}
+    if isinstance(raw_by_file, Mapping):
+        for records in raw_by_file.values():
+            for record in records or ():
+                if not isinstance(record, Mapping):
+                    continue
+                if (
+                    str(record.get("invocation_kind") or "").casefold() == "source_wrapper"
+                    and str(record.get("wrapper_receiver_type") or "").strip() == receiver_type
+                    and record.get("wrapper_source_available") is True
+                ):
+                    return True
+
+    for attribute in (
+        "contract_preflight_proposals",
+        "contract_proposals",
+        "verified_implementation_snapshots",
+    ):
+        proposals = getattr(scan, attribute, None) or ()
+        if isinstance(proposals, Mapping):
+            proposals = (proposals,)
+        for proposal in proposals:
+            if not isinstance(proposal, Mapping):
+                continue
+            if receiver_type not in _proposal_receiver_types(proposal):
+                continue
+            evidence_kind = str(proposal.get("evidence_kind") or "").casefold()
+            if proposal.get("source_backed") is True or evidence_kind in {
+                "source",
+                "source_backed",
+                "local_source",
+                "verified_source",
+            }:
+                return True
+    return False
+
+
+def _find_source_csproj(root: Path, source_files: list[str]) -> Path | None:
+    root = root.resolve()
+    candidates: set[Path] = set()
+    for source_file in source_files:
+        source_path = Path(source_file)
+        if not source_path.is_absolute():
+            source_path = root / source_path
+        source_path = source_path.resolve()
+        try:
+            source_path.relative_to(root)
+        except ValueError:
+            continue
+        current = source_path.parent
+        while True:
+            candidates.update(path for path in current.glob("*.csproj") if path.is_file())
+            if current == root or root not in current.parents:
+                break
+            current = current.parent
+    if not candidates:
+        return None
+    deepest = max(len(path.parts) for path in candidates)
+    deepest_candidates = sorted(
+        (path for path in candidates if len(path.parts) == deepest),
+        key=lambda path: str(path).casefold(),
+    )
+    return deepest_candidates[0] if len(deepest_candidates) == 1 else None
+
+
+def _decompilation_reasons(response: Mapping[str, Any]) -> list[str]:
+    outcome = str(response.get("attempt_outcome") or "").strip()
+    if not outcome:
+        attempt = response.get("decompilation_attempt")
+        if isinstance(attempt, Mapping):
+            outcome = str(attempt.get("outcome") or "").strip()
+    status = str(response.get("status") or "").strip()
+    if outcome == "not_attempted" and status in {
+        "csproj_not_found",
+        "csproj_unreadable",
+        "receiver_not_referenced",
+        "hint_path_missing",
+        "referenced_dll_missing",
+    }:
+        return [status]
+    if outcome != "incomplete":
+        return []
+
+    reasons: list[str] = []
+    if status and status != "resolved":
+        reasons.append(status)
+    if response.get("translation_problem_methods"):
+        reasons.append("decompiler_translation_problem")
+    for definition in response.get("wrapper_definitions") or ():
+        if not isinstance(definition, Mapping):
+            continue
+        reason = str(definition.get("unresolved_reason") or "").strip()
+        if reason:
+            reasons.append(reason)
+    if not reasons:
+        reasons.append("decompilation_incomplete")
+    return list(dict.fromkeys(reasons))
+
+
+def _decompilation_attempt_record(
+    response: Mapping[str, Any],
+    *,
+    receiver_type: str,
+    csproj_path: Path,
+) -> dict[str, Any]:
+    attempt = response.get("decompilation_attempt")
+    cache_status = str(response.get("cache_status") or "").strip()
+    attempted = (
+        bool(attempt.get("attempted"))
+        if isinstance(attempt, Mapping) and "attempted" in attempt
+        else cache_status != "hit"
+    )
+    outcome = str(response.get("attempt_outcome") or "").strip()
+    if not outcome and isinstance(attempt, Mapping):
+        outcome = str(attempt.get("outcome") or "").strip()
+    if not outcome:
+        outcome = (
+            "complete"
+            if response.get("status") == "resolved" and response.get("contract_proposals")
+            else "incomplete"
+        )
+    display_outcome = "cached-skip" if not attempted and cache_status == "hit" else outcome
+    return {
+        "receiver_type": receiver_type,
+        "csproj_path": str(csproj_path),
+        "dll_path": str(response.get("dll_path") or ""),
+        "assembly_identity": str(response.get("assembly_identity") or ""),
+        "attempted": attempted,
+        "outcome": display_outcome,
+        "attempt_outcome": outcome,
+        "cache_status": cache_status,
+        "reasons": _decompilation_reasons(response),
+        "detail": str(response.get("detail") or ""),
+    }
+
+
+def _not_attempted_decompilation_record(
+    *,
+    receiver_type: str,
+    reason: str,
+    csproj_path: Path | None = None,
+) -> dict[str, Any]:
+    return {
+        "receiver_type": receiver_type,
+        "csproj_path": str(csproj_path) if csproj_path is not None else "",
+        "dll_path": "",
+        "assembly_identity": "",
+        "attempted": False,
+        "outcome": "not_attempted",
+        "attempt_outcome": "not_attempted",
+        "cache_status": "not_applicable",
+        "reasons": [reason],
+        "detail": "",
+    }
+
+
+def _incomplete_decompilation_record(
+    *,
+    receiver_type: str,
+    csproj_path: Path,
+    reason: str,
+    detail: str,
+    attempted: bool,
+) -> dict[str, Any]:
+    return {
+        **_not_attempted_decompilation_record(
+            receiver_type=receiver_type,
+            reason=reason,
+            csproj_path=csproj_path,
+        ),
+        "attempted": attempted,
+        "outcome": "incomplete",
+        "attempt_outcome": "incomplete",
+        "detail": detail,
+    }
+
+
+def _decompilation_summary(
+    attempts: list[dict[str, Any]],
+    *,
+    reason: str = "",
+) -> dict[str, Any]:
+    outcomes = [str(item.get("outcome") or "") for item in attempts]
+    if any(outcome == "incomplete" for outcome in outcomes):
+        outcome = "incomplete"
+    elif any(outcome == "complete" for outcome in outcomes):
+        outcome = "complete"
+    elif any(outcome == "cached-skip" for outcome in outcomes):
+        outcome = "cached-skip"
+    else:
+        outcome = "not_attempted"
+    reasons = [
+        str(item_reason)
+        for item in attempts
+        for item_reason in item.get("reasons") or ()
+        if str(item_reason)
+    ]
+    if reason:
+        reasons.append(reason)
+    return {
+        "attempted": any(bool(item.get("attempted")) for item in attempts),
+        "outcome": outcome,
+        "reasons": list(dict.fromkeys(reasons)),
+        "attempts": attempts,
+    }
+
+
+def _populate_decompilation_proposals(
+    scans: Iterable[ProjectScanResult],
+    *,
+    enabled: bool,
+    disabled_reason: str = "",
+    active_contract_receivers: set[str] | None = None,
+) -> dict[str, Any]:
+    if not enabled:
+        return _decompilation_summary([], reason=disabled_reason)
+
+    scan_list = list(scans)
+    attempts: list[dict[str, Any]] = []
+    skipped_reasons: set[str] = set()
+    active_contract_receivers = active_contract_receivers or set()
+    source_backed_receivers = {
+        receiver
+        for scan in scan_list
+        for receiver in _all_wrapper_receivers(scan)
+        if any(
+            _has_source_backed_wrapper_evidence(other_scan, receiver)
+            for other_scan in scan_list
+        )
+    }
+    host: StaticAnalyzerHost | None = None
+    host_error: str | None = None
+    for scan in scan_list:
+        root = Path(scan.project_root)
+        external_sources = _external_wrapper_sources(scan)
+        for receiver_type in sorted(external_sources, key=str.casefold):
+            if receiver_type in source_backed_receivers:
+                skipped_reasons.add("source_backed_evidence")
+                continue
+            if receiver_type in active_contract_receivers:
+                skipped_reasons.add("active_contract_evidence")
+                continue
+            csproj_path = _find_source_csproj(root, external_sources[receiver_type])
+            if csproj_path is None:
+                attempts.append(
+                    _not_attempted_decompilation_record(
+                        receiver_type=receiver_type,
+                        reason="receiver_not_referenced",
+                    )
+                )
+                continue
+            if host_error is not None:
+                attempts.append(
+                    _incomplete_decompilation_record(
+                        receiver_type=receiver_type,
+                        csproj_path=csproj_path,
+                        reason="decompiler_host_unavailable",
+                        detail=host_error,
+                        attempted=False,
+                    )
+                )
+                continue
+            if host is None:
+                try:
+                    host = StaticAnalyzerHost.for_project(
+                        Path(__file__).resolve().parent.parent
+                    )
+                    host.ensure_ready()
+                except StaticAnalyzerHostError as exc:
+                    host_error = str(exc)
+                    attempts.append(
+                        _incomplete_decompilation_record(
+                            receiver_type=receiver_type,
+                            csproj_path=csproj_path,
+                            reason="decompiler_host_unavailable",
+                            detail=host_error,
+                            attempted=False,
+                        )
+                    )
+                    continue
+            try:
+                response = host.decompile_wrapper(csproj_path, receiver_type)
+            except StaticAnalyzerHostError as exc:
+                attempts.append(
+                    _incomplete_decompilation_record(
+                        receiver_type=receiver_type,
+                        csproj_path=csproj_path,
+                        reason="decompiler_failed",
+                        detail=str(exc),
+                        attempted=True,
+                    )
+                )
+                continue
+            proposals = response.get("contract_proposals") or []
+            if isinstance(proposals, Mapping):
+                proposals = [proposals]
+            current_proposals = getattr(scan, "contract_proposals", None)
+            if not isinstance(current_proposals, list):
+                current_proposals = []
+                scan.contract_proposals = current_proposals
+            for proposal in proposals:
+                if isinstance(proposal, Mapping) and dict(proposal) not in current_proposals:
+                    current_proposals.append(dict(proposal))
+            attempts.append(
+                _decompilation_attempt_record(
+                    response,
+                    receiver_type=receiver_type,
+                    csproj_path=csproj_path,
+                )
+            )
+
+    reason = ",".join(sorted(skipped_reasons))
+    return _decompilation_summary(attempts, reason=reason)
 
 
 def _execution_sql_context(database_alias: str) -> Tuple[SpCatalog, Dict, str]:
@@ -2394,6 +2784,26 @@ def refresh_source(
     ):
         configured_selector = load_system_contract_selector(database)
     registry = load_contract_registry()
+    selector_state = normalize_contract_selector(configured_selector, registry)
+    decompilation_enabled = (
+        not requested
+        and selector_state.status == "unspecified"
+        and not selector_state.reason
+    )
+    if requested:
+        decompilation_disabled_reason = "program_scope"
+    elif selector_state.status == "valid":
+        decompilation_disabled_reason = "selector_configured"
+    elif selector_state.reason:
+        decompilation_disabled_reason = selector_state.reason
+    else:
+        decompilation_disabled_reason = ""
+    decompilation_summary = _populate_decompilation_proposals(
+        scans,
+        enabled=decompilation_enabled,
+        disabled_reason=decompilation_disabled_reason,
+        active_contract_receivers=_active_contract_receivers(registry),
+    )
     preflight = run_contract_preflight(
         scans,
         selector=configured_selector,
@@ -2411,6 +2821,7 @@ def refresh_source(
             preflight.reason if preflight.failed else ""
         ),
     )
+    wrapper_summary["decompilation"] = decompilation_summary
 
     # Registry/catalog writes happen only after formal classification and
     # wrapper reconciliation above have already succeeded, and only for a
