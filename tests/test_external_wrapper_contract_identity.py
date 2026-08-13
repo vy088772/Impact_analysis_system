@@ -376,7 +376,8 @@ def test_external_invocation_retains_contract_revision_provenance() -> None:
     assert fields["contract_status"] == "accepted"
 
 
-def test_bound_implementation_identity_selects_only_its_matching_contract() -> None:
+def test_bound_implementation_identity_without_selector_stays_unresolved() -> None:
+    """A concrete binding cannot select a registry contract implicitly."""
     gateway = CSharpAnalysisGateway(
         SpCatalog.from_databases({"OrdersDb": ["usp_Save"]}),
         connection_sources={"conn": "OrdersDb"},
@@ -432,8 +433,11 @@ def test_bound_implementation_identity_selects_only_its_matching_contract() -> N
 
     invocation = gateway.resolve_direct_invocations("Page.cs", [raw])[0]
 
-    assert invocation.wrapper_contract == "vendor-two"
-    assert invocation.evidence.value == "proven"
+    assert invocation.wrapper_contract == ""
+    assert invocation.wrapper_selection_source == "unresolved_receiver_type"
+    assert invocation.wrapper_status == "unresolved_contract"
+    assert invocation.wrapper_review_candidate is True
+    assert invocation.evidence.value == "unresolved"
 
 
 def test_implementation_identity_without_assembly_identity_stays_unresolved() -> None:

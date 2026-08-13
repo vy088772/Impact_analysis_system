@@ -1604,40 +1604,6 @@ class CSharpAnalysisGateway:
             None,
         )
 
-    def _contracts_by_implementation_identity(
-        self, binding: Mapping[str, str]
-    ) -> List[Dict[str, Any]]:
-        """Contracts matching a genuinely resolved Receiver Implementation
-        Binding (spec item 168): a receiver traced through construction and
-        relevant assignments to a concrete wrapper type *and* assembly
-        identity may select a contract. A bare receiver type name alone --
-        which carries no assembly identity -- may not; requiring both here
-        is what distinguishes this from matching on ``receiver_type``.
-
-        Contracts still under review (carrying a ``status``/``lifecycle``
-        from the onboarding workflow, e.g. ``legacy_unverified``) require a
-        fully explicit ``wrapper_contract`` selector regardless of binding.
-        """
-        implementation_identity = binding.get("implementation_identity", "")
-        if not _normalize_type_identity(implementation_identity):
-            return []
-        if not _normalize_type_identity(binding.get("assembly_identity", "")):
-            return []
-        contracts = (
-            _load_external_wrapper_contracts()
-            if self._external_wrapper_contracts is None
-            else self._external_wrapper_contracts
-        )
-        return [
-            contract
-            for contract in contracts.values()
-            if "status" not in contract
-            and "lifecycle" not in contract
-            and _receiver_type_matches_contract(
-                implementation_identity, contract.get("receiver_types", [])
-            )
-        ]
-
     def reconcile_wrapper(
         self,
         relative_path: str,
@@ -1885,22 +1851,14 @@ class CSharpAnalysisGateway:
                 mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
             )
 
-        # Contract selection has exactly two legitimate sources (spec item
-        # 70/168): an explicit selector, or a receiver traced through
-        # construction/assignment to a concrete implementation identity. A
-        # bare declared/observed receiver type name alone may never select a
-        # contract; without either source this stays an unresolved review
-        # candidate.
+        # Contract selection has one legitimate source: an explicit system
+        # selector. Receiver implementation binding remains provenance and
+        # cannot define a registry-wide candidate boundary.
         if explicit_selected:
             candidates = selected_contracts or [
                 candidate for candidate in (selected_contract,) if candidate is not None
             ]
             selection_source = "explicit"
-        elif binding["implementation_identity"]:
-            candidates = list(
-                self._contracts_by_implementation_identity(binding)
-            )
-            selection_source = "auto_receiver_type"
         else:
             candidates = []
             selection_source = "unresolved_receiver_type"
@@ -2091,7 +2049,7 @@ class CSharpAnalysisGateway:
 
         return result(
             wrapper_kind="external_wrapper",
-            status="explicit_selected" if explicit_selected else "auto_selected",
+            status="explicit_selected",
             selection_source=selection_source,
             contract=contract_name,
             contract_mode=contract_mode,
@@ -2948,7 +2906,7 @@ class CSharpAnalysisGateway:
                     **metadata,
                     **common,
                 ))
-            if reconciliation.status in {"explicit_selected", "auto_selected"}:
+            if reconciliation.status == "explicit_selected":
                 if not _known_terminal_sink(raw.get("terminal_sink")):
                     metadata = self._invocation_metadata(
                         raw,

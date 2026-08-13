@@ -22,6 +22,7 @@ from code_analyzer.csharp_analysis_gateway import (
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 import code_analyzer.static_analyzer_host as static_analyzer_host_module
 import code_analyzer.csharp_analysis_gateway as gateway_module
+from service.execution_path_builder import build_execution_paths
 
 
 def _raw_invocation(**overrides) -> dict:
@@ -219,6 +220,96 @@ def test_external_contract_without_explicit_selector_never_auto_selects_by_recei
     assert gateway.resolve_direct_invocations("f.cs", [raw])[0].evidence is (
         InvocationEvidence.UNRESOLVED
     )
+
+
+def test_receiver_binding_without_selector_never_auto_selects_registry_contract() -> None:
+    """A concrete binding supplies provenance, not an implicit selector."""
+    registry = {
+        "vendor-one": {
+            "name": "vendor-one",
+            "receiver_types": ["Vendor.One.SQLObject"],
+            "methods": {
+                "Execute": {
+                    "mode": "stored_procedure",
+                    "sink": "ExecuteNonQuery",
+                }
+            },
+        }
+    }
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contracts=registry,
+    )
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        wrapper_method_name="Execute",
+        wrapper_receiver_type="Vendor.One.SQLObject",
+        wrapper_source_available=False,
+        wrapper_mode="stored_procedure",
+        receiver_binding={
+            "implementation_identity": "Vendor.One.SQLObject",
+            "assembly_identity": "Vendor.One",
+            "assembly_revision": "1.0.0",
+            "provenance": "verified_metadata",
+        },
+    )
+
+    reconciliation = gateway.reconcile_wrapper("f.cs", raw)
+    invocation = gateway.resolve_direct_invocations("f.cs", [raw])[0]
+
+    assert reconciliation.status == "unresolved_contract"
+    assert reconciliation.selection_source == "unresolved_receiver_type"
+    assert reconciliation.contract == ""
+    assert reconciliation.contract_mode == ""
+    assert reconciliation.contract_sink == ""
+    assert reconciliation.candidate_contracts == ()
+    assert reconciliation.review_candidate is True
+    assert reconciliation.active_contract is False
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.wrapper_contract == ""
+    assert invocation.wrapper_status == "unresolved_contract"
+    assert invocation.invocation_mode == "stored_procedure"
+    matching_graph = {
+        "nodes": [
+            {
+                "id": "stored_procedure:dbo.usp_SaveOrder",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_SaveOrder",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_SaveOrder",
+                "module": {
+                    "type": "stored_procedure",
+                    "schema": "dbo",
+                    "name": "usp_SaveOrder",
+                },
+                "sequence": 1,
+                "operation_type": "UPDATE",
+                "branch_path": [],
+                "conditions": [],
+                "read_tables": [],
+                "write_tables": ["dbo.SOrder"],
+                "written_columns": [],
+            },
+        ],
+        "relationships": [
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_SaveOrder",
+                "target": "dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
+            }
+        ],
+    }
+    paths = build_execution_paths([invocation], matching_graph)
+    assert len(paths) == 1
+    assert paths[0]["evidence"] == "unresolved"
+    assert paths[0]["confirmed"] is False
+    assert paths[0]["terminal_operation"] is None
+    assert paths[0]["target"] == ""
 
 
 def test_external_contract_explicit_selection_still_requires_exact_qualified_identity() -> None:

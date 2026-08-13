@@ -254,12 +254,12 @@ def test_path_evidence_preserves_wrapper_classification_and_database_evidence(tm
         source_snapshot_hash="snapshot-hash",
         external_wrapper_method="ExeProcNon",
         wrapper_contract="sqlobject",
-        wrapper_contract_source="auto_receiver_type",
+        wrapper_contract_source="explicit",
         wrapper_receiver_type="SQLObject",
         wrapper_contract_candidates=("sqlobject",),
         wrapper_kind="external_wrapper",
-        wrapper_status="auto_selected",
-        wrapper_selection_source="auto_receiver_type",
+        wrapper_status="explicit_selected",
+        wrapper_selection_source="explicit",
         wrapper_contract_mode="stored_procedure",
         wrapper_contract_sink="ExecuteNonQuery",
         wrapper_scan_root=str(tmp_path),
@@ -279,11 +279,11 @@ def test_path_evidence_preserves_wrapper_classification_and_database_evidence(tm
     )
 
     assert evidence.wrapper_kind == "external_wrapper"
-    assert evidence.wrapper_status == "auto_selected"
-    assert evidence.wrapper_classification_status == "auto_selected"
-    assert evidence.classification_status == "auto_selected"
-    assert evidence.status == "auto_selected"
-    assert evidence.wrapper_selection_source == "auto_receiver_type"
+    assert evidence.wrapper_status == "explicit_selected"
+    assert evidence.wrapper_classification_status == "explicit_selected"
+    assert evidence.classification_status == "explicit_selected"
+    assert evidence.status == "explicit_selected"
+    assert evidence.wrapper_selection_source == "explicit"
     assert evidence.wrapper_contract == "sqlobject"
     assert evidence.contract == "sqlobject"
     assert evidence.wrapper_contract_mode == "stored_procedure"
