@@ -225,6 +225,69 @@ def test_report_evidence_and_provenance_match_refresh_reconciliation(
     assert report_observation["locations"][0]["evidence_status"] == "proven"
 
 
+def test_refresh_reconciliation_drops_reviewed_exclusions_from_totals_and_detail(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A reviewed wrapper-review exclusion must not just lose its review flag --
+    it must not occupy wrapper_calls/observation_groups or appear in the
+    observations list at all, matching how resolve_direct_invocations already
+    drops it outright rather than relabeling it in place."""
+    source_file = tmp_path / "OrderPage.cs"
+    excluded_record = _record(
+        wrapper_receiver_type="",
+        wrapper_method_name="Add",
+        wrapper_source_available=False,
+        wrapper_mode="unknown",
+        command_text="",
+        command_text_kind="",
+    )
+    kept_record = _record(connection_expression="conn")
+    scan = SimpleNamespace(
+        project_root=str(tmp_path),
+        db_invocations={str(source_file): [excluded_record, kept_record]},
+        connection_sources={str(source_file.resolve()): {"conn": "OrdersDb"}},
+    )
+    monkeypatch.setattr(
+        analyze_service,
+        "load_wrapper_review_exclusions",
+        lambda system: (
+            {"receiver_type": "", "method_name": "Add", "reason": "framework_method_not_sqlfunc"},
+        ),
+    )
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema: {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "procedures": [{"name": "dbo.usp_SO_Delete"}],
+        },
+    )
+
+    refresh = analyze_service.reconcile_refresh_wrappers(
+        [scan],
+        database="OrdersDb",
+        explicit_contract="sqlobject",
+        contract_registry={
+            "sqlobject": {
+                "name": "sqlobject",
+                "receiver_types": ["SQLObject"],
+                "methods": {
+                    "ExeProcNon": {"mode": "stored_procedure", "sink": "ExecuteNonQuery"},
+                },
+            }
+        },
+    )
+
+    assert refresh["totals"]["wrapper_calls"] == 1
+    assert refresh["totals"]["observation_groups"] == 1
+    assert refresh["totals"]["review_candidates"] == 0
+    assert all(item["wrapper_method"] != "Add" for item in refresh["observations"])
+    assert len(refresh["observations"]) == 1
+    assert refresh["observations"][0]["wrapper_method"] == "ExeProcNon"
+
+
 def test_json_cli_output_is_machine_readable(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parent.parent
     environment = os.environ.copy()

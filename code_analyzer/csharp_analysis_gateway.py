@@ -383,8 +383,17 @@ def wrapper_observation_fields(
         or (evidence.source_snapshot_hash if evidence is not None else "")
         or ""
     )
-    evidence_status = evidence.evidence.value if evidence is not None else "not_applicable"
-    evidence_reason = evidence.reason if evidence is not None else "inline_sql"
+    reviewed_exclusion = evidence is None and classification["status"] == "not_applicable"
+    evidence_status = (
+        "not_applicable"
+        if reviewed_exclusion
+        else evidence.evidence.value if evidence is not None else "not_applicable"
+    )
+    evidence_reason = (
+        classification["reason"]
+        if reviewed_exclusion
+        else evidence.reason if evidence is not None else "inline_sql"
+    )
     database = evidence.database if evidence is not None else None
     database_candidates = (
         list(evidence.database_candidates) if evidence is not None else []
@@ -737,6 +746,75 @@ def _normalize_external_wrapper_contract_registry(
     return loaded_contracts
 
 
+def _normalize_wrapper_review_exclusions(
+    exclusions: Optional[Iterable[Mapping[str, Any]]],
+) -> Dict[tuple[str, str], str]:
+    """Fold a curated review-triage list into an exact (receiver, method) lookup.
+
+    Each entry records a human decision that one exact observed receiver/method
+    pair is confirmed not to be a database wrapper call (e.g. ``String.Format``
+    surfaced only because its receiver type could not be resolved locally).
+    Matching is exact, not a method-name wildcard, so a triage decision never
+    silently swallows an unrelated call that happens to share a method name.
+    """
+    normalized: Dict[tuple[str, str], str] = {}
+    for entry in exclusions or ():
+        if not isinstance(entry, Mapping):
+            continue
+        method_name = _text_fact(entry.get("method_name") or entry.get("wrapper_method"))
+        if not method_name:
+            continue
+        receiver_type = _text_fact(entry.get("receiver_type"))
+        reason = _text_fact(entry.get("reason")) or "reviewed_non_wrapper_method"
+        normalized[(receiver_type.casefold(), method_name.casefold())] = reason
+    return normalized
+
+
+def _load_wrapper_review_exclusions_registry() -> Dict[str, tuple[Dict[str, Any], ...]]:
+    """Load the repository-level per-system wrapper review exclusion registry."""
+    config_path = (
+        Path(__file__).resolve().parent.parent / "config" / "wrapper_review_exclusions.json"
+    )
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    systems = payload.get("systems", payload) if isinstance(payload, dict) else {}
+    if not isinstance(systems, dict):
+        return {}
+    registry: Dict[str, tuple[Dict[str, Any], ...]] = {}
+    for system_id, entries in systems.items():
+        if not isinstance(entries, list):
+            continue
+        rules = tuple(entry for entry in entries if isinstance(entry, dict))
+        if rules:
+            registry[str(system_id)] = rules
+    return registry
+
+
+def load_wrapper_review_exclusions(system: str) -> tuple[Dict[str, Any], ...]:
+    """Load the reviewed wrapper-review exclusion list for one system id.
+
+    Each entry is a human triage decision, recorded once a maintainer has
+    confirmed one exact receiver/method pair surfaced only because its
+    receiver type could not be resolved locally and is not actually a
+    database wrapper call. Scoped per system so the same method name can be
+    treated differently across unrelated codebases.
+    """
+    normalized_system = str(system or "").strip().casefold()
+    if not normalized_system:
+        return ()
+    registry = _load_wrapper_review_exclusions_registry()
+    return next(
+        (
+            rules
+            for key, rules in registry.items()
+            if str(key).strip().casefold() == normalized_system
+        ),
+        (),
+    )
+
+
 def load_external_wrapper_contract(contract_name: str) -> Optional[Dict[str, Any]]:
     """Load one named external wrapper contract from repository configuration."""
     normalized_name = str(contract_name or "").strip().casefold()
@@ -879,8 +957,53 @@ def _wrapper_contract_method(
     if len(matching) == 1:
         return matching[0], "", tuple(named_methods)
     if len(matching) > 1:
+        merged = _merge_ambiguous_candidates_by_shared_mode(matching)
+        if merged is not None:
+            return merged, "ambiguous_overload_mode_resolved", tuple(named_methods)
         return None, "ambiguous_overload", tuple(named_methods)
     return None, "overload_not_found", tuple(named_methods)
+
+
+def _merge_ambiguous_candidates_by_shared_mode(
+    matching: tuple[Mapping[str, Any], ...],
+) -> Optional[Dict[str, Any]]:
+    """Rate database evidence for a tied overload set when every remaining
+    candidate agrees on ``mode`` and ``sink``.
+
+    Two sibling overloads (e.g. ``CreateReader(string, SqlParameter)`` vs.
+    ``CreateReader(string, SqlParameter[])``) can be indistinguishable from
+    call-site facts alone -- the scanner only sees an argument count, not the
+    exact parameter type -- yet both run the exact same command text through
+    the exact same terminal sink. In that case the *method identity* stays
+    ambiguous (kept out of the merged result, and callers must keep surfacing
+    that as a review-worthy fact) but the *database evidence* does not have
+    to.  A signature-less candidate never participates: it does not declare
+    enough to even confirm it describes the observed call, so folding it in
+    would be exactly the kind of guess this module refuses to make.
+    """
+    modes: Set[str] = set()
+    sinks: Set[str] = set()
+    for candidate in matching:
+        has_signature = bool(
+            _text_fact(_first_fact(candidate, "method_identity", "identity"))
+            or _optional_int_fact(_first_fact(candidate, "method_arity", "arity"))
+            is not None
+            or _text_facts(_first_fact(candidate, "parameter_types", "parameters"))
+        )
+        if not has_signature:
+            return None
+        mode = str(candidate.get("mode") or "").strip()
+        sink = str(candidate.get("sink") or "").strip()
+        if not mode or not sink:
+            return None
+        modes.add(mode.casefold())
+        sinks.add(sink.casefold())
+    if len(modes) != 1 or len(sinks) != 1:
+        return None
+    representative = dict(matching[0])
+    for ambiguous_key in ("method_identity", "identity", "parameter_types", "parameters"):
+        representative.pop(ambiguous_key, None)
+    return representative
 
 
 def _wrapper_contract_method_identity(
@@ -1586,6 +1709,7 @@ class CSharpAnalysisGateway:
         connection_sources: Optional[Dict[str, str]] = None,
         external_wrapper_contract: Optional[Mapping[str, Any]] = None,
         external_wrapper_contracts: Optional[Mapping[str, Any]] = None,
+        wrapper_review_exclusions: Optional[Iterable[Mapping[str, Any]]] = None,
     ):
         self._catalog = catalog
         self._connection_sources = connection_sources or {}
@@ -1595,6 +1719,9 @@ class CSharpAnalysisGateway:
             None
             if external_wrapper_contracts is None
             else _normalize_external_wrapper_contract_registry(external_wrapper_contracts)
+        )
+        self._wrapper_review_exclusions = _normalize_wrapper_review_exclusions(
+            wrapper_review_exclusions
         )
 
     def _load_contract(self, contract_name: str) -> Optional[Dict[str, Any]]:
@@ -1610,6 +1737,15 @@ class CSharpAnalysisGateway:
                 if name.casefold() == normalized_name
             ),
             None,
+        )
+
+    def _wrapper_review_exclusion_reason(self, receiver_type: str, wrapper_method: str) -> str:
+        return self._wrapper_review_exclusions.get(
+            (
+                str(receiver_type or "").strip().casefold(),
+                str(wrapper_method or "").strip().casefold(),
+            ),
+            "",
         )
 
     def reconcile_wrapper(
@@ -1764,6 +1900,16 @@ class CSharpAnalysisGateway:
             if method_semantics == "call_site" and raw_mode == "stored_procedure":
                 return True, ""
             return False, "wrapper_mode_unresolved"
+
+        exclusion_reason = self._wrapper_review_exclusion_reason(receiver_type, wrapper_method)
+        if exclusion_reason:
+            return result(
+                wrapper_kind="external_wrapper",
+                status="not_applicable",
+                selection_source="reviewed_exclusion",
+                reason=exclusion_reason,
+                review_candidate=False,
+            )
 
         if source_available:
             if method_facts["reason"]:
@@ -2056,16 +2202,30 @@ class CSharpAnalysisGateway:
             "call_site": "call_site",
         }.get(contract_mode_key, method_semantics)
 
+        # Every remaining candidate agreed on mode/sink (e.g. CreateReader's
+        # SqlParameter vs SqlParameter[] siblings), so database evidence can
+        # still be rated -- but the exact overload identity was never
+        # confirmed, so this must stay a visible review candidate, not a
+        # silent "explicit_selected" match.
+        overload_identity_ambiguous = method_reason == "ambiguous_overload_mode_resolved"
         return result(
             wrapper_kind="external_wrapper",
-            status="explicit_selected",
+            status="ambiguous_overload" if overload_identity_ambiguous else "explicit_selected",
             selection_source=selection_source,
             contract=contract_name,
             contract_mode=contract_mode,
             contract_sink=str(method_contract.get("sink") or ""),
             candidate_contracts=candidate_names,
+            overload_candidates=method_candidate_names if overload_identity_ambiguous else None,
+            overload_candidate_facts=(
+                tuple(_wrapper_candidate_fact(candidate) for candidate in method_candidates)
+                if overload_identity_ambiguous
+                else None
+            ),
             stored_procedure_mode=stored_procedure_mode,
             mode_reason=mode_reason,
+            reason="ambiguous_overload_mode_resolved" if overload_identity_ambiguous else "",
+            review_candidate=overload_identity_ambiguous,
             contract_identity_facts=contract_identity_facts,
         )
 
@@ -2785,6 +2945,8 @@ class CSharpAnalysisGateway:
             scan_root=scan_root,
             explicit_contract=explicit_contract,
         )
+        if reconciliation.status == "not_applicable":
+            return None
         raw = dict(raw)
         if not _text_fact(raw.get("terminal_sink")):
             raw["terminal_sink"] = _text_fact(
@@ -2892,7 +3054,8 @@ class CSharpAnalysisGateway:
         }
 
         if not source_available:
-            if reconciliation.status == "ambiguous_overload":
+            overload_identity_ambiguous = reconciliation.reason == "ambiguous_overload_mode_resolved"
+            if reconciliation.status == "ambiguous_overload" and not overload_identity_ambiguous:
                 metadata = self._invocation_metadata(
                     raw,
                     database=database,
@@ -2916,7 +3079,7 @@ class CSharpAnalysisGateway:
                     **metadata,
                     **common,
                 ))
-            if reconciliation.status == "explicit_selected":
+            if reconciliation.status == "explicit_selected" or overload_identity_ambiguous:
                 if not _known_terminal_sink(raw.get("terminal_sink")):
                     metadata = self._invocation_metadata(
                         raw,

@@ -1,0 +1,96 @@
+{
+  "systems": {
+    "STC": [
+      {
+        "receiver_type": "",
+        "method_name": "Add",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_dictionary_or_collection_add"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "bindConsignee",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_local_helper_method"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "Combine",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_path_combine"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "Create",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_file_or_directory_create"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "Exists",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_file_or_directory_exists"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "FindByValue",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_webcontrol_findbyvalue"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "FindControl",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_control_findcontrol"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "Format",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_string_format"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "GetExtension",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_path_getextension"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "HtmlEncode",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_httputility_htmlencode"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "IndexOf",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_string_indexof"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "Join",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_string_join"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "MapPath",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_server_mappath"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "Replace",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_string_replace"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "SendMail",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_smtpclient_sendmail"
+      },
+      {
+        "receiver_type": "",
+        "method_name": "Write",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_response_write"
+      },
+      {
+        "receiver_type": "DataTable",
+        "method_name": "Select",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_datatable_select"
+      },
+      {
+        "receiver_type": "string",
+        "method_name": "Replace",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_string_replace"
+      }
+    ]
+  }
+}

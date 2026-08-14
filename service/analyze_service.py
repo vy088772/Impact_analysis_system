@@ -29,6 +29,7 @@ from code_analyzer.csharp_analysis_gateway import (
     WRAPPER_EVIDENCE_FIELDS,
     invocation_wrapper_evidence_fields,
     load_external_wrapper_contract,
+    load_wrapper_review_exclusions,
     normalize_procedure_name,
     wrapper_observation_identity,
 )
@@ -936,6 +937,9 @@ def _rated_execution_invocations(
         else ""
     )
     contract_registry = load_contract_registry()
+    wrapper_review_exclusions = load_wrapper_review_exclusions(
+        str(getattr(req, "database", "") or "")
+    )
 
     for file_result in matched_files:
         file_key = str(Path(file_result.file_path).resolve())
@@ -955,6 +959,7 @@ def _rated_execution_invocations(
             ),
             external_wrapper_contract=external_wrapper_contract,
             external_wrapper_contracts=contract_registry,
+            wrapper_review_exclusions=wrapper_review_exclusions,
         )
         relative_path = _rel(file_result.file_path, root)
         for invocation in gateway.resolve_direct_invocations(
@@ -2315,6 +2320,7 @@ def reconcile_refresh_wrappers(
     else:
         normalized_contract = explicit_contract
     catalog = load_sp_catalog(database)
+    wrapper_review_exclusions = load_wrapper_review_exclusions(database)
 
     for scan in scans:
         root = Path(scan.project_root)
@@ -2338,12 +2344,12 @@ def reconcile_refresh_wrappers(
                 ),
                 external_wrapper_contract=external_wrapper_contract,
                 external_wrapper_contracts=contract_registry,
+                wrapper_review_exclusions=wrapper_review_exclusions,
             )
             records = raw_by_file.get(source_file, []) or []
             for record in records:
                 if not isinstance(record, Mapping) or not _is_refresh_wrapper_record(record):
                     continue
-                wrapper_calls += 1
                 observation = gateway.reconcile_wrapper_observation(
                     relative_path,
                     record,
@@ -2351,6 +2357,14 @@ def reconcile_refresh_wrappers(
                     source_snapshot_hash=snapshot_hash,
                     explicit_contract=normalized_contract or None,
                 )
+                if observation["status"] == "not_applicable":
+                    # A reviewed wrapper-review exclusion: a maintainer already
+                    # confirmed this exact (receiver, method) pair is not a
+                    # database wrapper call, so it should not occupy the
+                    # wrapper-call totals or the observation list at all --
+                    # not just drop out of the printed review detail.
+                    continue
+                wrapper_calls += 1
                 if (
                     contract_preflight_failure_reason
                     and observation.get("wrapper_kind") == "external_wrapper"

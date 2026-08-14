@@ -1854,7 +1854,8 @@ internal static class WrapperAnalyzer
             false,
             mode,
             new[] { caller.Identifier.Text, member.Name.Identifier.Text },
-            WrapperReceiverType: ResolveExternalReceiverType(call, caller));
+            WrapperReceiverType: ResolveExternalReceiverType(call, caller),
+            WrapperMethodArity: call.ArgumentList.Arguments.Count);
 
     private static string? ResolveExternalReceiverType(
         InvocationExpressionSyntax call,

@@ -346,6 +346,123 @@ def test_external_contract_explicit_selection_still_requires_exact_qualified_ide
     assert reconciliation.reason == "receiver_type_does_not_match_contract"
 
 
+def test_wrapper_review_exclusion_marks_reviewed_non_wrapper_call_not_applicable() -> None:
+    """A curated per-system exclusion list lets a human triage decision short-
+    circuit contract classification for calls already confirmed to be ordinary
+    framework methods (e.g. String.Format), not database wrapper calls."""
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contracts={"sqlfunc": _sqlobject_wrapper_contract()},
+        wrapper_review_exclusions=[
+            {
+                "receiver_type": "",
+                "method_name": "Add",
+                "reason": "framework_method_not_sqlfunc",
+            }
+        ],
+    )
+
+    reconciliation = gateway.reconcile_wrapper(
+        "OrderPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="Add",
+            wrapper_receiver_type="",
+            wrapper_source_available=False,
+            wrapper_mode="unknown",
+        ),
+        explicit_contract="sqlfunc",
+    )
+
+    assert reconciliation.status == "not_applicable"
+    assert reconciliation.reason == "framework_method_not_sqlfunc"
+    assert reconciliation.review_candidate is False
+
+
+def test_wrapper_review_exclusion_leaves_observation_evidence_not_applicable() -> None:
+    """The exclusion decision must also flow through to the evidence rating so
+    the wrapper summary stops counting the call as unresolved."""
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contracts={"sqlfunc": _sqlobject_wrapper_contract()},
+        wrapper_review_exclusions=[
+            {
+                "receiver_type": "",
+                "method_name": "Add",
+                "reason": "framework_method_not_sqlfunc",
+            }
+        ],
+    )
+
+    observation = gateway.reconcile_wrapper_observation(
+        "OrderPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="Add",
+            wrapper_receiver_type="",
+            wrapper_source_available=False,
+            wrapper_mode="unknown",
+        ),
+        explicit_contract="sqlfunc",
+    )
+
+    assert observation["status"] == "not_applicable"
+    assert observation["evidence_status"] == "not_applicable"
+    assert observation["evidence_reason"] == "framework_method_not_sqlfunc"
+    assert observation["review_candidate"] is False
+
+
+def test_wrapper_review_exclusion_is_scoped_to_exact_receiver_and_method() -> None:
+    """An exclusion keyed to an unknown receiver must not swallow a call whose
+    receiver type is actually known and simply happens to share the method
+    name -- exclusions are exact-match triage decisions, not name wildcards."""
+    gateway = CSharpAnalysisGateway(
+        SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
+        connection_sources={"conn": "OrdersDb"},
+        external_wrapper_contracts={"sqlfunc": _sqlobject_wrapper_contract()},
+        wrapper_review_exclusions=[
+            {
+                "receiver_type": "",
+                "method_name": "Add",
+                "reason": "framework_method_not_sqlfunc",
+            }
+        ],
+    )
+
+    reconciliation = gateway.reconcile_wrapper(
+        "OrderPage.cs",
+        _raw_invocation(
+            invocation_kind="source_wrapper",
+            wrapper_method_name="Add",
+            wrapper_receiver_type="Dictionary",
+            wrapper_source_available=False,
+            wrapper_mode="unknown",
+        ),
+        explicit_contract="sqlfunc",
+    )
+
+    assert reconciliation.status != "not_applicable"
+
+
+def test_stc_wrapper_review_exclusions_are_loaded_from_repository_config() -> None:
+    """Regression guard tying config/wrapper_review_exclusions.json to the
+    loader: the reviewed STC framework-method false positives (Add, Write,
+    FindControl, DataTable.Select, string.Replace, ...) must still resolve,
+    and an unrelated system id must see no exclusions at all."""
+    stc_exclusions = gateway_module.load_wrapper_review_exclusions("STC")
+    normalized = gateway_module._normalize_wrapper_review_exclusions(stc_exclusions)
+
+    assert normalized[("", "add")] == "reviewed_2026-08-14_not_sqlfunc_dictionary_or_collection_add"
+    assert normalized[("", "findcontrol")]
+    assert normalized[("datatable", "select")]
+    assert normalized[("string", "replace")]
+
+    assert gateway_module.load_wrapper_review_exclusions("PUR") == ()
+    assert gateway_module.load_wrapper_review_exclusions("") == ()
+
+
 def test_external_contract_without_receiver_identity_cannot_be_selected() -> None:
     gateway = CSharpAnalysisGateway(
         SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
@@ -444,6 +561,84 @@ def test_external_contract_overloads_require_raw_signature_identity() -> None:
     assert invocation.evidence is InvocationEvidence.UNRESOLVED
     assert invocation.reason == "ambiguous_overload"
     assert invocation.overload_candidates == ambiguous.overload_candidates
+
+
+def _sqlfunc_createreader_contract() -> dict:
+    """Mirrors the real sqlfunc contract's CreateReader overload set: two
+    arity-2 siblings differing only in SqlParameter vs SqlParameter[], both
+    running the exact same inline_sql -> ExecuteReader semantics."""
+    return {
+        "name": "sqlfunc",
+        "receiver_types": ["SQLFunc"],
+        "methods": {
+            "CreateReader": [
+                {
+                    "method_identity": "sqlfunc.createreader(string)",
+                    "arity": 1,
+                    "parameter_types": ["string"],
+                    "mode": "inline_sql",
+                    "sink": "ExecuteReader",
+                },
+                {
+                    "method_identity": "sqlfunc.createreader(string,system.data.sqlclient.sqlparameter)",
+                    "arity": 2,
+                    "parameter_types": ["string", "system.data.sqlclient.sqlparameter"],
+                    "mode": "inline_sql",
+                    "sink": "ExecuteReader",
+                },
+                {
+                    "method_identity": "sqlfunc.createreader(string,system.data.sqlclient.sqlparameter[])",
+                    "arity": 2,
+                    "parameter_types": ["string", "system.data.sqlclient.sqlparameter[]"],
+                    "mode": "inline_sql",
+                    "sink": "ExecuteReader",
+                },
+            ]
+        },
+    }
+
+
+def test_ambiguous_overload_still_rates_evidence_when_candidates_share_mode_and_sink() -> None:
+    """CreateReader's SqlParameter vs SqlParameter[] siblings can't be told
+    apart from an arity-2 call site alone, but both run the exact same
+    command text through the exact same sink -- so the database evidence
+    should still be ratable, while the exact overload identity stays a
+    visible review fact rather than silently disappearing."""
+    catalog = SpCatalog.from_databases({"STC": []})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "STC"})
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        command_text="select CompanyCode,CompanyTitle from YMTTCompany order by CompanyTitle",
+        wrapper_method_name="CreateReader",
+        wrapper_receiver_type="SQLFunc",
+        wrapper_source_available=False,
+        wrapper_mode="inline_sql",
+        wrapper_method_arity=2,
+        terminal_sink="ExecuteReader",
+        connection_expression="conn",
+    )
+
+    reconciliation = gateway.reconcile_wrapper(
+        "f.cs", raw, explicit_contract=_sqlfunc_createreader_contract()
+    )
+    assert reconciliation.status == "ambiguous_overload"
+    assert reconciliation.reason == "ambiguous_overload_mode_resolved"
+    assert reconciliation.contract_mode == "inline_sql"
+    assert reconciliation.contract_sink == "ExecuteReader"
+    assert "sqlfunc.createreader(string,system.data.sqlclient.sqlparameter)" in (
+        reconciliation.overload_candidates
+    )
+    assert "sqlfunc.createreader(string,system.data.sqlclient.sqlparameter[])" in (
+        reconciliation.overload_candidates
+    )
+    assert reconciliation.review_candidate is True
+
+    invocation = gateway.resolve_direct_invocations(
+        "f.cs", [raw], explicit_contract=_sqlfunc_createreader_contract()
+    )[0]
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.wrapper_status == "ambiguous_overload"
+    assert invocation.wrapper_unresolved_reason == "ambiguous_overload_mode_resolved"
 
 
 def test_external_contract_single_signatureless_method_stays_unresolved_against_specific_overload() -> None:
@@ -5829,10 +6024,28 @@ def test_static_analyzer_host_applies_sqlobject_default_text_without_sp_mode() -
         assert raw_by_text["usp_ExplicitTable"]["wrapper_mode"] == "stored_procedure"
         assert raw_by_text["usp_DynamicMode"]["wrapper_mode"] == "unknown"
 
+        # The scanner now reports argument count for every external/unavailable
+        # wrapper call (previously always null), so a contract entry must
+        # declare its own arity per overload to stay resolvable -- a
+        # signature-less entry can no longer silently match every call site.
+        contract = {
+            "name": "sqlobject",
+            "receiver_types": ["SQLObject"],
+            "methods": {
+                "CreateTable": [
+                    {"arity": 3, "mode": "call_site", "sink": "ExecuteReader"},
+                    {"arity": 4, "mode": "call_site", "sink": "ExecuteReader"},
+                ],
+                "CreateDataSet": [
+                    {"arity": 1, "mode": "call_site", "sink": "ExecuteReader"},
+                    {"arity": 2, "mode": "call_site", "sink": "ExecuteReader"},
+                ],
+            },
+        }
         gateway = CSharpAnalysisGateway(
             SpCatalog.from_databases({"OrdersDb": ["usp_ExplicitTable"]}),
             connection_sources={"obj": "OrdersDb"},
-            external_wrapper_contract=_sqlobject_wrapper_contract(),
+            external_wrapper_contract=contract,
         )
         invocations = gateway.resolve_direct_invocations(
             "SqlObjectDefaultPage.cs",
@@ -5913,6 +6126,7 @@ def test_static_analyzer_host_preserves_external_inline_non_prefix_and_dynamic_f
             "receiver_types": ["SQLObject"],
             "methods": {
                 "Execute": {
+                    "arity": 1,
                     "mode": "inline_sql",
                     "sink": "ExecuteReader",
                 }
