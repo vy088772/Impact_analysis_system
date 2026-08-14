@@ -544,7 +544,7 @@ internal static class DirectSqlClientAnalyzer
             .ToList();
     }
 
-    private static bool IsSqlCommandExpression(
+    internal static bool IsSqlCommandExpression(
         ExpressionSyntax expression,
         MethodDeclarationSyntax method)
     {
@@ -2091,6 +2091,99 @@ internal static class WrapperAnalyzer
             && string.IsNullOrEmpty(Reason);
     }
 
+    /// <summary>
+    /// The construct that supplies one wrapper method's command text and terminal sink.
+    /// </summary>
+    /// <param name="Creation">The construction the rule recognized.</param>
+    /// <param name="VariableName">The variable the construction is bound to, if any.</param>
+    /// <param name="CommandPropertyOwner">
+    /// The expression whose <c>CommandText</c>/<c>CommandType</c>/<c>Connection</c> assignments
+    /// govern this Command Source.
+    /// </param>
+    /// <param name="PropertyInitializerOwner">
+    /// The construction whose object initializer sets command properties, if any.
+    /// </param>
+    /// <param name="SinkKind">Where this Command Source's terminal sink is read from.</param>
+    private sealed record CommandSource(
+        ObjectCreationExpressionSyntax Creation,
+        string? VariableName,
+        string? CommandPropertyOwner,
+        ObjectCreationExpressionSyntax? PropertyInitializerOwner,
+        CommandSourceSinkKind SinkKind);
+
+    private enum CommandSourceSinkKind
+    {
+        Command,
+        Adapter,
+    }
+
+    /// <summary>
+    /// Resolves the Command Sources of one method. Every construct that can supply a command text
+    /// and a terminal sink is recognized by exactly one rule in <see cref="Rules"/>; a further
+    /// construct is one added entry there, not a change to the classification flow around it.
+    /// </summary>
+    private static class CommandSourceResolver
+    {
+        private static readonly IReadOnlyList<Func<MethodDeclarationSyntax, IEnumerable<CommandSource>>> Rules
+            = new Func<MethodDeclarationSyntax, IEnumerable<CommandSource>>[]
+            {
+                ResolveCommandObjectSources,
+                ResolveDataAdapterSources,
+            };
+
+        internal static IReadOnlyList<CommandSource> Resolve(MethodDeclarationSyntax method)
+            => Rules
+                .SelectMany(rule => rule(method))
+                .OrderBy(source => source.Creation.SpanStart)
+                .ToList();
+
+        /// <summary>An explicit command object construction, e.g. <c>new SqlCommand(sql, conn)</c>.</summary>
+        private static IEnumerable<CommandSource> ResolveCommandObjectSources(MethodDeclarationSyntax method)
+            => method.DescendantNodes()
+                .OfType<ObjectCreationExpressionSyntax>()
+                .Where(creation => CSharpAnalyzer.IsSqlCommandType(creation.Type))
+                .Select(creation =>
+                {
+                    var variable = ResolveVariableName(creation);
+                    return new CommandSource(
+                        creation,
+                        variable,
+                        variable,
+                        creation,
+                        CommandSourceSinkKind.Command);
+                });
+
+        /// <summary>
+        /// A data adapter construction that takes a command text argument and a connection
+        /// argument, e.g. <c>new SqlDataAdapter(sql, conn)</c>. An adapter built from an existing
+        /// command object is not a Command Source of its own: the command object rule covers it.
+        /// </summary>
+        private static IEnumerable<CommandSource> ResolveDataAdapterSources(MethodDeclarationSyntax method)
+        {
+            foreach (var creation in method.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
+            {
+                if (!CSharpAnalyzer.IsDataAdapterType(creation.Type))
+                    continue;
+                var arguments = creation.ArgumentList?.Arguments;
+                if (arguments is not { Count: 2 })
+                    continue;
+                if (DirectSqlClientAnalyzer.IsSqlCommandExpression(arguments.Value[0].Expression, method))
+                    continue;
+                var variable = ResolveVariableName(creation);
+                if (variable is null)
+                    continue;
+                yield return new CommandSource(
+                    creation,
+                    variable,
+                    // An adapter has no CommandType of its own; the mode is whatever the method
+                    // assigns to the command the adapter built for itself.
+                    $"{variable}.SelectCommand",
+                    null,
+                    CommandSourceSinkKind.Adapter);
+            }
+        }
+    }
+
     private static WrapperDefinition? CreateDefinition(
         MethodDeclarationSyntax method,
         IReadOnlyList<CompilationUnitSyntax> sourceRoots,
@@ -2098,24 +2191,20 @@ internal static class WrapperAnalyzer
         string assemblyIdentity = "",
         string assemblyRevision = "")
     {
-        var commands = method.DescendantNodes()
-            .OfType<ObjectCreationExpressionSyntax>()
-            .Where(creation => CSharpAnalyzer.IsSqlCommandType(creation.Type))
-            .ToList();
-        var command = commands.FirstOrDefault();
-        if (command is null)
+        var commandSources = CommandSourceResolver.Resolve(method);
+        var commandSource = commandSources.FirstOrDefault();
+        if (commandSource is null)
             return null;
 
-        var commandVariable = ResolveVariableName(command);
+        var commandVariable = commandSource.VariableName;
         if (commandVariable is null)
             return null;
 
         var commandTypeAssignments = GetCommandPropertyAssignments(
             method,
-            command,
-            commandVariable,
+            commandSource,
             "CommandType");
-        var terminalSinkInvocations = ResolveTerminalSinkInvocations(method, commandVariable);
+        var terminalSinkInvocations = ResolveTerminalSinkInvocations(method, commandSource);
         if (terminalSinkInvocations.Count > 0)
         {
             commandTypeAssignments = commandTypeAssignments
@@ -2144,12 +2233,13 @@ internal static class WrapperAnalyzer
         var requiredParameterCount = method.ParameterList.Parameters.Count(parameter =>
             parameter.Default is null
             && !parameter.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.ParamsKeyword)));
-        var commandTextExpression = command.ArgumentList?.Arguments.ElementAtOrDefault(0)?.Expression;
-        var connectionExpression = command.ArgumentList?.Arguments.ElementAtOrDefault(1)?.Expression?.ToString().Trim();
+        var commandTextExpression = commandSource.Creation.ArgumentList?.Arguments
+            .ElementAtOrDefault(0)?.Expression;
+        var connectionExpression = commandSource.Creation.ArgumentList?.Arguments
+            .ElementAtOrDefault(1)?.Expression?.ToString().Trim();
         var commandTextAssignments = GetCommandPropertyAssignments(
             method,
-            command,
-            commandVariable,
+            commandSource,
             "CommandText");
         if (terminalSinkInvocations.Count > 0)
         {
@@ -2170,8 +2260,7 @@ internal static class WrapperAnalyzer
         }
         foreach (var assignment in GetCommandPropertyAssignments(
             method,
-            command,
-            commandVariable,
+            commandSource,
             "Connection"))
         {
             connectionExpression = assignment.Right.ToString().Trim();
@@ -2183,13 +2272,13 @@ internal static class WrapperAnalyzer
         var commandTextParameterIndex = parameters.IndexOf(commandTextParameter ?? "");
         var modeParameter = FindModeParameter(method, commandTypeAssignments, parameters);
         var modeParameterIndex = parameters.IndexOf(modeParameter ?? "");
-        var methodSemantics = commands.Count > 1
+        var methodSemantics = commandSources.Count > 1
             ? "unresolved"
             : ResolveMethodSemantics(commandTypeAssignments, modeParameter);
-        var terminalSink = commands.Count > 1
+        var terminalSink = commandSources.Count > 1
             ? null
-            : ResolveTerminalSinkName(method, commandVariable);
-        var unresolvedReason = commands.Count > 1
+            : ResolveTerminalSinkName(method, commandSource);
+        var unresolvedReason = commandSources.Count > 1
             ? "multiple_sql_commands"
             : null;
         var constructorConnectionParameterIndex = FindConstructorConnectionParameterIndex(
@@ -2737,6 +2826,27 @@ internal static class WrapperAnalyzer
 
     private static IReadOnlyList<InvocationExpressionSyntax> ResolveTerminalSinkInvocations(
         MethodDeclarationSyntax method,
+        CommandSource commandSource)
+        => commandSource.VariableName is not { } variableName
+            ? Array.Empty<InvocationExpressionSyntax>()
+            : commandSource.SinkKind == CommandSourceSinkKind.Adapter
+                ? ResolveAdapterFillInvocations(method, variableName)
+                : ResolveCommandTerminalSinkInvocations(method, variableName);
+
+    /// <summary>The adapter rule's terminal sink is the adapter's own fill call.</summary>
+    private static IReadOnlyList<InvocationExpressionSyntax> ResolveAdapterFillInvocations(
+        MethodDeclarationSyntax method,
+        string adapterVariable)
+        => method.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => invocation.Expression is MemberAccessExpressionSyntax member
+                && member.Expression.ToString().Trim() == adapterVariable
+                && member.Name.Identifier.Text is "Fill" or "FillAsync")
+            .DistinctBy(invocation => invocation.SpanStart)
+            .ToList();
+
+    private static IReadOnlyList<InvocationExpressionSyntax> ResolveCommandTerminalSinkInvocations(
+        MethodDeclarationSyntax method,
         string commandVariable)
     {
         var sinkInvocations = method.DescendantNodes()
@@ -2775,9 +2885,9 @@ internal static class WrapperAnalyzer
 
     private static string? ResolveTerminalSinkName(
         MethodDeclarationSyntax method,
-        string commandVariable)
+        CommandSource commandSource)
     {
-        var sinkNames = ResolveTerminalSinkInvocations(method, commandVariable)
+        var sinkNames = ResolveTerminalSinkInvocations(method, commandSource)
             .Select(invocation => ((MemberAccessExpressionSyntax)invocation.Expression).Name.Identifier.Text)
             .Distinct(StringComparer.Ordinal)
             .ToList();
@@ -3135,17 +3245,19 @@ internal static class WrapperAnalyzer
 
     private static List<AssignmentExpressionSyntax> GetCommandPropertyAssignments(
         MethodDeclarationSyntax method,
-        ObjectCreationExpressionSyntax command,
-        string commandVariable,
+        CommandSource commandSource,
         string propertyName)
     {
         var assignments = method.DescendantNodes()
             .OfType<AssignmentExpressionSyntax>()
-            .Where(assignment => IsMemberAssignment(assignment, commandVariable, propertyName))
+            .Where(assignment => IsMemberAssignment(
+                assignment,
+                commandSource.CommandPropertyOwner ?? "",
+                propertyName))
             .ToList();
-        if (command.Initializer is not null)
+        if (commandSource.PropertyInitializerOwner?.Initializer is { } initializer)
         {
-            assignments.AddRange(command.Initializer.Expressions
+            assignments.AddRange(initializer.Expressions
                 .OfType<AssignmentExpressionSyntax>()
                 .Where(assignment => assignment.Left is IdentifierNameSyntax identifier
                     && identifier.Identifier.Text == propertyName));

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,9 +29,47 @@ requires_stc_fixture = pytest.mark.skipif(
     reason="local data/repos/System_Dept_1/STC fixture checkout is not present",
 )
 
+requires_dotnet = pytest.mark.skipif(
+    shutil.which("dotnet") is None,
+    reason="the .NET toolchain is not available",
+)
+
 
 def _definitions_by_method(wrapper_definitions: list[dict], method_name: str) -> list[dict]:
     return [d for d in wrapper_definitions if d["method_name"] == method_name]
+
+
+# The whole classified surface of SQLFunc.dll, keyed by method identity. Asserting the map
+# whole keeps a new Command Source rule from quietly changing an unrelated method's facts.
+SQLFUNC_CLASSIFIED_SURFACE = {
+    "SQLFunc.EditData(string)": ("fixed_inline_sql", "ExecuteNonQuery"),
+    "SQLFunc.EditData(string,System.Data.SqlClient.SqlParameter[])": ("fixed_inline_sql", "ExecuteNonQuery"),
+    "SQLFunc.ExeProcNon(string)": ("fixed_stored_procedure", "ExecuteNonQuery"),
+    "SQLFunc.ExeProcNon(string,System.Data.SqlClient.SqlParameter[])": ("fixed_stored_procedure", "ExecuteNonQuery"),
+    "SQLFunc.ExeProcNon(string,System.Data.SqlClient.SqlParameter[],int)": ("fixed_stored_procedure", "ExecuteNonQuery"),
+    "SQLFunc.ExeProcNonLong(string)": ("fixed_stored_procedure", "ExecuteNonQuery"),
+    "SQLFunc.ExeProcNonLong(string,System.Data.SqlClient.SqlParameter[])": ("fixed_stored_procedure", "ExecuteNonQuery"),
+    "SQLFunc.CreateReader(string)": ("fixed_inline_sql", "ExecuteReader"),
+    "SQLFunc.CreateReader(string,System.Data.SqlClient.SqlParameter)": ("fixed_inline_sql", "ExecuteReader"),
+    "SQLFunc.CreateReader(string,System.Data.SqlClient.SqlParameter[])": ("fixed_inline_sql", "ExecuteReader"),
+    "SQLFunc.ExeProcRead(string)": ("fixed_stored_procedure", "ExecuteReader"),
+    "SQLFunc.ExeProcRead(string,System.Data.SqlClient.SqlParameter)": ("fixed_stored_procedure", "ExecuteReader"),
+    "SQLFunc.ExeProcRead(string,System.Data.SqlClient.SqlParameter[])": ("fixed_stored_procedure", "ExecuteReader"),
+    "SQLFunc.ExeProcReadLong(string,System.Data.SqlClient.SqlParameter[])": ("fixed_stored_procedure", "ExecuteReader"),
+    "SQLFunc.CreateTable(string,string)": ("fixed_inline_sql", "Fill"),
+    "SQLFunc.CreateTable(string,System.Data.SqlClient.SqlParameter,string)": ("fixed_inline_sql", "Fill"),
+    "SQLFunc.CreateTable(string,System.Data.SqlClient.SqlParameter[],string)": ("fixed_inline_sql", "Fill"),
+    "SQLFunc.ExeTable(string,string)": ("fixed_stored_procedure", "Fill"),
+    "SQLFunc.ExeTable(string,System.Data.SqlClient.SqlParameter[],string)": ("fixed_stored_procedure", "Fill"),
+    "SQLFunc.CreateAdapterTsql(string)": ("fixed_inline_sql", None),
+    "SQLFunc.CreateAdapter(string)": ("fixed_stored_procedure", None),
+    "SQLFunc.CreateAdapter(string,System.Data.SqlClient.SqlParameter[])": ("fixed_stored_procedure", None),
+    "SQLFunc.ExeProcDataSet(string)": ("fixed_stored_procedure", "Fill"),
+    "SQLFunc.ExeProcDataSet(string,System.Data.SqlClient.SqlParameter[])": ("fixed_stored_procedure", "Fill"),
+    "SQLFunc.GetFirstValue(string)": ("fixed_inline_sql", "ExecuteScalar"),
+    "SQLFunc.GetFirstValue(string,System.Data.SqlClient.SqlParameter)": ("fixed_inline_sql", "ExecuteScalar"),
+    "SQLFunc.GetFirstValue(string,System.Data.SqlClient.SqlParameter[])": ("fixed_inline_sql", "ExecuteScalar"),
+}
 
 
 @requires_stc_fixture
@@ -99,6 +138,47 @@ def test_decompile_wrapper_classifies_sqlfunc_dll_end_to_end() -> None:
 
     reader_sink_methods = _definitions_by_method(definitions, "ExeProcRead")
     assert reader_sink_methods and all(d["terminal_sink"] == "ExecuteReader" for d in reader_sink_methods)
+
+
+@requires_dotnet
+@requires_stc_fixture
+def test_decompile_wrapper_classifies_every_public_create_table_overload() -> None:
+    """The two-argument CreateTable builds its command through a data adapter, not a command
+    object; it is a database operation all the same, and the other methods are untouched."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    result = host.decompile_wrapper(STC_CSPROJ, "SQLFunc", rerun=True)
+
+    assert result["status"] == "resolved"
+    definitions = result["wrapper_definitions"]
+
+    create_table = _definitions_by_method(definitions, "CreateTable")
+    assert len(create_table) == 3
+    two_argument = [d for d in create_table if len(d["parameter_types"]) == 2]
+    assert len(two_argument) == 1
+    assert two_argument[0]["parameter_types"] == ["string", "string"]
+    assert two_argument[0]["method_semantics"] == "fixed_inline_sql"
+    assert two_argument[0]["terminal_sink"] == "Fill"
+    assert two_argument[0]["unresolved_reason"] is None
+
+    classified_surface = {
+        definition["method_identity"]: (
+            definition["method_semantics"],
+            definition["terminal_sink"],
+        )
+        for definition in definitions
+    }
+    assert classified_surface == SQLFUNC_CLASSIFIED_SURFACE
+
+    operations = result["contract_proposals"][0]["implementation_snapshot"]["methods"]
+    two_argument_operation = next(
+        operation
+        for operation in operations
+        if operation["method_identity"] == "SQLFunc.CreateTable(string,string)"
+    )
+    assert two_argument_operation["effective_command_semantics"] == "inline_sql"
+    assert two_argument_operation["terminal_sink"] == "Fill"
 
 
 @requires_stc_fixture
