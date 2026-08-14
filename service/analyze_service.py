@@ -334,17 +334,6 @@ def _proposal_receiver_types(proposal: Mapping[str, Any]) -> set[str]:
     return values
 
 
-def _active_contract_receivers(registry: Mapping[str, Any]) -> set[str]:
-    contracts = registry.get("contracts", registry)
-    if not isinstance(contracts, Mapping):
-        return set()
-    receivers: set[str] = set()
-    for contract in contracts.values():
-        if isinstance(contract, Mapping):
-            receivers.update(_proposal_receiver_types(contract))
-    return receivers
-
-
 def _has_source_backed_wrapper_evidence(
     scan: ProjectScanResult,
     receiver_type: str,
@@ -561,7 +550,6 @@ def _populate_decompilation_proposals(
     *,
     enabled: bool,
     disabled_reason: str = "",
-    active_contract_receivers: set[str] | None = None,
     rerun_receiver_types: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     if not enabled:
@@ -570,7 +558,6 @@ def _populate_decompilation_proposals(
     scan_list = list(scans)
     attempts: list[dict[str, Any]] = []
     skipped_reasons: set[str] = set()
-    active_contract_receivers = active_contract_receivers or set()
     rerun_receivers = {
         value.strip().casefold()
         for value in (rerun_receiver_types or ())
@@ -593,9 +580,6 @@ def _populate_decompilation_proposals(
         for receiver_type in sorted(external_sources, key=str.casefold):
             if receiver_type in source_backed_receivers:
                 skipped_reasons.add("source_backed_evidence")
-                continue
-            if receiver_type in active_contract_receivers:
-                skipped_reasons.add("active_contract_evidence")
                 continue
             csproj_path = _find_source_csproj(root, external_sources[receiver_type])
             if csproj_path is None:
@@ -2853,7 +2837,6 @@ def refresh_source(
         scans,
         enabled=decompilation_enabled,
         disabled_reason=decompilation_disabled_reason,
-        active_contract_receivers=_active_contract_receivers(registry),
         rerun_receiver_types=rerun_receiver_types,
     )
     preflight = run_contract_preflight(

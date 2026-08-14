@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from code_analyzer.project_scanner import ProjectScanResult
+from code_analyzer.static_analyzer_host import StaticAnalyzerHostError
 from service import analyze_service
 
 STC_CSPROJ = PROJECT_ROOT / "data" / "repos" / "System_Dept_1" / "STC" / "STC" / "STC.csproj"
@@ -314,25 +315,82 @@ def test_valid_selector_never_triggers_decompilation(monkeypatch, tmp_path) -> N
     assert result["wrapper_summary"]["observations"][0]["selection_source"] == "explicit"
 
 
-def test_active_registry_receiver_never_triggers_decompilation(monkeypatch, tmp_path) -> None:
+def test_registry_receiver_name_collision_with_different_fingerprint_still_decompiles(
+    monkeypatch, tmp_path
+) -> None:
+    """A registry contract already exists for receiver type ``SQLFunc``, but its
+    Contract Fingerprint differs from what the mocked decompiler will return for
+    this system. Receiver-type name is never grounds to skip decompile-based
+    Contract Onboarding -- only Contract Fingerprint comparison decides reuse
+    vs. creation -- so the attempt must still be made, and since the
+    fingerprints disagree, a new fingerprint-suffixed contract is created
+    rather than reusing the name-colliding one."""
+
     root = tmp_path / "Orders"
     root.mkdir()
-    _write_referencing_project(root)
+    csproj = _write_referencing_project(root)
     scan = _scan(root)
     calls: list[tuple[Path, str]] = []
     _patch_refresh(monkeypatch, root, scan)
     _patch_host(monkeypatch, [_response()], calls)
+
+    registry_path = tmp_path / "external_wrapper_contracts.json"
+    catalog_path = tmp_path / "system_catalog.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "contracts": {
+                    "sqlfunc": {
+                        "receiver_types": ["SQLFunc"],
+                        "contract_fingerprint": "0" * 64,
+                        "behavior_signature": {
+                            "signature_version": "v1",
+                            "operations": [],
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    catalog_path.write_text(
+        json.dumps({"systems": [{"system_id": "Orders", "wrapper_contract": ""}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(analyze_service, "cached_commit", lambda scan_root: "deadbeef")
+    monkeypatch.setattr(analyze_service, "CONTRACT_TRANSACTION_REGISTRY_PATH", registry_path)
+    monkeypatch.setattr(analyze_service, "CONTRACT_TRANSACTION_CATALOG_PATH", catalog_path)
     monkeypatch.setattr(
         analyze_service,
         "load_contract_registry",
-        lambda: {"contracts": {"sqlfunc": {"receiver_types": ["SQLFunc"]}}},
+        lambda: json.loads(registry_path.read_text(encoding="utf-8")),
     )
 
-    result = analyze_service.refresh_source({"project": "p", "repo": "r"})
+    result = analyze_service.refresh_source(
+        {"project": "p", "repo": "r"},
+        database="Orders",
+    )
 
-    assert calls == []
-    assert result["wrapper_summary"]["decompilation"]["attempted"] is False
-    assert "active_contract_evidence" in result["wrapper_summary"]["decompilation"]["reasons"]
+    assert calls == [(csproj, "SQLFunc")]
+    decompilation = result["wrapper_summary"]["decompilation"]
+    assert decompilation["attempted"] is True
+    assert decompilation["outcome"] == "complete"
+    assert "active_contract_evidence" not in decompilation["reasons"]
+
+    assert result["wrapper_summary"]["contract_onboarding_status"] == "created"
+    assert result["contract_transaction"]["status"] == "committed"
+
+    committed_name = json.loads(catalog_path.read_text(encoding="utf-8"))["systems"][0][
+        "wrapper_contract"
+    ]
+    assert committed_name != "sqlfunc"
+    assert committed_name.startswith("sqlfunc-")
+
+    staged_contracts = result["wrapper_summary"]["contract_preflight"]["staged_registry"][
+        "contracts"
+    ]
+    assert "sqlfunc" in staged_contracts
+    assert committed_name in staged_contracts
 
 
 def test_source_backed_receiver_in_one_root_blocks_other_root_decompilation(
@@ -519,3 +577,58 @@ def test_source_backed_wrapper_is_stronger_than_decompile_candidate(monkeypatch,
     assert calls == []
     assert result["wrapper_summary"]["decompilation"]["attempted"] is False
     assert result["wrapper_summary"]["contract_onboarding_status"] == "not_required"
+
+
+def test_decompiler_host_unavailable_skips_with_reason(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "Orders"
+    root.mkdir()
+    _write_referencing_project(root)
+    scan = _scan(root)
+    _patch_refresh(monkeypatch, root, scan)
+
+    class UnavailableHost:
+        @classmethod
+        def for_project(cls, project_root: Path) -> "UnavailableHost":
+            return cls()
+
+        def ensure_ready(self) -> dict:
+            raise StaticAnalyzerHostError("decompiler binary not found")
+
+    monkeypatch.setattr(analyze_service, "StaticAnalyzerHost", UnavailableHost, raising=False)
+
+    result = analyze_service.refresh_source({"project": "p", "repo": "r"})
+
+    decompilation = result["wrapper_summary"]["decompilation"]
+    assert decompilation["attempts"][0]["attempted"] is False
+    assert decompilation["attempts"][0]["outcome"] == "incomplete"
+    assert "decompiler_host_unavailable" in decompilation["attempts"][0]["reasons"]
+
+
+def test_decompiler_failed_skips_with_reason(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "Orders"
+    root.mkdir()
+    _write_referencing_project(root)
+    scan = _scan(root)
+    _patch_refresh(monkeypatch, root, scan)
+
+    class FailingHost:
+        @classmethod
+        def for_project(cls, project_root: Path) -> "FailingHost":
+            return cls()
+
+        def ensure_ready(self) -> dict:
+            return {"contract_version": 2}
+
+        def decompile_wrapper(
+            self, csproj_path: Path, receiver_type: str, *, rerun: bool = False
+        ) -> dict:
+            raise StaticAnalyzerHostError("decompilation crashed")
+
+    monkeypatch.setattr(analyze_service, "StaticAnalyzerHost", FailingHost, raising=False)
+
+    result = analyze_service.refresh_source({"project": "p", "repo": "r"})
+
+    decompilation = result["wrapper_summary"]["decompilation"]
+    assert decompilation["attempts"][0]["attempted"] is True
+    assert decompilation["attempts"][0]["outcome"] == "incomplete"
+    assert "decompiler_failed" in decompilation["attempts"][0]["reasons"]
