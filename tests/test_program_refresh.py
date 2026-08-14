@@ -474,6 +474,56 @@ def test_refresh_api_forwards_wrapper_contract_and_serializes_summary(monkeypatc
     }
 
 
+def test_refresh_api_forwards_rerun_decompile_receiver_types(monkeypatch) -> None:
+    from service import api
+    from service.schemas import RefreshRequest
+
+    observed: dict[str, object] = {}
+
+    def fake_refresh_source(
+        source: dict,
+        program_names: list[str],
+        database: str,
+        rerun_receiver_types: list[str],
+    ) -> dict:
+        observed["rerun_receiver_types"] = rerun_receiver_types
+        return {"scope": "system"}
+
+    monkeypatch.setattr(api.analyze_service, "refresh_source", fake_refresh_source)
+
+    api.refresh(
+        RefreshRequest(
+            system="SYS",
+            source={"project": "p", "repo": "r", "path": "TTPUR"},
+            rerun_decompile_receiver_types=["SQLFunc"],
+        )
+    )
+
+    assert observed["rerun_receiver_types"] == ["SQLFunc"]
+
+
+def test_refresh_api_omits_rerun_receiver_types_when_not_requested(monkeypatch) -> None:
+    from service import api
+    from service.schemas import RefreshRequest
+
+    observed: dict[str, object] = {}
+
+    def fake_refresh_source(source: dict, program_names: list[str], database: str) -> dict:
+        observed["called_without_rerun_kwarg"] = True
+        return {"scope": "system"}
+
+    monkeypatch.setattr(api.analyze_service, "refresh_source", fake_refresh_source)
+
+    api.refresh(
+        RefreshRequest(
+            system="SYS",
+            source={"project": "p", "repo": "r", "path": "TTPUR"},
+        )
+    )
+
+    assert observed["called_without_rerun_kwarg"] is True
+
+
 def test_refresh_source_without_programs_keeps_full_refresh(monkeypatch, tmp_path) -> None:
     root = tmp_path / "TTPUR"
     root.mkdir()

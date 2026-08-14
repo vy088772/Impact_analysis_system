@@ -8,10 +8,10 @@
 
 **Blocked by:** 05.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `refresh_source` (or its caller) accepts an explicit re-run trigger and forwards it to `decompile_wrapper`'s `rerun` parameter, bypassing a cached incomplete/failed attempt for the targeted DLL only
-- [ ] A test exercises the rerun trigger through the refresh entry point (not only at the `StaticAnalyzerHost` client boundary), verifying a cached failure is bypassed and a fresh attempt is made
-- [ ] The csproj-lookup-failure case in `_populate_decompilation_proposals` is reported under a reason distinct from `receiver_not_referenced` (e.g. reuse `csproj_not_found`/a new dedicated reason), and a test asserts the two failure modes produce different reason strings
-- [ ] A decision is made and recorded (spec/ADR update or inline comment with rationale) on whether "selector unspecified" for decompile-gating purposes includes a broken/misconfigured explicit selector or only a truly absent one; `refresh_source`'s gating matches the recorded decision
-- [ ] Existing tests in `tests/test_refresh_decompile_onboarding.py` and `tests/test_refresh_contract_preflight.py` continue to pass; new tests follow the existing seam (synthetic `ProjectScanResult`/`contract_proposals`, no StaticAnalyzerHost internals)
+- [x] `refresh_source` (or its caller) accepts an explicit re-run trigger and forwards it to `decompile_wrapper`'s `rerun` parameter, bypassing a cached incomplete/failed attempt for the targeted DLL only
+- [x] A test exercises the rerun trigger through the refresh entry point (not only at the `StaticAnalyzerHost` client boundary), verifying a cached failure is bypassed and a fresh attempt is made
+- [x] The csproj-lookup-failure case in `_populate_decompilation_proposals` is reported under a reason distinct from `receiver_not_referenced` (e.g. reuse `csproj_not_found`/a new dedicated reason), and a test asserts the two failure modes produce different reason strings
+- [x] A decision is made and recorded (spec/ADR update or inline comment with rationale) on whether "selector unspecified" for decompile-gating purposes includes a broken/misconfigured explicit selector or only a truly absent one; `refresh_source`'s gating matches the recorded decision
+- [x] Existing tests in `tests/test_refresh_decompile_onboarding.py` and `tests/test_refresh_contract_preflight.py` continue to pass; new tests follow the existing seam (synthetic `ProjectScanResult`/`contract_proposals`, no StaticAnalyzerHost internals)

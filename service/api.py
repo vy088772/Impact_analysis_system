@@ -117,6 +117,8 @@ def refresh(req: RefreshRequest) -> RefreshResponse:
             refresh_kwargs["wrapper_contract"] = req.wrapper_contract
         if req.system.strip():
             refresh_kwargs["database"] = req.system.strip()
+        if req.rerun_decompile_receiver_types:
+            refresh_kwargs["rerun_receiver_types"] = req.rerun_decompile_receiver_types
         result = analyze_service.refresh_source(source, **refresh_kwargs)
         return RefreshResponse(**result)
     except ValueError as exc:

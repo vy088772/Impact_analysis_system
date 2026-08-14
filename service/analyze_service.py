@@ -561,6 +561,7 @@ def _populate_decompilation_proposals(
     enabled: bool,
     disabled_reason: str = "",
     active_contract_receivers: set[str] | None = None,
+    rerun_receiver_types: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     if not enabled:
         return _decompilation_summary([], reason=disabled_reason)
@@ -569,6 +570,11 @@ def _populate_decompilation_proposals(
     attempts: list[dict[str, Any]] = []
     skipped_reasons: set[str] = set()
     active_contract_receivers = active_contract_receivers or set()
+    rerun_receivers = {
+        value.strip().casefold()
+        for value in (rerun_receiver_types or ())
+        if str(value).strip()
+    }
     source_backed_receivers = {
         receiver
         for scan in scan_list
@@ -592,10 +598,14 @@ def _populate_decompilation_proposals(
                 continue
             csproj_path = _find_source_csproj(root, external_sources[receiver_type])
             if csproj_path is None:
+                # Distinct from the host's "receiver_not_referenced" (a .csproj was
+                # found but has no matching <Reference> for the receiver): here no
+                # single .csproj could even be found/disambiguated for this call
+                # site, so the host is never reached.
                 attempts.append(
                     _not_attempted_decompilation_record(
                         receiver_type=receiver_type,
-                        reason="receiver_not_referenced",
+                        reason="csproj_not_found",
                     )
                 )
                 continue
@@ -629,7 +639,11 @@ def _populate_decompilation_proposals(
                     )
                     continue
             try:
-                response = host.decompile_wrapper(csproj_path, receiver_type)
+                response = host.decompile_wrapper(
+                    csproj_path,
+                    receiver_type,
+                    rerun=receiver_type.casefold() in rerun_receivers,
+                )
             except StaticAnalyzerHostError as exc:
                 attempts.append(
                     _incomplete_decompilation_record(
@@ -2738,8 +2752,15 @@ def refresh_source(
     program_names: List[str] | None = None,
     wrapper_contract: Any = "",
     database: str = "",
+    rerun_receiver_types: Iterable[str] | None = None,
 ) -> dict:
-    """Pull source and refresh either the whole system or selected programs."""
+    """Pull source and refresh either the whole system or selected programs.
+
+    rerun_receiver_types: receiver types (e.g. "SQLFunc") for which a maintainer
+    explicitly requests a fresh decompilation attempt, bypassing any cached
+    incomplete/failed attempt for that DLL only (US21). An unnamed receiver type
+    still reuses its cached attempt untouched.
+    """
     roots = resolve_scan_roots(source, refresh=True)
     requested = list(
         dict.fromkeys(name.strip() for name in (program_names or []) if name.strip())
@@ -2792,6 +2813,15 @@ def refresh_source(
         configured_selector = load_system_contract_selector(database)
     registry = load_contract_registry()
     selector_state = normalize_contract_selector(configured_selector, registry)
+    # Decision (US2, spec.md "Implementation Decisions"): a selector that was
+    # explicitly given but fails to resolve (selector_contract_not_found /
+    # selector_type_invalid) is deliberately treated the same as a valid
+    # selector here, not as "unspecified" — normalize_contract_selector()
+    # reports its status as "unspecified" but still sets `reason` for this
+    # case, so gating on `not selector_state.reason` (in addition to status)
+    # keeps decompile-based onboarding fail-closed for it. The operator
+    # explicitly configured something; auto-decompile must never second-guess
+    # that by silently substituting a guess for a selector they got wrong.
     decompilation_enabled = (
         not requested
         and selector_state.status == "unspecified"
@@ -2810,6 +2840,7 @@ def refresh_source(
         enabled=decompilation_enabled,
         disabled_reason=decompilation_disabled_reason,
         active_contract_receivers=_active_contract_receivers(registry),
+        rerun_receiver_types=rerun_receiver_types,
     )
     preflight = run_contract_preflight(
         scans,

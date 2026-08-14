@@ -175,6 +175,9 @@ class RefreshRequest(BaseModel):
     wrapper_contract: WrapperContractSelector = ""  # 外部 wrapper contract selector
     source: AzureSource = Field(default_factory=AzureSource)
     program_names: List[str] = Field(default_factory=list)
+    # 維護者明確要求重跑反編譯的 receiver type（例如 "SQLFunc"）；
+    # 只繞過該 DLL 已快取的失敗/未完成嘗試，其餘維持快取。
+    rerun_decompile_receiver_types: List[str] = Field(default_factory=list)
 
 
 class RefreshResponse(BaseModel):

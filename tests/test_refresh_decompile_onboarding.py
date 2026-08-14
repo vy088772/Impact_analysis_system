@@ -121,7 +121,12 @@ def _patch_refresh(monkeypatch, root: Path, scan: ProjectScanResult) -> None:
     )
 
 
-def _patch_host(monkeypatch, responses: list[dict], calls: list[tuple[Path, str]]) -> None:
+def _patch_host(
+    monkeypatch,
+    responses: list[dict],
+    calls: list[tuple[Path, str]],
+    rerun_calls: list[bool] | None = None,
+) -> None:
     class FakeHost:
         @classmethod
         def for_project(cls, project_root: Path) -> "FakeHost":
@@ -130,8 +135,12 @@ def _patch_host(monkeypatch, responses: list[dict], calls: list[tuple[Path, str]
         def ensure_ready(self) -> dict:
             return {"contract_version": 2}
 
-        def decompile_wrapper(self, csproj_path: Path, receiver_type: str) -> dict:
+        def decompile_wrapper(
+            self, csproj_path: Path, receiver_type: str, *, rerun: bool = False
+        ) -> dict:
             calls.append((Path(csproj_path), receiver_type))
+            if rerun_calls is not None:
+                rerun_calls.append(rerun)
             return responses[len(calls) - 1]
 
     monkeypatch.setattr(analyze_service, "StaticAnalyzerHost", FakeHost, raising=False)
@@ -361,6 +370,139 @@ def test_source_backed_receiver_in_one_root_blocks_other_root_decompilation(
     assert calls == []
     assert result["wrapper_summary"]["decompilation"]["attempted"] is False
     assert "source_backed_evidence" in result["wrapper_summary"]["decompilation"]["reasons"]
+
+
+def test_rerun_trigger_forwards_through_refresh_source_and_bypasses_cached_failure(
+    monkeypatch, tmp_path
+) -> None:
+    """A stale cached failure survives an ordinary refresh, but is bypassed
+    (and a fresh attempt made) once the maintainer names that receiver type
+    in ``rerun_receiver_types`` on a later refresh — mirroring how the real
+    StaticAnalyzerHost's ``--rerun`` flag behaves against its on-disk cache
+    (see ``StaticAnalyzerHost.decompile_wrapper``)."""
+
+    root = tmp_path / "Orders"
+    root.mkdir()
+    _write_referencing_project(root)
+    scan = _scan(root)
+    calls: list[tuple[Path, str, bool]] = []
+    cached_failure = _response(outcome="incomplete", cached=True, proposal=False)
+    fresh_success = _response(outcome="complete", cached=False)
+
+    class StatefulFakeHost:
+        @classmethod
+        def for_project(cls, project_root: Path) -> "StatefulFakeHost":
+            return cls()
+
+        def ensure_ready(self) -> dict:
+            return {"contract_version": 2}
+
+        def decompile_wrapper(
+            self, csproj_path: Path, receiver_type: str, *, rerun: bool = False
+        ) -> dict:
+            calls.append((Path(csproj_path), receiver_type, rerun))
+            return fresh_success if rerun else cached_failure
+
+    _patch_refresh(monkeypatch, root, scan)
+    monkeypatch.setattr(analyze_service, "StaticAnalyzerHost", StatefulFakeHost, raising=False)
+
+    stale_result = analyze_service.refresh_source({"project": "p", "repo": "r"})
+    fresh_result = analyze_service.refresh_source(
+        {"project": "p", "repo": "r"},
+        rerun_receiver_types=["SQLFunc"],
+    )
+
+    assert calls == [
+        (root / "Orders.csproj", "SQLFunc", False),
+        (root / "Orders.csproj", "SQLFunc", True),
+    ]
+    stale_attempt = stale_result["wrapper_summary"]["decompilation"]["attempts"][0]
+    fresh_attempt = fresh_result["wrapper_summary"]["decompilation"]["attempts"][0]
+    # Without a rerun request, the cached incomplete attempt is reported as a
+    # cache hit ("cached-skip"), preserving the underlying "incomplete" verdict
+    # in attempt_outcome; the rerun request instead forces a fresh "complete"
+    # attempt that misses the cache entirely.
+    assert stale_attempt["attempt_outcome"] == "incomplete"
+    assert stale_attempt["outcome"] == "cached-skip"
+    assert stale_attempt["cache_status"] == "hit"
+    assert fresh_attempt["attempt_outcome"] == "complete"
+    assert fresh_attempt["outcome"] == "complete"
+    assert fresh_attempt["cache_status"] == "miss"
+
+
+def test_unnamed_receiver_type_does_not_trigger_rerun(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "Orders"
+    root.mkdir()
+    _write_referencing_project(root)
+    scan = _scan(root)
+    calls: list[tuple[Path, str]] = []
+    rerun_calls: list[bool] = []
+    _patch_refresh(monkeypatch, root, scan)
+    _patch_host(monkeypatch, [_response(cached=True)], calls, rerun_calls)
+
+    analyze_service.refresh_source(
+        {"project": "p", "repo": "r"},
+        rerun_receiver_types=["SomeOtherReceiver"],
+    )
+
+    assert rerun_calls == [False]
+
+
+def test_csproj_lookup_failure_reason_differs_from_receiver_not_referenced(
+    monkeypatch, tmp_path
+) -> None:
+    # No .csproj exists anywhere under root: _find_source_csproj cannot locate
+    # one, so the host is never reached.
+    no_csproj_root = tmp_path / "NoCsproj"
+    no_csproj_root.mkdir()
+    calls_without_csproj: list[tuple[Path, str]] = []
+    _patch_refresh(monkeypatch, no_csproj_root, _scan(no_csproj_root))
+    _patch_host(monkeypatch, [], calls_without_csproj)
+
+    result_without_csproj = analyze_service.refresh_source({"project": "p", "repo": "r"})
+
+    assert calls_without_csproj == []
+    lookup_failure_reasons = result_without_csproj["wrapper_summary"]["decompilation"][
+        "attempts"
+    ][0]["reasons"]
+    assert lookup_failure_reasons == ["csproj_not_found"]
+
+    # A .csproj IS found this time, but the host itself reports the distinct
+    # "receiver_not_referenced" status (a .csproj exists with no matching
+    # <Reference> entry for the receiver).
+    referenced_root = tmp_path / "Referenced"
+    referenced_root.mkdir()
+    _write_referencing_project(referenced_root)
+    calls_with_csproj: list[tuple[Path, str]] = []
+    _patch_refresh(monkeypatch, referenced_root, _scan(referenced_root))
+    _patch_host(
+        monkeypatch,
+        [
+            {
+                "status": "receiver_not_referenced",
+                "attempt_outcome": "not_attempted",
+                "cache_status": "not_applicable",
+                "decompilation_attempt": {
+                    "attempted": False,
+                    "outcome": "not_attempted",
+                    "cache_status": "not_applicable",
+                },
+                "contract_proposals": [],
+                "translation_problem_methods": [],
+                "wrapper_definitions": [],
+            }
+        ],
+        calls_with_csproj,
+    )
+
+    result_with_csproj = analyze_service.refresh_source({"project": "p", "repo": "r"})
+
+    assert len(calls_with_csproj) == 1
+    referenced_reasons = result_with_csproj["wrapper_summary"]["decompilation"]["attempts"][
+        0
+    ]["reasons"]
+    assert referenced_reasons == ["receiver_not_referenced"]
+    assert referenced_reasons != lookup_failure_reasons
 
 
 def test_source_backed_wrapper_is_stronger_than_decompile_candidate(monkeypatch, tmp_path) -> None:
