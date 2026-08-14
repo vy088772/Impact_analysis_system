@@ -382,6 +382,40 @@ def _proposal_binding_key(proposal: Mapping[str, Any]) -> str:
     ).casefold()
 
 
+def _find_casefold(mapping: Mapping[str, Any], name: str) -> str | None:
+    """Return the mapping's own spelling of a name, ignoring letter case."""
+    folded = str(name).casefold()
+    return next((str(key) for key in mapping if str(key).casefold() == folded), None)
+
+
+def _taken_contract_name(
+    entries: Mapping[str, Any],
+    staged_names: Mapping[str, Any],
+    name: str,
+) -> str | None:
+    """Return the spelling a registered or staged contract already holds."""
+    return _find_casefold(entries, name) or _find_casefold(staged_names, name)
+
+
+def _unused_revision_name(
+    entries: Mapping[str, Any],
+    staged_names: Mapping[str, Any],
+    taken_name: str,
+    fingerprint: str,
+) -> str:
+    """Name one revision of a taken contract name without overwriting an entry."""
+    for suffix in (fingerprint[:12], fingerprint[:16], fingerprint):
+        name = f"{taken_name}-{suffix}"
+        if _taken_contract_name(entries, staged_names, name) is None:
+            return name
+    ordinal = 2
+    while True:
+        name = f"{taken_name}-{fingerprint}-{ordinal}"
+        if _taken_contract_name(entries, staged_names, name) is None:
+            return name
+        ordinal += 1
+
+
 def _has_external_wrapper(scans: Any) -> bool:
     for scan in scans or ():
         raw_by_file = getattr(scan, "db_invocations", {}) or {}
@@ -501,11 +535,16 @@ def _stage_complete_proposals(
             lifecycle = "reused"
         else:
             base_name = str(item["proposal"].get("name") or "contract").strip() or "contract"
-            name = base_name
-            if name in entries or name in staged_names:
-                name = f"{base_name}-{fingerprint[:12]}"
-            while name in entries or name in staged_names:
-                name = f"{base_name}-{fingerprint}"
+            taken_name = _taken_contract_name(entries, staged_names, base_name)
+            if taken_name is None:
+                name = base_name
+            else:
+                name = _unused_revision_name(
+                    entries,
+                    staged_names,
+                    taken_name,
+                    fingerprint,
+                )
             staged_names[name] = copy.deepcopy(item["entry"])
             lifecycle = "created"
         item["contract_name"] = name

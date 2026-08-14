@@ -190,6 +190,107 @@ def test_multiple_complete_proposals_are_sorted_and_equivalent_fingerprint_is_re
     assert sorted(second.formal_registry["contracts"]) == ["alpha", "zeta"]
 
 
+def _registry_renamed(registry: dict, old_name: str, new_name: str) -> dict:
+    contracts = dict(registry["contracts"])
+    contracts[new_name] = contracts.pop(old_name)
+    return {**registry, "contracts": contracts}
+
+
+def _extra_method_proposal(name: str, assembly: str) -> dict:
+    proposal = _proposal(name, assembly)
+    methods = proposal["implementation_snapshot"]["methods"]
+    methods.append(
+        {
+            **methods[0],
+            "method_identity": f"{assembly}.SQLObject.Read(System.String)",
+            "method_name": "Read",
+            "terminal_sink": "ExecuteReader",
+            "branch_rules": [{"mode": "stored_procedure", "sink": "ExecuteReader"}],
+        }
+    )
+    return proposal
+
+
+def test_matching_fingerprint_reuses_the_entry_despite_name_case() -> None:
+    created = run_contract_preflight(
+        [SimpleNamespace(contract_proposals=[_proposal("sqlfunc", "Vendor.Data")])],
+        registry={"contracts": {}},
+    )
+    registry = _registry_renamed(created.formal_registry, "sqlfunc", "SQLFunc")
+
+    result = run_contract_preflight(
+        [SimpleNamespace(contract_proposals=[_proposal("SQLFunc", "Vendor.Data")])],
+        registry=registry,
+    )
+
+    assert result.onboarding_status == "reused"
+    assert result.proposals[0]["lifecycle_status"] == "reused"
+    assert result.formal_selector == "SQLFunc"
+    assert list(result.formal_registry["contracts"]) == ["SQLFunc"]
+
+
+def test_case_different_contract_name_versions_one_entry_without_a_case_twin() -> None:
+    created = run_contract_preflight(
+        [SimpleNamespace(contract_proposals=[_proposal("sqlfunc", "Vendor.Data")])],
+        registry={"contracts": {}},
+    )
+    registry = _registry_renamed(created.formal_registry, "sqlfunc", "SQLFunc")
+
+    result = run_contract_preflight(
+        [
+            SimpleNamespace(
+                contract_proposals=[_extra_method_proposal("SQLFunc", "Vendor.Data")]
+            )
+        ],
+        registry=registry,
+    )
+
+    names = list(result.formal_registry["contracts"])
+    assert result.onboarding_status == "created"
+    assert len(names) == 2
+    assert len({name.casefold() for name in names}) == len(names)
+    assert "SQLFunc" in names
+    versioned = next(name for name in names if name != "SQLFunc")
+    assert versioned.startswith("SQLFunc-")
+    assert result.formal_selector == versioned
+    for name in names:
+        assert (
+            normalize_contract_selector(name, result.formal_registry).candidates
+            == (name,)
+        )
+
+
+def test_versioned_name_steps_past_an_existing_revision_of_the_same_name() -> None:
+    created = run_contract_preflight(
+        [SimpleNamespace(contract_proposals=[_proposal("sqlfunc", "Vendor.Data")])],
+        registry={"contracts": {}},
+    )
+    registry = _registry_renamed(created.formal_registry, "sqlfunc", "SQLFunc")
+    proposal = _extra_method_proposal("SQLFunc", "Vendor.Data")
+    first = run_contract_preflight(
+        [SimpleNamespace(contract_proposals=[proposal])],
+        registry=registry,
+    )
+    occupied_name = str(first.formal_selector)
+
+    # Stage the same behavior surface again, with the twelve-character
+    # revision name already taken by an unrelated entry.
+    registry["contracts"][occupied_name] = {"receiver_types": [], "methods": []}
+    result = run_contract_preflight(
+        [SimpleNamespace(contract_proposals=[proposal])],
+        registry=registry,
+    )
+
+    names = list(result.formal_registry["contracts"])
+    assert len({name.casefold() for name in names}) == len(names)
+    assert result.formal_selector != occupied_name
+    assert str(result.formal_selector).startswith("SQLFunc-")
+    assert registry["contracts"][occupied_name] == {
+        "receiver_types": [],
+        "methods": [],
+    }
+
+
 def test_invalid_selector_is_preserved_when_preflight_fails() -> None:
     original = ["alpha", "missing"]
     result = run_contract_preflight(
