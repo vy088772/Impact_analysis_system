@@ -1,0 +1,17 @@
+# 07 — Code-review follow-ups: rerun trigger, reason-code accuracy, selector-unspecified scope
+
+**What to build:** Three findings from the Standards/Spec code review of issues 01–06 (diff `0dcda4e...12e93d2`), all touching `service/analyze_service.py`'s decompile-onboarding path:
+
+1. US21 requires a cached failed/incomplete decompilation attempt to be invalidated "only when the DLL's hash changes or a maintainer explicitly requests a re-run." The rerun capability exists at the `StaticAnalyzerHost.decompile_wrapper(..., rerun=False)` / `--rerun` boundary (`code_analyzer/static_analyzer_host.py:282`), but `_populate_decompilation_proposals`/`refresh_source` never accept or forward a rerun flag — there is currently no way to trigger a re-run through the actual refresh entry point. Wire an explicit rerun trigger through `refresh_source` down to `decompile_wrapper`.
+2. In `_populate_decompilation_proposals` (`service/analyze_service.py:784-792`), when `_find_source_csproj` cannot uniquely locate a `.csproj` for a call site, the recorded reason is `"receiver_not_referenced"` — but that status is the host's distinct code for "`.csproj` found, but no matching `<Reference>` entry for the receiver." Conflating "couldn't find/disambiguate the `.csproj`" with "found the `.csproj` but the receiver isn't referenced in it" produces a misleading reason string in the US27 operator-facing report. Give the csproj-lookup-failure case its own distinct reason.
+3. `refresh_source` (`service/analyze_service.py:876-882`) currently disables decompilation whenever `selector_state.reason` is truthy, which also covers a selector that *was specified but is broken* (`selector_contract_not_found`, `selector_type_invalid`), not only a selector that is unspecified. Spec (Implementation Decisions, US2) says decompile-based onboarding runs "only when the selector is unspecified." Decide whether to (a) keep the current stricter fail-closed behavior and document the decision explicitly in the spec/ADR, or (b) narrow the check to fire only on a truly unspecified selector, matching the literal spec wording. Implement whichever is chosen and record the reasoning.
+
+**Blocked by:** 05.
+
+**Status:** ready-for-agent
+
+- [ ] `refresh_source` (or its caller) accepts an explicit re-run trigger and forwards it to `decompile_wrapper`'s `rerun` parameter, bypassing a cached incomplete/failed attempt for the targeted DLL only
+- [ ] A test exercises the rerun trigger through the refresh entry point (not only at the `StaticAnalyzerHost` client boundary), verifying a cached failure is bypassed and a fresh attempt is made
+- [ ] The csproj-lookup-failure case in `_populate_decompilation_proposals` is reported under a reason distinct from `receiver_not_referenced` (e.g. reuse `csproj_not_found`/a new dedicated reason), and a test asserts the two failure modes produce different reason strings
+- [ ] A decision is made and recorded (spec/ADR update or inline comment with rationale) on whether "selector unspecified" for decompile-gating purposes includes a broken/misconfigured explicit selector or only a truly absent one; `refresh_source`'s gating matches the recorded decision
+- [ ] Existing tests in `tests/test_refresh_decompile_onboarding.py` and `tests/test_refresh_contract_preflight.py` continue to pass; new tests follow the existing seam (synthetic `ProjectScanResult`/`contract_proposals`, no StaticAnalyzerHost internals)
