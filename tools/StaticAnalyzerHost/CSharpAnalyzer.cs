@@ -103,6 +103,54 @@ internal static class CSharpAnalyzer
             "NpgsqlDataAdapter" or
             "MySqlDataAdapter";
 
+    /// <summary>The data adapter methods that execute the adapter's own select command.</summary>
+    internal static bool IsAdapterFillMethod(string methodName)
+        => methodName is "Fill" or "FillAsync";
+
+    /// <summary>Whether an expression denotes a command object: a construction, a parameter,
+    /// a local, or a field of command type.</summary>
+    internal static bool IsSqlCommandExpression(
+        ExpressionSyntax expression,
+        MethodDeclarationSyntax method)
+    {
+        if (expression is ObjectCreationExpressionSyntax creation)
+            return IsSqlCommandType(creation.Type);
+
+        var name = expression switch
+        {
+            IdentifierNameSyntax identifier => identifier.Identifier.Text,
+            MemberAccessExpressionSyntax member => member.ToString().Trim(),
+            _ => "",
+        };
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        if (method.ParameterList.Parameters.Any(parameter =>
+            parameter.Identifier.Text == name
+            && parameter.Type is not null
+            && IsSqlCommandType(parameter.Type)))
+            return true;
+
+        if (method.DescendantNodes().OfType<VariableDeclarationSyntax>().Any(declaration =>
+            declaration.Variables.Any(variable => variable.Identifier.Text == name)
+            && (IsSqlCommandType(declaration.Type)
+                || declaration.Type.ToString() == "var"
+                && declaration.Variables.Any(variable =>
+                    variable.Identifier.Text == name
+                    && variable.Initializer?.Value is ObjectCreationExpressionSyntax creation
+                    && IsSqlCommandType(creation.Type)))))
+            return true;
+
+        var receiverName = name.StartsWith("this.", StringComparison.Ordinal)
+            ? name[5..]
+            : name;
+        var containingClass = method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+        return containingClass?.DescendantNodes()
+            .OfType<FieldDeclarationSyntax>()
+            .Any(field => IsSqlCommandType(field.Declaration.Type)
+                && field.Declaration.Variables.Any(variable => variable.Identifier.Text == receiverName)) is true;
+    }
+
     internal static string GetTypeIdentity(TypeDeclarationSyntax? typeDeclaration)
     {
         if (typeDeclaration is null)
@@ -461,7 +509,7 @@ internal static class DirectSqlClientAnalyzer
         InvocationExpressionSyntax? fluentFill = null;
         if (creation.Parent is MemberAccessExpressionSyntax fluentMember
             && fluentMember.Expression == creation
-            && fluentMember.Name.Identifier.Text is "Fill" or "FillAsync"
+            && CSharpAnalyzer.IsAdapterFillMethod(fluentMember.Name.Identifier.Text)
             && fluentMember.Parent is InvocationExpressionSyntax fluentInvocation
             && fluentInvocation.Expression == fluentMember)
         {
@@ -472,7 +520,7 @@ internal static class DirectSqlClientAnalyzer
 
         var arguments = creation.ArgumentList?.Arguments ?? default;
         var commandTextExpression = arguments.ElementAtOrDefault(0)?.Expression;
-        if (commandTextExpression is null || IsSqlCommandExpression(commandTextExpression, method))
+        if (commandTextExpression is null || CSharpAnalyzer.IsSqlCommandExpression(commandTextExpression, method))
             return Array.Empty<DirectSqlInvocation>();
 
         var fillSinks = fluentFill is not null
@@ -481,7 +529,7 @@ internal static class DirectSqlClientAnalyzer
                 .OfType<InvocationExpressionSyntax>()
                 .Where(invocation => invocation.Expression is MemberAccessExpressionSyntax member
                     && member.Expression.ToString().Trim() == adapterVariable
-                    && member.Name.Identifier.Text is "Fill" or "FillAsync"
+                    && CSharpAnalyzer.IsAdapterFillMethod(member.Name.Identifier.Text)
                     && invocation.SpanStart > creation.SpanStart)
                 .OrderBy(invocation => invocation.SpanStart)
                 .ToList();
@@ -542,48 +590,6 @@ internal static class DirectSqlClientAnalyzer
                 BranchContext: string.Join("\u001f", invocation.BranchContext ?? Array.Empty<string>())))
             .Select(group => group.First())
             .ToList();
-    }
-
-    internal static bool IsSqlCommandExpression(
-        ExpressionSyntax expression,
-        MethodDeclarationSyntax method)
-    {
-        if (expression is ObjectCreationExpressionSyntax creation)
-            return CSharpAnalyzer.IsSqlCommandType(creation.Type);
-
-        var name = expression switch
-        {
-            IdentifierNameSyntax identifier => identifier.Identifier.Text,
-            MemberAccessExpressionSyntax member => member.ToString().Trim(),
-            _ => "",
-        };
-        if (string.IsNullOrWhiteSpace(name))
-            return false;
-
-        if (method.ParameterList.Parameters.Any(parameter =>
-            parameter.Identifier.Text == name
-            && parameter.Type is not null
-            && CSharpAnalyzer.IsSqlCommandType(parameter.Type)))
-            return true;
-
-        if (method.DescendantNodes().OfType<VariableDeclarationSyntax>().Any(declaration =>
-            declaration.Variables.Any(variable => variable.Identifier.Text == name)
-            && (CSharpAnalyzer.IsSqlCommandType(declaration.Type)
-                || declaration.Type.ToString() == "var"
-                && declaration.Variables.Any(variable =>
-                    variable.Identifier.Text == name
-                    && variable.Initializer?.Value is ObjectCreationExpressionSyntax creation
-                    && CSharpAnalyzer.IsSqlCommandType(creation.Type)))))
-            return true;
-
-        var receiverName = name.StartsWith("this.", StringComparison.Ordinal)
-            ? name[5..]
-            : name;
-        var containingClass = method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
-        return containingClass?.DescendantNodes()
-            .OfType<FieldDeclarationSyntax>()
-            .Any(field => CSharpAnalyzer.IsSqlCommandType(field.Declaration.Type)
-                && field.Declaration.Variables.Any(variable => variable.Identifier.Text == receiverName)) is true;
     }
 
     private static DirectSqlInvocation CreateInvocation(
@@ -677,7 +683,7 @@ internal static class DirectSqlClientAnalyzer
                 .OfType<InvocationExpressionSyntax>()
                 .Where(call => call.Expression is MemberAccessExpressionSyntax member
                     && member.Expression.ToString().Trim() == adapterVariable
-                    && member.Name.Identifier.Text is "Fill" or "FillAsync"
+                    && CSharpAnalyzer.IsAdapterFillMethod(member.Name.Identifier.Text)
                     && call.SpanStart > creationStart)))
             .DistinctBy(call => call.SpanStart)
             .OrderBy(call => call.SpanStart)
@@ -2096,26 +2102,23 @@ internal static class WrapperAnalyzer
     /// </summary>
     /// <param name="Creation">The construction the rule recognized.</param>
     /// <param name="VariableName">The variable the construction is bound to, if any.</param>
-    /// <param name="CommandPropertyOwner">
-    /// The expression whose <c>CommandText</c>/<c>CommandType</c>/<c>Connection</c> assignments
-    /// govern this Command Source.
+    /// <param name="CommandPropertyReceiver">
+    /// The receiver text whose <c>CommandText</c>/<c>CommandType</c>/<c>Connection</c> assignments
+    /// govern this Command Source. Empty when the construction is bound to no variable.
     /// </param>
     /// <param name="PropertyInitializerOwner">
     /// The construction whose object initializer sets command properties, if any.
     /// </param>
-    /// <param name="SinkKind">Where this Command Source's terminal sink is read from.</param>
+    /// <param name="ResolveTerminalSinks">
+    /// This Command Source's own terminal sink calls within the method. Each rule brings its own,
+    /// so recognizing a further construct never reaches back into the classification flow.
+    /// </param>
     private sealed record CommandSource(
         ObjectCreationExpressionSyntax Creation,
         string? VariableName,
-        string? CommandPropertyOwner,
+        string CommandPropertyReceiver,
         ObjectCreationExpressionSyntax? PropertyInitializerOwner,
-        CommandSourceSinkKind SinkKind);
-
-    private enum CommandSourceSinkKind
-    {
-        Command,
-        Adapter,
-    }
+        Func<MethodDeclarationSyntax, IReadOnlyList<InvocationExpressionSyntax>> ResolveTerminalSinks);
 
     /// <summary>
     /// Resolves the Command Sources of one method. Every construct that can supply a command text
@@ -2148,9 +2151,11 @@ internal static class WrapperAnalyzer
                     return new CommandSource(
                         creation,
                         variable,
-                        variable,
+                        variable ?? "",
                         creation,
-                        CommandSourceSinkKind.Command);
+                        method => variable is null
+                            ? Array.Empty<InvocationExpressionSyntax>()
+                            : ResolveCommandTerminalSinkInvocations(method, variable));
                 });
 
         /// <summary>
@@ -2164,10 +2169,14 @@ internal static class WrapperAnalyzer
             {
                 if (!CSharpAnalyzer.IsDataAdapterType(creation.Type))
                     continue;
+                // Every two-argument adapter constructor takes a command text and a connection;
+                // the one-argument form takes a command object, which rule 1 already covers.
                 var arguments = creation.ArgumentList?.Arguments;
                 if (arguments is not { Count: 2 })
                     continue;
-                if (DirectSqlClientAnalyzer.IsSqlCommandExpression(arguments.Value[0].Expression, method))
+                // Stated rather than left to the arity above, so the rule that an existing command
+                // object never yields a second Command Source holds for any adapter type.
+                if (CSharpAnalyzer.IsSqlCommandExpression(arguments.Value[0].Expression, method))
                     continue;
                 var variable = ResolveVariableName(creation);
                 if (variable is null)
@@ -2179,7 +2188,7 @@ internal static class WrapperAnalyzer
                     // assigns to the command the adapter built for itself.
                     $"{variable}.SelectCommand",
                     null,
-                    CommandSourceSinkKind.Adapter);
+                    method => ResolveAdapterFillInvocations(method, variable));
             }
         }
     }
@@ -2204,7 +2213,7 @@ internal static class WrapperAnalyzer
             method,
             commandSource,
             "CommandType");
-        var terminalSinkInvocations = ResolveTerminalSinkInvocations(method, commandSource);
+        var terminalSinkInvocations = commandSource.ResolveTerminalSinks(method);
         if (terminalSinkInvocations.Count > 0)
         {
             commandTypeAssignments = commandTypeAssignments
@@ -2824,15 +2833,6 @@ internal static class WrapperAnalyzer
     private static string NormalizeTypeName(string typeName)
         => typeName.Trim().Replace("global::", "", StringComparison.Ordinal).TrimEnd('?');
 
-    private static IReadOnlyList<InvocationExpressionSyntax> ResolveTerminalSinkInvocations(
-        MethodDeclarationSyntax method,
-        CommandSource commandSource)
-        => commandSource.VariableName is not { } variableName
-            ? Array.Empty<InvocationExpressionSyntax>()
-            : commandSource.SinkKind == CommandSourceSinkKind.Adapter
-                ? ResolveAdapterFillInvocations(method, variableName)
-                : ResolveCommandTerminalSinkInvocations(method, variableName);
-
     /// <summary>The adapter rule's terminal sink is the adapter's own fill call.</summary>
     private static IReadOnlyList<InvocationExpressionSyntax> ResolveAdapterFillInvocations(
         MethodDeclarationSyntax method,
@@ -2841,7 +2841,7 @@ internal static class WrapperAnalyzer
             .OfType<InvocationExpressionSyntax>()
             .Where(invocation => invocation.Expression is MemberAccessExpressionSyntax member
                 && member.Expression.ToString().Trim() == adapterVariable
-                && member.Name.Identifier.Text is "Fill" or "FillAsync")
+                && CSharpAnalyzer.IsAdapterFillMethod(member.Name.Identifier.Text))
             .DistinctBy(invocation => invocation.SpanStart)
             .ToList();
 
@@ -2876,7 +2876,7 @@ internal static class WrapperAnalyzer
             .OfType<InvocationExpressionSyntax>()
             .Where(invocation => invocation.Expression is MemberAccessExpressionSyntax member
                 && adapterVariables.Contains(member.Expression.ToString().Trim())
-                && member.Name.Identifier.Text is "Fill" or "FillAsync"));
+                && CSharpAnalyzer.IsAdapterFillMethod(member.Name.Identifier.Text)));
 
         return sinkInvocations
             .DistinctBy(invocation => invocation.SpanStart)
@@ -2887,7 +2887,7 @@ internal static class WrapperAnalyzer
         MethodDeclarationSyntax method,
         CommandSource commandSource)
     {
-        var sinkNames = ResolveTerminalSinkInvocations(method, commandSource)
+        var sinkNames = commandSource.ResolveTerminalSinks(method)
             .Select(invocation => ((MemberAccessExpressionSyntax)invocation.Expression).Name.Identifier.Text)
             .Distinct(StringComparer.Ordinal)
             .ToList();
@@ -3252,7 +3252,7 @@ internal static class WrapperAnalyzer
             .OfType<AssignmentExpressionSyntax>()
             .Where(assignment => IsMemberAssignment(
                 assignment,
-                commandSource.CommandPropertyOwner ?? "",
+                commandSource.CommandPropertyReceiver,
                 propertyName))
             .ToList();
         if (commandSource.PropertyInitializerOwner?.Initializer is { } initializer)

@@ -50,6 +50,10 @@ _Avoid_: formal invocation evidence, runtime discovery
 The refresh/preflight disposition of a contract binding: `reused`, `created`, `preflight_failed`, `conflicted`, `selected`, or `not_required`. It describes how the contract was handled in the current refresh, not where its implementation evidence came from. Existing registry-to-invocation projections may also expose `accepted` or `legacy_unverified` for registry validation compatibility. The separate `evidence_kind` marker identifies provenance such as `decompiled_auto` and remains additive to this status.
 _Avoid_: evidence provenance, Evidence Status
 
+**Command Source**:
+The construct inside one wrapper method that supplies the method's command text and terminal sink. A method has a Command Source when a resolution rule recognizes its construct — today an explicit command object construction, or a data adapter construction taking a command text argument and a connection argument. A method that touches a database type but yields no Command Source is a visible gap, not a silent drop.
+_Avoid_: SqlCommand construction, command builder
+
 **Implementation Snapshot**:
 A structured record of one receiver's public database operations (method identity, argument roles, effective command semantics, terminal sink) captured from local source, a verified external assembly, or a decompiled external assembly, submitted as a candidate for Contract Preflight.
 _Avoid_: method inventory, observed call list
