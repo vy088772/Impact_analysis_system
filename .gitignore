@@ -7,3 +7,4 @@ __pycache__/
 data/
 tools/StaticAnalyzerHost/bin/
 tools/StaticAnalyzerHost/obj/
+config/.contract_transactions/
