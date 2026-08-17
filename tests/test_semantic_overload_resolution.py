@@ -156,6 +156,48 @@ def test_bound_symbol_selects_one_overload_through_the_gateway() -> None:
 
 @requires_dotnet
 @requires_stc_fixture
+def test_refresh_of_stc_reports_proven_evidence_for_previously_missing_create_table_overload() -> None:
+    """Spec regression (User Story 15): before this ticket, the two-argument `CreateTable`
+    overload had no contract entry, so `CommonFunction.GetDept`'s call sat at Evidence Status
+    `unresolved` with reason `overload_not_found`. Ticket 01/02 gave the decompiler a Command
+    Source rule for the data-adapter construction that overload uses, so the rebuilt sqlfunc
+    contract now covers it end to end and the call should evidence as `proven`."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    target = STC_ROOT / "CommonFunction.cs"
+    results = host.analyze_csharp_files([target], source_roots=[STC_ROOT])
+    assert len(results) == 1
+    db_invocations = {str(target): results[0].get("db_invocations", [])}
+    scan = SimpleNamespace(
+        project_root=str(STC_ROOT),
+        db_invocations=db_invocations,
+        connection_sources={},
+    )
+
+    refresh = analyze_service.reconcile_refresh_wrappers(
+        [scan],
+        contract_registry={"sqlfunc": _sqlfunc_contract()},
+        explicit_contract="sqlfunc",
+    )
+
+    create_table_observations = [
+        observation
+        for observation in refresh["observations"]
+        if observation["wrapper_method"] == "CreateTable"
+        and observation.get("method_arity") == 2
+    ]
+    assert create_table_observations, (
+        "expected the CommonFunction.GetDept two-argument CreateTable call in the fixture"
+    )
+    for observation in create_table_observations:
+        assert observation["evidence_status"] == "proven"
+        assert observation["status"] != "unresolved"
+        assert observation["classification_reason"] != "overload_not_found"
+
+
+@requires_dotnet
+@requires_stc_fixture
 def test_refresh_of_stc_reports_no_ambiguous_overload_for_bound_calls() -> None:
     """A refresh of STC reports no `ambiguous_overload` review candidate for a call the
     semantic model could bind, and the wrapper summary reports how many calls it resolved."""
