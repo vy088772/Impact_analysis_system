@@ -641,6 +641,150 @@ def test_ambiguous_overload_still_rates_evidence_when_candidates_share_mode_and_
     assert invocation.wrapper_unresolved_reason == "ambiguous_overload_mode_resolved"
 
 
+def _sqlfunc_createreader_contract_with_assembly() -> dict:
+    """`_sqlfunc_createreader_contract` plus the Implementation Snapshot assembly identity a
+    real decompiled contract carries -- ticket 06's symbol acceptance rule checks a bound
+    symbol's own containing assembly against exactly this field."""
+    contract = _sqlfunc_createreader_contract()
+    contract["implementation_snapshots"] = [{"assembly_identity": "sqlfunc-dll-sha256-fixture"}]
+    return contract
+
+
+def test_semantic_bound_method_facts_rejects_mismatched_assembly() -> None:
+    """`_semantic_bound_method_facts` is the one shared gate both the primary contract match
+    and the multi-contract-name disambiguation loop use to decide whether to trust a bound
+    identity -- test it directly so a future change to either call site can't quietly stop
+    routing through the same acceptance rule."""
+    raw = _raw_invocation(
+        wrapper_method_identity="SQLFunc.CreateReader(string,System.Data.SqlClient.SqlParameter[])",
+        wrapper_parameter_types=["string", "System.Data.SqlClient.SqlParameter[]"],
+        wrapper_assembly_identity="real-dll-hash",
+    )
+    method_facts = gateway_module._wrapper_method_facts(raw)
+
+    identity, parameter_types, accepted = gateway_module._semantic_bound_method_facts(
+        raw, method_facts, {"assembly_identity": "real-dll-hash"}
+    )
+    assert accepted is True
+    assert identity == "SQLFunc.CreateReader(string,System.Data.SqlClient.SqlParameter[])"
+    assert parameter_types == ("string", "System.Data.SqlClient.SqlParameter[]")
+
+    identity, parameter_types, accepted = gateway_module._semantic_bound_method_facts(
+        raw, method_facts, {"assembly_identity": "unrelated-dll-hash"}
+    )
+    assert accepted is False
+    assert identity == ""
+    assert parameter_types == ()
+
+    # No bound identity at all (the compiler never resolved a symbol, or no semantic model
+    # was available): never accepted, regardless of the contract's assembly identity.
+    unbound_raw = _raw_invocation(wrapper_method_identity="", wrapper_assembly_identity="")
+    identity, parameter_types, accepted = gateway_module._semantic_bound_method_facts(
+        unbound_raw,
+        gateway_module._wrapper_method_facts(unbound_raw),
+        {"assembly_identity": "real-dll-hash"},
+    )
+    assert accepted is False
+    assert identity == ""
+
+
+def test_semantic_binding_resolves_bound_method_identity_to_one_overload() -> None:
+    """Ticket 06: once the compiler binds a call to one exact method symbol -- reported as
+    wrapper_method_identity/wrapper_parameter_types, alongside the bound symbol's own assembly
+    identity -- the contract match uses that identity instead of arity alone, so CreateReader's
+    SqlParameter[] sibling stops being an unresolvable review candidate."""
+    catalog = SpCatalog.from_databases({"STC": []})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "STC"})
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        command_text="select CompanyCode,CompanyTitle from YMTTCompany order by CompanyTitle",
+        wrapper_method_name="CreateReader",
+        wrapper_receiver_type="SQLFunc",
+        wrapper_source_available=False,
+        wrapper_mode="inline_sql",
+        wrapper_method_arity=2,
+        wrapper_method_identity="SQLFunc.CreateReader(string,System.Data.SqlClient.SqlParameter[])",
+        wrapper_parameter_types=["string", "System.Data.SqlClient.SqlParameter[]"],
+        wrapper_assembly_identity="sqlfunc-dll-sha256-fixture",
+        terminal_sink="ExecuteReader",
+        connection_expression="conn",
+    )
+
+    reconciliation = gateway.reconcile_wrapper(
+        "f.cs", raw, explicit_contract=_sqlfunc_createreader_contract_with_assembly()
+    )
+    assert reconciliation.status == "explicit_selected"
+    assert reconciliation.reason == ""
+    assert reconciliation.review_candidate is False
+    assert reconciliation.contract_mode == "inline_sql"
+    assert reconciliation.contract_sink == "ExecuteReader"
+
+    invocation = gateway.resolve_direct_invocations(
+        "f.cs", [raw], explicit_contract=_sqlfunc_createreader_contract_with_assembly()
+    )[0]
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.wrapper_status == "explicit_selected"
+
+
+def test_semantic_binding_falls_back_when_no_symbol_was_resolved() -> None:
+    """Ticket 06: a call whose symbol the compiler could not resolve (or for which no
+    semantic model was available) carries no wrapper_method_identity at all, and lands
+    exactly where it did before this ticket -- an arity-2 call still can't tell CreateReader's
+    SqlParameter vs SqlParameter[] siblings apart from argument count alone."""
+    catalog = SpCatalog.from_databases({"STC": []})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "STC"})
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        wrapper_method_name="CreateReader",
+        wrapper_receiver_type="SQLFunc",
+        wrapper_source_available=False,
+        wrapper_mode="inline_sql",
+        wrapper_method_arity=2,
+        terminal_sink="ExecuteReader",
+        connection_expression="conn",
+    )
+
+    reconciliation = gateway.reconcile_wrapper(
+        "f.cs", raw, explicit_contract=_sqlfunc_createreader_contract_with_assembly()
+    )
+    assert reconciliation.status == "ambiguous_overload"
+    assert reconciliation.reason == "ambiguous_overload_mode_resolved"
+
+
+def test_semantic_binding_rejects_symbol_from_unexpected_assembly() -> None:
+    """Ticket 06 symbol acceptance rule: a bound symbol whose own containing assembly differs
+    from the assembly identity the contract records is never adopted. The call falls back to
+    the argument-count path exactly as if the compiler had not resolved a symbol at all --
+    this system refuses to guess even when the compiler handed it a name."""
+    catalog = SpCatalog.from_databases({"STC": []})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "STC"})
+    raw = _raw_invocation(
+        invocation_kind="source_wrapper",
+        wrapper_method_name="CreateReader",
+        wrapper_receiver_type="SQLFunc",
+        wrapper_source_available=False,
+        wrapper_mode="inline_sql",
+        wrapper_method_arity=2,
+        wrapper_method_identity="SQLFunc.CreateReader(string,System.Data.SqlClient.SqlParameter[])",
+        wrapper_parameter_types=["string", "System.Data.SqlClient.SqlParameter[]"],
+        wrapper_assembly_identity="a-different-assembly-entirely",
+        terminal_sink="ExecuteReader",
+        connection_expression="conn",
+    )
+
+    reconciliation = gateway.reconcile_wrapper(
+        "f.cs", raw, explicit_contract=_sqlfunc_createreader_contract_with_assembly()
+    )
+    assert reconciliation.status == "ambiguous_overload"
+    assert reconciliation.reason == "ambiguous_overload_mode_resolved"
+
+    invocation = gateway.resolve_direct_invocations(
+        "f.cs", [raw], explicit_contract=_sqlfunc_createreader_contract_with_assembly()
+    )[0]
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.wrapper_status == "ambiguous_overload"
+
+
 def test_external_contract_single_signatureless_method_stays_unresolved_against_specific_overload() -> None:
     """A contract's lone signature-less method entry must not silently match a raw call
     whose facts already reveal a specific arity/parameter overload."""

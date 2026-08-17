@@ -38,7 +38,10 @@ internal static class CSharpAnalyzer
     internal static CSharpAnalysis Analyze(string inputPath)
         => Analyze(inputPath, new[] { ReadSource(inputPath) });
 
-    internal static CSharpAnalysis Analyze(string inputPath, IReadOnlyList<CSharpSource> sourceFiles)
+    internal static CSharpAnalysis Analyze(
+        string inputPath,
+        IReadOnlyList<CSharpSource> sourceFiles,
+        CSharpCompilation? compilation = null)
     {
         var bytes = File.ReadAllBytes(inputPath);
         var source = File.ReadAllText(inputPath);
@@ -65,7 +68,7 @@ internal static class CSharpAnalyzer
                         || !usedWrapperMethodIdentities.Contains(methodIdentity));
             })
             .ToList();
-        dbInvocations.AddRange(WrapperAnalyzer.Analyze(root, sourceRoots));
+        dbInvocations.AddRange(WrapperAnalyzer.Analyze(root, sourceRoots, compilation));
         dbInvocations.AddRange(AdapterAnalyzer.Analyze(root, sourceRoots));
         dbInvocations.AddRange(root.DescendantNodes()
             .OfType<ObjectCreationExpressionSyntax>()
@@ -1554,7 +1557,8 @@ internal static class WrapperAnalyzer
 
     internal static List<DirectSqlInvocation> Analyze(
         CompilationUnitSyntax root,
-        IEnumerable<CompilationUnitSyntax> sourceRoots)
+        IEnumerable<CompilationUnitSyntax> sourceRoots,
+        CSharpCompilation? compilation = null)
     {
         var roots = sourceRoots.ToList();
         var wrappers = GetDefinitions(roots);
@@ -1597,7 +1601,7 @@ internal static class WrapperAnalyzer
                 {
                     if (AdapterAnalyzer.IsRecognizedAdapterInvocation(call, method))
                         continue;
-                    var unavailable = CreateUnavailableCandidate(call, method, callerClass);
+                    var unavailable = CreateUnavailableCandidate(call, method, callerClass, compilation);
                     if (unavailable is not null)
                         invocations.Add(unavailable);
                     continue;
@@ -1870,7 +1874,8 @@ internal static class WrapperAnalyzer
     private static DirectSqlInvocation? CreateUnavailableCandidate(
         InvocationExpressionSyntax call,
         MethodDeclarationSyntax caller,
-        string callerClass)
+        string callerClass,
+        CSharpCompilation? compilation)
     {
         if (call.Expression is not MemberAccessExpressionSyntax member)
             return null;
@@ -1892,7 +1897,60 @@ internal static class WrapperAnalyzer
             literalText,
             mode == "stored_procedure",
             mode,
-            call);
+            call,
+            TryResolveBoundWrapperSymbol(call, compilation));
+    }
+
+    // Symbol acceptance rule (ticket 06): accept a bound method symbol only when the compiler
+    // returned one resolved symbol and returned no candidate set. A non-empty candidate set
+    // means overload resolution could not choose between two or more methods -- that is exactly
+    // the ambiguity this system refuses to guess through, so it is treated the same as no
+    // symbol at all, and the call falls back to the argument-count path unchanged. Whether the
+    // bound symbol's own assembly matches the one the contract records is a decision for the
+    // Python gateway, which is where the contract actually lives; this only reports the bound
+    // symbol's own facts.
+    private static BoundWrapperSymbolFacts? TryResolveBoundWrapperSymbol(
+        InvocationExpressionSyntax call,
+        CSharpCompilation? compilation)
+    {
+        if (compilation is null || !compilation.ContainsSyntaxTree(call.SyntaxTree))
+            return null;
+
+        var semanticModel = compilation.GetSemanticModel(call.SyntaxTree);
+        var symbolInfo = semanticModel.GetSymbolInfo(call);
+        if (symbolInfo.Symbol is not IMethodSymbol method || !symbolInfo.CandidateSymbols.IsEmpty)
+            return null;
+
+        var parameterTypes = method.Parameters
+            .Select(parameter => parameter.Type.ToDisplayString(BoundParameterTypeFormat))
+            .ToList();
+        var methodIdentity = $"{method.ContainingType.Name}.{method.Name}({string.Join(",", parameterTypes)})";
+        var assemblyIdentity = ResolveBoundAssemblyIdentity(compilation, method.ContainingAssembly);
+
+        return new BoundWrapperSymbolFacts(methodIdentity, parameterTypes, assemblyIdentity);
+    }
+
+    private static readonly SymbolDisplayFormat BoundParameterTypeFormat = new(
+        globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
+        typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+        miscellaneousOptions: SymbolDisplayMiscellaneousOptions.UseSpecialTypes);
+
+    private static string? ResolveBoundAssemblyIdentity(CSharpCompilation compilation, IAssemblySymbol assembly)
+    {
+        if (compilation.GetMetadataReference(assembly) is not PortableExecutableReference
+            {
+                FilePath: { } path,
+            }
+            || !File.Exists(path))
+            return null;
+        try
+        {
+            return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private static ExpressionSyntax? ResolveExternalCommandTextArgument(
@@ -1914,7 +1972,8 @@ internal static class WrapperAnalyzer
         string? commandText,
         bool commandTypeStoredProcedure,
         string mode,
-        InvocationExpressionSyntax call)
+        InvocationExpressionSyntax call,
+        BoundWrapperSymbolFacts? boundSymbol = null)
         => new(
             callerClass,
             caller.Identifier.Text,
@@ -1932,7 +1991,18 @@ internal static class WrapperAnalyzer
             mode,
             new[] { caller.Identifier.Text, member.Name.Identifier.Text },
             WrapperReceiverType: ResolveExternalReceiverType(call, caller),
-            WrapperMethodArity: call.ArgumentList.Arguments.Count);
+            WrapperMethodArity: call.ArgumentList.Arguments.Count,
+            WrapperMethodIdentity: boundSymbol?.MethodIdentity,
+            WrapperParameterTypes: boundSymbol?.ParameterTypes,
+            WrapperAssemblyIdentity: boundSymbol?.AssemblyIdentity);
+
+    /// <summary>One externally referenced wrapper call's uniquely bound method symbol facts —
+    /// only ever built when the compiler resolved the call to exactly one method with no
+    /// candidate set (see <see cref="TryResolveBoundWrapperSymbol"/>).</summary>
+    private sealed record BoundWrapperSymbolFacts(
+        string MethodIdentity,
+        IReadOnlyList<string> ParameterTypes,
+        string? AssemblyIdentity);
 
     private static string? ResolveExternalReceiverType(
         InvocationExpressionSyntax call,

@@ -21,11 +21,7 @@ internal static class ProjectCompilationResolver
         var results = new List<ProjectSemanticBinding>();
         foreach (var scanRoot in scanRoots.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var projectFiles = Directory.Exists(scanRoot)
-                ? Directory.EnumerateFiles(scanRoot, "*.csproj", SearchOption.AllDirectories)
-                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                    .ToList()
-                : new List<string>();
+            var projectFiles = DiscoverProjectFiles(scanRoot);
             if (projectFiles.Count == 0)
             {
                 results.Add(ProjectSemanticBinding.Unavailable(
@@ -33,12 +29,49 @@ internal static class ProjectCompilationResolver
                 continue;
             }
             foreach (var projectFile in projectFiles)
-                results.Add(ResolveProject(scanRoot, projectFile));
+                results.Add(ResolveProject(scanRoot, projectFile, null));
         }
         return results;
     }
 
-    private static ProjectSemanticBinding ResolveProject(string scanRoot, string projectFile)
+    /// <summary>
+    /// Ticket 06: the `csharp` command reuses project reference resolution to build one
+    /// compilation from the exact syntax trees it already parsed for its own analysis context,
+    /// rather than re-parsing the project's `&lt;Compile&gt;` items into fresh tree instances.
+    /// Roslyn's semantic APIs require a queried node to belong to a tree the compilation
+    /// actually holds, so reusing the same tree instances is what lets a wrapper call site be
+    /// bound to a symbol at all. Ambiguous project ownership -- zero or more than one project
+    /// file resolves across the given scan roots -- is treated the same as "no semantic model":
+    /// the syntax-only path, never a guess at which project's references apply.
+    /// </summary>
+    internal static CSharpCompilation? ResolveCompilationForAnalysis(
+        IEnumerable<string> scanRoots,
+        IReadOnlyList<SyntaxTree> syntaxTrees)
+    {
+        if (syntaxTrees.Count == 0)
+            return null;
+        var projectFiles = scanRoots
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .SelectMany(DiscoverProjectFiles)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (projectFiles.Count != 1)
+            return null;
+        // ScanRoot is discarded below (only Availability/Compilation matter here), so which of
+        // the given scan roots actually owns this one project file is deliberately not tracked.
+        var binding = ResolveProject(scanRoot: "", projectFiles[0], syntaxTrees);
+        return binding.Availability == "available" ? binding.Compilation : null;
+    }
+
+    private static List<string> DiscoverProjectFiles(string scanRoot)
+        => Directory.Exists(scanRoot)
+            ? Directory.EnumerateFiles(scanRoot, "*.csproj", SearchOption.AllDirectories)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+            : new List<string>();
+
+    private static ProjectSemanticBinding ResolveProject(
+        string scanRoot, string projectFile, IReadOnlyList<SyntaxTree>? overrideSyntaxTrees)
     {
         ProjectFileDescription description;
         try
@@ -74,12 +107,23 @@ internal static class ProjectCompilationResolver
             references.Add(MetadataReference.CreateFromFile(resolvedPath));
         }
 
+        // An old-style (non-SDK) .csproj never lists mscorlib as an explicit <Reference>: csc.exe
+        // adds it implicitly to every compilation. Ticket 05 never needed it (it only checked
+        // whether each declared reference resolves as a file), but a real semantic model does --
+        // without it, every built-in type (object, string, ...) fails to bind and every call site
+        // becomes an unresolvable error, defeating the whole point of building a compilation.
+        var mscorlibPath = ResolveFrameworkReference(new ProjectReferenceItem("mscorlib", null));
+        if (mscorlibPath is null)
+            unresolved.Add("mscorlib");
+        else
+            references.Add(MetadataReference.CreateFromFile(mscorlibPath));
+
         if (unresolved.Count > 0)
             return ProjectSemanticBinding.Unavailable(
                 scanRoot, projectFile, "unavailable_reference_resolution_failed", unresolved);
 
-        var syntaxTrees = description.CompileItems
-            .Select(path => CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path))
+        var syntaxTrees = overrideSyntaxTrees ?? description.CompileItems
+            .Select(path => (SyntaxTree)CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path))
             .ToList();
         var compilation = CSharpCompilation.Create(
             Path.GetFileNameWithoutExtension(projectFile),

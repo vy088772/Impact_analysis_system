@@ -80,6 +80,7 @@ class WrapperReconciliation:
     scan_root: str = ""
     reason: str = ""
     review_candidate: bool = False
+    semantic_binding_accepted: bool = False
     stored_procedure_mode: bool = False
     mode_reason: str = ""
     implementation_identity: str = ""
@@ -133,6 +134,7 @@ class WrapperReconciliation:
             "unresolved_reason": self.reason,
             "review_candidate": self.review_candidate,
             "active_contract": self.active_contract,
+            "semantic_binding_accepted": self.semantic_binding_accepted,
             "stored_procedure_mode": self.stored_procedure_mode,
             "mode_reason": self.mode_reason,
             "implementation_identity": self.implementation_identity,
@@ -452,6 +454,7 @@ def wrapper_observation_fields(
         "source_available": classification["source_available"],
         "wrapper_review_candidate": classification["review_candidate"],
         "review_candidate": classification["review_candidate"],
+        "semantic_binding_accepted": classification["semantic_binding_accepted"],
         "wrapper_unresolved_reason": classification["reason"],
         "classification_reason": classification["reason"],
         "wrapper_mode_reason": classification["mode_reason"],
@@ -1036,6 +1039,69 @@ def _wrapper_contract_receiver_matches(
     return _receiver_type_matches_contract(receiver_type, receiver_types)
 
 
+def _contract_snapshot_field(contract: Mapping[str, Any], *field_names: str) -> str:
+    """Read a field from a contract's Implementation Snapshot: from the singular
+    `implementation_snapshot` (the pre-acceptance proposal shape) if it carries the field,
+    else from the first entry of `implementation_snapshots` (the accepted-contract shape).
+    Checks each field name in `field_names` in priority order, mirroring `_first_fact`."""
+    snapshot = contract.get("implementation_snapshot")
+    if isinstance(snapshot, Mapping):
+        value = _text_fact(_first_fact(snapshot, *field_names))
+        if value:
+            return value
+    snapshots = contract.get("implementation_snapshots")
+    if isinstance(snapshots, (list, tuple)) and snapshots:
+        first_snapshot = snapshots[0]
+        if isinstance(first_snapshot, Mapping):
+            return _text_fact(_first_fact(first_snapshot, *field_names))
+        return _text_fact(first_snapshot)
+    return ""
+
+
+def _contract_assembly_identity(contract: Mapping[str, Any]) -> str:
+    """The assembly identity a contract was built from -- a top-level field on a hand-authored
+    contract, or the field of the same name on its Implementation Snapshot for a decompiled
+    one. Contract Onboarding never records this at the top level, only on the snapshot, so
+    both places must be checked."""
+    explicit = _text_fact(contract.get("assembly_identity"))
+    if explicit:
+        return explicit
+    return _contract_snapshot_field(contract, "assembly_identity")
+
+
+def _semantic_bound_method_facts(
+    raw: Mapping[str, Any],
+    method_facts: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> tuple[str, tuple[str, ...], bool]:
+    """The bound method identity/parameter types to trust when matching a call against one
+    specific contract candidate, and whether the compiler's binding was accepted for it.
+
+    Symbol acceptance rule (ticket 06): a bound identity is trusted only when the call site
+    carries a bound symbol *and* that symbol's own containing assembly identity equals the
+    assembly identity this contract was actually built from. A rejected identity is discarded
+    entirely -- both the method identity and its parameter types -- so contract matching falls
+    back to the argument-count path exactly as if the compiler had not resolved a symbol at
+    all. Never adopt a bound identity from an assembly the contract does not describe.
+    """
+    observed_method_identity = _text_fact(
+        _first_fact(raw, "wrapper_method_identity", "method_identity")
+    )
+    if not observed_method_identity:
+        return "", (), False
+    bound_assembly_identity = _text_fact(
+        _first_fact(raw, "wrapper_assembly_identity", "assembly_identity")
+    )
+    contract_assembly_identity = _contract_assembly_identity(contract)
+    if (
+        bound_assembly_identity
+        and contract_assembly_identity
+        and bound_assembly_identity.casefold() != contract_assembly_identity.casefold()
+    ):
+        return "", (), False
+    return observed_method_identity, method_facts["parameter_types"], True
+
+
 def _contract_identity_facts(contract: Mapping[str, Any]) -> Dict[str, str]:
     explicit_fingerprint = _text_fact(contract.get("contract_fingerprint"))
     fingerprint = explicit_fingerprint
@@ -1055,26 +1121,14 @@ def _contract_identity_facts(contract: Mapping[str, Any]) -> Dict[str, str]:
         lifecycle_status = _text_fact(lifecycle.get("status"))
     if not lifecycle_status:
         lifecycle_status = "accepted" if explicit_fingerprint else "legacy_unverified"
-    snapshot = contract.get("implementation_snapshot")
-    snapshots = contract.get("implementation_snapshots")
     snapshot_reference = _text_fact(
         contract.get("implementation_snapshot_reference")
         or contract.get("snapshot_reference")
     )
-    if not snapshot_reference and isinstance(snapshot, Mapping):
-        snapshot_reference = _text_fact(
-            snapshot.get("snapshot_identity")
-            or snapshot.get("artifact_identity")
+    if not snapshot_reference:
+        snapshot_reference = _contract_snapshot_field(
+            contract, "snapshot_identity", "artifact_identity"
         )
-    if not snapshot_reference and isinstance(snapshots, (list, tuple)) and snapshots:
-        first_snapshot = snapshots[0]
-        if isinstance(first_snapshot, Mapping):
-            snapshot_reference = _text_fact(
-                first_snapshot.get("snapshot_identity")
-                or first_snapshot.get("artifact_identity")
-            )
-        else:
-            snapshot_reference = _text_fact(first_snapshot)
     report = contract.get("comparison_report")
     report_reference = _text_fact(
         contract.get("comparison_report_reference")
@@ -1813,6 +1867,7 @@ class CSharpAnalysisGateway:
             overload_candidate_facts: Optional[Iterable[Mapping[str, Any]]] = None,
             reason: str = "",
             review_candidate: bool = False,
+            semantic_binding_accepted: bool = False,
             stored_procedure_mode: bool = False,
             mode_reason: str = "",
             contract_identity_facts: Optional[Mapping[str, Any]] = None,
@@ -1835,6 +1890,7 @@ class CSharpAnalysisGateway:
                 scan_root=root,
                 reason=reason,
                 review_candidate=review_candidate,
+                semantic_binding_accepted=semantic_binding_accepted,
                 stored_procedure_mode=stored_procedure_mode,
                 mode_reason=mode_reason,
                 implementation_identity=binding["implementation_identity"],
@@ -2047,14 +2103,15 @@ class CSharpAnalysisGateway:
             if len(receiver_matches) > 1:
                 method_matches: list[Mapping[str, Any]] = []
                 for candidate in receiver_matches:
+                    candidate_identity, candidate_parameter_types, _ = (
+                        _semantic_bound_method_facts(raw, method_facts, candidate)
+                    )
                     method_contract, _, _ = _wrapper_contract_method(
                         candidate,
                         wrapper_method,
-                        method_identity=_text_fact(
-                            _first_fact(raw, "wrapper_method_identity", "method_identity")
-                        ),
+                        method_identity=candidate_identity,
                         method_arity=method_facts["method_arity"],
-                        parameter_types=method_facts["parameter_types"],
+                        parameter_types=candidate_parameter_types,
                     )
                     if method_contract is not None:
                         method_matches.append(candidate)
@@ -2128,15 +2185,15 @@ class CSharpAnalysisGateway:
                 contract_identity_facts=contract_identity_facts,
             )
 
-        observed_method_identity = _text_fact(
-            _first_fact(raw, "wrapper_method_identity", "method_identity")
+        observed_method_identity, observed_parameter_types, semantic_binding_accepted = (
+            _semantic_bound_method_facts(raw, method_facts, contract)
         )
         method_contract, method_reason, method_candidates = _wrapper_contract_method(
             contract,
             wrapper_method,
             method_identity=observed_method_identity,
             method_arity=method_facts["method_arity"],
-            parameter_types=method_facts["parameter_types"],
+            parameter_types=observed_parameter_types,
         )
         method_candidate_names = tuple(
             _wrapper_contract_method_identity(candidate, wrapper_method)
@@ -2159,6 +2216,7 @@ class CSharpAnalysisGateway:
                 ),
                 reason=method_reason,
                 review_candidate=True,
+                semantic_binding_accepted=semantic_binding_accepted,
                 stored_procedure_mode=attempted_sp_mode,
                 mode_reason="" if attempted_sp_mode else "wrapper_mode_unresolved",
                 contract_identity_facts=contract_identity_facts,
@@ -2226,6 +2284,7 @@ class CSharpAnalysisGateway:
             mode_reason=mode_reason,
             reason="ambiguous_overload_mode_resolved" if overload_identity_ambiguous else "",
             review_candidate=overload_identity_ambiguous,
+            semantic_binding_accepted=semantic_binding_accepted,
             contract_identity_facts=contract_identity_facts,
         )
 

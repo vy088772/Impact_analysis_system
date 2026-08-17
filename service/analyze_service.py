@@ -2296,6 +2296,7 @@ def reconcile_refresh_wrappers(
     observations_by_key: Dict[tuple, Dict[str, object]] = {}
     scan_summaries: List[Dict[str, object]] = []
     total_wrapper_calls = 0
+    total_semantic_binding_resolved = 0
     if isinstance(explicit_contract, str):
         normalized_contract: Any = explicit_contract.strip()
     elif isinstance(explicit_contract, (list, tuple)):
@@ -2352,6 +2353,14 @@ def reconcile_refresh_wrappers(
                     # not just drop out of the printed review detail.
                     continue
                 wrapper_calls += 1
+                if observation.get("semantic_binding_accepted") is True:
+                    # `semantic_binding_accepted` is the gateway's own verdict, not a raw
+                    # call-site fact: the compiler bound this call to one method symbol *and*
+                    # that symbol's containing assembly matched the contract's -- a call whose
+                    # bound symbol was rejected (assembly mismatch) never sets this, so it is
+                    # never counted here even though the raw record still carries the rejected
+                    # identity.
+                    total_semantic_binding_resolved += 1
                 if (
                     contract_preflight_failure_reason
                     and observation.get("wrapper_kind") == "external_wrapper"
@@ -2533,6 +2542,7 @@ def reconcile_refresh_wrappers(
         ),
         "totals": {
             "wrapper_calls": total_wrapper_calls,
+            "semantic_binding_resolved": total_semantic_binding_resolved,
             "observation_groups": len(observations),
             "source_wrappers": sum(
                 item["wrapper_kind"] == "source_wrapper" for item in observations

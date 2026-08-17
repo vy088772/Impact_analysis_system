@@ -61,8 +61,15 @@ internal static class Program
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var sourceFiles = contextPaths.Select(CSharpAnalyzer.ReadSource).ToList();
+        // A semantic model lets a wrapper call bind to one exact method symbol (ticket 06);
+        // when the project's references don't resolve to exactly one project across the given
+        // scan roots, this stays null and every call falls back to the syntax-only path it
+        // already used before this ticket existed.
+        var compilation = ProjectCompilationResolver.ResolveCompilationForAnalysis(
+            sourceRoots,
+            sourceFiles.Select(sourceFile => sourceFile.Root.SyntaxTree).ToList());
         var analyses = inputPaths
-            .Select(inputPath => CSharpAnalyzer.Analyze(inputPath, sourceFiles))
+            .Select(inputPath => CSharpAnalyzer.Analyze(inputPath, sourceFiles, compilation))
             .ToList();
         if (analyses.Count == 1)
         {
