@@ -116,7 +116,6 @@ class PathEvidenceResponse(BaseModel):
     sp_chain: List[str] = Field(default_factory=list)
     conditions: List[str] = Field(default_factory=list)
     risk_flags: List[str] = Field(default_factory=list)
-    evidence: str = "unresolved"
     evidence_status: str = "unresolved"
     evidence_reason: str = ""
     confirmed: bool = False
@@ -250,7 +249,7 @@ class FindBySPRequest(BaseModel):
 class SPMatchProgram(BaseModel):
     program: str = ""                         # 程式基底名（不含副檔名）
     file: str = ""                            # 相對 repo 根目錄的檔案路徑
-    evidence: str = "proven"
+
     reason: str = ""
     database: str = ""
     database_candidates: List[str] = Field(default_factory=list)
@@ -359,7 +358,6 @@ class TableMatchProgram(BaseModel):
     path_id: str = ""
     entry_method: str = ""
     sp_chain: List[str] = Field(default_factory=list)
-    evidence: str = "proven"
     reason: str = ""
     database: str = ""
     database_candidates: List[str] = Field(default_factory=list)

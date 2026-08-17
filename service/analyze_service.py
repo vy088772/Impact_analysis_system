@@ -1063,7 +1063,6 @@ def _invocation_response_fields(invocation: DbInvocation) -> Dict:
     response = {
         key: serialized[key]
         for key in (
-            "evidence",
             "reason",
             "database",
             "database_candidates",
@@ -1307,7 +1306,7 @@ def _materialize_path_evidence(
 
     wrapper_projection = _wrapper_projection_fields(
         path,
-        exclude=("evidence", "source_span", "source_snapshot_hash", "unresolved_reason"),
+        exclude=("evidence_status", "source_span", "source_snapshot_hash", "unresolved_reason"),
     )
     return PathEvidenceResponse(
         path_id=str(path.get("path_id") or ""),
@@ -1331,7 +1330,7 @@ def _materialize_path_evidence(
         sp_chain=list(path.get("sp_chain", []) or []),
         conditions=list(path.get("conditions", []) or []),
         risk_flags=list(path.get("risk_flags", []) or []),
-        evidence=str(path.get("evidence") or "unresolved"),
+        evidence_status=str(path.get("evidence") or "unresolved"),
         confirmed=bool(path.get("confirmed", False)),
         reason=str(path.get("reason") or ""),
         unresolved_reason=str(path.get("unresolved_reason") or ""),
@@ -2000,7 +1999,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             sp_chain = list(access_record.get("sp_chain") or [])
             wrapper_projection = _wrapper_projection_fields(
                 access_record,
-                exclude=("evidence", "source_span", "source_snapshot_hash"),
+                exclude=("evidence_status", "source_span", "source_snapshot_hash"),
             )
             candidate = TableMatchProgram(
                 program=_normalize_program(Path(csharp_file).name),
@@ -2010,7 +2009,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
                 path_id=str(access_record.get("path_id") or ""),
                 entry_method=str(access_record.get("entry_method") or ""),
                 sp_chain=sp_chain,
-                evidence=str(access_record.get("evidence") or "unresolved"),
+                evidence_status=str(access_record.get("evidence") or "unresolved"),
                 reason=str(access_record.get("reason") or ""),
                 database=str(access_record.get("database") or ""),
                 database_candidates=list(access_record.get("database_candidates") or []),

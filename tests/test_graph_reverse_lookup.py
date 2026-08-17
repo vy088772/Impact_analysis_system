@@ -205,7 +205,7 @@ def test_find_by_table_write_only_uses_graph_writers(monkeypatch, tmp_path: Path
         ("orderpage", "WRITE_INDIRECT", "INSERT"),
     ]
     assert all(match.via_sp is True for match in response.matches)
-    assert all(match.evidence == "proven" for match in response.matches)
+    assert all(match.evidence_status == "proven" for match in response.matches)
     assert all(match.path_id for match in response.matches)
 
 

@@ -24,7 +24,12 @@ from code_analyzer.csharp_analysis_gateway import (
 )
 from service import analyze_service
 from service.execution_path_builder import build_execution_paths
-from service.schemas import PathEvidenceRequest
+from service.schemas import (
+    PathEvidenceRequest,
+    PathEvidenceResponse,
+    SPMatchProgram,
+    TableMatchProgram,
+)
 
 
 def _cached_path_fixture(
@@ -285,8 +290,8 @@ def test_path_evidence_preserves_wrapper_classification_and_database_evidence(tm
     # -> contract, wrapper_contract_mode -> contract_mode,
     # wrapper_contract_sink -> contract_sink, wrapper_stored_procedure_mode
     # -> stored_procedure_mode, source_snapshot_identity ->
-    # source_snapshot_hash. evidence/evidence_status stay untouched here
-    # (ticket 03), as do the dual-fact wrapper_receiver_type/wrapper_method.
+    # source_snapshot_hash. evidence collapses into evidence_status (ticket
+    # 03), as do the dual-fact wrapper_receiver_type/wrapper_method.
     assert evidence.wrapper_kind == "external_wrapper"
     assert evidence.status == "explicit_selected"
     assert evidence.selection_source == "explicit"
@@ -296,8 +301,8 @@ def test_path_evidence_preserves_wrapper_classification_and_database_evidence(tm
     assert evidence.wrapper_receiver_type == "SQLObject"
     assert evidence.wrapper_method == "ExeProcNon"
     assert evidence.stored_procedure_mode is True
-    assert evidence.evidence == "proven"
     assert evidence.evidence_status == "proven"
+    assert not hasattr(evidence, "evidence")
     assert evidence.source_snapshot_hash == "snapshot-hash"
     assert evidence.source_provenance["scan_root"] == str(tmp_path)
 
@@ -453,7 +458,7 @@ def test_path_evidence_materializes_unresolved_cycle_without_terminal_dml(tmp_pa
         graph,
     )
 
-    assert evidence.evidence == "unresolved"
+    assert evidence.evidence_status == "unresolved"
     assert evidence.unresolved_reason == "stored_procedure_call_cycle"
     assert evidence.operations == []
     assert [item["name"] for item in evidence.stored_procedures] == [
@@ -501,7 +506,7 @@ def test_path_evidence_retains_unverified_literal_sp_candidate(monkeypatch, tmp_
         graph,
     )
 
-    assert evidence.evidence == "unresolved"
+    assert evidence.evidence_status == "unresolved"
     assert evidence.confirmed is False
     assert len(evidence.literal_sp_candidates) == 1
     candidate = evidence.literal_sp_candidates[0]
@@ -544,3 +549,14 @@ def test_path_evidence_skips_external_wrapper_method_span(tmp_path: Path) -> Non
     assert [procedure["name"] for procedure in evidence.stored_procedures] == [
         "dbo.usp_SaveOrder"
     ]
+
+
+def test_wrapper_evidence_bag_schemas_drop_evidence_alias_keep_evidence_status() -> None:
+    """Regression guard for ticket 03: the wrapper-evidence bag only ever
+    exposes ``evidence_status`` on these three response schemas now — the
+    ``evidence`` alias must never reappear (``DbInvocation``'s own top-level
+    ``evidence: InvocationEvidence`` field, serialized separately by
+    ``_serialize_db_invocation``, is untouched and out of scope here)."""
+    for model in (PathEvidenceResponse, SPMatchProgram, TableMatchProgram):
+        assert "evidence" not in model.model_fields
+        assert "evidence_status" in model.model_fields

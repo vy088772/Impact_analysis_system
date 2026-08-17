@@ -1179,8 +1179,8 @@ def test_stored_procedure_projection_separates_execution_and_evidence_fields() -
     assert projected["invocation_mode"] == "stored_procedure"
     assert projected["procedure_name"] == "usp_saveorder"
     assert projected["terminal_sink"] == "ExecuteNonQuery"
-    assert projected["evidence"] == "proven"
     assert projected["evidence_status"] == "proven"
+    assert "evidence" not in projected
 
 
 def test_schema_qualified_catalog_matching_does_not_cross_same_name_schemas() -> None:

@@ -4,10 +4,10 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `impact_orch/context_builder.py`'s reads of the inner `evidence` key (the `PathEvidenceResponse.evidence` field nested inside spec-rag's own `{"path": ..., "evidence": ...}` wrapper — not spec-rag's own outer `"evidence"` wrapper key, which is unrelated and stays as-is) are changed to read `evidence_status`.
-- [ ] `impact_orch/path_selection.py`'s equivalent reads of the same inner `evidence` key are changed to read `evidence_status`.
-- [ ] `impact_orch/refresh_cli.py` is left unchanged — it already reads `evidence_status` from `wrapper_summary.review_items` for `/refresh`.
-- [ ] Existing spec-rag tests covering `context_builder.py`/`path_selection.py` pass against a `/path_evidence` fixture response that has both `evidence` and `evidence_status` present with the same value (matching today's actual Impact_analysis_system behavior).
-- [ ] Change is committed in the `llamaindex-spec-rag` repository, not pushed.
+- [x] `impact_orch/context_builder.py`'s reads of the inner `evidence` key (the `PathEvidenceResponse.evidence` field nested inside spec-rag's own `{"path": ..., "evidence": ...}` wrapper — not spec-rag's own outer `"evidence"` wrapper key, which is unrelated and stays as-is) are changed to read `evidence_status`.
+- [x] `impact_orch/path_selection.py`'s equivalent reads of the same inner `evidence` key are changed to read `evidence_status`.
+- [x] `impact_orch/refresh_cli.py` is left unchanged — it already reads `evidence_status` from `wrapper_summary.review_items` for `/refresh`.
+- [x] Existing spec-rag tests covering `context_builder.py`/`path_selection.py` pass against a `/path_evidence` fixture response that has both `evidence` and `evidence_status` present with the same value (matching today's actual Impact_analysis_system behavior).
+- [x] Change is committed in the `llamaindex-spec-rag` repository, not pushed (commit `90065e4` on branch `spec_extend_20260701`).
