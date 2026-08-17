@@ -61,11 +61,24 @@ class PathEvidenceRequest(BaseModel):
     refresh: bool = False
 
 
-class PathEvidenceResponse(BaseModel):
-    """One selected Execution Path expanded into source-backed evidence."""
-    path_id: str
-    entry_method: str = ""
-    method_chain: List[str] = Field(default_factory=list)
+class WrapperEvidenceFields(BaseModel):
+    """Canonical wrapper-evidence bag shared by `PathEvidenceResponse`,
+    `SPMatchProgram`, and `TableMatchProgram`.
+
+    Declares each fact exactly once (one field, one name) instead of every
+    response schema independently redeclaring the same ~90-field alias
+    sprawl. The JSON shape produced by each subclass stays flat — this is a
+    field-count reduction, not a nested `wrapper_evidence` sub-object.
+
+    `receiver_type`/`wrapper_receiver_type` and
+    `external_wrapper_method`/`wrapper_method` are NOT aliases of each
+    other — both stay declared here, independently populated from the
+    invocation's own identity vs. the external wrapper's it resolved
+    through. (The other eight dual-fact pairs from
+    `code_analyzer/csharp_analysis_gateway.py`'s `WRAPPER_EVIDENCE_FIELDS` —
+    e.g. `implementation_identity`/`wrapper_implementation_identity` — were
+    never declared on these response schemas and remain out of scope here.)
+    """
     database: str = ""
     database_candidates: List[str] = Field(default_factory=list)
     database_attribution: str = "unresolved"
@@ -74,53 +87,46 @@ class PathEvidenceResponse(BaseModel):
     caller_method: str = ""
     external_wrapper_method: str = ""
     wrapper_kind: str = ""
-    wrapper_status: str = ""
-    wrapper_classification_status: str = ""
-    classification_status: str = ""
     status: str = ""
-    wrapper_selection_source: str = ""
     selection_source: str = ""
-    wrapper_contract: str = ""
-    contract: str = ""
-    selected_contract: str = ""
     wrapper_contract_source: str = ""
-    wrapper_contract_mode: str = ""
+    contract: str = ""
     contract_mode: str = ""
-    wrapper_contract_sink: str = ""
     contract_sink: str = ""
     wrapper_receiver_type: str = ""
-    wrapper_contract_candidates: List[str] = Field(default_factory=list)
     candidate_contracts: List[str] = Field(default_factory=list)
-    candidate_contract_names: List[str] = Field(default_factory=list)
     receiver_type: str = ""
-    wrapper_scan_root: str = ""
     scan_root: str = ""
-    wrapper_source_available: bool = False
     source_available: bool = False
-    wrapper_review_candidate: bool = False
     review_candidate: bool = False
-    wrapper_unresolved_reason: str = ""
     classification_reason: str = ""
-    wrapper_mode_reason: str = ""
     mode_reason: str = ""
     wrapper_method: str = ""
-    observed_method: str = ""
     stored_procedure_mode: bool = False
-    wrapper_stored_procedure_mode: bool = False
     active_contract: bool = False
     procedure_name: str = ""
     procedure_schema: str = ""
     branch_context: List[str] = Field(default_factory=list)
     source_span: Dict = Field(default_factory=dict)
     source_snapshot_hash: str = ""
+    evidence_status: str = "unresolved"
+    evidence_reason: str = ""
+    reason: str = ""
+    unresolved_reason: str = ""
+    source_provenance: Dict[str, Any] = Field(default_factory=dict)
+    contract_signature_version: str = ""
+    contract_lifecycle_status: str = ""
+
+
+class PathEvidenceResponse(WrapperEvidenceFields):
+    """One selected Execution Path expanded into source-backed evidence."""
+    path_id: str
+    entry_method: str = ""
+    method_chain: List[str] = Field(default_factory=list)
     sp_chain: List[str] = Field(default_factory=list)
     conditions: List[str] = Field(default_factory=list)
     risk_flags: List[str] = Field(default_factory=list)
-    evidence_status: str = "unresolved"
-    evidence_reason: str = ""
     confirmed: bool = False
-    reason: str = ""
-    unresolved_reason: str = ""
     unresolved_targets: List[str] = Field(default_factory=list)
     csharp_methods: List[Dict] = Field(default_factory=list)
     literal_sp_candidates: List[Dict] = Field(default_factory=list)
@@ -128,8 +134,6 @@ class PathEvidenceResponse(BaseModel):
     operations: List[Dict] = Field(default_factory=list)
     views: List[Dict] = Field(default_factory=list)
     functions: List[Dict] = Field(default_factory=list)
-    source_snapshot_identity: str = ""
-    source_provenance: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CodeSnippet(BaseModel):
@@ -246,62 +250,10 @@ class FindBySPRequest(BaseModel):
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
 
 
-class SPMatchProgram(BaseModel):
+class SPMatchProgram(WrapperEvidenceFields):
     program: str = ""                         # 程式基底名（不含副檔名）
     file: str = ""                            # 相對 repo 根目錄的檔案路徑
 
-    reason: str = ""
-    database: str = ""
-    database_candidates: List[str] = Field(default_factory=list)
-    database_attribution: str = "unresolved"
-    caller: str = ""
-    caller_class: str = ""
-    caller_method: str = ""
-    external_wrapper_method: str = ""
-    wrapper_kind: str = ""
-    wrapper_status: str = ""
-    wrapper_classification_status: str = ""
-    classification_status: str = ""
-    status: str = ""
-    wrapper_selection_source: str = ""
-    selection_source: str = ""
-    wrapper_contract: str = ""
-    contract: str = ""
-    selected_contract: str = ""
-    wrapper_contract_source: str = ""
-    wrapper_contract_mode: str = ""
-    contract_mode: str = ""
-    wrapper_contract_sink: str = ""
-    contract_sink: str = ""
-    wrapper_receiver_type: str = ""
-    receiver_type: str = ""
-    wrapper_contract_candidates: List[str] = Field(default_factory=list)
-    candidate_contracts: List[str] = Field(default_factory=list)
-    candidate_contract_names: List[str] = Field(default_factory=list)
-    wrapper_scan_root: str = ""
-    scan_root: str = ""
-    wrapper_source_available: bool = False
-    source_available: bool = False
-    wrapper_review_candidate: bool = False
-    review_candidate: bool = False
-    wrapper_unresolved_reason: str = ""
-    classification_reason: str = ""
-    wrapper_mode_reason: str = ""
-    mode_reason: str = ""
-    wrapper_method: str = ""
-    observed_method: str = ""
-    stored_procedure_mode: bool = False
-    wrapper_stored_procedure_mode: bool = False
-    active_contract: bool = False
-    procedure_name: str = ""
-    procedure_schema: str = ""
-    branch_context: List[str] = Field(default_factory=list)
-    source_span: Dict = Field(default_factory=dict)
-    source_snapshot_hash: str = ""
-    source_snapshot_identity: str = ""
-    source_provenance: Dict[str, Any] = Field(default_factory=dict)
-    evidence_status: str = "unresolved"
-    evidence_reason: str = ""
     invocation_mode: str = ""
     terminal_sink: str = ""
     connection_source: str = ""
@@ -309,13 +261,8 @@ class SPMatchProgram(BaseModel):
     command_text_kind: str = ""
     command_text_literal: str = ""
     contract_fingerprint: str = ""
-    contract_signature_version: str = ""
-    signature_version: str = ""
-    contract_lifecycle_status: str = ""
-    contract_status: str = ""
     implementation_snapshot_reference: str = ""
     comparison_report_reference: str = ""
-    unresolved_reason: str = ""
 
 
 class FindBySPResponse(BaseModel):
@@ -347,7 +294,7 @@ class FindByTableRequest(BaseModel):
     # 的命中——用於「打算異動這張表，只想知道誰會寫壞」這種比純反查更聚焦的情境。
 
 
-class TableMatchProgram(BaseModel):
+class TableMatchProgram(WrapperEvidenceFields):
     program: str = ""                         # 程式基底名（不含副檔名）
     file: str = ""                             # 相對 repo 根目錄的檔案路徑
     via_sp: bool = False                       # True：這筆是透過 Gateway + SQL Execution Graph path 間接找到的
@@ -358,59 +305,7 @@ class TableMatchProgram(BaseModel):
     path_id: str = ""
     entry_method: str = ""
     sp_chain: List[str] = Field(default_factory=list)
-    reason: str = ""
-    database: str = ""
-    database_candidates: List[str] = Field(default_factory=list)
-    database_attribution: str = "unresolved"
-    caller: str = ""
-    caller_class: str = ""
-    caller_method: str = ""
-    external_wrapper_method: str = ""
-    wrapper_kind: str = ""
-    wrapper_status: str = ""
-    wrapper_classification_status: str = ""
-    classification_status: str = ""
-    status: str = ""
-    wrapper_selection_source: str = ""
-    selection_source: str = ""
-    wrapper_contract: str = ""
-    contract: str = ""
-    selected_contract: str = ""
-    wrapper_contract_source: str = ""
-    wrapper_contract_mode: str = ""
-    contract_mode: str = ""
-    wrapper_contract_sink: str = ""
-    contract_sink: str = ""
-    wrapper_receiver_type: str = ""
-    receiver_type: str = ""
-    wrapper_contract_candidates: List[str] = Field(default_factory=list)
-    candidate_contracts: List[str] = Field(default_factory=list)
-    candidate_contract_names: List[str] = Field(default_factory=list)
-    wrapper_scan_root: str = ""
-    scan_root: str = ""
-    wrapper_source_available: bool = False
-    source_available: bool = False
-    wrapper_review_candidate: bool = False
-    review_candidate: bool = False
-    wrapper_unresolved_reason: str = ""
-    classification_reason: str = ""
-    wrapper_mode_reason: str = ""
-    mode_reason: str = ""
-    wrapper_method: str = ""
-    observed_method: str = ""
-    stored_procedure_mode: bool = False
-    wrapper_stored_procedure_mode: bool = False
-    active_contract: bool = False
-    procedure_name: str = ""
-    procedure_schema: str = ""
-    branch_context: List[str] = Field(default_factory=list)
-    source_span: Dict = Field(default_factory=dict)
-    source_snapshot_hash: str = ""
     operation_type: str = ""
-    source_snapshot_identity: str = ""
-    source_provenance: Dict[str, Any] = Field(default_factory=dict)
-    evidence_status: str = "unresolved"
-    evidence_reason: str = ""
     invocation_mode: str = ""
     terminal_sink: str = ""
     connection_source: str = ""
@@ -418,13 +313,8 @@ class TableMatchProgram(BaseModel):
     command_text_kind: str = ""
     command_text_literal: str = ""
     contract_fingerprint: str = ""
-    contract_signature_version: str = ""
-    signature_version: str = ""
-    contract_lifecycle_status: str = ""
-    contract_status: str = ""
     implementation_snapshot_reference: str = ""
     comparison_report_reference: str = ""
-    unresolved_reason: str = ""
 
 
 class FindByTableResponse(BaseModel):

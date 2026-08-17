@@ -13,6 +13,8 @@ from service.schemas import (
     FlowChainRequest,
     PathEvidenceRequest,
     PathEvidenceResponse,
+    RefreshRequest,
+    SPMatchProgram,
 )
 
 
@@ -64,6 +66,72 @@ def test_path_evidence_route_returns_service_response(monkeypatch) -> None:
     monkeypatch.setattr(analyze_service, "get_path_evidence", lambda request: expected)
 
     assert api.path_evidence(PathEvidenceRequest(path_id="P-valid")) == expected
+
+
+# The 20 wrapper-evidence alias names ticket 02 dropped, plus the `evidence`
+# key ticket 03 dropped — none of these may reappear on a collapsed schema.
+_DROPPED_WRAPPER_EVIDENCE_ALIASES = {
+    "wrapper_status",
+    "wrapper_classification_status",
+    "classification_status",
+    "wrapper_selection_source",
+    "wrapper_contract",
+    "selected_contract",
+    "wrapper_contract_mode",
+    "wrapper_contract_sink",
+    "wrapper_contract_candidates",
+    "candidate_contract_names",
+    "wrapper_scan_root",
+    "wrapper_source_available",
+    "wrapper_review_candidate",
+    "wrapper_unresolved_reason",
+    "wrapper_mode_reason",
+    "observed_method",
+    "wrapper_stored_procedure_mode",
+    "signature_version",
+    "contract_status",
+    "source_snapshot_identity",
+    "evidence",
+}
+
+
+def test_path_evidence_route_response_exposes_evidence_status_only(monkeypatch) -> None:
+    expected = PathEvidenceResponse(path_id="P-valid", evidence_status="proven")
+    monkeypatch.setattr(analyze_service, "get_path_evidence", lambda request: expected)
+
+    response = api.path_evidence(PathEvidenceRequest(path_id="P-valid"))
+    payload = response.model_dump()
+
+    assert payload["evidence_status"] == "proven"
+    assert _DROPPED_WRAPPER_EVIDENCE_ALIASES.isdisjoint(payload.keys())
+
+
+def test_refresh_route_wrapper_summary_review_items_expose_evidence_status_only(
+    monkeypatch,
+) -> None:
+    # Build the review item from an actual SPMatchProgram so this test
+    # regresses against the collapsed schema itself, not just a hand-built
+    # dict shaped like it.
+    review_item = SPMatchProgram(
+        program="OrderPage",
+        receiver_type="UnknownDbHelper",
+        status="unresolved_contract",
+        evidence_status="unresolved",
+        selection_source="unresolved_receiver_type",
+        review_candidate=True,
+    ).model_dump()
+    fake_summary = {"review_items": [review_item], "observations": [review_item]}
+    monkeypatch.setattr(
+        analyze_service,
+        "refresh_source",
+        lambda source, **kwargs: {"scope": "system", "wrapper_summary": fake_summary},
+    )
+
+    response = api.refresh(RefreshRequest(system="SYS", source={"project": "p", "repo": "r"}))
+
+    for item in response.wrapper_summary["review_items"]:
+        assert item["evidence_status"] == "unresolved"
+        assert _DROPPED_WRAPPER_EVIDENCE_ALIASES.isdisjoint(item.keys())
 
 
 def test_analyze_route_maps_graph_readiness_to_conflict(monkeypatch) -> None:
