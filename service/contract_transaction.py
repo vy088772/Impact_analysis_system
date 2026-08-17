@@ -176,9 +176,13 @@ def _read_manifest(manifest_path: Path) -> dict[str, Any]:
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
+_VALID_TRIGGERS = ("refresh", "manual_acceptance")
+
+
 def commit_staged_contract_transaction(
     *,
     staged_registry: Mapping[str, Any],
+    trigger: str,
     staged_selector: Any = None,
     system_id: str = "",
     registry_path: Path | str = DEFAULT_REGISTRY_PATH,
@@ -192,7 +196,16 @@ def commit_staged_contract_transaction(
     staged/backup artifacts have been written.  A failure during replacement
     or post-commit validation rolls the active files back to their previous
     bytes; both remain byte-for-byte unchanged in that case.
+
+    ``trigger`` records which workflow ("refresh" or "manual_acceptance")
+    produced this commit, verbatim, in the transaction manifest, so a
+    manifest found on disk after an interruption is self-describing.
     """
+    if trigger not in _VALID_TRIGGERS:
+        _error(
+            "invalid_trigger",
+            f"trigger 必須是 {_VALID_TRIGGERS!r} 其中之一，收到：{trigger!r}",
+        )
     registry_file = Path(registry_path)
     normalized_system_id = str(system_id or "").strip()
     normalized_selector = _selector_value(staged_selector)
@@ -261,6 +274,7 @@ def commit_staged_contract_transaction(
     manifest: dict[str, Any] = {
         "transaction_id": transaction_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "trigger": trigger,
         "system_id": normalized_system_id,
         "source_revision": dict(source_revision or {}),
         "target_repository_revision": {

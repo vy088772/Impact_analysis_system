@@ -2883,6 +2883,7 @@ def refresh_source(
         try:
             contract_transaction_summary = commit_staged_contract_transaction(
                 staged_registry=preflight.staged_registry or {"contracts": {}},
+                trigger="refresh",
                 staged_selector=preflight.staged_selector,
                 system_id=database,
                 registry_path=CONTRACT_TRANSACTION_REGISTRY_PATH,

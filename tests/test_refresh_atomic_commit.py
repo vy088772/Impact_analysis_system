@@ -109,6 +109,11 @@ def test_full_refresh_commits_staged_contract_to_active_configuration(
     catalog_after = json.loads(catalog_path.read_text(encoding="utf-8"))
     assert catalog_after["systems"][0]["wrapper_contract"] == "vendor"
 
+    manifest = json.loads(
+        Path(result["contract_transaction"]["manifest_path"]).read_text(encoding="utf-8")
+    )
+    assert manifest["trigger"] == "refresh"
+
     reference = result["analysis_manifest"]["contract_revision_reference"]
     assert "vendor" in reference
     assert reference["vendor"]["contract_fingerprint"]

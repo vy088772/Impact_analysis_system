@@ -33,6 +33,46 @@ def _write_catalog(path: Path, system_id: str, selector) -> None:
     )
 
 
+def test_commit_records_trigger_in_manifest(tmp_path) -> None:
+    registry_path = tmp_path / "external_wrapper_contracts.json"
+    catalog_path = tmp_path / "system_catalog.json"
+    _write_registry(registry_path, {})
+    _write_catalog(catalog_path, "Orders", "")
+
+    result = commit_staged_contract_transaction(
+        staged_registry={"contracts": {"vendor": {"contract_fingerprint": "abc123"}}},
+        staged_selector="vendor",
+        system_id="Orders",
+        registry_path=registry_path,
+        catalog_path=catalog_path,
+        manifest_dir=tmp_path / ".contract_transactions",
+        trigger="refresh",
+    )
+
+    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+    assert manifest["trigger"] == "refresh"
+
+
+def test_commit_rejects_unknown_trigger_value(tmp_path) -> None:
+    registry_path = tmp_path / "external_wrapper_contracts.json"
+    catalog_path = tmp_path / "system_catalog.json"
+    _write_registry(registry_path, {})
+    _write_catalog(catalog_path, "Orders", "")
+
+    with pytest.raises(ContractTransactionError) as excinfo:
+        commit_staged_contract_transaction(
+            staged_registry={"contracts": {"vendor": {"contract_fingerprint": "abc123"}}},
+            staged_selector="vendor",
+            system_id="Orders",
+            registry_path=registry_path,
+            catalog_path=catalog_path,
+            manifest_dir=tmp_path / ".contract_transactions",
+            trigger="something_else",
+        )
+
+    assert excinfo.value.code == "invalid_trigger"
+
+
 def test_commit_writes_both_files_and_a_manifest(tmp_path) -> None:
     registry_path = tmp_path / "external_wrapper_contracts.json"
     catalog_path = tmp_path / "system_catalog.json"
@@ -46,6 +86,7 @@ def test_commit_writes_both_files_and_a_manifest(tmp_path) -> None:
         registry_path=registry_path,
         catalog_path=catalog_path,
         manifest_dir=tmp_path / ".contract_transactions",
+        trigger="refresh",
     )
 
     assert result["status"] == "committed"
@@ -78,6 +119,7 @@ def test_commit_is_noop_when_staged_content_matches_active(tmp_path) -> None:
         registry_path=registry_path,
         catalog_path=catalog_path,
         manifest_dir=tmp_path / ".contract_transactions",
+        trigger="refresh",
     )
 
     assert result["status"] == "noop"
@@ -97,6 +139,7 @@ def test_commit_without_selector_only_touches_registry(tmp_path) -> None:
         registry_path=registry_path,
         catalog_path=catalog_path,
         manifest_dir=tmp_path / ".contract_transactions",
+        trigger="refresh",
     )
 
     assert result["status"] == "committed"
@@ -137,6 +180,7 @@ def test_failure_between_registry_and_catalog_replacement_rolls_back(
             registry_path=registry_path,
             catalog_path=catalog_path,
             manifest_dir=tmp_path / ".contract_transactions",
+            trigger="refresh",
         )
 
     assert excinfo.value.code == "commit_failed"
@@ -162,6 +206,7 @@ def test_recover_completes_interrupted_commit_to_the_new_pair(tmp_path) -> None:
         registry_path=registry_path,
         catalog_path=catalog_path,
         manifest_dir=tmp_path / ".contract_transactions",
+        trigger="refresh",
     )
     manifest_path = Path(committed["manifest_path"])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -207,6 +252,7 @@ def test_deterministic_transaction_identity_for_equivalent_staged_content(tmp_pa
         registry_path=registry_path_a,
         catalog_path=catalog_path_a,
         manifest_dir=tmp_path / "a" / ".contract_transactions",
+        trigger="refresh",
     )
     result_b = commit_staged_contract_transaction(
         staged_registry=staged,
@@ -215,6 +261,7 @@ def test_deterministic_transaction_identity_for_equivalent_staged_content(tmp_pa
         registry_path=registry_path_b,
         catalog_path=catalog_path_b,
         manifest_dir=tmp_path / "b" / ".contract_transactions",
+        trigger="refresh",
     )
 
     assert result_a["transaction_id"] == result_b["transaction_id"]
