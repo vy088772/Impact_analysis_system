@@ -1,0 +1,16 @@
+# 02 — Collapse the 16 non-evidence wrapper-evidence alias groups at the domain seam
+
+**What to build:** `WrapperReconciliation.to_dict()` is replaced by a standalone `project_wrapper_evidence(reconciliation) -> dict` function that emits exactly one canonical key per fact for the 16 true-duplicate groups (everything in the spec's canonical-name table except `evidence`/`evidence_status`, which is handled separately in ticket 03). `WRAPPER_EVIDENCE_FIELDS` shrinks to match. This is the seam every wrapper-evidence consumer in this repo goes through.
+
+**Blocked by:** None — can start immediately.
+
+**Status:** ready-for-agent
+
+- [ ] `project_wrapper_evidence(reconciliation: WrapperReconciliation) -> Dict[str, Any]` is added next to `WrapperReconciliation` in `code_analyzer/csharp_analysis_gateway.py`, replacing `to_dict()`. `WrapperReconciliation` itself keeps only typed attributes — no serialization method remains on the class.
+- [ ] `project_wrapper_evidence`'s output uses exactly one canonical key for each of these 16 groups, per the spec's table: `status`, `selection_source`, `contract`, `contract_mode`, `contract_sink`, `candidate_contracts`, `scan_root`, `source_available`, `review_candidate`, `classification_reason`, `mode_reason`, `wrapper_method`, `stored_procedure_mode`, `contract_signature_version`, `contract_lifecycle_status`, `source_snapshot_hash` (including inside the nested `source_provenance` object). None of the dropped aliases (`wrapper_status`, `wrapper_classification_status`, `classification_status`, `wrapper_selection_source`, `wrapper_contract`, `selected_contract`, `wrapper_contract_mode`, `wrapper_contract_sink`, `wrapper_contract_candidates`, `candidate_contract_names`, `wrapper_scan_root`, `wrapper_source_available`, `wrapper_review_candidate`, `wrapper_unresolved_reason`, `wrapper_mode_reason`, `observed_method`, `wrapper_stored_procedure_mode`, `signature_version`, `contract_status`, `source_snapshot_identity`) appear in the output.
+- [ ] The `evidence`/`evidence_status` pair, all ten dual-fact identity/receiver/method pairs (`implementation_identity`/`wrapper_implementation_identity` and friends, `receiver_type`/`wrapper_receiver_type`, `external_wrapper_method`/`wrapper_method`), and every already-single-named field are left untouched and continue to be emitted exactly as today.
+- [ ] `WRAPPER_EVIDENCE_FIELDS` in `code_analyzer/csharp_analysis_gateway.py` is updated to contain exactly the canonical key set now produced (dropping the 20 alias entries covered by this ticket's scope; the `evidence`/`evidence_status` entries are left alone for ticket 03 to handle).
+- [ ] `analyze_service.py`'s `_wrapper_projection_fields` and `invocation_wrapper_evidence_fields` continue to work unchanged in shape against the shrunk `WRAPPER_EVIDENCE_FIELDS`.
+- [ ] `tests/test_external_wrapper_contract_identity.py`, `tests/test_external_wrapper_discovery.py`, and `tests/test_csharp_analysis_gateway.py`'s existing calls to `.to_dict()` are updated to call `project_wrapper_evidence(...)`; any assertion on a now-dropped alias key is rewritten to assert the canonical key.
+- [ ] A new focused test constructs a `WrapperReconciliation` and asserts `project_wrapper_evidence(...)` contains none of the 20 dropped alias keys listed above.
+- [ ] Full existing test suite passes.
