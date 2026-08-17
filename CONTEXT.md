@@ -50,6 +50,10 @@ _Avoid_: formal invocation evidence, runtime discovery
 The refresh/preflight disposition of a contract binding: `reused`, `created`, `preflight_failed`, `conflicted`, `selected`, or `not_required`. It describes how the contract was handled in the current refresh, not where its implementation evidence came from. Existing registry-to-invocation projections may also expose `accepted` or `legacy_unverified` for registry validation compatibility. The separate `evidence_kind` marker identifies provenance such as `decompiled_auto` and remains additive to this status.
 _Avoid_: evidence provenance, Evidence Status
 
+**Contract Transaction**:
+The manifest-backed atomic replacement of the external wrapper registry and, when a selector changes, the system catalog, committed as one recoverable unit. Refresh-time onboarding and explicit contract acceptance are independent triggers that share this same commit; a crash mid-commit leaves a manifest that recovers to the same new pair rather than a mixed state.
+_Avoid_: atomic commit, registry write, two-file write
+
 **Command Source**:
 The construct inside one wrapper method that supplies the method's command text and terminal sink. A method has a Command Source when a resolution rule recognizes its construct — today an explicit command object construction, or a data adapter construction taking a command text argument and a connection argument. A method that touches a database type but yields no Command Source is a visible gap, not a silent drop.
 _Avoid_: SqlCommand construction, command builder
