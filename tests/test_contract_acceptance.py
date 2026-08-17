@@ -16,6 +16,8 @@ from service.contract_acceptance import (  # noqa: E402
     reclassify_cached_scans,
 )
 import service.contract_acceptance as contract_acceptance_module  # noqa: E402
+from service.contract_transaction import recover_transaction  # noqa: E402
+import service.contract_transaction as contract_transaction_module  # noqa: E402
 from service import scan_store as scan_store_module  # noqa: E402
 from code_analyzer.project_scanner import ProjectScanResult  # noqa: E402
 
@@ -438,14 +440,14 @@ def test_apply_write_failure_restores_both_configuration_files(monkeypatch, tmp_
     )
     before_registry = registry_path.read_bytes()
     before_catalog = catalog_path.read_bytes()
-    original_write = contract_acceptance_module._atomic_write_json
+    original_write = contract_transaction_module._atomic_write_bytes
 
-    def fail_catalog_write(path, payload):
+    def fail_catalog_write(path, content):
         if Path(path) == catalog_path:
             raise OSError("simulated catalog write failure")
-        return original_write(path, payload)
+        return original_write(path, content)
 
-    monkeypatch.setattr(contract_acceptance_module, "_atomic_write_json", fail_catalog_write)
+    monkeypatch.setattr(contract_transaction_module, "_atomic_write_bytes", fail_catalog_write)
 
     try:
         accept_external_wrapper_contract(
@@ -466,7 +468,7 @@ def test_apply_write_failure_restores_both_configuration_files(monkeypatch, tmp_
             apply=True,
         )
     except ContractAcceptanceError as exc:
-        assert exc.code == "apply_failed"
+        assert exc.code == "commit_failed"
     else:
         raise AssertionError("catalog write failure must abort acceptance")
 
@@ -482,21 +484,20 @@ def test_apply_reports_rollback_failure(monkeypatch, tmp_path) -> None:
         json.dumps({"systems": [{"system_id": "Orders"}]}),
         encoding="utf-8",
     )
-    original_write = contract_acceptance_module._atomic_write_json
+    original_write = contract_transaction_module._atomic_write_bytes
+    registry_write_calls = {"n": 0}
 
-    def fail_catalog_write(path, payload):
-        if Path(path) == catalog_path:
+    def flaky_write(path, content):
+        target = Path(path)
+        if target == catalog_path:
             raise OSError("simulated catalog write failure")
-        return original_write(path, payload)
+        if target == registry_path:
+            registry_write_calls["n"] += 1
+            if registry_write_calls["n"] > 1:
+                raise OSError("simulated rollback failure")
+        return original_write(path, content)
 
-    monkeypatch.setattr(contract_acceptance_module, "_atomic_write_json", fail_catalog_write)
-    monkeypatch.setattr(
-        contract_acceptance_module,
-        "_atomic_write_bytes",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            OSError("simulated rollback failure")
-        ),
-    )
+    monkeypatch.setattr(contract_transaction_module, "_atomic_write_bytes", flaky_write)
 
     try:
         accept_external_wrapper_contract(
@@ -517,10 +518,143 @@ def test_apply_reports_rollback_failure(monkeypatch, tmp_path) -> None:
             apply=True,
         )
     except ContractAcceptanceError as exc:
-        assert exc.code == "apply_rollback_failed"
+        assert exc.code == "commit_rollback_failed"
         assert str(registry_path) in exc.details[0]
     else:
         raise AssertionError("rollback failures must be reported")
+
+
+def test_apply_commits_manifest_with_manual_acceptance_trigger(tmp_path) -> None:
+    registry_path = tmp_path / "external_wrapper_contracts.json"
+    catalog_path = tmp_path / "system_catalog.json"
+    registry_path.write_text(json.dumps({"contracts": {}}), encoding="utf-8")
+    catalog_path.write_text(
+        json.dumps({"systems": [{"system_id": "Orders", "wrapper_contract": ""}]}),
+        encoding="utf-8",
+    )
+
+    result = accept_external_wrapper_contract(
+        {
+            "name": "orderhelper",
+            "receiver_types": ["OrderHelper"],
+            "methods": {
+                "Run": {
+                    "mode": "stored_procedure",
+                    "sink": "ExecuteReader",
+                }
+            },
+        },
+        registry_path=registry_path,
+        catalog_path=catalog_path,
+        system_id="Orders",
+        requested_selector="orderhelper",
+        apply=True,
+    )
+
+    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+    assert manifest["trigger"] == "manual_acceptance"
+
+
+def test_transaction_id_and_manifest_path_populated_only_for_real_commits(tmp_path) -> None:
+    registry_path = tmp_path / "external_wrapper_contracts.json"
+    catalog_path = tmp_path / "system_catalog.json"
+    registry_path.write_text(json.dumps({"contracts": {}}), encoding="utf-8")
+    catalog_path.write_text(
+        json.dumps({"systems": [{"system_id": "Orders", "wrapper_contract": ""}]}),
+        encoding="utf-8",
+    )
+    proposal = {
+        "name": "orderhelper",
+        "receiver_types": ["OrderHelper"],
+        "methods": {
+            "Run": {
+                "mode": "stored_procedure",
+                "sink": "ExecuteReader",
+            }
+        },
+    }
+
+    preview = accept_external_wrapper_contract(
+        proposal,
+        registry_path=registry_path,
+        catalog_path=catalog_path,
+        system_id="Orders",
+        requested_selector="orderhelper",
+        apply=False,
+    )
+    assert preview["transaction_id"] == ""
+    assert preview["manifest_path"] == ""
+
+    applied = accept_external_wrapper_contract(
+        proposal,
+        registry_path=registry_path,
+        catalog_path=catalog_path,
+        system_id="Orders",
+        requested_selector="orderhelper",
+        apply=True,
+    )
+    assert applied["transaction_id"]
+    assert applied["manifest_path"]
+    assert Path(applied["manifest_path"]).exists()
+
+    noop = accept_external_wrapper_contract(
+        proposal,
+        registry_path=registry_path,
+        catalog_path=catalog_path,
+        system_id="Orders",
+        requested_selector="orderhelper",
+        apply=True,
+    )
+    assert noop["transaction_id"] == ""
+    assert noop["manifest_path"] == ""
+
+
+def test_recover_completes_interrupted_manual_acceptance(tmp_path) -> None:
+    registry_path = tmp_path / "external_wrapper_contracts.json"
+    catalog_path = tmp_path / "system_catalog.json"
+    registry_path.write_text(json.dumps({"contracts": {}}), encoding="utf-8")
+    catalog_path.write_text(
+        json.dumps({"systems": [{"system_id": "Orders", "wrapper_contract": ""}]}),
+        encoding="utf-8",
+    )
+
+    result = accept_external_wrapper_contract(
+        {
+            "name": "orderhelper",
+            "receiver_types": ["OrderHelper"],
+            "methods": {
+                "Run": {
+                    "mode": "stored_procedure",
+                    "sink": "ExecuteReader",
+                }
+            },
+        },
+        registry_path=registry_path,
+        catalog_path=catalog_path,
+        system_id="Orders",
+        requested_selector="orderhelper",
+        apply=True,
+    )
+
+    committed_registry_bytes = registry_path.read_bytes()
+    committed_catalog_bytes = catalog_path.read_bytes()
+    manifest_path = Path(result["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    # Simulate a crash between the registry replacement and the catalog
+    # replacement: restore the catalog to its previous bytes and rewrite the
+    # manifest to reflect only the registry step as completed.
+    backup_catalog_bytes = Path(manifest["backup_catalog_artifact"]).read_bytes()
+    catalog_path.write_bytes(backup_catalog_bytes)
+    manifest["commit_progress"] = ["registry_replaced"]
+    manifest["final_status"] = "pending"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    recovery = recover_transaction(manifest_path)
+
+    assert recovery["status"] == "recovered_committed"
+    assert registry_path.read_bytes() == committed_registry_bytes
+    assert catalog_path.read_bytes() == committed_catalog_bytes
 
 
 def test_requested_selector_drives_cached_reclassification(monkeypatch, tmp_path) -> None:

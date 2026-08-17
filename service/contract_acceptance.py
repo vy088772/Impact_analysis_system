@@ -6,9 +6,7 @@ import copy
 import difflib
 import hashlib
 import json
-import os
 import re
-import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
@@ -19,6 +17,7 @@ from code_analyzer.external_wrapper_contracts import (
 )
 
 from . import analyze_service, scan_store
+from .contract_transaction import ContractTransactionError, commit_staged_contract_transaction
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -605,48 +604,6 @@ def _catalog_after_selector(
     return after
 
 
-def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=str(path.parent),
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(_json_text(payload))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-    except Exception:
-        try:
-            os.unlink(temporary_name)
-        except OSError:
-            pass
-        raise
-
-
-def _atomic_write_bytes(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=str(path.parent),
-    )
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-    except Exception:
-        try:
-            os.unlink(temporary_name)
-        except OSError:
-            pass
-        raise
-
-
 def _payload_digest(payload: Any) -> str:
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
@@ -830,34 +787,23 @@ def accept_external_wrapper_contract(
     )
 
     written_files: list[str] = []
+    transaction_id = ""
+    manifest_path = ""
     if apply:
-        registry_original = registry_file.read_bytes()
-        catalog_original = catalog_file.read_bytes() if before_catalog is not None else None
-        written_originals: list[tuple[Path, bytes]] = []
         try:
-            if registry_diff["changed"]:
-                _atomic_write_json(registry_file, after_registry)
-                written_files.append(str(registry_file))
-                written_originals.append((registry_file, registry_original))
-            if catalog_diff["changed"] and after_catalog is not None:
-                _atomic_write_json(catalog_file, after_catalog)
-                written_files.append(str(catalog_file))
-                if catalog_original is not None:
-                    written_originals.append((catalog_file, catalog_original))
-        except Exception as exc:
-            rollback_errors: list[str] = []
-            for path, original in reversed(written_originals):
-                try:
-                    _atomic_write_bytes(path, original)
-                except Exception as rollback_exc:
-                    rollback_errors.append(f"{path}: {rollback_exc}")
-            if rollback_errors:
-                _error(
-                    "apply_rollback_failed",
-                    f"active configuration 寫入失敗且 rollback 不完整：{exc}",
-                    rollback_errors,
-                )
-            _error("apply_failed", f"active configuration 寫入失敗，已完成 rollback：{exc}")
+            commit_result = commit_staged_contract_transaction(
+                staged_registry=after_registry,
+                trigger="manual_acceptance",
+                staged_selector=selector_contract_name,
+                system_id=normalized_system_id,
+                registry_path=registry_file,
+                catalog_path=catalog_file,
+            )
+            written_files = list(commit_result["written_files"])
+            transaction_id = str(commit_result["transaction_id"])
+            manifest_path = str(commit_result["manifest_path"])
+        except ContractTransactionError as exc:
+            _error(exc.code, str(exc), exc.details)
 
     return {
         "status": "applied" if apply else "preview",
@@ -870,6 +816,8 @@ def accept_external_wrapper_contract(
         "reclassification": reclassification,
         "applied": bool(apply),
         "written_files": written_files,
+        "transaction_id": transaction_id,
+        "manifest_path": manifest_path,
         "git_commit": False,
         "contract_fingerprint": (
             comparison_report["contract_fingerprint"]
