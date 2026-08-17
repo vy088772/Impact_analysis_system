@@ -57,7 +57,7 @@ def test_static_analyzer_host_contract() -> None:
     assert host.project_path == HOST_PROJECT
     version = host.ensure_ready()
     assert version["contract_version"] == 2
-    assert set(version["commands"]) == {"csharp", "sql", "decompile-wrapper"}
+    assert set(version["commands"]) == {"csharp", "sql", "decompile-wrapper", "semantic-binding"}
 
     with tempfile.TemporaryDirectory() as temp_dir:
         source_path = Path(temp_dir) / "Example.cs"

@@ -105,7 +105,9 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # lack this shape.
 # v27：adapter raw facts now include EF branch candidates, ADO.NET Fill sinks,
 # constructor-based adapter calls, and source-wrapper optional-arity semantics.
-_CACHE_VERSION = 27
+# v28：ProjectScanResult 新增 semantic_binding_availability 欄位（每個掃描到的專案是否
+# 能建立 Roslyn Compilation／語意模型的誠實回報）；舊快取沒有這份紀錄，須重新掃描補上。
+_CACHE_VERSION = 28
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

@@ -14,11 +14,11 @@ internal static class Program
         try
         {
             if (args.Length == 0)
-                return Fail("usage: StaticAnalyzerHost <csharp|sql|decompile-wrapper> --input <file> [--input <file> ...] | --version");
+                return Fail("usage: StaticAnalyzerHost <csharp|sql|decompile-wrapper|semantic-binding> --input <file> [--input <file> ...] | --version");
 
             if (args.Length == 1 && args[0] == "--version")
             {
-                Write(new { contract_version = ContractVersion, host_version = "0.1.0", commands = new[] { "csharp", "sql", "decompile-wrapper" } });
+                Write(new { contract_version = ContractVersion, host_version = "0.1.0", commands = new[] { "csharp", "sql", "decompile-wrapper", "semantic-binding" } });
                 return 0;
             }
 
@@ -40,6 +40,11 @@ internal static class Program
                     decompileInputs.ReceiverType,
                     decompileInputs.ForceRerun,
                     decompileInputs.CacheRoot);
+            }
+            if (args[0] == "semantic-binding")
+            {
+                var scanRoots = ReadSourceRoots(args);
+                return SemanticBinding(scanRoots);
             }
             return Fail($"unknown command: {args[0]}");
         }
@@ -72,6 +77,23 @@ internal static class Program
                 sources = analyses.Select(analysis => new { source_id = analysis.SourceId, methods = analysis.Methods, db_invocations = analysis.DbInvocations }),
             });
         }
+        return 0;
+    }
+
+    private static int SemanticBinding(List<string> scanRoots)
+    {
+        var attempts = ProjectCompilationResolver.Resolve(scanRoots);
+        Write(new
+        {
+            contract_version = ContractVersion,
+            semantic_binding_availability = attempts.Select(attempt => new
+            {
+                scan_root = attempt.ScanRoot,
+                project_file = attempt.ProjectFile,
+                availability = attempt.Availability,
+                unresolved_references = attempt.UnresolvedReferences,
+            }),
+        });
         return 0;
     }
 
@@ -244,6 +266,23 @@ internal static class Program
         if (inputPaths.Count == 0)
             throw new ArgumentException("csharp requires at least one --input path");
         return (inputPaths, sourceRoots);
+    }
+
+    private static List<string> ReadSourceRoots(string[] args)
+    {
+        if (args.Length < 3 || (args.Length - 1) % 2 != 0)
+            throw new ArgumentException("usage: StaticAnalyzerHost semantic-binding --source-root <directory> [--source-root <directory> ...]");
+
+        var scanRoots = new List<string>();
+        for (var index = 1; index < args.Length; index += 2)
+        {
+            if (args[index] != "--source-root")
+                throw new ArgumentException("expected --source-root before each scan root");
+            scanRoots.Add(args[index + 1]);
+        }
+        if (scanRoots.Count == 0)
+            throw new ArgumentException("semantic-binding requires at least one --source-root");
+        return scanRoots;
     }
 
     private static (string CsprojPath, string ReceiverType, bool ForceRerun, string? CacheRoot) ReadDecompileWrapperInputs(string[] args)

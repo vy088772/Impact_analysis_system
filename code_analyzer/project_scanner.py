@@ -128,6 +128,12 @@ class ProjectScanResult:
     contract_preflight_proposals: List[Dict] = field(default_factory=list)
     contract_proposals: List[Dict] = field(default_factory=list)
     verified_implementation_snapshots: List[Dict] = field(default_factory=list)
+    # Semantic Binding Availability (ticket 05): one entry per project file found under this
+    # scan's project_root, each holding "availability" (available /
+    # unavailable_no_project_file / unavailable_reference_resolution_failed) and, when it
+    # failed, "unresolved_references". A degraded analysis must never look like a confident
+    # one, so this is always populated, never inferred silently.
+    semantic_binding_availability: List[Dict] = field(default_factory=list)
     
     # View 層分析結果（依框架偵測結果選擇性填入；未偵測到對應框架時維持空清單）
     aspx_results: List[FileAnalysisResult] = field(default_factory=list)    # .aspx / .ascx
@@ -162,6 +168,9 @@ class ProjectScanResult:
         self.contract_proposals = getattr(self, "contract_proposals", [])
         self.verified_implementation_snapshots = getattr(
             self, "verified_implementation_snapshots", []
+        )
+        self.semantic_binding_availability = getattr(
+            self, "semantic_binding_availability", []
         )
 
     @staticmethod
@@ -614,6 +623,11 @@ class ProjectScanner:
         print(f"\n📝 解析 C# 檔案...")
         if csharp_files:
             self.static_analyzer_host.ensure_ready()
+            self.scan_result.semantic_binding_availability = (
+                self.static_analyzer_host.semantic_binding_availability(
+                    [Path(self.project_root)]
+                )
+            )
             print(f"   C# analyzer 批次進度：0/{len(csharp_files)}", flush=True)
             host_results = self.static_analyzer_host.analyze_csharp_files(
                 [Path(file_path) for file_path in csharp_files],
@@ -715,6 +729,11 @@ class ProjectScanner:
         refreshed_results: List[FileAnalysisResult] = []
         if current_files:
             self.static_analyzer_host.ensure_ready()
+            self.scan_result.semantic_binding_availability = (
+                self.static_analyzer_host.semantic_binding_availability(
+                    [Path(self.project_root)]
+                )
+            )
             host_results = self.static_analyzer_host.analyze_csharp_files(
                 [Path(file_path) for file_path in current_files],
                 source_roots=[Path(self.project_root)],

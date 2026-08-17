@@ -333,6 +333,9 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
         def ensure_ready(self) -> None:
             return None
 
+        def semantic_binding_availability(self, scan_roots):
+            return []
+
         def analyze_csharp_files(self, input_paths, source_roots):
             assert input_paths == [selected_file]
             assert source_roots == [root]
@@ -895,6 +898,9 @@ def test_partial_refresh_keeps_wrapper_source_lookup_inside_each_root(monkeypatc
         class FakeHost:
             def ensure_ready(self) -> None:
                 return None
+
+            def semantic_binding_availability(self, scan_roots):
+                return []
 
             def analyze_csharp_files(
                 self,

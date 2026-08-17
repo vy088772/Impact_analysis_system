@@ -113,6 +113,20 @@ class StaticAnalyzerHost:
     def analyze_sql(self, input_path: Path) -> dict[str, Any]:
         return self._run("sql", "--input", str(input_path))
 
+    def semantic_binding_availability(self, scan_roots: list[Path]) -> list[dict[str, Any]]:
+        """Report Semantic Binding Availability for each project file found under each
+        scan root: whether the analyzer could build a compilation with a real semantic
+        model, or why not. One call covers every scan root; the host builds one
+        compilation per project file, never one per source file."""
+        if not scan_roots:
+            return []
+        args = ["semantic-binding"]
+        for scan_root in scan_roots:
+            args.extend(["--source-root", str(scan_root)])
+        payload = self._run(*args)
+        result = payload.get("semantic_binding_availability")
+        return result if isinstance(result, list) else []
+
     def decompile_wrapper(
         self,
         csproj_path: Path,

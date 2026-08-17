@@ -65,3 +65,7 @@ _Avoid_: draft snapshot, decompiled output
 **Assembly Revision Boundary**:
 The identity scope within which every method fact in one Implementation Snapshot must originate from the same exact external assembly (the same byte-identical DLL, hashed rather than assumed from name/version alone for unsigned or unversioned assemblies). Facts from two different revisions are never combined into one snapshot.
 _Avoid_: assembly version, DLL name
+
+**Semantic Binding Availability**:
+The state of the Roslyn semantic model the analyzer built for one scanned project's own declarations: `available`, `unavailable_no_project_file`, or `unavailable_reference_resolution_failed`. Reported for every scanned project so a degraded, syntax-only analysis never looks like a confident one. Building the compilation and reporting this state does not itself change any classification result.
+_Avoid_: compilation success, semantic model status

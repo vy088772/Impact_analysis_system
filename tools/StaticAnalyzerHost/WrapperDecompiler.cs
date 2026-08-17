@@ -199,7 +199,11 @@ internal static class WrapperAssemblyDecompiler
             "decompiler_translation_problem");
     }
 
-    private static IEnumerable<string> ReferenceAssemblyDirectories()
+    // Exposed for ProjectCompilationResolver (Semantic Binding Availability), which resolves a
+    // project's bare framework references (e.g. "System", "System.Data") against the same
+    // downloaded .NET Framework reference assembly package this decompiler already uses to
+    // resolve mscorlib etc. for a decompiled wrapper DLL.
+    internal static IEnumerable<string> ReferenceAssemblyDirectories()
     {
         var nugetRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
