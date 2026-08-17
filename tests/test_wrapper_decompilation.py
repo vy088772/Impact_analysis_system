@@ -119,6 +119,8 @@ def test_decompile_wrapper_classifies_sqlfunc_dll_end_to_end() -> None:
     assert snapshot["assembly_identity"] == result["assembly_identity"]
     assert snapshot["assembly_revision"] == result["assembly_identity"]
     assert snapshot["behavior_surface_unit"] == "SQLFunc"
+    assert snapshot["public_database_operations_complete"] is True
+    assert snapshot["unclassified_public_methods"] == []
     assert validate_implementation_snapshot(snapshot)["complete"] is True
     preflight = run_contract_preflight(
         [SimpleNamespace(contract_proposals=result["contract_proposals"])],
@@ -179,6 +181,105 @@ def test_decompile_wrapper_classifies_every_public_create_table_overload() -> No
     )
     assert two_argument_operation["effective_command_semantics"] == "inline_sql"
     assert two_argument_operation["terminal_sink"] == "Fill"
+
+
+def _build_unclassified_method_dll(build_dir: Path) -> Path:
+    """Compile a tiny classlib whose `Wrapper` type holds one method the Command Source
+    resolver cannot classify (a data adapter built and filled inline, bound to no variable —
+    the known limit ticket 01 left for this ticket) alongside one non-database method.
+
+    The `SqlConnection`/`SqlCommand`/`SqlDataAdapter` types here are stand-ins declared in the
+    same file, not the real System.Data.SqlClient types: the decompiler's ADO.NET and Command
+    Source recognition match by syntactic type name only, so this exercises the exact same path
+    without needing an external ADO.NET package reference.
+    """
+    build_dir.mkdir(parents=True, exist_ok=True)
+    (build_dir / "Wrapper.csproj").write_text(
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
+        "  <PropertyGroup>\n"
+        "    <TargetFramework>net8.0</TargetFramework>\n"
+        "    <AssemblyName>Wrapper</AssemblyName>\n"
+        "    <Nullable>disable</Nullable>\n"
+        "  </PropertyGroup>\n"
+        "</Project>\n",
+        encoding="utf-8",
+    )
+    (build_dir / "Wrapper.cs").write_text(
+        "public class SqlConnection { public SqlConnection(string cn) {} }\n"
+        "public class SqlCommand {\n"
+        "    public SqlCommand(string sql, SqlConnection conn) {}\n"
+        "    public object CommandType;\n"
+        "}\n"
+        "public class SqlDataAdapter {\n"
+        "    public SqlDataAdapter(string sql, SqlConnection conn) {}\n"
+        "    public SqlDataAdapter(SqlCommand cmd) {}\n"
+        "    public SqlCommand SelectCommand;\n"
+        "    public void Fill(object dataSet) {}\n"
+        "}\n"
+        "public class Wrapper {\n"
+        "    public void Save(string sql, SqlConnection conn) {\n"
+        "        new SqlDataAdapter(sql, conn).Fill(new object());\n"
+        "    }\n"
+        "    public string Format(string input) {\n"
+        "        return input.Trim();\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    bin_dir = build_dir / "bin"
+    result = subprocess.run(
+        [
+            "dotnet",
+            "build",
+            str(build_dir / "Wrapper.csproj"),
+            "-c",
+            "Release",
+            "-o",
+            str(bin_dir),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return bin_dir / "Wrapper.dll"
+
+
+@requires_dotnet
+def test_decompile_wrapper_reports_unclassified_public_method_and_preflight_rejects_it() -> None:
+    """Ticket 02: a public method that touches an ADO.NET type but yields no Command Source is
+    recorded as unclassified, the surface is reported incomplete, and Contract Preflight rejects
+    the snapshot instead of accepting a contract with a silent gap."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        wrapper_dll = _build_unclassified_method_dll(root / "wrapperlib")
+        csproj_path = _write_referenced_dll_project(root, "Wrapper", wrapper_dll.read_bytes())
+
+        result = host.decompile_wrapper(csproj_path, "Wrapper", cache_root=root / "cache")
+
+    assert result["status"] == "resolved"
+    definitions = result["wrapper_definitions"]
+    assert _definitions_by_method(definitions, "Save") == []
+    assert _definitions_by_method(definitions, "Format") == []
+
+    snapshot = result["contract_proposals"][0]["implementation_snapshot"]
+    assert snapshot["public_database_operations_complete"] is False
+    assert snapshot["unclassified_public_methods"] == ["Wrapper.Save(string,SqlConnection)"]
+
+    assert validate_implementation_snapshot(snapshot)["complete"] is False
+    preflight = run_contract_preflight(
+        [SimpleNamespace(contract_proposals=result["contract_proposals"])],
+        registry={"contracts": {}},
+    )
+    assert preflight.onboarding_status != "created"
+    assert "wrapper" not in preflight.formal_registry.get("contracts", {})
+    reasons = preflight.review_candidates[0]["unresolved_reasons"]
+    assert (
+        "unclassified_public_method:Wrapper.Save(string,SqlConnection)" in reasons
+    )
 
 
 @requires_stc_fixture

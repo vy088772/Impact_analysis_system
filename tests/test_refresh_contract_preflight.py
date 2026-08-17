@@ -173,6 +173,46 @@ def test_decompiled_snapshot_validation_identifies_translation_problem() -> None
     assert "decompiler_translation_problem" in validation["unresolved_reasons"]
 
 
+def test_decompiled_snapshot_validation_rejects_unclassified_public_method() -> None:
+    """Ticket 02: a public method the decompiler could not classify makes the surface incomplete,
+    and the rejection reason names that method."""
+    snapshot = _proposal("vendor", "Vendor.Data")["implementation_snapshot"]
+    snapshot["public_database_operations_complete"] = False
+    snapshot["unclassified_public_methods"] = ["Vendor.Data.SQLObject.Open(System.String)"]
+
+    validation = validate_implementation_snapshot(snapshot)
+
+    assert validation["complete"] is False
+    assert "database_behavior_surface_incomplete" in validation["unresolved_reasons"]
+    assert (
+        "unclassified_public_method:Vendor.Data.SQLObject.Open(System.String)"
+        in validation["unresolved_reasons"]
+    )
+
+
+def test_preflight_rejects_a_snapshot_with_an_unclassified_public_method() -> None:
+    """Ticket 02: Contract Preflight rejects a snapshot with an incomplete public database
+    behavior surface, and never reaches the registry with a silent gap."""
+    proposal = _proposal("vendor", "Vendor.Data")
+    proposal["implementation_snapshot"]["public_database_operations_complete"] = False
+    proposal["implementation_snapshot"]["unclassified_public_methods"] = [
+        "Vendor.Data.SQLObject.Open(System.String)"
+    ]
+    scan = SimpleNamespace(contract_proposals=[proposal])
+
+    result = run_contract_preflight([scan], selector=None, registry={"contracts": {}})
+
+    assert result.onboarding_status != "created"
+    assert "vendor" not in result.formal_registry.get("contracts", {})
+    assert len(result.review_candidates) == 1
+    reasons = result.review_candidates[0]["unresolved_reasons"]
+    assert "database_behavior_surface_incomplete" in reasons
+    assert any(
+        reason == "unclassified_public_method:Vendor.Data.SQLObject.Open(System.String)"
+        for reason in reasons
+    )
+
+
 def test_multiple_complete_proposals_are_sorted_and_equivalent_fingerprint_is_reused() -> None:
     proposals = [_proposal("zeta", "Vendor.Zeta"), _proposal("alpha", "Vendor.Alpha")]
     first = run_contract_preflight(

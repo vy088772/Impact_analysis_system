@@ -264,12 +264,16 @@ internal static class DecompiledWrapperClassifier
             new[] { decompilation.Root! },
             decompilation.AssemblyIdentity!,
             decompilation.AssemblyIdentity!);
+        var unclassifiedPublicMethods = WrapperAnalyzer.GetUnclassifiedPublicMethods(
+            decompilation.Root!,
+            definitions);
 
         return DecompiledWrapperClassification.Resolved(
             resolution.DllPath!,
             decompilation.AssemblyIdentity!,
             definitions.Concat(decompilation.TranslationProblemDefinitions).ToList(),
-            decompilation.TranslationProblemMethods);
+            decompilation.TranslationProblemMethods,
+            unclassifiedPublicMethods);
     }
 }
 
@@ -279,24 +283,26 @@ internal sealed record DecompiledWrapperClassification(
     string? AssemblyIdentity,
     IReadOnlyList<WrapperAnalyzer.WrapperDefinition> WrapperDefinitions,
     IReadOnlyList<string> TranslationProblemMethods,
+    IReadOnlyList<string> UnclassifiedPublicMethods,
     string? Detail)
 {
     internal static DecompiledWrapperClassification Unresolved(string reason)
-        => new(reason, null, null, Array.Empty<WrapperAnalyzer.WrapperDefinition>(), Array.Empty<string>(), null);
+        => new(reason, null, null, Array.Empty<WrapperAnalyzer.WrapperDefinition>(), Array.Empty<string>(), Array.Empty<string>(), null);
 
     internal static DecompiledWrapperClassification DecompileFailed(
         string dllPath,
         string reason,
         string? detail,
         string? assemblyIdentity)
-        => new(reason, dllPath, assemblyIdentity, Array.Empty<WrapperAnalyzer.WrapperDefinition>(), Array.Empty<string>(), detail);
+        => new(reason, dllPath, assemblyIdentity, Array.Empty<WrapperAnalyzer.WrapperDefinition>(), Array.Empty<string>(), Array.Empty<string>(), detail);
 
     internal static DecompiledWrapperClassification Resolved(
         string dllPath,
         string assemblyIdentity,
         IReadOnlyList<WrapperAnalyzer.WrapperDefinition> wrapperDefinitions,
-        IReadOnlyList<string> translationProblemMethods)
-        => new("resolved", dllPath, assemblyIdentity, wrapperDefinitions, translationProblemMethods, null);
+        IReadOnlyList<string> translationProblemMethods,
+        IReadOnlyList<string> unclassifiedPublicMethods)
+        => new("resolved", dllPath, assemblyIdentity, wrapperDefinitions, translationProblemMethods, unclassifiedPublicMethods, null);
 }
 
 internal static class DecompiledWrapperProposalBuilder
@@ -334,9 +340,10 @@ internal static class DecompiledWrapperProposalBuilder
                 .Select(ToOperation)
                 .ToList(),
             classification.TranslationProblemMethods,
+            classification.UnclassifiedPublicMethods.Count == 0,
             true,
-            true,
-            helperDefinitions.All(definition => string.IsNullOrWhiteSpace(definition.UnresolvedReason)));
+            helperDefinitions.All(definition => string.IsNullOrWhiteSpace(definition.UnresolvedReason)),
+            classification.UnclassifiedPublicMethods);
         return new[]
         {
             new DecompiledWrapperProposal(
@@ -405,7 +412,8 @@ internal sealed record DecompiledImplementationSnapshot(
     IReadOnlyList<string> TranslationProblemMethods,
     bool PublicDatabaseOperationsComplete,
     bool HelperOperationsComplete,
-    bool InheritedOperationsComplete);
+    bool InheritedOperationsComplete,
+    IReadOnlyList<string> UnclassifiedPublicMethods);
 
 internal sealed record ImplementationSnapshotOperation(
     string MethodIdentity,

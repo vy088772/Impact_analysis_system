@@ -341,6 +341,8 @@ def validate_implementation_snapshot(snapshot: Mapping[str, Any]) -> dict[str, A
         reasons.append("incomplete_snapshot")
     if snapshot.get("public_database_operations_complete") is False:
         reasons.append("database_behavior_surface_incomplete")
+        for method_identity in _text_values(snapshot.get("unclassified_public_methods")):
+            reasons.append(f"unclassified_public_method:{method_identity}")
     if snapshot.get("unknown_overloads") or snapshot.get("unresolved_overloads"):
         reasons.append("unknown_overload")
     if snapshot.get("unresolved_helper_operations") or snapshot.get("unresolved_inherited_operations"):

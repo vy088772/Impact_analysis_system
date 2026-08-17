@@ -103,6 +103,32 @@ internal static class CSharpAnalyzer
             "NpgsqlDataAdapter" or
             "MySqlDataAdapter";
 
+    private static readonly IReadOnlyCollection<string> AdoNetTypeNames = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "IDbCommand", "DbCommand", "OleDbCommand", "OdbcCommand", "NpgsqlCommand", "MySqlCommand", "OracleCommand",
+        "IDbConnection", "DbConnection", "SqlConnection", "SqliteConnection", "NpgsqlConnection", "MySqlConnection",
+        "OracleConnection", "OleDbConnection", "OdbcConnection",
+        "IDataReader", "DbDataReader", "SqlDataReader", "OleDbDataReader", "OdbcDataReader", "NpgsqlDataReader",
+        "MySqlDataReader",
+        "IDataParameter", "IDbDataParameter", "DbParameter", "SqlParameter", "OleDbParameter", "OdbcParameter",
+        "NpgsqlParameter", "MySqlParameter",
+        "IDbTransaction", "DbTransaction", "SqlTransaction", "OleDbTransaction", "OdbcTransaction",
+    };
+
+    /// <summary>
+    /// Whether a syntactic type reference names an ADO.NET construct: a command, connection, data
+    /// adapter, data reader, parameter, or transaction type, from any common ADO.NET provider. Tells
+    /// a method that genuinely touches the database apart from a non-database utility method, for a
+    /// method whose body yields no Command Source.
+    /// </summary>
+    internal static bool IsAdoNetType(TypeSyntax type)
+    {
+        if (IsSqlCommandType(type) || IsDataAdapterType(type))
+            return true;
+        var name = type.ToString().Trim().TrimEnd('?').Replace("[]", "").Split('.').Last();
+        return AdoNetTypeNames.Contains(name);
+    }
+
     /// <summary>The data adapter methods that execute the adapter's own select command.</summary>
     internal static bool IsAdapterFillMethod(string methodName)
         => methodName is "Fill" or "FillAsync";
@@ -1687,6 +1713,51 @@ internal static class WrapperAnalyzer
             .Where(typeIdentity => !string.IsNullOrWhiteSpace(typeIdentity))
             .Distinct(StringComparer.Ordinal)
             .ToList();
+
+    /// <summary>
+    /// Assigns every public method of a decompiled receiver type one of three states: classified
+    /// (<paramref name="definitions"/> holds a <see cref="WrapperDefinition"/> for it), non-database
+    /// (its body names no ADO.NET type), or unclassified (its body names an ADO.NET type, but the
+    /// Command Source resolver found nothing usable for it). Returns only the unclassified method
+    /// identities — the honest signal that the public database behavior surface is incomplete.
+    /// </summary>
+    /// <param name="root">
+    /// The flat, namespace-less <c>class {ReceiverType} {{ ... }}</c> root
+    /// <see cref="WrapperAssemblyDecompiler.Decompile"/> builds from one receiver type's own
+    /// decompiled methods; only its direct class members are censused, deliberately not
+    /// <c>DescendantNodes()</c>, so a compiler-generated nested type a decompiled method body
+    /// happens to carry along is never mistaken for a public method of the receiver type itself.
+    /// </param>
+    internal static IReadOnlyList<string> GetUnclassifiedPublicMethods(
+        CompilationUnitSyntax root,
+        IReadOnlyList<WrapperDefinition> definitions)
+    {
+        var knownTypeIdentities = GetKnownTypeIdentities(new[] { root });
+        var classifiedIdentities = definitions
+            .Select(definition => definition.MethodIdentity)
+            .Where(identity => !string.IsNullOrWhiteSpace(identity))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var unclassified = new List<string>();
+        foreach (var classDeclaration in root.Members.OfType<ClassDeclarationSyntax>())
+        {
+            foreach (var method in classDeclaration.Members.OfType<MethodDeclarationSyntax>())
+            {
+                if (!method.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.PublicKeyword)))
+                    continue;
+                // Blank only when the class itself has no resolvable identity; nothing durable
+                // to name the method by, so it is left out rather than reported under a
+                // fabricated blank-prefixed identity.
+                var methodIdentity = GetMethodIdentity(method, knownTypeIdentities);
+                if (methodIdentity is null || classifiedIdentities.Contains(methodIdentity))
+                    continue;
+                if (!method.DescendantNodes().OfType<TypeSyntax>().Any(CSharpAnalyzer.IsAdoNetType))
+                    continue;
+                unclassified.Add(methodIdentity);
+            }
+        }
+        return unclassified.Distinct(StringComparer.Ordinal).ToList();
+    }
 
     private static (ExpressionSyntax? Argument, string? Literal) ResolveCommandTextArgument(
         InvocationExpressionSyntax call,
