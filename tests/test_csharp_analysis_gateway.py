@@ -13,10 +13,14 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
+    DbInvocation,
     InvocationEvidence,
+    InvocationSourceSpan,
     SpCatalog,
+    WrapperReconciliation,
     invocation_wrapper_evidence_fields,
     normalize_procedure_name,
+    project_wrapper_evidence,
     wrapper_observation_identity,
 )
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
@@ -160,8 +164,8 @@ def test_wrapper_reconciliation_boundary_classifies_contract_sources_and_review_
     assert unknown_receiver.method_semantics == "unresolved"
     assert unknown_receiver.review_candidate is True
     assert unknown_receiver.active_contract is False
-    unknown_payload = unknown_receiver.to_dict()
-    assert unknown_payload["observed_method"] == "ExeProcNon"
+    unknown_payload = project_wrapper_evidence(unknown_receiver)
+    assert unknown_payload["wrapper_method"] == "ExeProcNon"
     assert unknown_payload["unresolved_reason"] == "no_contract_matches_receiver_type"
 
     mismatched = gateway.reconcile_wrapper(
@@ -179,6 +183,62 @@ def test_wrapper_reconciliation_boundary_classifies_contract_sources_and_review_
     assert mismatched.status == "receiver_mismatch"
     assert mismatched.reason == "receiver_type_does_not_match_contract"
     assert mismatched.candidate_contracts == ("sqlobject",)
+
+
+def test_project_wrapper_evidence_drops_all_alias_keys() -> None:
+    """Regression guard: none of the 20 collapsed alias keys ever reappear."""
+    reconciliation = WrapperReconciliation(
+        wrapper_kind="external_wrapper",
+        status="explicit_selected",
+        selection_source="explicit",
+        contract="sqlobject",
+        contract_mode="stored_procedure",
+        contract_sink="ExecuteNonQuery",
+        candidate_contracts=("sqlobject",),
+        receiver_type="SQLObject",
+        wrapper_method="ExeProcNon",
+        source_span=InvocationSourceSpan(
+            relative_path="OrderPage.cs", start_offset=1, end_offset=20
+        ),
+        source_available=True,
+        scan_root="/tmp/root",
+        reason="",
+        review_candidate=False,
+        stored_procedure_mode=True,
+        mode_reason="explicit_selected",
+        contract_signature_version="contract-behavior-v1",
+        contract_lifecycle_status="accepted",
+    )
+
+    payload = project_wrapper_evidence(reconciliation)
+
+    dropped_aliases = {
+        "wrapper_status",
+        "wrapper_classification_status",
+        "classification_status",
+        "wrapper_selection_source",
+        "wrapper_contract",
+        "selected_contract",
+        "wrapper_contract_mode",
+        "wrapper_contract_sink",
+        "wrapper_contract_candidates",
+        "candidate_contract_names",
+        "wrapper_scan_root",
+        "wrapper_source_available",
+        "wrapper_review_candidate",
+        "wrapper_unresolved_reason",
+        "wrapper_mode_reason",
+        "observed_method",
+        "wrapper_stored_procedure_mode",
+        "signature_version",
+        "contract_status",
+        "source_snapshot_identity",
+    }
+    assert dropped_aliases.isdisjoint(payload.keys())
+    assert payload["status"] == "explicit_selected"
+    assert payload["contract"] == "sqlobject"
+    assert payload["contract_signature_version"] == "contract-behavior-v1"
+    assert payload["contract_lifecycle_status"] == "accepted"
 
 
 def test_external_contract_without_explicit_selector_never_auto_selects_by_receiver_name() -> None:
@@ -6352,6 +6412,56 @@ public class NamedWrapperPage {
         assert invocation.procedure_name == "usp_named"
         assert invocation.invocation_mode == "stored_procedure"
         assert invocation.method_semantics == "call_site"
+
+
+def test_identity_and_receiver_dual_facts_survive_serialization_independently() -> None:
+    """implementation_identity/wrapper_implementation_identity and
+    receiver_type/wrapper_receiver_type are each two independent facts -- the
+    invocation's own identity/receiver versus the external wrapper's -- not an
+    alias pair left over from the collapse work in tickets 02-04. Both values
+    must survive projection unchanged, and neither may overwrite the other."""
+    both_set = DbInvocation(
+        class_name="OrderPage",
+        method_name="Save",
+        database="OrdersDb",
+        procedure_name="usp_SaveOrder",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("OrderPage.cs", 10, 90),
+        implementation_identity="OrderPage.Save",
+        wrapper_implementation_identity="OrderRepository.SaveOrder",
+        receiver_type="SqlCommand",
+        wrapper_receiver_type="OrderRepository",
+    )
+
+    projected = invocation_wrapper_evidence_fields(both_set)
+
+    assert projected["implementation_identity"] == "OrderPage.Save"
+    assert projected["wrapper_implementation_identity"] == "OrderRepository.SaveOrder"
+    # both set: the invocation's own receiver_type wins over the wrapper's.
+    assert projected["receiver_type"] == "SqlCommand"
+    assert projected["wrapper_receiver_type"] == "OrderRepository"
+
+    empty_receiver_type = DbInvocation(
+        class_name="OrderPage",
+        method_name="Save",
+        database="OrdersDb",
+        procedure_name="usp_SaveOrder",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("OrderPage.cs", 10, 90),
+        implementation_identity="OrderPage.Save",
+        wrapper_implementation_identity="OrderRepository.SaveOrder",
+        receiver_type="",
+        wrapper_receiver_type="OrderRepository",
+    )
+
+    fallback_projected = invocation_wrapper_evidence_fields(empty_receiver_type)
+
+    # empty own receiver_type: falls back to the wrapper's receiver_type.
+    assert fallback_projected["receiver_type"] == "OrderRepository"
+    assert fallback_projected["wrapper_receiver_type"] == "OrderRepository"
+    # the identity pair is unaffected by the receiver_type fallback.
+    assert fallback_projected["implementation_identity"] == "OrderPage.Save"
+    assert fallback_projected["wrapper_implementation_identity"] == "OrderRepository.SaveOrder"
 
 
 if __name__ == "__main__":

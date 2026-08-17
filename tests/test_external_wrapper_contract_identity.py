@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from code_analyzer.csharp_analysis_gateway import CSharpAnalysisGateway, SpCatalog
+from code_analyzer.csharp_analysis_gateway import (
+    CSharpAnalysisGateway,
+    SpCatalog,
+    project_wrapper_evidence,
+)
 from code_analyzer.external_wrapper_contracts import (
     canonical_contract_behavior_signature,
     compare_implementation_snapshot,
@@ -309,7 +313,7 @@ def test_source_semantics_win_and_record_contract_conflict() -> None:
         explicit_contract=contract,
     )
 
-    payload = reconciliation.to_dict()
+    payload = project_wrapper_evidence(reconciliation)
     assert reconciliation.stored_procedure_mode is False
     assert payload["source_contract_conflict"] is True
     assert payload["contract_fingerprint"] == "fp-vendor"

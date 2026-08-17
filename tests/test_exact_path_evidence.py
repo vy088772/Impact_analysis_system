@@ -278,23 +278,27 @@ def test_path_evidence_preserves_wrapper_classification_and_database_evidence(tm
         cached["sql_execution_graph"],
     )
 
+    # Canonical wrapper-evidence keys only (ticket 02 collapses the alias
+    # sprawl at the WrapperReconciliation/WRAPPER_EVIDENCE_FIELDS seam):
+    # wrapper_status/wrapper_classification_status/classification_status ->
+    # status, wrapper_selection_source -> selection_source, wrapper_contract
+    # -> contract, wrapper_contract_mode -> contract_mode,
+    # wrapper_contract_sink -> contract_sink, wrapper_stored_procedure_mode
+    # -> stored_procedure_mode, source_snapshot_identity ->
+    # source_snapshot_hash. evidence/evidence_status stay untouched here
+    # (ticket 03), as do the dual-fact wrapper_receiver_type/wrapper_method.
     assert evidence.wrapper_kind == "external_wrapper"
-    assert evidence.wrapper_status == "explicit_selected"
-    assert evidence.wrapper_classification_status == "explicit_selected"
-    assert evidence.classification_status == "explicit_selected"
     assert evidence.status == "explicit_selected"
-    assert evidence.wrapper_selection_source == "explicit"
-    assert evidence.wrapper_contract == "sqlobject"
+    assert evidence.selection_source == "explicit"
     assert evidence.contract == "sqlobject"
-    assert evidence.wrapper_contract_mode == "stored_procedure"
-    assert evidence.wrapper_contract_sink == "ExecuteNonQuery"
+    assert evidence.contract_mode == "stored_procedure"
+    assert evidence.contract_sink == "ExecuteNonQuery"
     assert evidence.wrapper_receiver_type == "SQLObject"
     assert evidence.wrapper_method == "ExeProcNon"
     assert evidence.stored_procedure_mode is True
-    assert evidence.wrapper_stored_procedure_mode is True
     assert evidence.evidence == "proven"
     assert evidence.evidence_status == "proven"
-    assert evidence.source_snapshot_identity == "snapshot-hash"
+    assert evidence.source_snapshot_hash == "snapshot-hash"
     assert evidence.source_provenance["scan_root"] == str(tmp_path)
 
 

@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import tools.discover_external_wrappers as discovery
+from code_analyzer.csharp_analysis_gateway import project_wrapper_evidence
 from service import analyze_service
 
 
@@ -63,16 +64,22 @@ def test_classifier_delegates_to_gateway_reconciliation_boundary(monkeypatch, tm
     seen = {}
 
     class FakeResult:
-        def to_dict(self) -> dict:
-            return {"status": "from_gateway", "review_candidate": True}
+        pass
+
+    fake_result = FakeResult()
 
     def fake_reconcile(self, relative_path, raw, **kwargs):
         seen["relative_path"] = relative_path
         seen["raw"] = raw
         seen.update(kwargs)
-        return FakeResult()
+        return fake_result
+
+    def fake_project_wrapper_evidence(reconciliation) -> dict:
+        seen["projected"] = reconciliation
+        return {"status": "from_gateway", "review_candidate": True}
 
     monkeypatch.setattr(discovery.CSharpAnalysisGateway, "reconcile_wrapper", fake_reconcile)
+    monkeypatch.setattr(discovery, "project_wrapper_evidence", fake_project_wrapper_evidence)
     source_file = tmp_path / "OrderPage.cs"
     result = discovery._classify_wrapper(
         _record(),
@@ -86,6 +93,7 @@ def test_classifier_delegates_to_gateway_reconciliation_boundary(monkeypatch, tm
     assert seen["raw"]["wrapper_method_name"] == "ExeProcNon"
     assert seen["scan_root"] == str(tmp_path)
     assert seen["explicit_contract"] == "sqlobject"
+    assert seen["projected"] is fake_result
 
 
 def test_report_classification_matches_gateway_boundary(tmp_path: Path) -> None:
@@ -94,11 +102,13 @@ def test_report_classification_matches_gateway_boundary(tmp_path: Path) -> None:
     gateway = discovery.CSharpAnalysisGateway(
         discovery.SpCatalog.from_databases({}),
     )
-    expected = gateway.reconcile_wrapper(
-        "OrderPage.cs",
-        record,
-        scan_root=str(tmp_path),
-    ).to_dict()
+    expected = project_wrapper_evidence(
+        gateway.reconcile_wrapper(
+            "OrderPage.cs",
+            record,
+            scan_root=str(tmp_path),
+        )
+    )
 
     actual = discovery._classify_wrapper(
         record,

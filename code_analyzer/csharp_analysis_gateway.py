@@ -110,57 +110,63 @@ class WrapperReconciliation:
         """Whether this observation has approved contract semantics to use."""
         return bool(self.contract and not self.review_candidate)
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Return the machine-readable boundary shape used by audit consumers."""
-        return {
-            "wrapper_kind": self.wrapper_kind,
-            "status": self.status,
-            "selection_source": self.selection_source,
-            "contract": self.contract,
-            "contract_mode": self.contract_mode,
-            "contract_sink": self.contract_sink,
-            "candidate_contracts": list(self.candidate_contracts),
-            "receiver_type": self.receiver_type,
-            "wrapper_method": self.wrapper_method,
-            "observed_method": self.wrapper_method,
-            "source_available": self.source_available,
-            "scan_root": self.scan_root,
-            "source_span": {
-                "relative_path": self.source_span.relative_path,
-                "start_offset": self.source_span.start_offset,
-                "end_offset": self.source_span.end_offset,
-            },
-            "reason": self.reason,
-            "unresolved_reason": self.reason,
-            "review_candidate": self.review_candidate,
-            "active_contract": self.active_contract,
-            "semantic_binding_accepted": self.semantic_binding_accepted,
-            "stored_procedure_mode": self.stored_procedure_mode,
-            "mode_reason": self.mode_reason,
-            "implementation_identity": self.implementation_identity,
-            "assembly_identity": self.assembly_identity,
-            "assembly_revision": self.assembly_revision,
-            "method_identity": self.method_identity,
-            "method_arity": self.method_arity,
-            "parameter_types": list(self.parameter_types),
-            "method_semantics": self.method_semantics,
-            "overload_candidates": list(self.overload_candidates),
-            "overload_candidate_facts": [dict(item) for item in self.overload_candidate_facts],
-            "receiver_construction_facts": list(self.receiver_construction_facts),
-            "receiver_assignment_facts": list(self.receiver_assignment_facts),
-            "contract_fingerprint": self.contract_fingerprint,
-            "contract_signature_version": self.contract_signature_version,
-            "signature_version": self.contract_signature_version,
-            "contract_lifecycle_status": self.contract_lifecycle_status,
-            "contract_status": self.contract_lifecycle_status,
-            "evidence_kind": self.evidence_kind,
-            "implementation_snapshot_reference": self.implementation_snapshot_reference,
-            "comparison_report_reference": self.comparison_report_reference,
-            "source_contract_conflict": self.source_contract_conflict,
-            "source_contract_conflict_reason": self.source_contract_conflict_reason,
-            "source_contract_semantics": self.source_contract_semantics,
-            "source_contract_sink": self.source_contract_sink,
-        }
+
+def project_wrapper_evidence(reconciliation: WrapperReconciliation) -> Dict[str, Any]:
+    """Return the machine-readable boundary shape used by audit consumers.
+
+    Emits exactly one canonical key per fact. The dropped aliases
+    (``observed_method``, ``signature_version``, ``contract_status``, and
+    friends) never appear here -- see ``.scratch/collapse-wrapper-evidence-
+    aliases/spec.md`` for the canonical-name table.
+    """
+    return {
+        "wrapper_kind": reconciliation.wrapper_kind,
+        "status": reconciliation.status,
+        "selection_source": reconciliation.selection_source,
+        "contract": reconciliation.contract,
+        "contract_mode": reconciliation.contract_mode,
+        "contract_sink": reconciliation.contract_sink,
+        "candidate_contracts": list(reconciliation.candidate_contracts),
+        "receiver_type": reconciliation.receiver_type,
+        "wrapper_method": reconciliation.wrapper_method,
+        "source_available": reconciliation.source_available,
+        "scan_root": reconciliation.scan_root,
+        "source_span": {
+            "relative_path": reconciliation.source_span.relative_path,
+            "start_offset": reconciliation.source_span.start_offset,
+            "end_offset": reconciliation.source_span.end_offset,
+        },
+        "reason": reconciliation.reason,
+        "unresolved_reason": reconciliation.reason,
+        "review_candidate": reconciliation.review_candidate,
+        "active_contract": reconciliation.active_contract,
+        "semantic_binding_accepted": reconciliation.semantic_binding_accepted,
+        "stored_procedure_mode": reconciliation.stored_procedure_mode,
+        "mode_reason": reconciliation.mode_reason,
+        "implementation_identity": reconciliation.implementation_identity,
+        "assembly_identity": reconciliation.assembly_identity,
+        "assembly_revision": reconciliation.assembly_revision,
+        "method_identity": reconciliation.method_identity,
+        "method_arity": reconciliation.method_arity,
+        "parameter_types": list(reconciliation.parameter_types),
+        "method_semantics": reconciliation.method_semantics,
+        "overload_candidates": list(reconciliation.overload_candidates),
+        "overload_candidate_facts": [
+            dict(item) for item in reconciliation.overload_candidate_facts
+        ],
+        "receiver_construction_facts": list(reconciliation.receiver_construction_facts),
+        "receiver_assignment_facts": list(reconciliation.receiver_assignment_facts),
+        "contract_fingerprint": reconciliation.contract_fingerprint,
+        "contract_signature_version": reconciliation.contract_signature_version,
+        "contract_lifecycle_status": reconciliation.contract_lifecycle_status,
+        "evidence_kind": reconciliation.evidence_kind,
+        "implementation_snapshot_reference": reconciliation.implementation_snapshot_reference,
+        "comparison_report_reference": reconciliation.comparison_report_reference,
+        "source_contract_conflict": reconciliation.source_contract_conflict,
+        "source_contract_conflict_reason": reconciliation.source_contract_conflict_reason,
+        "source_contract_semantics": reconciliation.source_contract_semantics,
+        "source_contract_sink": reconciliation.source_contract_sink,
+    }
 
 
 @dataclass(frozen=True)
@@ -273,47 +279,29 @@ class DbInvocation:
 
 WRAPPER_EVIDENCE_FIELDS = (
     "wrapper_kind",
-    "wrapper_status",
-    "wrapper_classification_status",
-    "classification_status",
     "status",
-    "wrapper_selection_source",
     "selection_source",
-    "wrapper_contract",
     "contract",
-    "selected_contract",
     "wrapper_contract_source",
-    "wrapper_contract_mode",
     "contract_mode",
-    "wrapper_contract_sink",
     "contract_sink",
-    "wrapper_contract_candidates",
     "candidate_contracts",
-    "candidate_contract_names",
     "wrapper_receiver_type",
     "receiver_type",
-    "wrapper_scan_root",
     "scan_root",
-    "wrapper_source_available",
     "source_available",
-    "wrapper_review_candidate",
     "review_candidate",
-    "wrapper_unresolved_reason",
     "classification_reason",
-    "wrapper_mode_reason",
     "mode_reason",
     "wrapper_method",
     "external_wrapper_method",
-    "observed_method",
     "stored_procedure_mode",
-    "wrapper_stored_procedure_mode",
     "active_contract",
     "evidence",
     "evidence_status",
     "evidence_reason",
     "source_span",
     "source_snapshot_hash",
-    "source_snapshot_identity",
     "source_provenance",
     "method_semantics",
     "invocation_mode",
@@ -359,9 +347,7 @@ WRAPPER_EVIDENCE_FIELDS = (
     "wrapper_overload_candidate_facts",
     "contract_fingerprint",
     "contract_signature_version",
-    "signature_version",
     "contract_lifecycle_status",
-    "contract_status",
     "evidence_kind",
     "implementation_snapshot_reference",
     "comparison_report_reference",
@@ -379,7 +365,7 @@ def wrapper_observation_fields(
     source_snapshot_hash: str = "",
 ) -> Dict[str, Any]:
     """Project classification and database evidence into one audit shape."""
-    classification = reconciliation.to_dict()
+    classification = project_wrapper_evidence(reconciliation)
     snapshot_hash = str(
         source_snapshot_hash
         or (evidence.source_snapshot_hash if evidence is not None else "")

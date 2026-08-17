@@ -27,6 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from code_analyzer.csharp_analysis_gateway import (  # noqa: E402
     CSharpAnalysisGateway,
     SpCatalog,
+    project_wrapper_evidence,
     wrapper_observation_identity,
 )
 from config.settings import settings  # noqa: E402
@@ -142,12 +143,14 @@ def _classify_wrapper(
 ) -> Dict[str, Any]:
     boundary = gateway or CSharpAnalysisGateway(analyze_service.load_sp_catalog(database))
     relative_path = _relative_path(source_file, project_root) if source_file else ""
-    return boundary.reconcile_wrapper(
-        relative_path,
-        record,
-        scan_root=str(project_root or ""),
-        explicit_contract=str(configured_contract_name or "").strip() or None,
-    ).to_dict()
+    return project_wrapper_evidence(
+        boundary.reconcile_wrapper(
+            relative_path,
+            record,
+            scan_root=str(project_root or ""),
+            explicit_contract=str(configured_contract_name or "").strip() or None,
+        )
+    )
 
 
 def _is_wrapper_record(record: Mapping[str, Any]) -> bool:
