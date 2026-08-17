@@ -578,10 +578,19 @@ class ProjectScanner:
 
         return found_files
     
+    def _refresh_semantic_binding_availability(self) -> None:
+        """Recompute Semantic Binding Availability for every project file under
+        project_root, once per scan/refresh pass that touches C# files."""
+        self.scan_result.semantic_binding_availability = (
+            self.static_analyzer_host.semantic_binding_availability(
+                [Path(self.project_root)]
+            )
+        )
+
     # ========================================
     # 主掃描流程
     # ========================================
-    
+
     def scan_project(
         self, 
         database_aliases: List[str] = None,
@@ -623,11 +632,7 @@ class ProjectScanner:
         print(f"\n📝 解析 C# 檔案...")
         if csharp_files:
             self.static_analyzer_host.ensure_ready()
-            self.scan_result.semantic_binding_availability = (
-                self.static_analyzer_host.semantic_binding_availability(
-                    [Path(self.project_root)]
-                )
-            )
+            self._refresh_semantic_binding_availability()
             print(f"   C# analyzer 批次進度：0/{len(csharp_files)}", flush=True)
             host_results = self.static_analyzer_host.analyze_csharp_files(
                 [Path(file_path) for file_path in csharp_files],
@@ -729,11 +734,7 @@ class ProjectScanner:
         refreshed_results: List[FileAnalysisResult] = []
         if current_files:
             self.static_analyzer_host.ensure_ready()
-            self.scan_result.semantic_binding_availability = (
-                self.static_analyzer_host.semantic_binding_availability(
-                    [Path(self.project_root)]
-                )
-            )
+            self._refresh_semantic_binding_availability()
             host_results = self.static_analyzer_host.analyze_csharp_files(
                 [Path(file_path) for file_path in current_files],
                 source_roots=[Path(self.project_root)],
