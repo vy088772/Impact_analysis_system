@@ -1,0 +1,42 @@
+# 08 — Tidy Up the Cache-Identity Module After Its Reviews
+
+**Repo:** `Impact_analysis_system`
+**Spec:** `.scratch/database-identity-decoupled-from-system/spec.md`
+**ADR:** `docs/adr/0009-sql-cache-identity-decoupled-from-system.md`
+
+**What to build:** The follow-ups the ticket 02 code review raised and ticket 02 did not act on. No behaviour the analyst sees changes here, with one exception called out below — this is the module's shape, its documentation, and one leftover transitional crutch.
+
+**Blocked by:** 03 (it is actively editing the same public functions; changing their signatures underneath it would conflict)
+
+**Status:** ready-for-agent
+
+## Decide first
+
+- [ ] `normalize_server()` lowercases its result, but ticket 02's criterion says "a hostname that already contains `.` is unchanged" — the code and the written rule disagree, and a test currently locks the lowercasing in. Settle it one way and make code, test, and ADR-0009 agree. **Recommended: keep the lowercasing and amend the wording**, because hostnames are case-insensitive and a `VMSYSTEST07` in one Web.config must not produce a second cache file beside `vmsystest07`'s. The alternative is dropping `.lower()`, which makes the rule literally true but lets one server hold two cache identities.
+
+## Correctness of what the code says about itself
+
+- [ ] `get_or_dump()`'s docstring claims "`database`：顯示用簡稱；不參與快取鍵計算", but `db = str(db_name or database or "")` then keys the cache by `db` — when `db_name` is omitted, `database` *is* the key. Either drop the fallback (the `/refresh_sql` endpoint already rejects an empty `db_name`, so nothing relies on it) or correct the docstring. Prefer dropping the fallback.
+- [ ] `CONTEXT.md` gains the term for the cache identity itself — the normalized `(server, database, schema)` triple. Today the concept exists in ADR-0009 and in code (`normalize_server`, `cache_key`, `resolve_server`) but has no glossary entry; `Uncataloged Database` only links the ADR.
+
+## Retire the transitional crutch
+
+- [ ] `resolve_server()` back-resolves a server by globbing the cache directory, which makes one lookup's result depend on what *other* files sit in that directory. It exists because callers had no server to pass. `/analyze` and `/path_evidence` requests already carry `db_server`, so thread it through `analyze_service.py`'s read path (`_execution_sql_context`, `_require_sql_execution_graph`) and the fetchers into `load_cached(..., server=...)`.
+- [ ] Once every in-repo caller passes a server, decide whether `resolve_server()` still earns its place. If it stays, it stays for a named caller, not "in case someone needs it".
+
+## Shape
+
+- [ ] The triple travels as three loose strings through `cache_key`, `cache_filename`, `_paths`, `_load`, `_save`, `_is_valid_cache`, and `LEGACY_CACHE_SCOPES`, in three different argument orders (`(server, database, schema)`, `(database, schema, server="")`, `(server, database, schema)`). Give it one type and one order.
+- [ ] The cache filename shape is spelled three times — `cache_filename()`, `_paths()`, and `resolve_server()`'s glob suffix each rebuild it. One of them should be the source of truth.
+- [ ] `cache_filename()` has no caller outside its own test. Either give it the callers that justify it or delete it.
+- [ ] `tools/migrate_sql_cache_keys.py` rebuilds `_save()`'s meta-file dict by hand and reads the private `sql_cache_store._SQL_CACHE_VERSION`. Expose one meta-writing seam in `sql_cache_store` and have the migration use it, so the meta format lives in one place.
+
+## Tests
+
+- [ ] `tests/test_sql_cache_store.py`'s `_write_legacy_cache()` is used to write *new-key* caches too; rename it for what it does.
+- [ ] `tests/test_sql_execution_graph.py` still hand-rolls the cache-root/mem-cache save-and-restore boilerplate five times, which `tests/test_sql_cache_store.py`'s `_CacheRoot` context manager already does. Share one.
+- [ ] `tests/test_sql_cache_store.py`'s two `try/except ValueError` + `raise AssertionError` blocks become `pytest.raises`, matching the rest of `tests/`.
+
+## Comments
+
+Raised by the two-axis review of ticket 02 (`6732c30`). Two findings from that review are deliberately **not** in this ticket: the PUR cache's identity-string rewrite (a documented, necessary deviation from "byte-for-byte" — the old file stored a `system_id`, so the reader would have rejected it), and the migration script's `--dry-run`/`--cache-root`/idempotency extras (beyond what the spec asked for, but they cost nothing to keep and the script is one-off).
