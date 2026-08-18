@@ -4,8 +4,10 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `CONTEXT.md`'s Evidence Status entry lists `proven`/`likely`/`unresolved`/`not_applicable` as the full value set
-- [ ] `docs/adr/0007-*.md` exists, follows the numbering and format convention of `0001`–`0006`
-- [ ] The ADR explicitly names both repos' Evidence Status concepts and states they are unrelated despite the shared name
+- [x] `CONTEXT.md`'s Evidence Status entry lists `proven`/`likely`/`unresolved`/`not_applicable` as the full value set
+- [x] `docs/adr/0007-*.md` exists, follows the numbering and format convention of `0001`–`0006`
+- [x] The ADR explicitly names both repos' Evidence Status concepts and states they are unrelated despite the shared name
+
+`docs/adr/0007-evidence-status-name-collision-with-llamaindex-spec-rag.md` created. `CONTEXT.md`'s Evidence Status entry now lists all four values and links to the ADR. Ticket 08 (the reciprocal note in `llamaindex-spec-rag`'s `CONTEXT.md`) is unblocked but out of scope for this ticket — it lives in the other repo.

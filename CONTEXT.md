@@ -35,7 +35,7 @@ An evidence-rated C# data-access call that represents stored-procedure execution
 _Avoid_: assumed SP call
 
 **Evidence Status**:
-The confidence state of a Database Invocation: `proven`, `likely`, or `unresolved`. It rates the available execution and target evidence independently from contract selection status.
+The confidence state of a Database Invocation: `proven`, `likely`, `unresolved`, or `not_applicable`. It rates the available execution and target evidence independently from contract selection status. `not_applicable` marks an invocation with no database evidence to rate. This concept shares its name with, but is unrelated to, `llamaindex-spec-rag`'s per-path/query Evidence Status; see [ADR-0007](docs/adr/0007-evidence-status-name-collision-with-llamaindex-spec-rag.md).
 _Avoid_: contract status, scan success
 
 **Wrapper Contract Selector**:
