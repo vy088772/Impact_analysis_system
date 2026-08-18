@@ -17,6 +17,7 @@ from code_analyzer.models import FileAnalysisResult, FileType, FrameworkType, So
 from code_analyzer.project_scanner import ProjectScanResult
 from service import analyze_service
 from service import scan_store
+from service.schemas import RefreshResponse
 
 
 def test_refresh_source_delegates_program_scope_without_full_rescan(monkeypatch, tmp_path) -> None:
@@ -471,8 +472,8 @@ def test_refresh_api_forwards_wrapper_contract_and_serializes_summary(monkeypatc
 
     assert observed["wrapper_contract"] == "sqlobject"
     assert observed["database"] == "SYS"
-    assert response.wrapper_summary["observations"][0]["status"] == "unresolved_contract"
-    assert response.wrapper_summary["observations"][0]["source_provenance"] == {
+    assert response.wrapper_summary.observations[0]["status"] == "unresolved_contract"
+    assert response.wrapper_summary.observations[0]["source_provenance"] == {
         "scan_root": "C:/scan/TTPUR"
     }
 
@@ -623,6 +624,63 @@ def test_full_refresh_reconciles_raw_wrappers_once_without_sql(monkeypatch, tmp_
     assert observation["locations"][0]["evidence_reason"] == "wrapper_source_unavailable"
     assert observation["locations"][0]["procedure_name"] == "usp_saveorder"
     assert observation["locations"][0]["database"] == "OrdersDb"
+
+
+def test_refresh_response_wrapper_summary_accepts_real_refresh_shape(
+    monkeypatch, tmp_path
+) -> None:
+    """Regression guard (ticket 01): `RefreshResponse.wrapper_summary` must
+    accept the exact shape `reconcile_refresh_wrappers`/`refresh_source`
+    already produce today, unchanged — this is additive validation only."""
+    root = tmp_path / "TTPUR"
+    source_file = root / "OrderPage.aspx.cs"
+    root.mkdir()
+    scan = ProjectScanResult(
+        project_root=str(root),
+        project_name="TTPUR",
+        scan_time=datetime.now(),
+        total_files=1,
+        scanned_files=1,
+        db_invocations={
+            str(source_file): [
+                {
+                    "invocation_kind": "source_wrapper",
+                    "class_name": "OrderPage",
+                    "method_name": "Save",
+                    "wrapper_method_name": "RunProc",
+                    "wrapper_receiver_type": "UnknownDbHelper",
+                    "wrapper_source_available": False,
+                    "wrapper_mode": "stored_procedure",
+                    "command_text_kind": "literal",
+                    "command_text": "usp_SaveOrder",
+                    "connection_expression": "conn",
+                    "line_number": 42,
+                    "start_offset": 100,
+                    "end_offset": 180,
+                }
+            ]
+        },
+        connection_sources={str(source_file): {"conn": "OrdersDb"}},
+    )
+
+    monkeypatch.setattr(
+        analyze_service,
+        "resolve_scan_roots",
+        lambda source, refresh=False: [root],
+    )
+    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+
+    result = analyze_service.refresh_source({"project": "p", "repo": "r"})
+
+    response = RefreshResponse(**result)
+    validated_summary = response.wrapper_summary.model_dump()
+
+    # Every key the service actually produced round-trips through the typed
+    # model with the same value — no field renamed, dropped, or reshaped.
+    for key, value in result["wrapper_summary"].items():
+        assert validated_summary[key] == value, key
+
+    assert response.wrapper_summary.review_items[0].evidence_status == "unresolved"
 
 
 def test_review_candidates_keep_each_source_snapshot_identity(monkeypatch, tmp_path) -> None:

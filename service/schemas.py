@@ -6,8 +6,8 @@
 """
 from __future__ import annotations
 
-from typing import Any, List, Dict, Union
-from pydantic import BaseModel, Field
+from typing import Any, List, Dict, Literal, Union
+from pydantic import BaseModel, ConfigDict, Field
 
 WrapperContractSelector = Union[str, List[str], None]
 
@@ -183,6 +183,94 @@ class RefreshRequest(BaseModel):
     rerun_decompile_receiver_types: List[str] = Field(default_factory=list)
 
 
+# The four values `evidence_status` can hold, produced by
+# `code_analyzer.csharp_analysis_gateway.wrapper_observation_fields()`:
+# `InvocationEvidence.PROVEN/LIKELY/UNRESOLVED` plus the literal
+# `"not_applicable"` used when no database evidence applies.
+EvidenceStatus = Literal["proven", "likely", "unresolved", "not_applicable"]
+
+
+class WrapperReviewItem(BaseModel):
+    """One aggregated wrapper observation flagged for maintainer review.
+
+    Deliberately does NOT subclass `WrapperEvidenceFields` (the base
+    `PathEvidenceResponse`/`SPMatchProgram`/`TableMatchProgram` share):
+    that base declares fields like `database: str = ""` as non-optional,
+    but a review item's `database` is genuinely `None` whenever
+    `wrapper_observation_fields()` (code_analyzer/csharp_analysis_gateway.py)
+    has no `DbInvocation` evidence to read it from — `database = evidence.database
+    if evidence is not None else None`. Reusing that base here would reject
+    a shape this service produces today, which this ticket's regression
+    test (`test_refresh_response_wrapper_summary_accepts_real_refresh_shape`
+    in tests/test_program_refresh.py) catches. Widening `WrapperEvidenceFields`
+    itself is out of scope: the spec calls out `/analyze`'s and
+    `/path_evidence`'s already-typed response shapes as untouched by this
+    ticket.
+
+    `reconcile_refresh_wrappers`/`wrapper_observation_fields`
+    (service/analyze_service.py, code_analyzer/csharp_analysis_gateway.py)
+    populate several dozen alias fields on this bag — see
+    `WRAPPER_EVIDENCE_FIELDS` in csharp_analysis_gateway.py for the full
+    set. Only `evidence_status` is validated here; every other key passes
+    through unchanged via `extra="allow"` so this stays additive validation,
+    not a reshape.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    evidence_status: EvidenceStatus
+
+
+class WrapperSummaryTotals(BaseModel):
+    """`wrapper_summary["totals"]` — aggregate counts over all observations."""
+
+    model_config = ConfigDict(extra="allow")
+
+    wrapper_calls: int = 0
+    semantic_binding_resolved: int = 0
+    observation_groups: int = 0
+    source_wrappers: int = 0
+    external_wrappers: int = 0
+    auto_selected: int = 0
+    explicit_selected: int = 0
+    unresolved: int = 0
+    evidence_proven: int = 0
+    evidence_likely: int = 0
+    evidence_unresolved: int = 0
+    evidence_not_applicable: int = 0
+    review_candidates: int = 0
+
+
+class WrapperSummary(BaseModel):
+    """`RefreshResponse.wrapper_summary` — the aggregate produced by
+    `reconcile_refresh_wrappers()` (service/analyze_service.py), plus the
+    `decompilation` key `refresh_source()` adds afterward.
+
+    `extra="allow"` keeps this additive: an unforeseen key on a future
+    `/refresh` response still round-trips instead of failing validation.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    source_scan_count: int = 0
+    scans: List[Dict[str, Any]] = Field(default_factory=list)
+    observed_receiver_types: List[str] = Field(default_factory=list)
+    observed_methods: List[str] = Field(default_factory=list)
+    classification_statuses: List[str] = Field(default_factory=list)
+    evidence_statuses: List[EvidenceStatus] = Field(default_factory=list)
+    selected_contracts: List[str] = Field(default_factory=list)
+    selection_sources: List[str] = Field(default_factory=list)
+    candidate_contracts: List[str] = Field(default_factory=list)
+    observations: List[Dict[str, Any]] = Field(default_factory=list)
+    review_items: List[WrapperReviewItem] = Field(default_factory=list)
+    review_reasons: List[str] = Field(default_factory=list)
+    contract_preflight: Dict[str, Any] = Field(default_factory=dict)
+    contract_onboarding_status: str = ""
+    contract_preflight_failed: bool = False
+    totals: WrapperSummaryTotals = Field(default_factory=WrapperSummaryTotals)
+    decompilation: Dict[str, Any] = Field(default_factory=dict)
+
+
 class RefreshResponse(BaseModel):
     source_root: str = ""
     files: int = 0
@@ -195,7 +283,7 @@ class RefreshResponse(BaseModel):
     not_found: List[str] = Field(default_factory=list)
     updated_files: List[str] = Field(default_factory=list)
     removed_files: List[str] = Field(default_factory=list)
-    wrapper_summary: Dict[str, Any] = Field(default_factory=dict)
+    wrapper_summary: WrapperSummary = Field(default_factory=WrapperSummary)
     # Deprecated aliases retained for clients that have not migrated yet.
     sp_relations: int = 0
     table_relations: int = 0

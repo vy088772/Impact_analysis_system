@@ -129,9 +129,9 @@ def test_refresh_route_wrapper_summary_review_items_expose_evidence_status_only(
 
     response = api.refresh(RefreshRequest(system="SYS", source={"project": "p", "repo": "r"}))
 
-    for item in response.wrapper_summary["review_items"]:
-        assert item["evidence_status"] == "unresolved"
-        assert _DROPPED_WRAPPER_EVIDENCE_ALIASES.isdisjoint(item.keys())
+    for item in response.wrapper_summary.review_items:
+        assert item.evidence_status == "unresolved"
+        assert _DROPPED_WRAPPER_EVIDENCE_ALIASES.isdisjoint(item.model_dump().keys())
 
 
 def test_analyze_route_maps_graph_readiness_to_conflict(monkeypatch) -> None:

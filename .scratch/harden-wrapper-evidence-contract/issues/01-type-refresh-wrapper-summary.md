@@ -4,10 +4,10 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `RefreshResponse.wrapper_summary` is a typed Pydantic model, not `Dict[str, Any]`
-- [ ] `review_items[].evidence_status` is restricted to the four known values: `proven`, `likely`, `unresolved`, `not_applicable`
-- [ ] The model represents the existing aggregate fields (`evidence_statuses`, `totals`, and any other current `wrapper_summary` keys)
-- [ ] A test asserts the model accepts the exact shape currently produced by a real `/refresh` run — this is a regression guard, not new behavior
-- [ ] No field is renamed, dropped, or reshaped as part of this ticket
+- [x] `RefreshResponse.wrapper_summary` is a typed Pydantic model, not `Dict[str, Any]`
+- [x] `review_items[].evidence_status` is restricted to the four known values: `proven`, `likely`, `unresolved`, `not_applicable`
+- [x] The model represents the existing aggregate fields (`evidence_statuses`, `totals`, and any other current `wrapper_summary` keys)
+- [x] A test asserts the model accepts the exact shape currently produced by a real `/refresh` run — this is a regression guard, not new behavior
+- [x] No field is renamed, dropped, or reshaped as part of this ticket
