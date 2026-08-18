@@ -17,13 +17,18 @@ from code_analyzer.external_wrapper_contracts import (
 )
 
 from . import analyze_service, scan_store
-from .contract_registry import find_casefold, unused_revision_name
+from .contract_registry import (
+    DEFAULT_CATALOG_PATH,
+    DEFAULT_REGISTRY_PATH,
+    ContractRegistryError,
+    _validate_registry_content,
+    find_casefold,
+    load_contract_registry,
+    unused_revision_name,
+)
 from .contract_transaction import ContractTransactionError, commit_staged_contract_transaction
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_REGISTRY_PATH = PROJECT_ROOT / "config" / "external_wrapper_contracts.json"
-DEFAULT_CATALOG_PATH = PROJECT_ROOT.parent / "llamaindex-spec-rag" / "catalog" / "system_catalog.json"
 ALLOWED_MODES = frozenset({"stored_procedure", "inline_sql", "call_site"})
 ALLOWED_SINKS = {
     "executenonquery": "ExecuteNonQuery",
@@ -66,36 +71,23 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
     return payload
 
 
-def _contract_entries(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    contracts = payload.get("contracts")
-    if not isinstance(contracts, Mapping):
-        _error("registry_invalid", "external wrapper registry 必須包含 contracts object")
-    entries: dict[str, dict[str, Any]] = {}
-    folded_names: dict[str, str] = {}
-    for raw_name, raw_contract in contracts.items():
-        name = str(raw_name or "").strip()
-        if not name:
-            _error("invalid_contract_name", "contract name 不可為空")
-        folded = name.casefold()
-        if folded in folded_names:
-            _error(
-                "duplicate_contract_name",
-                f"contract name 不可重複（不分大小寫）：{name}",
-                [folded_names[folded], name],
-            )
-        if not isinstance(raw_contract, Mapping):
-            _error("invalid_contract", f"contract {name!r} 必須是 object")
-        entries[name] = copy.deepcopy(dict(raw_contract))
-        folded_names[folded] = name
-    return entries
+def _validated_registry_entries(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Re-validate an already-loaded registry payload and return its entries.
 
-
-def load_contract_registry(path: Path | str = DEFAULT_REGISTRY_PATH) -> dict[str, Any]:
-    """Load the active registry with fail-closed structural validation."""
-    registry_path = Path(path)
-    payload = _read_json(registry_path, "registry")
-    _contract_entries(payload)
-    return payload
+    Structural validation is delegated to the shared module's internal
+    validation logic (the same rules ``load_contract_registry(strict=True)``
+    enforces), translated to ``ContractAcceptanceError`` at this seam so the
+    two validation passes can't drift apart.
+    """
+    try:
+        _validate_registry_content(payload)
+    except ContractRegistryError as exc:
+        _error(exc.code, str(exc), exc.details)
+    contracts = payload.get("contracts", {})
+    return {
+        str(raw_name).strip(): copy.deepcopy(dict(raw_contract))
+        for raw_name, raw_contract in contracts.items()
+    }
 
 
 def _validate_receiver_types(value: Any, contract_name: str) -> list[str]:
@@ -295,7 +287,7 @@ def _prepare_registry(
     *,
     allow_legacy_mutation: bool = True,
 ) -> tuple[dict[str, Any], str, bool, str]:
-    before_entries = _contract_entries(registry_payload)
+    before_entries = _validated_registry_entries(registry_payload)
     _validate_contract_registry(before_entries)
     normalized = _normalize_proposal(proposal)
     proposal_name = normalized["name"]
@@ -444,7 +436,7 @@ def _prepare_versioned_registry(
     registry_payload: Mapping[str, Any],
     proposal: Mapping[str, Any],
 ) -> tuple[dict[str, Any], str, bool, str, dict[str, Any]]:
-    before_entries = _contract_entries(registry_payload)
+    before_entries = _validated_registry_entries(registry_payload)
     _validate_contract_registry(before_entries)
     try:
         versioned_entry, report = versioned_contract_from_proposal(proposal)
@@ -702,7 +694,10 @@ def accept_external_wrapper_contract(
     """Validate, preview, or explicitly apply one reviewed contract proposal."""
     registry_file = Path(registry_path)
     catalog_file = Path(catalog_path)
-    before_registry = load_contract_registry(registry_file)
+    try:
+        before_registry = load_contract_registry(registry_file, strict=True)
+    except ContractRegistryError as exc:
+        _error(exc.code, str(exc), exc.details)
     candidate = proposal.get("contract") if isinstance(proposal.get("contract"), Mapping) else proposal
     has_snapshot = any(
         isinstance(candidate.get(key), Mapping)
@@ -838,6 +833,5 @@ __all__ = [
     "ContractAcceptanceError",
     "accept_contract_proposal",
     "accept_external_wrapper_contract",
-    "load_contract_registry",
     "reclassify_cached_scans",
 ]
