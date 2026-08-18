@@ -17,6 +17,7 @@ from code_analyzer.external_wrapper_contracts import (
 )
 
 from . import analyze_service, scan_store
+from .contract_registry import find_casefold, unused_revision_name
 from .contract_transaction import ContractTransactionError, commit_staged_contract_transaction
 
 
@@ -249,11 +250,6 @@ def _normalize_proposal(proposal: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _find_casefold(mapping: Mapping[str, Any], name: str) -> Optional[str]:
-    folded = str(name).casefold()
-    return next((key for key in mapping if str(key).casefold() == folded), None)
-
-
 def _receiver_type_key(receiver_type: str) -> str:
     return str(receiver_type).strip().split(".")[-1].casefold()
 
@@ -303,7 +299,7 @@ def _prepare_registry(
     _validate_contract_registry(before_entries)
     normalized = _normalize_proposal(proposal)
     proposal_name = normalized["name"]
-    existing_name = _find_casefold(before_entries, proposal_name)
+    existing_name = find_casefold(before_entries, proposal_name)
     receiver_reuse = False
 
     receiver_keys = {_receiver_type_key(value) for value in normalized["receiver_types"]}
@@ -523,14 +519,11 @@ def _prepare_versioned_registry(
     base_name = _proposal_name(proposal)
     if not base_name or not _CONTRACT_NAME_PATTERN.fullmatch(base_name):
         _error("invalid_contract_name", f"contract name 無效：{base_name!r}")
-    existing_name = _find_casefold(before_entries, base_name)
-    active_name = base_name
-    if existing_name is not None:
-        active_name = f"{existing_name}-{fingerprint[:12]}"
-    while _find_casefold(before_entries, active_name) is not None:
-        active_name = f"{base_name}-{fingerprint[:16]}"
-        if _find_casefold(before_entries, active_name) is not None:
-            active_name = f"{base_name}-{fingerprint}"
+    existing_name = find_casefold(before_entries, base_name)
+    if existing_name is None:
+        active_name = base_name
+    else:
+        active_name = unused_revision_name(before_entries, {}, existing_name, fingerprint)
 
     after_payload, report = _append_comparison_report(registry_payload, report)
     versioned_entry = copy.deepcopy(versioned_entry)
@@ -589,7 +582,7 @@ def _catalog_after_selector(
     )
     if system is None:
         _error("system_not_found", f"system selector target 不存在：{system_id}")
-    contract_name = _find_casefold(active_contracts, selector)
+    contract_name = find_casefold(active_contracts, selector)
     if contract_name is None:
         _error("selector_contract_not_found", f"requested selector 不存在：{selector}")
     after = copy.deepcopy(dict(catalog_payload))
@@ -758,7 +751,7 @@ def accept_external_wrapper_contract(
         catalog_selector = normalized_selector
         if (
             has_snapshot
-            and _find_casefold(after_registry["contracts"], catalog_selector) is None
+            and find_casefold(after_registry["contracts"], catalog_selector) is None
             and catalog_selector.casefold() == _proposal_name(proposal).casefold()
         ):
             catalog_selector = active_name
@@ -768,7 +761,7 @@ def accept_external_wrapper_contract(
             catalog_selector,
             after_registry["contracts"],
         )
-        selector_contract_name = _find_casefold(
+        selector_contract_name = find_casefold(
             after_registry["contracts"],
             catalog_selector,
         ) or ""

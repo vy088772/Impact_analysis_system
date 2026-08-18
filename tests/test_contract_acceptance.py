@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import multiprocessing
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,9 @@ import service.contract_acceptance as contract_acceptance_module  # noqa: E402
 from service.contract_transaction import recover_transaction  # noqa: E402
 import service.contract_transaction as contract_transaction_module  # noqa: E402
 from service import scan_store as scan_store_module  # noqa: E402
+from code_analyzer.external_wrapper_contracts import (  # noqa: E402
+    versioned_contract_from_proposal,
+)
 from code_analyzer.project_scanner import ProjectScanResult  # noqa: E402
 
 
@@ -1107,3 +1111,119 @@ def test_acceptance_api_rejects_unknown_operation() -> None:
         assert exc.status_code == 400
     else:
         raise AssertionError("unknown acceptance operations must return HTTP 400")
+
+
+def _versioned_proposal(assembly: str) -> dict:
+    return {
+        "name": "orders",
+        "receiver_types": [f"{assembly}.SQLObject"],
+        "implementation_snapshot": {
+            "artifact_identity": f"{assembly}.dll@sha256:abc",
+            "assembly_identity": assembly,
+            "assembly_revision": "1.0.0",
+            "behavior_surface_unit": f"{assembly}.SQLObject",
+            "complete": True,
+            "methods": [
+                {
+                    "method_identity": f"{assembly}.SQLObject.Run(System.String)",
+                    "method_name": "Run",
+                    "method_arity": 1,
+                    "parameter_types": ["System.String"],
+                    "argument_roles": {"command_text": 0},
+                    "effective_command_semantics": "stored_procedure",
+                    "terminal_sink": "ExecuteNonQuery",
+                    "connection_behavior_boundary": "constructor_connection",
+                    "branch_rules": [
+                        {"mode": "stored_procedure", "sink": "ExecuteNonQuery"}
+                    ],
+                    "assembly_revision": "1.0.0",
+                    "body_complete": True,
+                }
+            ],
+            "helper_operations_complete": True,
+            "inherited_operations_complete": True,
+        },
+    }
+
+
+def _placeholder_contract(receiver_type: str) -> dict:
+    return {
+        "receiver_types": [receiver_type],
+        "methods": {
+            "Run": {"mode": "stored_procedure", "sink": "ExecuteNonQuery"},
+        },
+    }
+
+
+def _run_acceptance_into_queue(queue, proposal, registry_path) -> None:
+    """Module-level so a spawned child process can import and pickle it."""
+    result = accept_external_wrapper_contract(
+        proposal,
+        registry_path=registry_path,
+        scan_roots=[],
+    )
+    queue.put(result)
+
+
+def test_three_way_name_collision_returns_promptly_instead_of_hanging(tmp_path) -> None:
+    """A proposal whose fingerprint-derived name collides with every already
+    taken suffix variant (short, medium, full fingerprint) must still resolve
+    to a distinct name instead of oscillating forever between two taken
+    names -- the bug this shared algorithm exists to fix.
+
+    Runs the call in a separate, killable process rather than a thread: a
+    regression here is a genuine infinite loop, and Python joins non-daemon
+    threads at interpreter exit, so a thread-based timeout would still hang
+    the whole test process even after "catching" the timeout.
+    """
+    proposal = _versioned_proposal("Vendor.Orders")
+    entry, _report = versioned_contract_from_proposal(proposal)
+    fingerprint = str(entry["contract_fingerprint"])
+
+    registry_path = tmp_path / "external_wrapper_contracts.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "contracts": {
+                    "orders": _placeholder_contract("Legacy.Orders.LegacyReceiver"),
+                    f"orders-{fingerprint[:12]}": _placeholder_contract(
+                        "Collision.A.CollisionReceiverA"
+                    ),
+                    f"orders-{fingerprint[:16]}": _placeholder_contract(
+                        "Collision.B.CollisionReceiverB"
+                    ),
+                    f"orders-{fingerprint}": _placeholder_contract(
+                        "Collision.C.CollisionReceiverC"
+                    ),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ctx = multiprocessing.get_context("spawn")
+    queue = ctx.Queue()
+    process = ctx.Process(
+        target=_run_acceptance_into_queue,
+        args=(queue, proposal, registry_path),
+    )
+    process.start()
+    process.join(timeout=10)
+    if process.is_alive():
+        process.terminate()
+        process.join()
+        raise AssertionError(
+            "accept_external_wrapper_contract hung on a three-way "
+            "contract-name collision instead of returning promptly"
+        )
+
+    assert process.exitcode == 0
+    result = queue.get_nowait()
+    assert result["status"] == "preview"
+    assert result["contract"] == f"orders-{fingerprint}-2"
+    assert result["contract"] not in {
+        "orders",
+        f"orders-{fingerprint[:12]}",
+        f"orders-{fingerprint[:16]}",
+        f"orders-{fingerprint}",
+    }

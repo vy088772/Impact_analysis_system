@@ -4,12 +4,12 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `service/contract_registry.py` exists with `find_casefold`, `taken_contract_name`, and `unused_revision_name` — the always-terminating algorithm (three fingerprint-length suffixes, then an incrementing ordinal fallback) already used by `contract_preflight.py`.
-- [ ] `contract_preflight.py` imports these three functions from the shared module and no longer defines its own private copies.
-- [ ] `contract_acceptance.py` imports `find_casefold` from the shared module and no longer defines its own private copy.
-- [ ] `contract_acceptance.py`'s `_prepare_versioned_registry` calls the shared `unused_revision_name` (passing an empty staged-names collection, since it only ever resolves one proposal at a time) instead of its own inline suffix-picking loop. The non-terminating oscillation between two already-taken names is gone.
-- [ ] Direct unit tests cover `find_casefold`, `taken_contract_name`, and `unused_revision_name`, including the three-way collision case (short, medium, and full-fingerprint suffixes all already taken) asserting the ordinal fallback is used and the call returns promptly.
-- [ ] A regression test through the existing `accept_external_wrapper_contract` entry point reproduces the same three-way collision and asserts it returns a valid, distinct contract name within a bounded time instead of hanging.
-- [ ] Existing `contract_preflight`/`contract_acceptance` test suites pass unmodified, except any test that directly exercised the now-removed private duplicate functions (those are updated to target the shared module instead).
+- [x] `service/contract_registry.py` exists with `find_casefold`, `taken_contract_name`, and `unused_revision_name` — the always-terminating algorithm (three fingerprint-length suffixes, then an incrementing ordinal fallback) already used by `contract_preflight.py`.
+- [x] `contract_preflight.py` imports these three functions from the shared module and no longer defines its own private copies.
+- [x] `contract_acceptance.py` imports `find_casefold` from the shared module and no longer defines its own private copy.
+- [x] `contract_acceptance.py`'s `_prepare_versioned_registry` calls the shared `unused_revision_name` (passing an empty staged-names collection, since it only ever resolves one proposal at a time) instead of its own inline suffix-picking loop. The non-terminating oscillation between two already-taken names is gone.
+- [x] Direct unit tests cover `find_casefold`, `taken_contract_name`, and `unused_revision_name`, including the three-way collision case (short, medium, and full-fingerprint suffixes all already taken) asserting the ordinal fallback is used and the call returns promptly.
+- [x] A regression test through the existing `accept_external_wrapper_contract` entry point reproduces the same three-way collision and asserts it returns a valid, distinct contract name within a bounded time instead of hanging.
+- [x] Existing `contract_preflight`/`contract_acceptance` test suites pass unmodified, except any test that directly exercised the now-removed private duplicate functions (those are updated to target the shared module instead).
