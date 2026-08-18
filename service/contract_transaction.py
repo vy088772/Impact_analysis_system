@@ -23,10 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_REGISTRY_PATH = PROJECT_ROOT / "config" / "external_wrapper_contracts.json"
-DEFAULT_CATALOG_PATH = PROJECT_ROOT.parent / "llamaindex-spec-rag" / "catalog" / "system_catalog.json"
+from .contract_registry import DEFAULT_CATALOG_PATH, DEFAULT_REGISTRY_PATH
 
 
 def _repository_revision(path: Path) -> str:

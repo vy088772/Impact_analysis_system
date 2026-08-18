@@ -65,11 +65,11 @@ from .scan_store import cache_status, cached_commit, get_or_scan, has_cache, sav
 from . import sql_cache_store
 from . import flow_chain_builder
 from .contract_preflight import (
-    load_contract_registry,
     load_system_contract_selector,
     normalize_contract_selector,
     run_contract_preflight,
 )
+from .contract_registry import load_contract_registry
 from .contract_transaction import (
     ContractTransactionError,
     DEFAULT_CATALOG_PATH as CONTRACT_TRANSACTION_CATALOG_PATH,

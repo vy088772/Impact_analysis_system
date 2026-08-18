@@ -14,15 +14,16 @@ from code_analyzer.external_wrapper_contracts import (
     versioned_contract_from_proposal,
 )
 from .contract_registry import (
+    DEFAULT_CATALOG_PATH,
+    DEFAULT_REGISTRY_PATH,
+    _registry_entries,
+    _registry_payload,
     find_casefold,
+    load_contract_registry,
     taken_contract_name,
     unused_revision_name,
 )
 
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_REGISTRY_PATH = PROJECT_ROOT / "config" / "external_wrapper_contracts.json"
-DEFAULT_CATALOG_PATH = PROJECT_ROOT.parent / "llamaindex-spec-rag" / "catalog" / "system_catalog.json"
 
 SelectorValue = str | list[str] | tuple[str, ...] | None
 
@@ -92,36 +93,6 @@ class ContractPreflightResult:
                 copy.deepcopy(dict(item)) for item in self.review_candidates
             ],
         }
-
-
-def _registry_entries(registry: Mapping[str, Any]) -> dict[str, Any]:
-    contracts = registry.get("contracts", registry)
-    if not isinstance(contracts, Mapping):
-        return {}
-    return {str(name): value for name, value in contracts.items()}
-
-
-def _registry_payload(registry: Mapping[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(registry, Mapping):
-        return {"contracts": {}}
-    payload = copy.deepcopy(dict(registry))
-    contracts = payload.get("contracts")
-    if isinstance(contracts, Mapping):
-        payload["contracts"] = {
-            str(name): copy.deepcopy(value)
-            for name, value in contracts.items()
-        }
-        return payload
-    return {"contracts": copy.deepcopy(_registry_entries(registry))}
-
-
-def load_contract_registry(path: Path | str = DEFAULT_REGISTRY_PATH) -> dict[str, Any]:
-    """Load the active registry without turning a read failure into semantics."""
-    try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"contracts": {}}
-    return _registry_payload(payload if isinstance(payload, Mapping) else None)
 
 
 def load_system_contract_selector(

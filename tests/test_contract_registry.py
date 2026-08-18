@@ -1,16 +1,21 @@
-"""Unit tests for the shared contract-name collision algorithm."""
+"""Unit tests for the shared contract registry loader and naming algorithm."""
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from service.contract_registry import (  # noqa: E402
+    ContractRegistryError,
     find_casefold,
+    load_contract_registry,
     taken_contract_name,
     unused_revision_name,
 )
@@ -106,3 +111,142 @@ def test_unused_revision_name_considers_staged_names_too() -> None:
     name = unused_revision_name({}, staged, "orders", fingerprint)
 
     assert name == f"orders-{fingerprint[:16]}"
+
+
+# --- load_contract_registry(strict=False) — automatic refresh path behavior ---
+
+
+def test_non_strict_missing_file_degrades_to_empty_registry(tmp_path: Path) -> None:
+    missing_path = tmp_path / "missing.json"
+
+    registry = load_contract_registry(missing_path, strict=False)
+
+    assert registry == {"contracts": {}}
+
+
+def test_non_strict_unparseable_json_degrades_to_empty_registry(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text("{not valid json", encoding="utf-8")
+
+    registry = load_contract_registry(path, strict=False)
+
+    assert registry == {"contracts": {}}
+
+
+def test_non_strict_malformed_content_passes_through_unvalidated(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps({"contracts": {"Alpha": {}, "alpha": {}, "beta": "not-an-object"}}),
+        encoding="utf-8",
+    )
+
+    registry = load_contract_registry(path, strict=False)
+
+    assert registry == {
+        "contracts": {"Alpha": {}, "alpha": {}, "beta": "not-an-object"}
+    }
+
+
+def test_non_strict_bare_entry_mapping_is_wrapped_in_contracts_key(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps({"alpha": {}}), encoding="utf-8")
+
+    registry = load_contract_registry(path, strict=False)
+
+    assert registry == {"contracts": {"alpha": {}}}
+
+
+def test_non_strict_defaults_to_false() -> None:
+    import inspect
+
+    signature = inspect.signature(load_contract_registry)
+    assert signature.parameters["strict"].default is False
+
+
+# --- load_contract_registry(strict=True) — explicit acceptance path behavior ---
+
+
+def test_strict_missing_file_raises_registry_not_found(tmp_path: Path) -> None:
+    missing_path = tmp_path / "missing.json"
+
+    with pytest.raises(ContractRegistryError) as excinfo:
+        load_contract_registry(missing_path, strict=True)
+
+    assert excinfo.value.code == "registry_not_found"
+
+
+def test_strict_unparseable_json_raises_registry_invalid(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text("{not valid json", encoding="utf-8")
+
+    with pytest.raises(ContractRegistryError) as excinfo:
+        load_contract_registry(path, strict=True)
+
+    assert excinfo.value.code == "registry_invalid"
+
+
+def test_strict_non_object_root_raises_registry_invalid(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+
+    with pytest.raises(ContractRegistryError) as excinfo:
+        load_contract_registry(path, strict=True)
+
+    assert excinfo.value.code == "registry_invalid"
+
+
+def test_strict_missing_contracts_key_raises_registry_invalid(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps({"not_contracts": {}}), encoding="utf-8")
+
+    with pytest.raises(ContractRegistryError) as excinfo:
+        load_contract_registry(path, strict=True)
+
+    assert excinfo.value.code == "registry_invalid"
+
+
+def test_strict_empty_contract_name_raises_invalid_contract_name(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps({"contracts": {" ": {}}}), encoding="utf-8")
+
+    with pytest.raises(ContractRegistryError) as excinfo:
+        load_contract_registry(path, strict=True)
+
+    assert excinfo.value.code == "invalid_contract_name"
+
+
+def test_strict_casefold_duplicate_names_raise_duplicate_contract_name(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps({"contracts": {"Alpha": {}, "alpha": {}}}), encoding="utf-8"
+    )
+
+    with pytest.raises(ContractRegistryError) as excinfo:
+        load_contract_registry(path, strict=True)
+
+    assert excinfo.value.code == "duplicate_contract_name"
+    assert list(excinfo.value.details) == ["Alpha", "alpha"]
+
+
+def test_strict_non_object_contract_entry_raises_invalid_contract(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps({"contracts": {"alpha": "not-an-object"}}), encoding="utf-8"
+    )
+
+    with pytest.raises(ContractRegistryError) as excinfo:
+        load_contract_registry(path, strict=True)
+
+    assert excinfo.value.code == "invalid_contract"
+
+
+def test_strict_valid_registry_is_returned_as_is(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    payload = {"contracts": {"alpha": {"receiver_types": ["Foo"]}}}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    registry = load_contract_registry(path, strict=True)
+
+    assert registry == payload
