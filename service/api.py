@@ -251,7 +251,9 @@ def refresh_sql(req: RefreshSqlRequest) -> RefreshSqlResponse:
     資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取
     （data/sql_cache/）。
 
-    server/db_name 由呼叫端（catalog）提供，缺一即報錯、不嘗試連線。"""
+    server/db_name 由呼叫端（catalog）提供，缺一即報錯、不嘗試連線。連線身分預設
+    用 .env 的全域 DB_AUTH_MODE；請求帶了完整的 db_user_id/db_password 才改用那組
+    覆寫（ADR-0010）。"""
     if not req.database:
         raise HTTPException(status_code=400, detail="database 不可為空")
     if not req.server or not req.db_name:
@@ -267,6 +269,8 @@ def refresh_sql(req: RefreshSqlRequest) -> RefreshSqlResponse:
             req.server,
             req.db_name,
             req.db_schema,
+            user_id=req.db_user_id,
+            password=req.db_password,
             progress_callback=lambda stage, current, total, item: refresh_progress.update_job(
                 job_id,
                 status="running",

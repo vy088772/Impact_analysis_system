@@ -112,6 +112,8 @@ class SQLAnalyzer:
         database_alias: str = None,
         server: str = None,
         database_name: str = None,
+        user_id: str = "",
+        password: str = "",
     ):
         """
         初始化 SQL 分析器
@@ -123,6 +125,10 @@ class SQLAnalyzer:
                 逐系統提供）。與 database_name 需同時提供才會現組設定，兩者只
                 提供其一視為設定不完整，直接報錯不嘗試連線。
             database_name: 明確指定的實際資料庫名稱。
+            user_id: 這一台伺服器的掃描帳密覆寫帳號，與 password 兩者都有值才
+                生效；缺一即沿用 .env 的全域 DB_AUTH_MODE 身分（ADR-0010）。
+                掃描身分永遠不從被掃應用程式的 Web.config 推導。
+            password: 掃描帳密覆寫的密碼。
 
         每個系統的伺服器/資料庫可能不同，故優先使用明確提供的 server/
         database_name（見 settings.build_database_config()）；只有在完全沒
@@ -131,7 +137,11 @@ class SQLAnalyzer:
         """
         if server or database_name:
             self.db_config = settings.build_database_config(
-                alias=database_alias or server, server=server, database_name=database_name
+                alias=database_alias or server,
+                server=server,
+                database_name=database_name,
+                user_id=user_id,
+                password=password,
             )
         elif database_alias:
             self.db_config = settings.get_database_config(database_alias)

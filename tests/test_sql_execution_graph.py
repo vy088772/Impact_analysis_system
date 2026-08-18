@@ -253,7 +253,15 @@ END;
 def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
     """SQL refresh persists graph nodes and relationships alongside SQL definitions."""
     class FakeSqlAnalyzer:
-        def __init__(self, alias: str, *, server: str, database_name: str) -> None:
+        def __init__(
+            self,
+            alias: str,
+            *,
+            server: str,
+            database_name: str,
+            user_id: str = "",
+            password: str = "",
+        ) -> None:
             self.alias = alias
 
         def connect(self) -> bool:

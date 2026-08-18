@@ -215,19 +215,32 @@ class Settings:
         return cls._databases.get(alias)
 
     @classmethod
-    def build_database_config(cls, alias: str, server: str, database_name: str) -> DatabaseConfig:
+    def build_database_config(
+        cls,
+        alias: str,
+        server: str,
+        database_name: str,
+        user_id: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> DatabaseConfig:
         """
         依「呼叫端明確提供的 server + database_name」現組一個 DatabaseConfig，
         不查 .env 的 DB_SERVER／DB_DATABASES（每個系統的伺服器/資料庫不同，
-        改由 spec-rag 的 catalog 逐系統標注、隨請求帶入）。
+        改由 spec-rag 的 catalog 逐資料庫標注、隨請求帶入）。
 
-        連線共用參數（帳號/密碼/連線模式/連接埠/逾時/加密/驅動程式等）
-        仍沿用 .env（跨系統共用，通常是同一組服務帳號）。
+        連線身分預設沿用 .env 的全域 DB_AUTH_MODE（Windows 驗證或一組全域 SQL
+        帳號）；呼叫端把 user_id 與 password 兩者都帶進來時，才改用那組覆寫
+        （見 docs/adr/0010-scan-identity-independent-of-app-credentials.md）。
+        只帶一邊視為沒帶，避免組出一半的 SQL 登入在連線時才炸。掃描身分永遠不
+        從被掃應用程式的 Web.config 推導。其餘連線共用參數（連接埠/逾時/加密/
+        驅動程式等）一律沿用 .env。
 
         Args:
-            alias: 用於顯示/快取鍵的簡稱（通常是呼叫端的 system_id）
+            alias: 用於顯示/快取鍵的簡稱
             server: 實際主機位址（不可為空）
             database_name: 實際資料庫名稱（不可為空）
+            user_id: 這一台伺服器的掃描帳號覆寫，與 password 缺一即不生效
+            password: 掃描密碼覆寫，與 user_id 缺一即不生效
 
         Raises:
             ValueError: server 或 database_name 為空時，不嘗試連線。
@@ -238,13 +251,14 @@ class Settings:
                 f"database={database_name!r}）：server/database 需由呼叫端（catalog）"
                 f"提供，不會使用 .env 的 DB_SERVER/DB_DATABASES 作為 fallback。"
             )
+        overridden = bool(str(user_id or "").strip()) and bool(str(password or "").strip())
         return DatabaseConfig(
             alias=alias,
             database_name=database_name,
             server=server,
-            auth_mode=cls.DB_AUTH_MODE,
-            user_id=cls.DB_USER_ID,
-            password=cls.DB_PASSWORD,
+            auth_mode="sql" if overridden else cls.DB_AUTH_MODE,
+            user_id=user_id if overridden else cls.DB_USER_ID,
+            password=password if overridden else cls.DB_PASSWORD,
             port=cls.DB_PORT,
             timeout=cls.DB_TIMEOUT,
             encrypt=cls.DB_ENCRYPT,

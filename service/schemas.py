@@ -417,14 +417,20 @@ class RefreshSqlRequest(BaseModel):
     """POST /refresh_sql 請求：重新連線 SQL Server 撷取整庫 SP/View/Function/資料表
     Schema，覆寫本機快取（data/sql_cache/）。
 
-    server/db_name 由呼叫端（spec-rag 的 catalog，逐系統標注）提供，不使用
+    server/db_name 由呼叫端（spec-rag 的 catalog，逐資料庫標注）提供，不使用
     Impact 端 .env 的 DB_SERVER/DB_DATABASES；兩者缺一即報錯，不嘗試連線。
+
+    db_user_id/db_password 是這台伺服器的掃描帳密覆寫（見 ADR-0010）：兩者都有
+    值才生效，缺一即沿用 .env 的全域 DB_AUTH_MODE 身分。帳密由呼叫端的登錄檔
+    提供，Impact 永遠不從被掃應用程式的 Web.config 推導掃描用的連線身分。
     """
-    database: str                            # 快取鍵／顯示簡稱（通常是 spec-rag 的 system_id），必填
+    database: str                            # 快取鍵／顯示簡稱，必填
     server: str                              # 資料庫主機位址，必填
     db_name: str                             # 實際資料庫名稱，必填
     db_schema: str = "dbo"                    # SQL schema（欄位名稱不用 schema，避免與 BaseModel.schema() 名稱衝突）
     job_id: str = ""                          # 呼叫端提供的進度查詢識別碼，可留空
+    db_user_id: str = ""                      # 掃描帳密覆寫的帳號；與 db_password 缺一即不生效
+    db_password: str = ""                     # 掃描帳密覆寫的密碼；與 db_user_id 缺一即不生效
 
 
 class RefreshSqlResponse(BaseModel):

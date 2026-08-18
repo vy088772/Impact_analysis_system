@@ -2982,14 +2982,17 @@ def refresh_sql_source(
     server: str,
     db_name: str,
     schema: str = "dbo",
+    user_id: str = "",
+    password: str = "",
     progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> dict:
     """更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與
     資料表 Schema，覆寫本機落地快取（data/sql_cache/）。
 
-    database：快取鍵／顯示簡稱（通常是呼叫端的 system_id）。
+    database：快取鍵／顯示簡稱。
     server/db_name：實際連線目標，由呼叫端（catalog）提供；缺一時
     get_or_dump()→SQLAnalyzer 會直接報錯，不嘗試連線。
+    user_id/password：這台伺服器的掃描帳密覆寫，兩者都有值才生效（ADR-0010）。
 
     回傳 {database, db_schema, procedures, views, functions, tables} 數量摘要；
     SQL Execution Graph 會與 object definitions 一起落地到 SQL cache。
@@ -3002,6 +3005,8 @@ def refresh_sql_source(
         refresh=True,
         server=server,
         db_name=db_name,
+        user_id=user_id,
+        password=password,
         progress_callback=progress_callback,
     )
     return {

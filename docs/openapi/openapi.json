@@ -1218,7 +1218,7 @@
         "type": "object"
       },
       "RefreshSqlRequest": {
-        "description": "POST /refresh_sql 請求：重新連線 SQL Server 撷取整庫 SP/View/Function/資料表\nSchema，覆寫本機快取（data/sql_cache/）。\n\nserver/db_name 由呼叫端（spec-rag 的 catalog，逐系統標注）提供，不使用\nImpact 端 .env 的 DB_SERVER/DB_DATABASES；兩者缺一即報錯，不嘗試連線。",
+        "description": "POST /refresh_sql 請求：重新連線 SQL Server 撷取整庫 SP/View/Function/資料表\nSchema，覆寫本機快取（data/sql_cache/）。\n\nserver/db_name 由呼叫端（spec-rag 的 catalog，逐資料庫標注）提供，不使用\nImpact 端 .env 的 DB_SERVER/DB_DATABASES；兩者缺一即報錯，不嘗試連線。\n\ndb_user_id/db_password 是這台伺服器的掃描帳密覆寫（見 ADR-0010）：兩者都有\n值才生效，缺一即沿用 .env 的全域 DB_AUTH_MODE 身分。帳密由呼叫端的登錄檔\n提供，Impact 永遠不從被掃應用程式的 Web.config 推導掃描用的連線身分。",
         "properties": {
           "database": {
             "title": "Database",
@@ -1228,9 +1228,19 @@
             "title": "Db Name",
             "type": "string"
           },
+          "db_password": {
+            "default": "",
+            "title": "Db Password",
+            "type": "string"
+          },
           "db_schema": {
             "default": "dbo",
             "title": "Db Schema",
+            "type": "string"
+          },
+          "db_user_id": {
+            "default": "",
+            "title": "Db User Id",
             "type": "string"
           },
           "job_id": {
@@ -2469,7 +2479,7 @@
     },
     "/refresh_sql": {
       "post": {
-        "description": "更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與\n資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取\n（data/sql_cache/）。\n\nserver/db_name 由呼叫端（catalog）提供，缺一即報錯、不嘗試連線。",
+        "description": "更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與\n資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取\n（data/sql_cache/）。\n\nserver/db_name 由呼叫端（catalog）提供，缺一即報錯、不嘗試連線。連線身分預設\n用 .env 的全域 DB_AUTH_MODE；請求帶了完整的 db_user_id/db_password 才改用那組\n覆寫（ADR-0010）。",
         "operationId": "refresh_sql_refresh_sql_post",
         "requestBody": {
           "content": {

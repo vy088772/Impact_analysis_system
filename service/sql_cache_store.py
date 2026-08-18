@@ -242,6 +242,8 @@ def get_or_dump(
     refresh: bool = False,
     server: str = "",
     db_name: str = "",
+    user_id: str = "",
+    password: str = "",
     progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> Dict:
     """
@@ -254,6 +256,10 @@ def get_or_dump(
     （見 config.settings.build_database_config）。
 
     database：顯示用簡稱；不參與快取鍵計算。
+
+    user_id/password：這一台伺服器的掃描帳密覆寫，兩者都有值才生效；缺一即沿用
+    .env 的全域 DB_AUTH_MODE 身分（見 docs/adr/0010-scan-identity-independent-of-app-credentials.md）。
+    掃描用的連線身分永遠不從被掃應用程式的 Web.config 推導。
     """
     db = str(db_name or database or "").strip()
 
@@ -267,7 +273,9 @@ def get_or_dump(
     _report_progress(progress_callback, "connecting", 0, 1, db)
     from code_analyzer.sql_analyzer import SQLAnalyzer
 
-    analyzer = SQLAnalyzer(db, server=server, database_name=db)
+    analyzer = SQLAnalyzer(
+        db, server=server, database_name=db, user_id=user_id, password=password
+    )
     if not analyzer.connect():
         raise RuntimeError(f"無法連線資料庫：{db}")
     _report_progress(progress_callback, "connecting", 1, 1, db)

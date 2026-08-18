@@ -11,7 +11,7 @@ Each scanned application's Web.config carries its own SQL login for its own runt
 
 The scan tool's connecting identity stays a separate trust boundary from the credentials embedded in scanned application config. Web.config's `uid`/`pwd` are used only to help identify which database a call resolves to (as evidence for the SP Catalog lookup) — never to build the live connection the scan tool itself opens.
 
-Optionally, one `(server, database)` pair may carry an explicit credential override (used only when both uid and pwd are non-blank); when absent, the scan falls back to the existing global `DB_AUTH_MODE` identity.
+Optionally, one server may carry an explicit credential override, recorded as `uid`/`pwd` on that server's `SQLServerData.json` entry in `llamaindex-spec-rag` and shared by every database listed under it (used only when both are non-blank); when either is blank, the scan falls back to the existing global `DB_AUTH_MODE` identity. The caller sends the pair as `db_user_id`/`db_password` on the `/refresh_sql` request, and `build_database_config()` applies it only for that one scan. `SQLServerData.json` is a local, `.gitignore`d data file, so the override never enters version control.
 
 ## Consequences
 
