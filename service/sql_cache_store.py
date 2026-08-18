@@ -10,6 +10,11 @@ SQL 物件（預存程序/View/使用者定義函數/資料表 Schema）的本�
 
 純靜態資料，不含任何 AI 摘要（AI 注記交由 spec-rag 端的 code_retriever 按需、
 依內容雜湊快取產生，符合本專案「全程無 AI」的分工原則）。
+
+快取鍵是 (server, database, schema) 這組正規化三元組，與 system_id 無關
+（見 docs/adr/0009-sql-cache-identity-decoupled-from-system.md）：同一個
+Database 被幾套 System 參照、或不屬於任何 System，都只掃描與快取一次。
+「這個 Database 有沒有建檔」完全由對應的快取檔在不在磁碟上決定，沒有其他名單。
 """
 from __future__ import annotations
 
@@ -44,8 +49,46 @@ _SQL_CACHE_VERSION = 9
 _mem_cache: Dict[str, Dict] = {}
 
 
+# 內部 SQL Server 主機都在這個網域底下；短主機名補上這個尾綴即得完整位址。
+# 這是一條演算法規則，不是對照表——新的主機（如未來的 vmsystest09）不需要改設定。
+SERVER_DOMAIN_SUFFIX = ".topmost.com.tw"
+
+
 def _safe_name(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", text or "").strip("_") or "default"
+
+
+def normalize_server(server: str) -> str:
+    """把連線字串裡的主機位址正規化成快取鍵用的完整位址。
+
+    規則只有兩條：具名執行個體尾綴（`host\\instance`）丟掉、只留主機；主機名
+    不含 `.` 時補上 SERVER_DOMAIN_SUFFIX。主機名不分大小寫，一律轉小寫。
+    空字串進、空字串出（呼叫端自行決定要不要當成錯誤）。
+    """
+    host = str(server or "").strip()
+    if "\\" in host:
+        host = host.split("\\", 1)[0].strip()
+    if not host:
+        return ""
+    if "." not in host:
+        host += SERVER_DOMAIN_SUFFIX
+    return host.lower()
+
+
+def cache_key(server: str, database: str, schema: str = "dbo") -> str:
+    """(server, database, schema) 三元組的快取鍵；不吃 system_id。"""
+    normalized_server = normalize_server(server)
+    database = str(database or "").strip()
+    if not normalized_server or not database:
+        raise ValueError(
+            f"SQL 快取鍵需要 server 與 database（server={server!r}, database={database!r}）"
+        )
+    return f"{_safe_name(normalized_server)}__{_safe_name(database)}__{_safe_name(schema)}"
+
+
+def cache_filename(server: str, database: str, schema: str = "dbo") -> str:
+    """該三元組的快取檔名（含 .json）。"""
+    return f"{cache_key(server, database, schema)}.json"
 
 
 def _cache_root() -> Path:
@@ -54,20 +97,43 @@ def _cache_root() -> Path:
     return root
 
 
-def _key(database_alias: str, schema: str) -> str:
-    return f"{_safe_name(database_alias)}__{_safe_name(schema)}"
-
-
-def _paths(database_alias: str, schema: str) -> tuple[Path, Path]:
-    k = _key(database_alias, schema)
+def _paths(server: str, database: str, schema: str) -> tuple[Path, Path]:
+    k = cache_key(server, database, schema)
     return _cache_root() / f"{k}.json", _cache_root() / f"{k}.meta.json"
+
+
+def resolve_server(database: str, schema: str = "dbo") -> str:
+    """呼叫端只知道 database 名稱時，從磁碟上唯一一份快取回推它的 server。
+
+    找不到、或同名 database 在多台 server 上都有快取（無法判斷是哪一台）時回傳
+    空字串——寧可查無快取，也不猜錯資料庫。
+    """
+    database = str(database or "").strip()
+    if not database:
+        return ""
+    suffix = f"__{_safe_name(database)}__{_safe_name(schema)}.json"
+    servers = sorted(
+        {
+            path.name[: -len(suffix)]
+            for path in _cache_root().glob(f"*{suffix}")
+            if not path.name.endswith(".meta.json") and len(path.name) > len(suffix)
+        }
+    )
+    if len(servers) != 1:
+        if servers:
+            print(
+                f"⚠️  {database}.{schema} 在多台 server 上都有 SQL 快取（{', '.join(servers)}）；"
+                f"請指定 server。"
+            )
+        return ""
+    return servers[0]
 
 
 def _same_scope(actual: object, expected: str) -> bool:
     return str(actual or "").strip().casefold() == str(expected or "").strip().casefold()
 
 
-def _is_valid_cache(data: object, database_alias: str, schema: str) -> bool:
+def _is_valid_cache(data: object, database: str, schema: str) -> bool:
     if not isinstance(data, dict):
         return False
     graph = data.get("sql_execution_graph")
@@ -82,11 +148,11 @@ def _is_valid_cache(data: object, database_alias: str, schema: str) -> bool:
         for field in ("nodes", "relationships", "parse_errors")
     ):
         return False
-    if not _same_scope(data.get("database"), database_alias):
+    if not _same_scope(data.get("database"), database):
         return False
     if not _same_scope(data.get("schema"), schema):
         return False
-    return _same_scope(graph.get("database"), database_alias)
+    return _same_scope(graph.get("database"), database)
 
 
 def _without_legacy_dependency_fields(data: Dict) -> Dict:
@@ -96,12 +162,13 @@ def _without_legacy_dependency_fields(data: Dict) -> Dict:
     return sanitized
 
 
-def has_cache(database_alias: str, schema: str = "dbo") -> bool:
-    return _load(database_alias, schema) is not None
+def has_cache(database: str, schema: str = "dbo", server: str = "") -> bool:
+    """這個 Database 有沒有建檔：完全由對應的快取檔在不在磁碟上決定。"""
+    return load_cached(database, schema, server=server) is not None
 
 
-def _load(database_alias: str, schema: str) -> Optional[Dict]:
-    data_path, meta_path = _paths(database_alias, schema)
+def _load(server: str, database: str, schema: str) -> Optional[Dict]:
+    data_path, meta_path = _paths(server, database, schema)
     if not data_path.exists():
         return None
     try:
@@ -110,20 +177,22 @@ def _load(database_alias: str, schema: str) -> Optional[Dict]:
         info = json.loads(meta_path.read_text(encoding="utf-8"))
         if info.get("cache_version") != _SQL_CACHE_VERSION:
             return None
-        if not _same_scope(info.get("database"), database_alias):
+        if not _same_scope(info.get("database"), database):
             return None
         if not _same_scope(info.get("schema"), schema):
             return None
+        if info.get("server") and not _same_scope(info.get("server"), normalize_server(server)):
+            return None
         data = json.loads(data_path.read_text(encoding="utf-8"))
-        if not _is_valid_cache(data, database_alias, schema):
+        if not _is_valid_cache(data, database, schema):
             return None
         return data
     except Exception:
         return None
 
 
-def _save(database_alias: str, schema: str, data: Dict) -> None:
-    data_path, meta_path = _paths(database_alias, schema)
+def _save(server: str, database: str, schema: str, data: Dict) -> None:
+    data_path, meta_path = _paths(server, database, schema)
     try:
         data_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -132,7 +201,8 @@ def _save(database_alias: str, schema: str, data: Dict) -> None:
             json.dumps(
                 {
                     "cache_version": _SQL_CACHE_VERSION,
-                    "database": database_alias,
+                    "server": normalize_server(server),
+                    "database": database,
                     "schema": schema,
                     "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 },
@@ -145,22 +215,29 @@ def _save(database_alias: str, schema: str, data: Dict) -> None:
         print(f"⚠️  SQL 快取寫出失敗（非致命）：{exc}")
 
 
-def load_cached(database_alias: str, schema: str = "dbo") -> Optional[Dict]:
-    """單純讀取本機快取（不連線、不 dump）；查詢時的快速路徑用這個。"""
-    key = _key(database_alias, schema)
+def load_cached(database: str, schema: str = "dbo", server: str = "") -> Optional[Dict]:
+    """單純讀取本機快取（不連線、不 dump）；查詢時的快速路徑用這個。
+
+    server 省略時由 resolve_server() 從磁碟回推；同名 database 分屬多台 server
+    而無法判斷時視為查無快取。
+    """
+    server = normalize_server(server) or resolve_server(database, schema)
+    if not server:
+        return None
+    key = cache_key(server, database, schema)
     if key in _mem_cache:
         cached = _mem_cache[key]
-        if _is_valid_cache(cached, database_alias, schema):
+        if _is_valid_cache(cached, database, schema):
             return cached
         _mem_cache.pop(key, None)
-    cached = _load(database_alias, schema)
+    cached = _load(server, database, schema)
     if cached is not None:
         _mem_cache[key] = cached
     return cached
 
 
 def get_or_dump(
-    database_alias: str,
+    database: str,
     schema: str = "dbo",
     refresh: bool = False,
     server: str = "",
@@ -171,32 +248,29 @@ def get_or_dump(
     取得（或建立）SQL 物件快取：優先用記憶體/磁碟快取；refresh=True 則強制重新
     連線 SQL Server 撈取整庫定義並覆寫快取。
 
-    server/db_name：實際連線目標（由呼叫端如 spec-rag 的 catalog 逐系統提供），
-    只在需要真的連線時（refresh=True 或無現成快取）才用得到；缺一即由
-    SQLAnalyzer 直接報錯、不嘗試連線（見 config.settings.build_database_config）。
+    server/db_name：實際連線目標，同時也是快取鍵的兩個組成（第三個是 schema），
+    由呼叫端如 spec-rag 的 catalog 逐資料庫提供。db_name 省略時退回用 database
+    當資料庫名稱；缺 server 即由 SQLAnalyzer 直接報錯、不嘗試連線
+    （見 config.settings.build_database_config）。
+
+    database：顯示用簡稱；不參與快取鍵計算。
     """
-    key = _key(database_alias, schema)
+    db = str(db_name or database or "").strip()
 
     if not refresh:
-        if key in _mem_cache:
-            cached = _mem_cache[key]
-            if _is_valid_cache(cached, database_alias, schema):
-                return cached
-            _mem_cache.pop(key, None)
-        cached = _load(database_alias, schema)
+        cached = load_cached(db, schema, server=server)
         if cached is not None:
-            _mem_cache[key] = cached
-            print(f"⚡ 使用 SQL 快取：{database_alias}.{schema}")
+            print(f"⚡ 使用 SQL 快取：{db}.{schema}")
             return cached
 
-    print(f"🔍 連線 SQL Server 重新撈取物件定義：{database_alias}.{schema}")
-    _report_progress(progress_callback, "connecting", 0, 1, database_alias)
+    print(f"🔍 連線 SQL Server 重新撈取物件定義：{db}.{schema}")
+    _report_progress(progress_callback, "connecting", 0, 1, db)
     from code_analyzer.sql_analyzer import SQLAnalyzer
 
-    analyzer = SQLAnalyzer(database_alias, server=server, database_name=db_name)
+    analyzer = SQLAnalyzer(db, server=server, database_name=db)
     if not analyzer.connect():
-        raise RuntimeError(f"無法連線資料庫：{database_alias}")
-    _report_progress(progress_callback, "connecting", 1, 1, database_alias)
+        raise RuntimeError(f"無法連線資料庫：{db}")
+    _report_progress(progress_callback, "connecting", 1, 1, db)
     try:
         if progress_callback is None:
             data = analyzer.dump_all_sql_objects(schema)
@@ -215,13 +289,13 @@ def get_or_dump(
         data,
         progress_callback=progress_callback,
     )
-    if not _is_valid_cache(data, database_alias, schema):
+    if not _is_valid_cache(data, db, schema):
         raise ValueError(
-            f"SQL cache payload database identity mismatch: {database_alias}.{schema}"
+            f"SQL cache payload database identity mismatch: {db}.{schema}"
         )
-    _mem_cache[key] = data
+    _mem_cache[cache_key(server, db, schema)] = data
     _report_progress(progress_callback, "saving", 0, 1, "SQL cache")
-    _save(database_alias, schema, data)
+    _save(server, db, schema, data)
     _report_progress(progress_callback, "saving", 1, 1, "SQL cache")
     return data
 

@@ -19,6 +19,9 @@ from config.settings import settings
 from service import sql_cache_store
 
 
+TEST_SERVER = "vmsystest07"
+
+
 def _write_sql_cache_fixture(
     cache_dir: str,
     database: str,
@@ -26,10 +29,11 @@ def _write_sql_cache_fixture(
     cache_version: int | None = None,
 ) -> None:
     cache_root = Path(cache_dir)
-    (cache_root / f"{database}__dbo.json").write_text(
+    key = sql_cache_store.cache_key(TEST_SERVER, database, "dbo")
+    (cache_root / f"{key}.json").write_text(
         json.dumps(payload), encoding="utf-8"
     )
-    (cache_root / f"{database}__dbo.meta.json").write_text(
+    (cache_root / f"{key}.meta.json").write_text(
         json.dumps(
             {
                 "cache_version": (
@@ -85,7 +89,7 @@ def test_sql_cache_rejects_graphless_payload() -> None:
             {"database": "TestDb", "schema": "dbo", "procedures": []},
         )
 
-        assert sql_cache_store.load_cached("TestDb", "dbo") is None
+        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
     sql_cache_store._mem_cache.clear()
     sql_cache_store._mem_cache.update(previous_mem_cache)
     settings.SQL_CACHE_ROOT = previous_cache_root
@@ -110,10 +114,12 @@ def test_sql_cache_rejects_database_mismatch_from_memory_and_disk() -> None:
         sql_cache_store._mem_cache.clear()
         _write_sql_cache_fixture(cache_dir, "TestDb", mismatched_payload)
 
-        assert sql_cache_store.load_cached("TestDb", "dbo") is None
+        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
 
-        sql_cache_store._mem_cache["TestDb__dbo"] = mismatched_payload
-        assert sql_cache_store.load_cached("TestDb", "dbo") is None
+        sql_cache_store._mem_cache[
+            sql_cache_store.cache_key(TEST_SERVER, "TestDb", "dbo")
+        ] = mismatched_payload
+        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
     sql_cache_store._mem_cache.clear()
     sql_cache_store._mem_cache.update(previous_mem_cache)
     settings.SQL_CACHE_ROOT = previous_cache_root
@@ -142,7 +148,7 @@ def test_sql_cache_rejects_stale_payload_version() -> None:
             cache_version=sql_cache_store._SQL_CACHE_VERSION - 1,
         )
 
-        assert sql_cache_store.load_cached("TestDb", "dbo") is None
+        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
     sql_cache_store._mem_cache.clear()
     sql_cache_store._mem_cache.update(previous_mem_cache)
     settings.SQL_CACHE_ROOT = previous_cache_root
@@ -170,7 +176,7 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
             },
         )
 
-        assert sql_cache_store.load_cached("TestDb", "dbo") is None
+        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
     sql_cache_store._mem_cache.clear()
     sql_cache_store._mem_cache.update(previous_mem_cache)
     settings.SQL_CACHE_ROOT = previous_cache_root
@@ -298,8 +304,8 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
                 "TestDb",
                 schema="dbo",
                 refresh=True,
-                server="server",
-                db_name="database",
+                server=TEST_SERVER,
+                db_name="TestDb",
             )
             assert "dependencies" not in data
             assert "write_dependencies" not in data
@@ -334,7 +340,7 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             )
 
             sql_cache_store._mem_cache.clear()
-            reloaded = sql_cache_store.load_cached("TestDb", "dbo")
+            reloaded = sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER)
             assert reloaded is not None
             assert reloaded["sql_execution_graph"] == graph
             assert "dependencies" not in reloaded

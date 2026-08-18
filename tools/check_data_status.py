@@ -97,12 +97,15 @@ def _code_status(azure: dict) -> tuple[str, str]:
     return clone_str, scan_str
 
 
-def _sql_status(database: dict, system_id: str) -> str:
+def _sql_status(database: dict) -> str:
     server = (database or {}).get("server", "")
     name = (database or {}).get("name", "")
     if not server or not name:
         return f"{NA} 未設定DB"
-    return f"{OK} 已更新" if sql_cache_store.has_cache(system_id, "dbo") else f"{NO} 未更新"
+    # 快取鍵是 (server, database, schema)，不是 system_id：同一個資料庫被幾套系統
+    # 參照都只掃描一次，這裡照樣用資料庫本身的身分去查有沒有建檔。
+    has_cache = sql_cache_store.has_cache(name, "dbo", server=server)
+    return f"{OK} 已更新" if has_cache else f"{NO} 未更新"
 
 
 def main() -> None:
@@ -132,7 +135,7 @@ def main() -> None:
         database = sys_.get("database", {})
         raw, vec = _spec_status(spec_rag_root, system_id)
         code, scan = _code_status(azure)
-        sql = _sql_status(database, system_id)
+        sql = _sql_status(database)
         rows.append((system_id, raw, vec, code, scan, sql))
 
         has_repo = bool((azure or {}).get("repo"))
