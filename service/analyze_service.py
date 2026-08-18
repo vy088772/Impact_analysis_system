@@ -735,12 +735,39 @@ def _require_sql_execution_graph(database: str) -> Tuple[Dict, Dict]:
     return cached, dict(graph)
 
 
+def _connection_source_database(value: Any) -> str:
+    """One connection_sources entry's database name, whichever shape it is in.
+
+    An entry is either the legacy plain database-name string, or a
+    {"database": ..., "server": ...} mapping produced by the Web.config
+    connection-string resolver (ticket 01) -- both shapes can coexist within
+    the same ProjectScanResult (a freshly re-scanned file gets the new shape;
+    an untouched file keeps whatever an older scan wrote), so every reader of
+    connection_sources must tolerate both.
+    """
+    if isinstance(value, Mapping):
+        return str(value.get("database") or "")
+    return str(value or "")
+
+
+def _remap_connection_source(value: Any, database: str) -> Any:
+    """Rebuild one connection_sources entry with a new resolved database.
+
+    Preserves the entry's server when it carried one, so remapping a file's
+    ambiguous multi-database sources onto the selected graph scope never
+    drops the server ticket 01 threaded through connection_sources.
+    """
+    if isinstance(value, Mapping):
+        return {"database": database, "server": value.get("server")}
+    return database
+
+
 def _execution_connection_sources(
     scan: ProjectScanResult,
     file_path: str,
     graph_database: str,
     database_aliases: Iterable[str] = (),
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Resolve raw connection expressions for one file into the selected graph scope."""
     file_key = str(Path(file_path).resolve())
     sources = dict(getattr(scan, "connection_sources", {}).get(file_key, {}) or {})
@@ -758,21 +785,24 @@ def _execution_connection_sources(
         if value and value.strip()
     }
     source_values = {
-        value.strip().casefold()
+        _connection_source_database(value).strip().casefold()
         for value in sources.values()
-        if value and value.strip()
+        if _connection_source_database(value).strip()
     }
     if not source_values:
         return sources
     if len(source_values) <= 1:
-        return {expression: graph_database for expression in sources}
+        return {
+            expression: _remap_connection_source(value, graph_database)
+            for expression, value in sources.items()
+        }
     return {
         expression: (
-            graph_database
-            if source.strip().casefold() in known_databases
-            else source
+            _remap_connection_source(value, graph_database)
+            if _connection_source_database(value).strip().casefold() in known_databases
+            else value
         )
-        for expression, source in sources.items()
+        for expression, value in sources.items()
     }
 
 

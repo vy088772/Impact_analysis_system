@@ -350,7 +350,7 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
 
     class FakeParser:
         db_tracker = SimpleNamespace(
-            connections={"conn": SimpleNamespace(database_name="NewDb")}
+            connections={"conn": SimpleNamespace(database_name="NewDb", server=None)}
         )
 
         def parse_file(self, file_path: str) -> FileAnalysisResult:
@@ -373,7 +373,9 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
         "PUR_SOQry.aspx.cs",
     ]
     assert scan.db_invocations[str(selected_file.resolve())] == [{"new": True}]
-    assert scan.connection_sources[str(selected_file.resolve())] == {"conn": "NewDb"}
+    assert scan.connection_sources[str(selected_file.resolve())] == {
+        "conn": {"database": "NewDb", "server": None}
+    }
     assert scan.db_invocations[str(untouched_file.resolve())] == [{"untouched": True}]
     assert scan.connection_sources[str(untouched_file.resolve())] == {"conn": "UntouchedDb"}
     assert scan.source_snapshots["PUR_MasterEdit.aspx.cs"].content == "class Selected { }"
@@ -1097,3 +1099,71 @@ def test_refresh_reconciliation_uses_database_scoped_sp_catalog(monkeypatch, tmp
     assert observation["evidence_status"] == "proven"
     assert observation["database"] == "OrdersDb"
     assert observation["procedure_name"] == "usp_saveorder"
+
+
+def test_execution_connection_sources_tolerates_mixed_legacy_and_resolved_shapes(
+    tmp_path,
+) -> None:
+    """connection_sources entries can be the legacy plain database-name string
+    (an older scan, or a file untouched by a refresh) or the {"database": ...,
+    "server": ...} mapping ticket 01's Web.config resolver produces (a freshly
+    (re)scanned file) -- both shapes coexist within one ProjectScanResult, so
+    _execution_connection_sources must handle either without crashing, and
+    must preserve server when remapping onto the selected graph scope."""
+    source_file = tmp_path / "OrderPage.aspx.cs"
+    source_file.write_text("class OrderPage {}", encoding="utf-8")
+
+    scan = ProjectScanResult(
+        project_root=str(tmp_path),
+        project_name="Orders",
+        scan_time=datetime.now(),
+        connection_sources={
+            str(source_file.resolve()): {
+                "legacy": "OrdersDb",
+                "resolved": {"database": "OrdersDb", "server": "vmsystest07"},
+            }
+        },
+    )
+
+    sources = analyze_service._execution_connection_sources(
+        scan, str(source_file), graph_database="OrdersDb"
+    )
+
+    assert sources == {
+        "legacy": "OrdersDb",
+        "resolved": {"database": "OrdersDb", "server": "vmsystest07"},
+    }
+
+
+def test_execution_connection_sources_remaps_ambiguous_file_preserving_server(
+    tmp_path,
+) -> None:
+    """A file touching more than one database gets its sources remapped onto
+    the selected graph scope only for entries matching a known alias -- the
+    server on a remapped resolved-shape entry must survive the remap."""
+    source_file = tmp_path / "MultiDbPage.aspx.cs"
+    source_file.write_text("class MultiDbPage {}", encoding="utf-8")
+
+    scan = ProjectScanResult(
+        project_root=str(tmp_path),
+        project_name="Orders",
+        scan_time=datetime.now(),
+        connection_sources={
+            str(source_file.resolve()): {
+                "conn": {"database": "PUR", "server": "vmsystest07"},
+                "other": "ArchiveDb",
+            }
+        },
+    )
+
+    sources = analyze_service._execution_connection_sources(
+        scan,
+        str(source_file),
+        graph_database="OrdersDb",
+        database_aliases=("PUR",),
+    )
+
+    assert sources == {
+        "conn": {"database": "OrdersDb", "server": "vmsystest07"},
+        "other": "ArchiveDb",
+    }

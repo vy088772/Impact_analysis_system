@@ -253,6 +253,7 @@ class DbInvocation:
     procedure_name_hint: Optional[str] = None
     command_text_source: Optional[InvocationSourceSpan] = None
     command_text_provenance: str = ""
+    server: Optional[str] = None
 
     @property
     def embedded_procedure_target(self) -> Optional[EmbeddedProcedureTarget]:
@@ -1744,7 +1745,7 @@ class CSharpAnalysisGateway:
     def __init__(
         self,
         catalog: SpCatalog,
-        connection_sources: Optional[Dict[str, str]] = None,
+        connection_sources: Optional[Dict[str, Any]] = None,
         external_wrapper_contract: Optional[Mapping[str, Any]] = None,
         external_wrapper_contracts: Optional[Mapping[str, Any]] = None,
         wrapper_review_exclusions: Optional[Iterable[Mapping[str, Any]]] = None,
@@ -2438,10 +2439,11 @@ class CSharpAnalysisGateway:
         branch_context = self._branch_context(raw)
 
         connection_expression = raw.get("connection_expression")
-        database = self._resolve_database(connection_expression)
+        database, server = self._resolve_database(connection_expression)
         metadata = self._invocation_metadata(
             raw,
             database=database,
+            server=server,
             method_semantics="fixed_stored_procedure",
             invocation_mode="stored_procedure",
         )
@@ -2523,7 +2525,7 @@ class CSharpAnalysisGateway:
         class_name = raw["class_name"]
         method_name = raw["method_name"]
         branch_context = self._branch_context(raw)
-        database = self._resolve_database(raw.get("connection_expression"))
+        database, server = self._resolve_database(raw.get("connection_expression"))
         command_type_mode = str(raw.get("command_type_mode") or "").casefold()
         command_text_value = str(command_text or "")
         explicit_text_mode = (
@@ -2542,6 +2544,7 @@ class CSharpAnalysisGateway:
         metadata = self._invocation_metadata(
             raw,
             database=database,
+            server=server,
             method_semantics=inline_method_semantics,
             invocation_mode=inline_invocation_mode,
         )
@@ -2714,6 +2717,7 @@ class CSharpAnalysisGateway:
         database: Optional[str],
         method_semantics: str,
         invocation_mode: str,
+        server: Optional[str] = None,
     ) -> Dict[str, Any]:
         command_text_argument = raw.get("command_text_argument")
         if command_text_argument is None:
@@ -2822,6 +2826,7 @@ class CSharpAnalysisGateway:
                 raw.get("connection_expression_candidates")
             ),
             "connection_source": database,
+            "server": server,
             "provenance": str(raw.get("provenance") or "static_analyzer_host"),
             "command_text_source": command_text_source_span,
             "command_text_provenance": command_text_provenance,
@@ -2833,7 +2838,7 @@ class CSharpAnalysisGateway:
         class_name = raw["class_name"]
         method_name = raw["method_name"]
         branch_context = self._branch_context(raw)
-        database = self._resolve_database(raw.get("connection_expression"))
+        database, server = self._resolve_database(raw.get("connection_expression"))
         method_chain = tuple(raw.get("method_chain") or ())
         metadata_raw = dict(raw)
         if not _text_fact(metadata_raw.get("command_type_mode")):
@@ -2845,6 +2850,7 @@ class CSharpAnalysisGateway:
             metadata = self._invocation_metadata(
                 metadata_raw,
                 database=database,
+                server=server,
                 method_semantics="fixed_inline_sql",
                 invocation_mode="inline_sql",
             )
@@ -2903,6 +2909,7 @@ class CSharpAnalysisGateway:
             metadata = self._invocation_metadata(
                 metadata_raw,
                 database=database,
+                server=server,
                 method_semantics="unresolved",
                 invocation_mode="unresolved",
             )
@@ -2927,6 +2934,7 @@ class CSharpAnalysisGateway:
         metadata = self._invocation_metadata(
             metadata_raw,
             database=database,
+            server=server,
             method_semantics="fixed_stored_procedure",
             invocation_mode="stored_procedure",
         )
@@ -3005,7 +3013,7 @@ class CSharpAnalysisGateway:
             for value in (class_name, raw.get("wrapper_class_name"))
             if value
         )
-        database = self._resolve_database(raw.get("connection_expression"))
+        database, server = self._resolve_database(raw.get("connection_expression"))
         source_available = reconciliation.source_available
         external_wrapper_method = (
             reconciliation.wrapper_method if not source_available else ""
@@ -3102,6 +3110,7 @@ class CSharpAnalysisGateway:
                 metadata = self._invocation_metadata(
                     raw,
                     database=database,
+                    server=server,
                     method_semantics=reconciliation.method_semantics or "unresolved",
                     invocation_mode="unresolved",
                 )
@@ -3127,6 +3136,7 @@ class CSharpAnalysisGateway:
                     metadata = self._invocation_metadata(
                         raw,
                         database=database,
+                        server=server,
                         method_semantics=reconciliation.method_semantics,
                         invocation_mode=(
                             "inline_sql"
@@ -3156,6 +3166,7 @@ class CSharpAnalysisGateway:
                         metadata = self._invocation_metadata(
                             raw,
                             database=database,
+                            server=server,
                             method_semantics=reconciliation.method_semantics,
                             invocation_mode="unresolved",
                         )
@@ -3179,6 +3190,7 @@ class CSharpAnalysisGateway:
                     metadata = self._invocation_metadata(
                         raw,
                         database=database,
+                        server=server,
                         method_semantics=reconciliation.method_semantics,
                         invocation_mode="inline_sql",
                     )
@@ -3210,6 +3222,7 @@ class CSharpAnalysisGateway:
                     metadata = self._invocation_metadata(
                         raw,
                         database=database,
+                        server=server,
                         method_semantics=reconciliation.method_semantics,
                         invocation_mode="stored_procedure",
                     )
@@ -3235,6 +3248,7 @@ class CSharpAnalysisGateway:
                     metadata=self._invocation_metadata(
                         raw,
                         database=database,
+                        server=server,
                         method_semantics=reconciliation.method_semantics,
                         invocation_mode="stored_procedure",
                     ),
@@ -3264,6 +3278,7 @@ class CSharpAnalysisGateway:
                 **self._invocation_metadata(
                     raw,
                     database=database,
+                    server=server,
                     method_semantics=reconciliation.method_semantics,
                     invocation_mode=(
                         "stored_procedure"
@@ -3278,6 +3293,7 @@ class CSharpAnalysisGateway:
             metadata = self._invocation_metadata(
                 raw,
                 database=database,
+                server=server,
                 method_semantics=reconciliation.method_semantics or "unresolved",
                 invocation_mode="unresolved",
             )
@@ -3317,6 +3333,7 @@ class CSharpAnalysisGateway:
                 **self._invocation_metadata(
                     raw,
                     database=database,
+                    server=server,
                     method_semantics=reconciliation.method_semantics,
                     invocation_mode="unresolved",
                 ),
@@ -3326,6 +3343,7 @@ class CSharpAnalysisGateway:
             metadata = self._invocation_metadata(
                 raw,
                 database=database,
+                server=server,
                 method_semantics=reconciliation.method_semantics,
                 invocation_mode="unresolved",
             )
@@ -3350,6 +3368,7 @@ class CSharpAnalysisGateway:
             metadata = self._invocation_metadata(
                 raw,
                 database=database,
+                server=server,
                 method_semantics=reconciliation.method_semantics,
                 invocation_mode="inline_sql",
             )
@@ -3382,6 +3401,7 @@ class CSharpAnalysisGateway:
             metadata = self._invocation_metadata(
                 raw,
                 database=database,
+                server=server,
                 method_semantics=reconciliation.method_semantics,
                 invocation_mode="stored_procedure",
             )
@@ -3407,6 +3427,7 @@ class CSharpAnalysisGateway:
             metadata=self._invocation_metadata(
                 raw,
                 database=database,
+                server=server,
                 method_semantics=reconciliation.method_semantics,
                 invocation_mode="stored_procedure",
             ),
@@ -3528,17 +3549,27 @@ class CSharpAnalysisGateway:
             return "connection_source_unresolved"
         return ""
 
-    def _resolve_database(self, connection_expression: object) -> Optional[str]:
+    def _resolve_database(
+        self, connection_expression: object
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Resolve a connection expression to its (database, server) pair.
+
+        ``self._connection_sources`` values may be a plain database-name string
+        (the legacy shape, still accepted so every existing caller keeps
+        working unchanged) or a ``{"database": ..., "server": ...}`` mapping
+        produced by the Web.config connection-string resolver -- in which case
+        the server travels alongside the database instead of being dropped.
+        """
         if not connection_expression:
-            return None
+            return None, None
         expression = str(connection_expression).strip()
         if not expression:
-            return None
+            return None, None
         if expression in self._connection_sources:
-            database = self._connection_sources[expression]
+            entry = self._connection_sources[expression]
         else:
             folded = expression.casefold()
-            database = next(
+            entry = next(
                 (
                     value
                     for key, value in self._connection_sources.items()
@@ -3546,9 +3577,16 @@ class CSharpAnalysisGateway:
                 ),
                 None,
             )
+        if isinstance(entry, Mapping):
+            database = entry.get("database")
+            server = entry.get("server")
+        else:
+            database = entry
+            server = None
         if not database or str(database).strip().casefold() in {"unknown", "unresolved"}:
-            return None
-        return str(database).strip()
+            return None, None
+        server_text = str(server).strip() if server else None
+        return str(database).strip(), (server_text or None)
 
     @staticmethod
     def _branch_context(raw: dict) -> tuple[str, ...]:

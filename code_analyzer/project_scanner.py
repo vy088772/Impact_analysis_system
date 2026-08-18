@@ -8,7 +8,7 @@
 import hashlib
 import os
 from pathlib import Path
-from typing import List, Dict, Set, Optional, Tuple
+from typing import Any, List, Dict, Set, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from tqdm import tqdm
@@ -25,6 +25,7 @@ from .models import FileAnalysisResult, StoredProcedureCall, SQLQuery, Framework
 from .static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 from .smart_file_finder import SmartFileFinder, FileSearchResult
 from .config_parser import WebConfigParser
+from .webconfig_connection_resolver import parse_web_config_connections, WebConfigConnections
 from config.settings import settings, DatabaseConfig
 
 
@@ -124,7 +125,10 @@ class ProjectScanResult:
     csharp_results: List[FileAnalysisResult] = field(default_factory=list)
     source_snapshots: Dict[str, SourceSnapshot] = field(default_factory=dict)
     db_invocations: Dict[str, List[Dict]] = field(default_factory=dict)
-    connection_sources: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # 每個變數解析後的連線來源；值為舊制的純資料庫名稱字串，或
+    # {"database": ..., "server": ...} 這種由 Web.config 解析器產生的新形狀
+    # （兩種形狀都被 _connection_source_database/_connection_source_server 接受）。
+    connection_sources: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     contract_preflight_proposals: List[Dict] = field(default_factory=list)
     contract_proposals: List[Dict] = field(default_factory=list)
     verified_implementation_snapshots: List[Dict] = field(default_factory=list)
@@ -174,6 +178,27 @@ class ProjectScanResult:
         )
 
     @staticmethod
+    def _connection_source_database(value: Any) -> Optional[str]:
+        """One connection_sources entry's resolved database name.
+
+        An entry is either the legacy plain database-name string, or a
+        {"database": ..., "server": ...} mapping produced by the Web.config
+        connection-string resolver -- both shapes are accepted so callers
+        never need to know which one they were handed.
+        """
+        if isinstance(value, dict):
+            return value.get("database")
+        return value
+
+    @staticmethod
+    def _connection_source_server(value: Any) -> Optional[str]:
+        """One connection_sources entry's resolved server, or None when the
+        entry is the legacy plain-string shape (no server was ever tracked)."""
+        if isinstance(value, dict):
+            return value.get("server")
+        return None
+
+    @staticmethod
     def _is_formal_sp_invocation(record: Dict) -> bool:
         """Return whether a raw StaticAnalyzerHost record is an SP attempt."""
         invocation_kind = str(record.get("invocation_kind") or "").casefold()
@@ -215,6 +240,7 @@ class ProjectScanResult:
                     or record.get("connection_variable")
                     or ""
                 )
+                resolved_source = connection_sources.get(connection_variable)
                 result.append(
                     {
                         "source_file": source_file,
@@ -224,7 +250,7 @@ class ProjectScanResult:
                         "procedure_name": procedure_name,
                         "database": str(
                             record.get("database")
-                            or connection_sources.get(connection_variable)
+                            or self._connection_source_database(resolved_source)
                             or "unknown"
                         ),
                         "connection_variable": connection_variable,
@@ -250,7 +276,9 @@ class ProjectScanResult:
         self.databases_used = {
             database
             for sources in self.connection_sources.values()
-            for database in sources.values()
+            for database in (
+                self._connection_source_database(value) for value in sources.values()
+            )
             if database
         }
         formal_sp_invocations = self.iter_formal_sp_invocations()
@@ -372,6 +400,13 @@ class ProjectScanner:
         # 保留向下相容
         self.csharp_parser = self.parsers.get('csharp')
         self.static_analyzer_host = StaticAnalyzerHost.for_project(Path(__file__).resolve().parent.parent)
+
+        # 解析專案的 Web.config，讓 db_tracker 能把程式碼裡的 AppSettings/
+        # ConnectionStrings 查找鍵解析成真正的 {server, database}，而不是把
+        # 查找鍵本身當成資料庫名稱來猜。
+        self.connection_resolver: WebConfigConnections = self._load_connection_resolver()
+        if self.csharp_parser is not None:
+            self.csharp_parser.db_tracker.connection_resolver = self.connection_resolver
         
         # 初始化 SQL 分析器（多資料庫）
         self.sql_analyzers: Dict[str, SQLAnalyzer] = {}
@@ -389,6 +424,25 @@ class ProjectScanner:
         print(f"   解析器: {', '.join(self.required_parsers)}")
         print(f"   掃描檔案: {', '.join([f'*.{ext}' for ext in self.scan_extensions])}")
     
+    # ========================================
+    # Web.config 連線字串解析
+    # ========================================
+    def _load_connection_resolver(self) -> WebConfigConnections:
+        """尋找專案的 Web.config，解析成 app_settings/connection_strings 兩張表。
+
+        找不到 Web.config 時回傳空的 WebConfigConnections——db_tracker 會退回
+        舊行為（把查找鍵當成資料庫名稱），而不是拋出例外讓整個掃描失敗。
+        """
+        web_config_path = WebConfigParser(self.project_root)._find_file("web.config")
+        if not web_config_path:
+            return WebConfigConnections()
+        try:
+            content = Path(web_config_path).read_text(encoding="utf-8-sig")
+        except OSError as error:
+            print(f"⚠️ 讀取 web.config 失敗: {error}")
+            return WebConfigConnections()
+        return parse_web_config_connections(content)
+
     # ========================================
     # 自動偵測資料庫
     # ========================================
@@ -657,7 +711,7 @@ class ProjectScanner:
                     ]
                     result = self.csharp_parser.parse_file(file_path)
                     self.scan_result.connection_sources[file_key] = {
-                        name: info.database_name
+                        name: {"database": info.database_name, "server": info.server}
                         for name, info in self.csharp_parser.db_tracker.connections.items()
                         if info.database_name
                     }
@@ -748,7 +802,7 @@ class ProjectScanner:
                 ]
                 result = self.csharp_parser.parse_file(file_path)
                 self.scan_result.connection_sources[file_key] = {
-                    name: info.database_name
+                    name: {"database": info.database_name, "server": info.server}
                     for name, info in self.csharp_parser.db_tracker.connections.items()
                     if info.database_name
                 }
