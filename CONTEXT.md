@@ -30,6 +30,10 @@ _Avoid_: wrapper allowlist, regex SP detector
 The normalized stored-procedure inventory for one refreshed database, used to validate a candidate invocation against its resolved database source.
 _Avoid_: global SP-name match
 
+**Uncataloged Database**:
+A resolved connection target whose database is identified but has no matching SP Catalog scan yet. Distinct from a connection target that cannot be identified at all — the two are never reported under the same reason. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
+_Avoid_: unresolved database, unknown database
+
 **Database Invocation**:
 An evidence-rated C# data-access call that represents stored-procedure execution, inline SQL execution, or an unresolved database operation, regardless of whether it crosses direct ADO.NET, a local wrapper, an external wrapper, Dapper, or Entity Framework.
 _Avoid_: assumed SP call
