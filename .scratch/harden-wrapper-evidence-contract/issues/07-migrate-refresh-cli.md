@@ -4,8 +4,8 @@
 
 **Blocked by:** 04 (the module must exist), 05 (fixture rewrite needs the validation helper).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `refresh_cli.py` reads `wrapper_summary.review_items[].evidence_status` through the `evidence_status` module, not direct dict access
-- [ ] `tests/test_refresh_cli.py` fixtures are rewritten using the schema-validation helper (ticket 05) instead of hand-written dicts
-- [ ] Existing CLI output/behavior is unchanged
+- [x] `refresh_cli.py` reads `wrapper_summary.review_items[].evidence_status` through the `evidence_status` module, not direct dict access
+- [x] `tests/test_refresh_cli.py` fixtures are rewritten using the schema-validation helper (ticket 05) instead of hand-written dicts
+- [x] Existing CLI output/behavior is unchanged
