@@ -1,0 +1,2589 @@
+{
+  "components": {
+    "schemas": {
+      "AnalyzeRequest": {
+        "description": "POST /analyze 請求。",
+        "properties": {
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "db_name": {
+            "default": "",
+            "title": "Db Name",
+            "type": "string"
+          },
+          "db_server": {
+            "default": "",
+            "title": "Db Server",
+            "type": "string"
+          },
+          "expand_depth": {
+            "default": 0,
+            "title": "Expand Depth",
+            "type": "integer"
+          },
+          "expand_max_programs": {
+            "default": 10,
+            "title": "Expand Max Programs",
+            "type": "integer"
+          },
+          "fk_depth": {
+            "default": 1,
+            "title": "Fk Depth",
+            "type": "integer"
+          },
+          "include_execution_paths": {
+            "default": true,
+            "title": "Include Execution Paths",
+            "type": "boolean"
+          },
+          "include_snippets": {
+            "default": true,
+            "title": "Include Snippets",
+            "type": "boolean"
+          },
+          "include_sp_defs": {
+            "default": false,
+            "title": "Include Sp Defs",
+            "type": "boolean"
+          },
+          "include_view_layer": {
+            "default": false,
+            "title": "Include View Layer",
+            "type": "boolean"
+          },
+          "program_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Program Names",
+            "type": "array"
+          },
+          "refresh": {
+            "default": false,
+            "title": "Refresh",
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AzureSource"
+          },
+          "system": {
+            "default": "",
+            "title": "System",
+            "type": "string"
+          },
+          "wrapper_contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "",
+            "title": "Wrapper Contract"
+          }
+        },
+        "required": [
+          "program_names"
+        ],
+        "title": "AnalyzeRequest",
+        "type": "object"
+      },
+      "AnalyzeResponse": {
+        "properties": {
+          "not_found": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Not Found",
+            "type": "array"
+          },
+          "programs": {
+            "items": {
+              "$ref": "#/components/schemas/ProgramAnalysis"
+            },
+            "title": "Programs",
+            "type": "array"
+          },
+          "source_root": {
+            "default": "",
+            "title": "Source Root",
+            "type": "string"
+          }
+        },
+        "title": "AnalyzeResponse",
+        "type": "object"
+      },
+      "AzureSource": {
+        "description": "原始碼來源（由 spec-rag 從 system_catalog.json 的 azure 區塊解析後帶入）。\n\n注意：repo_manager.ensure_repo() 一律以此來源 clone/沿用 data/repos/ 下的程式碼，\n不會退回本機 PROJECT_ROOT；repo 為空時會直接報錯。",
+        "properties": {
+          "branch": {
+            "default": "",
+            "title": "Branch",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "default": "",
+            "title": "Path"
+          },
+          "project": {
+            "default": "",
+            "title": "Project",
+            "type": "string"
+          },
+          "repo": {
+            "default": "",
+            "title": "Repo",
+            "type": "string"
+          }
+        },
+        "title": "AzureSource",
+        "type": "object"
+      },
+      "CodeSnippet": {
+        "properties": {
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "lines": {
+            "default": "",
+            "title": "Lines",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "CodeSnippet",
+        "type": "object"
+      },
+      "FindBySPRequest": {
+        "description": "POST /find_by_sp 請求：反查「哪些程式呼叫了這支 SP」（純快取比對，不觸發 clone）。\n\ncache_only=True（預設）時，若該 repo 尚未 clone 過，直接回傳 skipped=True，\n不會觸發 Azure clone —— 這支端點常被逐系統掃描式呼叫（不知道 SP 屬於哪個\n系統），避免對每個未分析過的系統都觸發一次昂貴的 clone。",
+        "properties": {
+          "cache_only": {
+            "default": true,
+            "title": "Cache Only",
+            "type": "boolean"
+          },
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "refresh": {
+            "default": false,
+            "title": "Refresh",
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AzureSource"
+          },
+          "sp_name": {
+            "title": "Sp Name",
+            "type": "string"
+          },
+          "wrapper_contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "",
+            "title": "Wrapper Contract"
+          }
+        },
+        "required": [
+          "sp_name"
+        ],
+        "title": "FindBySPRequest",
+        "type": "object"
+      },
+      "FindBySPResponse": {
+        "properties": {
+          "diagnostics": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Diagnostics",
+            "type": "array"
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/SPMatchProgram"
+            },
+            "title": "Matches",
+            "type": "array"
+          },
+          "skipped": {
+            "default": false,
+            "title": "Skipped",
+            "type": "boolean"
+          },
+          "source_root": {
+            "default": "",
+            "title": "Source Root",
+            "type": "string"
+          },
+          "sp_name": {
+            "default": "",
+            "title": "Sp Name",
+            "type": "string"
+          }
+        },
+        "title": "FindBySPResponse",
+        "type": "object"
+      },
+      "FindByTableRequest": {
+        "description": "POST /find_by_table 請求：反查「哪些程式存取了這張資料表」（純快取比對，不觸發 clone）。\n\n情境：使用者打算異動某張資料表（改欄位、改約束等），需要先知道哪些程式會受影響——\n這跟 FindBySPRequest 是同一種「反查」需求；C# inline SQL facts 與 SQL Execution\nGraph 分別提供直接與 SQL module lineage。cache_only=True（預設）時，若該系統\n尚未分析過就直接跳過，不觸發 clone（供逐系統嘗試反查時使用）。",
+        "properties": {
+          "cache_only": {
+            "default": true,
+            "title": "Cache Only",
+            "type": "boolean"
+          },
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "refresh": {
+            "default": false,
+            "title": "Refresh",
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AzureSource"
+          },
+          "table_name": {
+            "title": "Table Name",
+            "type": "string"
+          },
+          "wrapper_contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "",
+            "title": "Wrapper Contract"
+          },
+          "write_only": {
+            "default": false,
+            "title": "Write Only",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table_name"
+        ],
+        "title": "FindByTableRequest",
+        "type": "object"
+      },
+      "FindByTableResponse": {
+        "properties": {
+          "diagnostics": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Diagnostics",
+            "type": "array"
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/TableMatchProgram"
+            },
+            "title": "Matches",
+            "type": "array"
+          },
+          "skipped": {
+            "default": false,
+            "title": "Skipped",
+            "type": "boolean"
+          },
+          "source_root": {
+            "default": "",
+            "title": "Source Root",
+            "type": "string"
+          },
+          "table_name": {
+            "default": "",
+            "title": "Table Name",
+            "type": "string"
+          }
+        },
+        "title": "FindByTableResponse",
+        "type": "object"
+      },
+      "FlowChainRequest": {
+        "description": "POST /flow_chain 請求：組出「關係鏈」候選清單（純靜態組裝，無 AI 判斷）。\n\ndirection=\"forward\"：從 anchor_method（program_name 內某個方法，通常是\nUI 事件處理常式）出發，走呼叫鏈到 SP、再到 SP 內部巢狀呼叫的其他 SP、\n最後彙整各層引用的資料表（含 FK 連動表）。program_name/anchor_method 必填。\n\ndirection=\"backward\"：從 table_name（可選 column_name，僅文字比對，非\n結構化保證）出發，反查引用該表的 SP、呼叫這些 SP（或直接用 SQL 存取此表）\n的 C# 方法、以及觸發該方法的 UI 控制項事件。table_name 必填，program_name/\nanchor_method 會被忽略。\n\ncache_only=True（預設）時，若該系統尚未 clone/分析過就直接跳過（與\nFindBySPRequest/FindByTableRequest 同樣的理由：這支端點也可能被逐系統\n嘗試呼叫），不觸發 Azure clone。",
+        "properties": {
+          "anchor_method": {
+            "default": "",
+            "title": "Anchor Method",
+            "type": "string"
+          },
+          "cache_only": {
+            "default": true,
+            "title": "Cache Only",
+            "type": "boolean"
+          },
+          "column_name": {
+            "default": "",
+            "title": "Column Name",
+            "type": "string"
+          },
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "db_name": {
+            "default": "",
+            "title": "Db Name",
+            "type": "string"
+          },
+          "db_server": {
+            "default": "",
+            "title": "Db Server",
+            "type": "string"
+          },
+          "direction": {
+            "default": "forward",
+            "title": "Direction",
+            "type": "string"
+          },
+          "fk_depth": {
+            "default": 1,
+            "title": "Fk Depth",
+            "type": "integer"
+          },
+          "max_sp_depth": {
+            "default": 2,
+            "title": "Max Sp Depth",
+            "type": "integer"
+          },
+          "program_name": {
+            "default": "",
+            "title": "Program Name",
+            "type": "string"
+          },
+          "refresh": {
+            "default": false,
+            "title": "Refresh",
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AzureSource"
+          },
+          "table_name": {
+            "default": "",
+            "title": "Table Name",
+            "type": "string"
+          },
+          "wrapper_contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "",
+            "title": "Wrapper Contract"
+          }
+        },
+        "title": "FlowChainRequest",
+        "type": "object"
+      },
+      "FlowChainResponse": {
+        "properties": {
+          "backward_chains": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Backward Chains",
+            "type": "array"
+          },
+          "diagnostics": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Diagnostics",
+            "type": "array"
+          },
+          "direction": {
+            "default": "",
+            "title": "Direction",
+            "type": "string"
+          },
+          "forward_chain": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forward Chain"
+          },
+          "skipped": {
+            "default": false,
+            "title": "Skipped",
+            "type": "boolean"
+          },
+          "source_root": {
+            "default": "",
+            "title": "Source Root",
+            "type": "string"
+          }
+        },
+        "title": "FlowChainResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PathEvidenceRequest": {
+        "description": "POST /path_evidence 請求。",
+        "properties": {
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "db_name": {
+            "default": "",
+            "title": "Db Name",
+            "type": "string"
+          },
+          "db_server": {
+            "default": "",
+            "title": "Db Server",
+            "type": "string"
+          },
+          "path_id": {
+            "title": "Path Id",
+            "type": "string"
+          },
+          "program_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Program Names",
+            "type": "array"
+          },
+          "refresh": {
+            "default": false,
+            "title": "Refresh",
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AzureSource"
+          },
+          "system": {
+            "default": "",
+            "title": "System",
+            "type": "string"
+          },
+          "wrapper_contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "",
+            "title": "Wrapper Contract"
+          }
+        },
+        "required": [
+          "path_id"
+        ],
+        "title": "PathEvidenceRequest",
+        "type": "object"
+      },
+      "PathEvidenceResponse": {
+        "description": "One selected Execution Path expanded into source-backed evidence.",
+        "properties": {
+          "active_contract": {
+            "default": false,
+            "title": "Active Contract",
+            "type": "boolean"
+          },
+          "branch_context": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Branch Context",
+            "type": "array"
+          },
+          "caller": {
+            "default": "",
+            "title": "Caller",
+            "type": "string"
+          },
+          "caller_class": {
+            "default": "",
+            "title": "Caller Class",
+            "type": "string"
+          },
+          "caller_method": {
+            "default": "",
+            "title": "Caller Method",
+            "type": "string"
+          },
+          "candidate_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Contracts",
+            "type": "array"
+          },
+          "classification_reason": {
+            "default": "",
+            "title": "Classification Reason",
+            "type": "string"
+          },
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "contract": {
+            "default": "",
+            "title": "Contract",
+            "type": "string"
+          },
+          "contract_lifecycle_status": {
+            "default": "",
+            "title": "Contract Lifecycle Status",
+            "type": "string"
+          },
+          "contract_mode": {
+            "default": "",
+            "title": "Contract Mode",
+            "type": "string"
+          },
+          "contract_signature_version": {
+            "default": "",
+            "title": "Contract Signature Version",
+            "type": "string"
+          },
+          "contract_sink": {
+            "default": "",
+            "title": "Contract Sink",
+            "type": "string"
+          },
+          "csharp_methods": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Csharp Methods",
+            "type": "array"
+          },
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "database_attribution": {
+            "default": "unresolved",
+            "title": "Database Attribution",
+            "type": "string"
+          },
+          "database_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Database Candidates",
+            "type": "array"
+          },
+          "entry_method": {
+            "default": "",
+            "title": "Entry Method",
+            "type": "string"
+          },
+          "evidence_reason": {
+            "default": "",
+            "title": "Evidence Reason",
+            "type": "string"
+          },
+          "evidence_status": {
+            "default": "unresolved",
+            "title": "Evidence Status",
+            "type": "string"
+          },
+          "external_wrapper_method": {
+            "default": "",
+            "title": "External Wrapper Method",
+            "type": "string"
+          },
+          "functions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Functions",
+            "type": "array"
+          },
+          "literal_sp_candidates": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Literal Sp Candidates",
+            "type": "array"
+          },
+          "method_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Method Chain",
+            "type": "array"
+          },
+          "mode_reason": {
+            "default": "",
+            "title": "Mode Reason",
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Operations",
+            "type": "array"
+          },
+          "path_id": {
+            "title": "Path Id",
+            "type": "string"
+          },
+          "procedure_name": {
+            "default": "",
+            "title": "Procedure Name",
+            "type": "string"
+          },
+          "procedure_schema": {
+            "default": "",
+            "title": "Procedure Schema",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "receiver_type": {
+            "default": "",
+            "title": "Receiver Type",
+            "type": "string"
+          },
+          "review_candidate": {
+            "default": false,
+            "title": "Review Candidate",
+            "type": "boolean"
+          },
+          "risk_flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Risk Flags",
+            "type": "array"
+          },
+          "scan_root": {
+            "default": "",
+            "title": "Scan Root",
+            "type": "string"
+          },
+          "selection_source": {
+            "default": "",
+            "title": "Selection Source",
+            "type": "string"
+          },
+          "source_available": {
+            "default": false,
+            "title": "Source Available",
+            "type": "boolean"
+          },
+          "source_provenance": {
+            "additionalProperties": true,
+            "title": "Source Provenance",
+            "type": "object"
+          },
+          "source_snapshot_hash": {
+            "default": "",
+            "title": "Source Snapshot Hash",
+            "type": "string"
+          },
+          "source_span": {
+            "additionalProperties": true,
+            "title": "Source Span",
+            "type": "object"
+          },
+          "sp_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sp Chain",
+            "type": "array"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          },
+          "stored_procedure_mode": {
+            "default": false,
+            "title": "Stored Procedure Mode",
+            "type": "boolean"
+          },
+          "stored_procedures": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Stored Procedures",
+            "type": "array"
+          },
+          "unresolved_reason": {
+            "default": "",
+            "title": "Unresolved Reason",
+            "type": "string"
+          },
+          "unresolved_targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved Targets",
+            "type": "array"
+          },
+          "views": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Views",
+            "type": "array"
+          },
+          "wrapper_contract_source": {
+            "default": "",
+            "title": "Wrapper Contract Source",
+            "type": "string"
+          },
+          "wrapper_kind": {
+            "default": "",
+            "title": "Wrapper Kind",
+            "type": "string"
+          },
+          "wrapper_method": {
+            "default": "",
+            "title": "Wrapper Method",
+            "type": "string"
+          },
+          "wrapper_receiver_type": {
+            "default": "",
+            "title": "Wrapper Receiver Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path_id"
+        ],
+        "title": "PathEvidenceResponse",
+        "type": "object"
+      },
+      "ProgramAnalysis": {
+        "description": "單一程式（檔案）的靜態分析結果。",
+        "properties": {
+          "call_chains": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Call Chains",
+            "type": "array"
+          },
+          "code_snippets": {
+            "items": {
+              "$ref": "#/components/schemas/CodeSnippet"
+            },
+            "title": "Code Snippets",
+            "type": "array"
+          },
+          "compact_execution_paths": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Compact Execution Paths",
+            "type": "array"
+          },
+          "compact_execution_paths_meta": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Compact Execution Paths Meta",
+            "type": "object"
+          },
+          "database_invocations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Database Invocations",
+            "type": "array"
+          },
+          "diagnostics": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Diagnostics",
+            "type": "array"
+          },
+          "execution_paths": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Execution Paths",
+            "type": "array"
+          },
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "framework": {
+            "default": "",
+            "title": "Framework",
+            "type": "string"
+          },
+          "methods": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Methods",
+            "type": "array"
+          },
+          "program": {
+            "title": "Program",
+            "type": "string"
+          },
+          "related_programs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Related Programs",
+            "type": "array"
+          },
+          "related_tables": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Related Tables",
+            "type": "array"
+          },
+          "sp_definitions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Sp Definitions",
+            "type": "array"
+          },
+          "stored_procedures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stored Procedures",
+            "type": "array"
+          },
+          "tables": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tables",
+            "type": "array"
+          },
+          "udf_definitions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Udf Definitions",
+            "type": "array"
+          },
+          "view_definitions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "View Definitions",
+            "type": "array"
+          },
+          "view_layer": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "View Layer",
+            "type": "array"
+          }
+        },
+        "required": [
+          "program",
+          "file"
+        ],
+        "title": "ProgramAnalysis",
+        "type": "object"
+      },
+      "RefreshRequest": {
+        "description": "POST /refresh 請求：更新某系統的程式碼並重新解析。",
+        "properties": {
+          "program_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Program Names",
+            "type": "array"
+          },
+          "rerun_decompile_receiver_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rerun Decompile Receiver Types",
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AzureSource"
+          },
+          "system": {
+            "default": "",
+            "title": "System",
+            "type": "string"
+          },
+          "wrapper_contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "",
+            "title": "Wrapper Contract"
+          }
+        },
+        "title": "RefreshRequest",
+        "type": "object"
+      },
+      "RefreshResponse": {
+        "properties": {
+          "database_invocations": {
+            "default": 0,
+            "title": "Database Invocations",
+            "type": "integer"
+          },
+          "files": {
+            "default": 0,
+            "title": "Files",
+            "type": "integer"
+          },
+          "inline_table_facts": {
+            "default": 0,
+            "title": "Inline Table Facts",
+            "type": "integer"
+          },
+          "not_found": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Not Found",
+            "type": "array"
+          },
+          "partial": {
+            "default": false,
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "removed_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Removed Files",
+            "type": "array"
+          },
+          "requested_programs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Requested Programs",
+            "type": "array"
+          },
+          "scope": {
+            "default": "system",
+            "title": "Scope",
+            "type": "string"
+          },
+          "source_root": {
+            "default": "",
+            "title": "Source Root",
+            "type": "string"
+          },
+          "sp_relations": {
+            "default": 0,
+            "title": "Sp Relations",
+            "type": "integer"
+          },
+          "table_relations": {
+            "default": 0,
+            "title": "Table Relations",
+            "type": "integer"
+          },
+          "updated_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Updated Files",
+            "type": "array"
+          },
+          "updated_programs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Updated Programs",
+            "type": "array"
+          },
+          "wrapper_summary": {
+            "$ref": "#/components/schemas/WrapperSummary"
+          }
+        },
+        "title": "RefreshResponse",
+        "type": "object"
+      },
+      "RefreshSqlProgressResponse": {
+        "properties": {
+          "current": {
+            "default": 0,
+            "title": "Current",
+            "type": "integer"
+          },
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "item": {
+            "default": "",
+            "title": "Item",
+            "type": "string"
+          },
+          "job_id": {
+            "default": "",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "stage": {
+            "default": "",
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "default": "starting",
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "updated_at": {
+            "default": 0.0,
+            "title": "Updated At",
+            "type": "number"
+          }
+        },
+        "title": "RefreshSqlProgressResponse",
+        "type": "object"
+      },
+      "RefreshSqlRequest": {
+        "description": "POST /refresh_sql 請求：重新連線 SQL Server 撷取整庫 SP/View/Function/資料表\nSchema，覆寫本機快取（data/sql_cache/）。\n\nserver/db_name 由呼叫端（spec-rag 的 catalog，逐系統標注）提供，不使用\nImpact 端 .env 的 DB_SERVER/DB_DATABASES；兩者缺一即報錯，不嘗試連線。",
+        "properties": {
+          "database": {
+            "title": "Database",
+            "type": "string"
+          },
+          "db_name": {
+            "title": "Db Name",
+            "type": "string"
+          },
+          "db_schema": {
+            "default": "dbo",
+            "title": "Db Schema",
+            "type": "string"
+          },
+          "job_id": {
+            "default": "",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "server": {
+            "title": "Server",
+            "type": "string"
+          }
+        },
+        "required": [
+          "database",
+          "server",
+          "db_name"
+        ],
+        "title": "RefreshSqlRequest",
+        "type": "object"
+      },
+      "RefreshSqlResponse": {
+        "properties": {
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "db_schema": {
+            "default": "",
+            "title": "Db Schema",
+            "type": "string"
+          },
+          "functions": {
+            "default": 0,
+            "title": "Functions",
+            "type": "integer"
+          },
+          "job_id": {
+            "default": "",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "procedures": {
+            "default": 0,
+            "title": "Procedures",
+            "type": "integer"
+          },
+          "tables": {
+            "default": 0,
+            "title": "Tables",
+            "type": "integer"
+          },
+          "views": {
+            "default": 0,
+            "title": "Views",
+            "type": "integer"
+          }
+        },
+        "title": "RefreshSqlResponse",
+        "type": "object"
+      },
+      "SPMatchProgram": {
+        "properties": {
+          "active_contract": {
+            "default": false,
+            "title": "Active Contract",
+            "type": "boolean"
+          },
+          "branch_context": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Branch Context",
+            "type": "array"
+          },
+          "caller": {
+            "default": "",
+            "title": "Caller",
+            "type": "string"
+          },
+          "caller_class": {
+            "default": "",
+            "title": "Caller Class",
+            "type": "string"
+          },
+          "caller_method": {
+            "default": "",
+            "title": "Caller Method",
+            "type": "string"
+          },
+          "candidate_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Contracts",
+            "type": "array"
+          },
+          "classification_reason": {
+            "default": "",
+            "title": "Classification Reason",
+            "type": "string"
+          },
+          "command_text_kind": {
+            "default": "",
+            "title": "Command Text Kind",
+            "type": "string"
+          },
+          "command_text_literal": {
+            "default": "",
+            "title": "Command Text Literal",
+            "type": "string"
+          },
+          "comparison_report_reference": {
+            "default": "",
+            "title": "Comparison Report Reference",
+            "type": "string"
+          },
+          "connection_source": {
+            "default": "",
+            "title": "Connection Source",
+            "type": "string"
+          },
+          "contract": {
+            "default": "",
+            "title": "Contract",
+            "type": "string"
+          },
+          "contract_fingerprint": {
+            "default": "",
+            "title": "Contract Fingerprint",
+            "type": "string"
+          },
+          "contract_lifecycle_status": {
+            "default": "",
+            "title": "Contract Lifecycle Status",
+            "type": "string"
+          },
+          "contract_mode": {
+            "default": "",
+            "title": "Contract Mode",
+            "type": "string"
+          },
+          "contract_signature_version": {
+            "default": "",
+            "title": "Contract Signature Version",
+            "type": "string"
+          },
+          "contract_sink": {
+            "default": "",
+            "title": "Contract Sink",
+            "type": "string"
+          },
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "database_attribution": {
+            "default": "unresolved",
+            "title": "Database Attribution",
+            "type": "string"
+          },
+          "database_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Database Candidates",
+            "type": "array"
+          },
+          "evidence_reason": {
+            "default": "",
+            "title": "Evidence Reason",
+            "type": "string"
+          },
+          "evidence_status": {
+            "default": "unresolved",
+            "title": "Evidence Status",
+            "type": "string"
+          },
+          "external_wrapper_method": {
+            "default": "",
+            "title": "External Wrapper Method",
+            "type": "string"
+          },
+          "file": {
+            "default": "",
+            "title": "File",
+            "type": "string"
+          },
+          "implementation_snapshot_reference": {
+            "default": "",
+            "title": "Implementation Snapshot Reference",
+            "type": "string"
+          },
+          "invocation_mode": {
+            "default": "",
+            "title": "Invocation Mode",
+            "type": "string"
+          },
+          "method_semantics": {
+            "default": "",
+            "title": "Method Semantics",
+            "type": "string"
+          },
+          "mode_reason": {
+            "default": "",
+            "title": "Mode Reason",
+            "type": "string"
+          },
+          "procedure_name": {
+            "default": "",
+            "title": "Procedure Name",
+            "type": "string"
+          },
+          "procedure_schema": {
+            "default": "",
+            "title": "Procedure Schema",
+            "type": "string"
+          },
+          "program": {
+            "default": "",
+            "title": "Program",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "receiver_type": {
+            "default": "",
+            "title": "Receiver Type",
+            "type": "string"
+          },
+          "review_candidate": {
+            "default": false,
+            "title": "Review Candidate",
+            "type": "boolean"
+          },
+          "scan_root": {
+            "default": "",
+            "title": "Scan Root",
+            "type": "string"
+          },
+          "selection_source": {
+            "default": "",
+            "title": "Selection Source",
+            "type": "string"
+          },
+          "source_available": {
+            "default": false,
+            "title": "Source Available",
+            "type": "boolean"
+          },
+          "source_provenance": {
+            "additionalProperties": true,
+            "title": "Source Provenance",
+            "type": "object"
+          },
+          "source_snapshot_hash": {
+            "default": "",
+            "title": "Source Snapshot Hash",
+            "type": "string"
+          },
+          "source_span": {
+            "additionalProperties": true,
+            "title": "Source Span",
+            "type": "object"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          },
+          "stored_procedure_mode": {
+            "default": false,
+            "title": "Stored Procedure Mode",
+            "type": "boolean"
+          },
+          "terminal_sink": {
+            "default": "",
+            "title": "Terminal Sink",
+            "type": "string"
+          },
+          "unresolved_reason": {
+            "default": "",
+            "title": "Unresolved Reason",
+            "type": "string"
+          },
+          "wrapper_contract_source": {
+            "default": "",
+            "title": "Wrapper Contract Source",
+            "type": "string"
+          },
+          "wrapper_kind": {
+            "default": "",
+            "title": "Wrapper Kind",
+            "type": "string"
+          },
+          "wrapper_method": {
+            "default": "",
+            "title": "Wrapper Method",
+            "type": "string"
+          },
+          "wrapper_receiver_type": {
+            "default": "",
+            "title": "Wrapper Receiver Type",
+            "type": "string"
+          }
+        },
+        "title": "SPMatchProgram",
+        "type": "object"
+      },
+      "TableMatchProgram": {
+        "properties": {
+          "access_type": {
+            "default": "",
+            "title": "Access Type",
+            "type": "string"
+          },
+          "active_contract": {
+            "default": false,
+            "title": "Active Contract",
+            "type": "boolean"
+          },
+          "branch_context": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Branch Context",
+            "type": "array"
+          },
+          "caller": {
+            "default": "",
+            "title": "Caller",
+            "type": "string"
+          },
+          "caller_class": {
+            "default": "",
+            "title": "Caller Class",
+            "type": "string"
+          },
+          "caller_method": {
+            "default": "",
+            "title": "Caller Method",
+            "type": "string"
+          },
+          "candidate_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Contracts",
+            "type": "array"
+          },
+          "classification_reason": {
+            "default": "",
+            "title": "Classification Reason",
+            "type": "string"
+          },
+          "command_text_kind": {
+            "default": "",
+            "title": "Command Text Kind",
+            "type": "string"
+          },
+          "command_text_literal": {
+            "default": "",
+            "title": "Command Text Literal",
+            "type": "string"
+          },
+          "comparison_report_reference": {
+            "default": "",
+            "title": "Comparison Report Reference",
+            "type": "string"
+          },
+          "connection_source": {
+            "default": "",
+            "title": "Connection Source",
+            "type": "string"
+          },
+          "contract": {
+            "default": "",
+            "title": "Contract",
+            "type": "string"
+          },
+          "contract_fingerprint": {
+            "default": "",
+            "title": "Contract Fingerprint",
+            "type": "string"
+          },
+          "contract_lifecycle_status": {
+            "default": "",
+            "title": "Contract Lifecycle Status",
+            "type": "string"
+          },
+          "contract_mode": {
+            "default": "",
+            "title": "Contract Mode",
+            "type": "string"
+          },
+          "contract_signature_version": {
+            "default": "",
+            "title": "Contract Signature Version",
+            "type": "string"
+          },
+          "contract_sink": {
+            "default": "",
+            "title": "Contract Sink",
+            "type": "string"
+          },
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "database_attribution": {
+            "default": "unresolved",
+            "title": "Database Attribution",
+            "type": "string"
+          },
+          "database_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Database Candidates",
+            "type": "array"
+          },
+          "entry_method": {
+            "default": "",
+            "title": "Entry Method",
+            "type": "string"
+          },
+          "evidence_reason": {
+            "default": "",
+            "title": "Evidence Reason",
+            "type": "string"
+          },
+          "evidence_status": {
+            "default": "unresolved",
+            "title": "Evidence Status",
+            "type": "string"
+          },
+          "external_wrapper_method": {
+            "default": "",
+            "title": "External Wrapper Method",
+            "type": "string"
+          },
+          "file": {
+            "default": "",
+            "title": "File",
+            "type": "string"
+          },
+          "implementation_snapshot_reference": {
+            "default": "",
+            "title": "Implementation Snapshot Reference",
+            "type": "string"
+          },
+          "invocation_mode": {
+            "default": "",
+            "title": "Invocation Mode",
+            "type": "string"
+          },
+          "method_semantics": {
+            "default": "",
+            "title": "Method Semantics",
+            "type": "string"
+          },
+          "mode_reason": {
+            "default": "",
+            "title": "Mode Reason",
+            "type": "string"
+          },
+          "operation_type": {
+            "default": "",
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "path_id": {
+            "default": "",
+            "title": "Path Id",
+            "type": "string"
+          },
+          "procedure_name": {
+            "default": "",
+            "title": "Procedure Name",
+            "type": "string"
+          },
+          "procedure_schema": {
+            "default": "",
+            "title": "Procedure Schema",
+            "type": "string"
+          },
+          "program": {
+            "default": "",
+            "title": "Program",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "receiver_type": {
+            "default": "",
+            "title": "Receiver Type",
+            "type": "string"
+          },
+          "review_candidate": {
+            "default": false,
+            "title": "Review Candidate",
+            "type": "boolean"
+          },
+          "scan_root": {
+            "default": "",
+            "title": "Scan Root",
+            "type": "string"
+          },
+          "selection_source": {
+            "default": "",
+            "title": "Selection Source",
+            "type": "string"
+          },
+          "source_available": {
+            "default": false,
+            "title": "Source Available",
+            "type": "boolean"
+          },
+          "source_provenance": {
+            "additionalProperties": true,
+            "title": "Source Provenance",
+            "type": "object"
+          },
+          "source_snapshot_hash": {
+            "default": "",
+            "title": "Source Snapshot Hash",
+            "type": "string"
+          },
+          "source_span": {
+            "additionalProperties": true,
+            "title": "Source Span",
+            "type": "object"
+          },
+          "sp_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sp Chain",
+            "type": "array"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          },
+          "stored_procedure_mode": {
+            "default": false,
+            "title": "Stored Procedure Mode",
+            "type": "boolean"
+          },
+          "terminal_sink": {
+            "default": "",
+            "title": "Terminal Sink",
+            "type": "string"
+          },
+          "unresolved_reason": {
+            "default": "",
+            "title": "Unresolved Reason",
+            "type": "string"
+          },
+          "via_sp": {
+            "default": false,
+            "title": "Via Sp",
+            "type": "boolean"
+          },
+          "wrapper_contract_source": {
+            "default": "",
+            "title": "Wrapper Contract Source",
+            "type": "string"
+          },
+          "wrapper_kind": {
+            "default": "",
+            "title": "Wrapper Kind",
+            "type": "string"
+          },
+          "wrapper_method": {
+            "default": "",
+            "title": "Wrapper Method",
+            "type": "string"
+          },
+          "wrapper_receiver_type": {
+            "default": "",
+            "title": "Wrapper Receiver Type",
+            "type": "string"
+          }
+        },
+        "title": "TableMatchProgram",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WrapperContractAcceptanceRequest": {
+        "description": "Explicit preview/apply request for a reviewed external-wrapper proposal.",
+        "properties": {
+          "apply": {
+            "default": false,
+            "title": "Apply",
+            "type": "boolean"
+          },
+          "operation": {
+            "default": "preview",
+            "title": "Operation",
+            "type": "string"
+          },
+          "proposal": {
+            "additionalProperties": true,
+            "title": "Proposal",
+            "type": "object"
+          },
+          "requested_selector": {
+            "default": "",
+            "title": "Requested Selector",
+            "type": "string"
+          },
+          "scan_roots": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scan Roots",
+            "type": "array"
+          },
+          "system_id": {
+            "default": "",
+            "title": "System Id",
+            "type": "string"
+          }
+        },
+        "title": "WrapperContractAcceptanceRequest",
+        "type": "object"
+      },
+      "WrapperContractAcceptanceResponse": {
+        "properties": {
+          "applied": {
+            "default": false,
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "catalog_diff": {
+            "additionalProperties": true,
+            "title": "Catalog Diff",
+            "type": "object"
+          },
+          "comparison_report": {
+            "additionalProperties": true,
+            "title": "Comparison Report",
+            "type": "object"
+          },
+          "contract": {
+            "default": "",
+            "title": "Contract",
+            "type": "string"
+          },
+          "contract_fingerprint": {
+            "default": "",
+            "title": "Contract Fingerprint",
+            "type": "string"
+          },
+          "contract_status": {
+            "default": "",
+            "title": "Contract Status",
+            "type": "string"
+          },
+          "git_commit": {
+            "default": false,
+            "title": "Git Commit",
+            "type": "boolean"
+          },
+          "reclassification": {
+            "additionalProperties": true,
+            "title": "Reclassification",
+            "type": "object"
+          },
+          "registry_diff": {
+            "additionalProperties": true,
+            "title": "Registry Diff",
+            "type": "object"
+          },
+          "reuse_reason": {
+            "default": "",
+            "title": "Reuse Reason",
+            "type": "string"
+          },
+          "reused": {
+            "default": false,
+            "title": "Reused",
+            "type": "boolean"
+          },
+          "signature_version": {
+            "default": "",
+            "title": "Signature Version",
+            "type": "string"
+          },
+          "status": {
+            "default": "preview",
+            "title": "Status",
+            "type": "string"
+          },
+          "valid": {
+            "default": false,
+            "title": "Valid",
+            "type": "boolean"
+          },
+          "written_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Written Files",
+            "type": "array"
+          }
+        },
+        "title": "WrapperContractAcceptanceResponse",
+        "type": "object"
+      },
+      "WrapperReviewItem": {
+        "additionalProperties": true,
+        "description": "One aggregated wrapper observation flagged for maintainer review.\n\nDeliberately does NOT subclass `WrapperEvidenceFields` (the base\n`PathEvidenceResponse`/`SPMatchProgram`/`TableMatchProgram` share):\nthat base declares fields like `database: str = \"\"` as non-optional,\nbut a review item's `database` is genuinely `None` whenever\n`wrapper_observation_fields()` (code_analyzer/csharp_analysis_gateway.py)\nhas no `DbInvocation` evidence to read it from — `database = evidence.database\nif evidence is not None else None`. Reusing that base here would reject\na shape this service produces today, which this ticket's regression\ntest (`test_refresh_response_wrapper_summary_accepts_real_refresh_shape`\nin tests/test_program_refresh.py) catches. Widening `WrapperEvidenceFields`\nitself is out of scope: the spec calls out `/analyze`'s and\n`/path_evidence`'s already-typed response shapes as untouched by this\nticket.\n\n`reconcile_refresh_wrappers`/`wrapper_observation_fields`\n(service/analyze_service.py, code_analyzer/csharp_analysis_gateway.py)\npopulate several dozen alias fields on this bag — see\n`WRAPPER_EVIDENCE_FIELDS` in csharp_analysis_gateway.py for the full\nset. Only `evidence_status` is validated here; every other key passes\nthrough unchanged via `extra=\"allow\"` so this stays additive validation,\nnot a reshape.",
+        "properties": {
+          "evidence_status": {
+            "enum": [
+              "proven",
+              "likely",
+              "unresolved",
+              "not_applicable"
+            ],
+            "title": "Evidence Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_status"
+        ],
+        "title": "WrapperReviewItem",
+        "type": "object"
+      },
+      "WrapperSummary": {
+        "additionalProperties": true,
+        "description": "`RefreshResponse.wrapper_summary` — the aggregate produced by\n`reconcile_refresh_wrappers()` (service/analyze_service.py), plus the\n`decompilation` key `refresh_source()` adds afterward.\n\n`extra=\"allow\"` keeps this additive: an unforeseen key on a future\n`/refresh` response still round-trips instead of failing validation.",
+        "properties": {
+          "candidate_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Contracts",
+            "type": "array"
+          },
+          "classification_statuses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Classification Statuses",
+            "type": "array"
+          },
+          "contract_onboarding_status": {
+            "default": "",
+            "title": "Contract Onboarding Status",
+            "type": "string"
+          },
+          "contract_preflight": {
+            "additionalProperties": true,
+            "title": "Contract Preflight",
+            "type": "object"
+          },
+          "contract_preflight_failed": {
+            "default": false,
+            "title": "Contract Preflight Failed",
+            "type": "boolean"
+          },
+          "decompilation": {
+            "additionalProperties": true,
+            "title": "Decompilation",
+            "type": "object"
+          },
+          "evidence_statuses": {
+            "items": {
+              "enum": [
+                "proven",
+                "likely",
+                "unresolved",
+                "not_applicable"
+              ],
+              "type": "string"
+            },
+            "title": "Evidence Statuses",
+            "type": "array"
+          },
+          "observations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Observations",
+            "type": "array"
+          },
+          "observed_methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Observed Methods",
+            "type": "array"
+          },
+          "observed_receiver_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Observed Receiver Types",
+            "type": "array"
+          },
+          "review_items": {
+            "items": {
+              "$ref": "#/components/schemas/WrapperReviewItem"
+            },
+            "title": "Review Items",
+            "type": "array"
+          },
+          "review_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Review Reasons",
+            "type": "array"
+          },
+          "scans": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Scans",
+            "type": "array"
+          },
+          "selected_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Selected Contracts",
+            "type": "array"
+          },
+          "selection_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Selection Sources",
+            "type": "array"
+          },
+          "source_scan_count": {
+            "default": 0,
+            "title": "Source Scan Count",
+            "type": "integer"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/WrapperSummaryTotals"
+          }
+        },
+        "title": "WrapperSummary",
+        "type": "object"
+      },
+      "WrapperSummaryTotals": {
+        "additionalProperties": true,
+        "description": "`wrapper_summary[\"totals\"]` — aggregate counts over all observations.",
+        "properties": {
+          "auto_selected": {
+            "default": 0,
+            "title": "Auto Selected",
+            "type": "integer"
+          },
+          "evidence_likely": {
+            "default": 0,
+            "title": "Evidence Likely",
+            "type": "integer"
+          },
+          "evidence_not_applicable": {
+            "default": 0,
+            "title": "Evidence Not Applicable",
+            "type": "integer"
+          },
+          "evidence_proven": {
+            "default": 0,
+            "title": "Evidence Proven",
+            "type": "integer"
+          },
+          "evidence_unresolved": {
+            "default": 0,
+            "title": "Evidence Unresolved",
+            "type": "integer"
+          },
+          "explicit_selected": {
+            "default": 0,
+            "title": "Explicit Selected",
+            "type": "integer"
+          },
+          "external_wrappers": {
+            "default": 0,
+            "title": "External Wrappers",
+            "type": "integer"
+          },
+          "observation_groups": {
+            "default": 0,
+            "title": "Observation Groups",
+            "type": "integer"
+          },
+          "review_candidates": {
+            "default": 0,
+            "title": "Review Candidates",
+            "type": "integer"
+          },
+          "semantic_binding_resolved": {
+            "default": 0,
+            "title": "Semantic Binding Resolved",
+            "type": "integer"
+          },
+          "source_wrappers": {
+            "default": 0,
+            "title": "Source Wrappers",
+            "type": "integer"
+          },
+          "unresolved": {
+            "default": 0,
+            "title": "Unresolved",
+            "type": "integer"
+          },
+          "wrapper_calls": {
+            "default": 0,
+            "title": "Wrapper Calls",
+            "type": "integer"
+          }
+        },
+        "title": "WrapperSummaryTotals",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "程式碼/DB 靜態影響分析服務（供 spec-rag 協調呼叫，不含 AI）",
+    "title": "Impact Analysis Service",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/analyze": {
+      "post": {
+        "operationId": "analyze_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalyzeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyzeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Analyze"
+      }
+    },
+    "/find_by_sp": {
+      "post": {
+        "description": "反查「哪些程式呼叫了這支 SP」（純快取比對；cache_only=True 時不觸發 clone）。",
+        "operationId": "find_by_sp_find_by_sp_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FindBySPRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindBySPResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Find By Sp"
+      }
+    },
+    "/find_by_table": {
+      "post": {
+        "description": "反查「哪些程式存取了這張資料表」（純快取比對；cache_only=True 時不觸發 clone）。",
+        "operationId": "find_by_table_find_by_table_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FindByTableRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindByTableResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Find By Table"
+      }
+    },
+    "/flow_chain": {
+      "post": {
+        "description": "組出變更影響「關係鏈」候選清單（純靜態組裝，無 AI 判斷；cache_only=True 時不觸發 clone）。\n\ndirection=\"forward\" 時 program_name/anchor_method 必填；\ndirection=\"backward\" 時 table_name 必填（column_name 選填，僅近似文字比對）。",
+        "operationId": "flow_chain_flow_chain_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowChainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowChainResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Flow Chain"
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/path_evidence": {
+      "post": {
+        "description": "依 path_id 取得目前 source/SQL snapshot 對應的精確 evidence。",
+        "operationId": "path_evidence_path_evidence_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PathEvidenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PathEvidenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Path Evidence"
+      }
+    },
+    "/refresh": {
+      "post": {
+        "description": "更新指令：git pull 取得最新程式碼並重新解析、覆寫快取。",
+        "operationId": "refresh_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh"
+      }
+    },
+    "/refresh_sql": {
+      "post": {
+        "description": "更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與\n資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取\n（data/sql_cache/）。\n\nserver/db_name 由呼叫端（catalog）提供，缺一即報錯、不嘗試連線。",
+        "operationId": "refresh_sql_refresh_sql_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshSqlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshSqlResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Sql"
+      }
+    },
+    "/refresh_sql/status/{job_id}": {
+      "get": {
+        "description": "查詢 SQL 快取更新的即時進度。",
+        "operationId": "refresh_sql_status_refresh_sql_status__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshSqlProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Sql Status"
+      }
+    },
+    "/wrapper_contracts/accept": {
+      "post": {
+        "description": "Preview or explicitly apply one reviewed external-wrapper proposal.",
+        "operationId": "accept_wrapper_contract_wrapper_contracts_accept_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WrapperContractAcceptanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WrapperContractAcceptanceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Wrapper Contract"
+      }
+    }
+  }
+}
