@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 — the ADR it references must exist first.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `llamaindex-spec-rag`'s `CONTEXT.md` Evidence Status entry notes it is unrelated to `Impact_analysis_system`'s identically-named concept
-- [ ] The note references ADR-0007 by number/link instead of re-explaining the distinction inline
+- [x] `llamaindex-spec-rag`'s `CONTEXT.md` Evidence Status entry notes it is unrelated to `Impact_analysis_system`'s identically-named concept
+- [x] The note references ADR-0007 by number/link instead of re-explaining the distinction inline
