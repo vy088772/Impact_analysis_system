@@ -4,11 +4,13 @@
 
 **Blocked by:** 01 — the module is built against this service's now-typed `/refresh` contract, not guessed ahead of it.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] One accessor parses a Database Invocation's own evidence rating from raw response data into a typed value
-- [ ] A separately-named, separately-typed accessor parses a wrapper-evidence-bag's evidence status from raw response data, including `not_applicable`
-- [ ] A boolean helper takes either typed value and reports verified vs. unresolved
-- [ ] Unit tests cover all four known values for each accessor
-- [ ] A unit test confirms an unrecognized/future value fails loudly rather than silently defaulting
-- [ ] No existing call site (`context_builder.py`, `path_selection.py`, `refresh_cli.py`, `rag_client.py`) is modified by this ticket
+- [x] One accessor parses a Database Invocation's own evidence rating from raw response data into a typed value
+- [x] A separately-named, separately-typed accessor parses a wrapper-evidence-bag's evidence status from raw response data, including `not_applicable`
+- [x] A boolean helper takes either typed value and reports verified vs. unresolved
+- [x] Unit tests cover all four known values for each accessor
+- [x] A unit test confirms an unrecognized/future value fails loudly rather than silently defaulting
+- [x] No existing call site (`context_builder.py`, `path_selection.py`, `refresh_cli.py`, `rag_client.py`) is modified by this ticket
+
+`llamaindex-spec-rag/impact_orch/evidence_status.py` created, with `tests/test_evidence_status.py` (23 tests, all passing). Two separate `Enum` types — `DbInvocationEvidenceRating` (parses a flat `evidence` key) and `WrapperEvidenceBagStatus` (parses an `evidence_status` key) — both closed over this service's four-value controlled vocabulary (`proven`/`likely`/`unresolved`/`not_applicable`), plus `is_verified()`. An unrecognized value raises `UnknownEvidenceStatusError` (a `ValueError` subclass) instead of defaulting. No call site was touched — that's ticket 06/07.
