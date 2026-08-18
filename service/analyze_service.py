@@ -750,6 +750,17 @@ def _connection_source_database(value: Any) -> str:
     return str(value or "")
 
 
+def _is_resolved_connection_source(value: Any) -> bool:
+    """True when a connection_sources entry carries a database the resolver worked out.
+
+    The {"database": ..., "server": ...} mapping shape comes from the Web.config
+    connection-string resolver and names the database the connection really opens. The
+    legacy plain-string shape is a system_id-shaped label an older scan wrote, which says
+    nothing about which database the connection reaches.
+    """
+    return isinstance(value, Mapping)
+
+
 def _remap_connection_source(value: Any, database: str) -> Any:
     """Rebuild one connection_sources entry with a new resolved database.
 
@@ -775,10 +786,11 @@ def _execution_connection_sources(
     if not graph_database:
         return sources
 
-    # One /analyze request selects one SQL cache scope. A single legacy connection
-    # label (such as "PUR") therefore resolves to that selected graph identity.
-    # Multiple distinct labels are kept separate so one file cannot silently map
-    # cross-database connections to the selected graph.
+    # One /analyze request selects one SQL cache scope. An entry whose database name is one
+    # of that scope's aliases is rewritten to the scope's own name. This matches on name
+    # alone, not on the (server, database, schema) identity ADR-0009 defines, because the
+    # selected scope reaches this function as a bare name. Multiple distinct labels are kept
+    # separate so one file cannot silently map cross-database connections to the graph.
     known_databases = {
         value.strip().casefold()
         for value in (*database_aliases, graph_database)
@@ -791,17 +803,24 @@ def _execution_connection_sources(
     }
     if not source_values:
         return sources
-    if len(source_values) <= 1:
-        return {
-            expression: _remap_connection_source(value, graph_database)
-            for expression, value in sources.items()
-        }
-    return {
-        expression: (
-            _remap_connection_source(value, graph_database)
-            if _connection_source_database(value).strip().casefold() in known_databases
-            else value
+
+    # A resolved entry names the database Web.config actually points at, so it survives
+    # untouched unless its name is an alias of the selected scope. Remapping it would report
+    # an invocation against the wrong database and lose the one fact that tells an analyst
+    # which database is still unscanned. A legacy entry carries no such evidence, so a file
+    # holding exactly one of them still resolves to the selected scope.
+    holds_one_label = len(source_values) <= 1
+
+    def remapped_onto_scope(value: Any) -> Any:
+        names_the_scope = (
+            _connection_source_database(value).strip().casefold() in known_databases
         )
+        if names_the_scope or (holds_one_label and not _is_resolved_connection_source(value)):
+            return _remap_connection_source(value, graph_database)
+        return value
+
+    return {
+        expression: remapped_onto_scope(value)
         for expression, value in sources.items()
     }
 

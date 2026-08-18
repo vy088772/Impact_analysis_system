@@ -1167,3 +1167,60 @@ def test_execution_connection_sources_remaps_ambiguous_file_preserving_server(
         "conn": {"database": "OrdersDb", "server": "vmsystest07"},
         "other": "ArchiveDb",
     }
+
+
+def test_execution_connection_sources_keeps_a_resolved_database_outside_the_scope(
+    tmp_path,
+) -> None:
+    """Global.asax.cs's shape: a Web.config-resolved database is authoritative.
+
+    `cn` resolves to SysErrorRecord -- a real database that simply is not the selected
+    scan scope. Remapping it onto STC would rate the invocation against the wrong
+    database and destroy the one fact that tells an analyst which database to scan."""
+    source_file = tmp_path / "Global.asax.cs"
+    source_file.write_text("class Global {}", encoding="utf-8")
+
+    scan = ProjectScanResult(
+        project_root=str(tmp_path),
+        project_name="STC",
+        scan_time=datetime.now(),
+        connection_sources={
+            str(source_file.resolve()): {
+                "cn": {"database": "SysErrorRecord", "server": "vmsystest07"},
+            }
+        },
+    )
+
+    sources = analyze_service._execution_connection_sources(
+        scan,
+        str(source_file),
+        graph_database="STC",
+        database_aliases=("STC",),
+    )
+
+    assert sources == {"cn": {"database": "SysErrorRecord", "server": "vmsystest07"}}
+
+
+def test_execution_connection_sources_still_remaps_a_lone_legacy_label(
+    tmp_path,
+) -> None:
+    """A legacy plain-string entry is an alias, not a resolved database name.
+
+    An older scan wrote the system_id it had; it carries no evidence about which
+    database the connection really reaches, so a file holding one such label still
+    resolves to the selected graph scope."""
+    source_file = tmp_path / "SOMaintain.aspx.cs"
+    source_file.write_text("class SOMaintain {}", encoding="utf-8")
+
+    scan = ProjectScanResult(
+        project_root=str(tmp_path),
+        project_name="TTPUR",
+        scan_time=datetime.now(),
+        connection_sources={str(source_file.resolve()): {"conn": "Y-Docs_TTPUR"}},
+    )
+
+    sources = analyze_service._execution_connection_sources(
+        scan, str(source_file), graph_database="PUR"
+    )
+
+    assert sources == {"conn": "PUR"}

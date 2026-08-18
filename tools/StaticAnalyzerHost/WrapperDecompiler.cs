@@ -196,7 +196,10 @@ internal static class WrapperAssemblyDecompiler
             null,
             assemblyIdentity,
             assemblyIdentity,
-            "decompiler_translation_problem");
+            "decompiler_translation_problem",
+            // A decompiled body has no connection of its own and no file to be declared in.
+            DeclaresConnectionAsLocal: false,
+            SourceFilePath: "");
     }
 
     // Exposed for ProjectCompilationResolver (Semantic Binding Availability), which resolves a

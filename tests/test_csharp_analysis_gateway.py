@@ -6464,6 +6464,167 @@ def test_identity_and_receiver_dual_facts_survive_serialization_independently() 
     assert fallback_projected["wrapper_implementation_identity"] == "OrderRepository.SaveOrder"
 
 
+def test_resolved_but_uncataloged_server_database_pair_is_not_in_resolved_catalog() -> None:
+    """The spAddRecordError case: SysErrorRecord is a real database, just not scanned yet.
+
+    A connection source that resolved to a {server, database} pair is a known database.
+    Its procedure missing from the loaded catalog means the database has no SQL cache on
+    disk -- `not_in_resolved_catalog` -- never `connection_source_unresolved`, which says
+    the database could not be identified at all.
+    """
+    catalog = SpCatalog.from_databases({"STC": ["usp_SO_Delete"]})
+    gateway = CSharpAnalysisGateway(
+        catalog,
+        connection_sources={"cn": {"database": "SysErrorRecord", "server": "vmsystest07"}},
+    )
+
+    invocation = gateway.resolve_direct_invocations(
+        "Global.asax.cs",
+        [_raw_invocation(connection_expression="cn", command_text="spAddRecordError")],
+    )[0]
+
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "not_in_resolved_catalog"
+    assert invocation.database == "SysErrorRecord"
+    assert invocation.server == "vmsystest07"
+
+
+def test_wrapper_owning_its_connection_reports_that_connection_at_its_call_site() -> None:
+    """Global.asax.cs's shape end-to-end: WriteDB opens its own connection.
+
+    `WriteDB` takes no connection from its caller -- it declares `cn` itself. The wrapper
+    therefore always reaches one database, so the call site inherits `cn` and rates against
+    the database `cn` resolves to, rather than reporting no connection source at all.
+    """
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "Global.asax.cs"
+        source_path.write_text(
+            "public class Global {\n"
+            "    protected void Application_Error() {\n"
+            "        WriteDB(\"boom\");\n"
+            "    }\n"
+            "    private void WriteDB(string str) {\n"
+            "        SqlConnection cn = new SqlConnection(ConfigurationManager.AppSettings[\"error\"]);\n"
+            "        SqlCommand cmd = new SqlCommand(\"spAddRecordError\", cn);\n"
+            "        cmd.CommandType = CommandType.StoredProcedure;\n"
+            "        cn.Open();\n"
+            "        cmd.ExecuteNonQuery();\n"
+            "        cn.Close();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        raw_invocations = host.analyze_csharp(source_path)["db_invocations"]
+
+    assert [raw["connection_expression"] for raw in raw_invocations] == ["cn"]
+
+    catalog = SpCatalog.from_databases({"STC": ["usp_SO_Delete"]})
+    gateway = CSharpAnalysisGateway(
+        catalog,
+        connection_sources={"cn": {"database": "SysErrorRecord", "server": "vmsystest07"}},
+    )
+
+    invocation = gateway.resolve_direct_invocations("Global.asax.cs", raw_invocations)[0]
+
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "not_in_resolved_catalog"
+    assert invocation.database == "SysErrorRecord"
+    assert invocation.server == "vmsystest07"
+
+
+def test_wrapper_taking_its_connection_from_a_caller_keeps_the_call_site_connection() -> None:
+    """A wrapper handed a connection resolves per call site, not to one fixed database.
+
+    The inherit rule must not fire here: `Save` uses whatever connection its constructor
+    received, so two callers can reach two databases, and the call site's own connection
+    expression stays the only correct answer.
+    """
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "Repository.cs"
+        source_path.write_text(
+            "public class Repository {\n"
+            "    private SqlConnection conn;\n"
+            "    public Repository(SqlConnection connection) { conn = connection; }\n"
+            "    public void Save() {\n"
+            "        SqlCommand cmd = new SqlCommand(\"usp_SO_Delete\", conn);\n"
+            "        cmd.CommandType = CommandType.StoredProcedure;\n"
+            "        cmd.ExecuteNonQuery();\n"
+            "    }\n"
+            "}\n"
+            "public class Caller {\n"
+            "    public void Run() {\n"
+            "        SqlConnection orders = new SqlConnection(ConfigurationManager.AppSettings[\"orders\"]);\n"
+            "        Repository repository = new Repository(orders);\n"
+            "        repository.Save();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        raw_invocations = host.analyze_csharp(source_path)["db_invocations"]
+
+    call_sites = [raw for raw in raw_invocations if raw["invocation_kind"] == "source_wrapper"]
+    assert [raw["connection_expression"] for raw in call_sites] == ["orders"]
+
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SO_Delete"]})
+    gateway = CSharpAnalysisGateway(
+        catalog,
+        connection_sources={"orders": {"database": "OrdersDb", "server": "vmsystest07"}},
+    )
+
+    invocation = gateway.resolve_direct_invocations("Repository.cs", call_sites)[0]
+
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.database == "OrdersDb"
+
+
+def test_unresolvable_wrapper_owned_connection_stays_connection_source_unresolved() -> None:
+    """Inheriting the wrapper's connection must not turn an unknown database into a guess.
+
+    `cn` is built from a value the connection tracker cannot resolve, so it never reaches
+    connection_sources. The call site knows of a connection source it could not resolve --
+    `connection_source_unresolved` -- and must not fall through to the unique-catalog match
+    that would rate this LIKELY against the only database that happens to hold the name."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "Runtime.cs"
+        source_path.write_text(
+            "public class Runtime {\n"
+            "    protected void Application_Error() {\n"
+            "        WriteDB(\"boom\");\n"
+            "    }\n"
+            "    private void WriteDB(string str) {\n"
+            "        SqlConnection cn = new SqlConnection(BuildConnectionString());\n"
+            "        SqlCommand cmd = new SqlCommand(\"spAddRecordError\", cn);\n"
+            "        cmd.CommandType = CommandType.StoredProcedure;\n"
+            "        cmd.ExecuteNonQuery();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        raw_invocations = host.analyze_csharp(source_path)["db_invocations"]
+
+    # The only catalog holds the procedure, so a guess would rate this LIKELY.
+    catalog = SpCatalog.from_databases({"OrdersDb": ["spAddRecordError"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={})
+
+    invocation = gateway.resolve_direct_invocations("Runtime.cs", raw_invocations)[0]
+
+    assert invocation.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.reason == "connection_source_unresolved"
+    assert invocation.database is None
+
+
 if __name__ == "__main__":
     test_normalize_procedure_name_strips_schema_and_brackets()
     test_explicit_stored_procedure_type_with_catalog_hit_is_proven()

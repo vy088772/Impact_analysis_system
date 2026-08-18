@@ -2457,7 +2457,30 @@ internal static class WrapperAnalyzer
                 : null,
             assemblyIdentity,
             assemblyRevision,
-            unresolvedReason);
+            unresolvedReason,
+            DeclaresConnectionAsLocal: DeclaresConnectionAsLocal(method, connectionExpression),
+            SourceFilePath: method.SyntaxTree?.FilePath ?? "");
+    }
+
+    /// <summary>
+    /// True when <paramref name="connectionExpression"/> -- already known to name the
+    /// method's connection -- is declared as a local of that method, rather than reaching it
+    /// as a parameter, a field, or a constructor argument. Such a connection is the wrapper's
+    /// own: every caller reaches whatever database it opens.
+    /// </summary>
+    private static bool DeclaresConnectionAsLocal(
+        MethodDeclarationSyntax method,
+        string? connectionExpression)
+    {
+        var connectionName = connectionExpression?.Trim();
+        if (string.IsNullOrEmpty(connectionName))
+            return false;
+        if (method.ParameterList.Parameters.Any(
+                parameter => parameter.Identifier.Text == connectionName))
+            return false;
+        return method.DescendantNodes()
+            .OfType<VariableDeclaratorSyntax>()
+            .Any(variable => variable.Identifier.Text == connectionName);
     }
 
     private static string? ResolveCommandTextParameterName(
@@ -3444,6 +3467,18 @@ internal static class WrapperAnalyzer
         IReadOnlyList<CompilationUnitSyntax> sourceRoots,
         IReadOnlyCollection<string> knownTypeIdentities)
     {
+        // A wrapper that opens its own connection reaches one fixed database whatever the
+        // call site is, so the call site inherits the wrapper's connection expression. It is
+        // also the call site's one connection candidate: an expression that resolves to no
+        // database then still reads as one unresolved connection source, never as a call
+        // with no connection source to rate.
+        if (wrapper.SuppliesConnectionTo(call.SyntaxTree?.FilePath))
+        {
+            return new(
+                wrapper.ConnectionExpression,
+                new[] { wrapper.ConnectionExpression! });
+        }
+
         if (call.Expression is not MemberAccessExpressionSyntax member)
             return new(null, Array.Empty<string>());
 
@@ -3705,5 +3740,21 @@ internal static class WrapperAnalyzer
         string? CommandTextLiteral,
         string AssemblyIdentity,
         string AssemblyRevision,
-        string? UnresolvedReason);
+        string? UnresolvedReason,
+        bool DeclaresConnectionAsLocal,
+        string SourceFilePath)
+    {
+        /// <summary>
+        /// True when this wrapper supplies the connection for a call made from
+        /// <paramref name="callFilePath"/>. The connection expression is a variable name and
+        /// connection_sources is keyed per file, so a wrapper only supplies a connection to
+        /// calls in the file it is declared in -- never to a wrapper body read from a tree
+        /// with no file of its own, such as a decompiled one.
+        /// </summary>
+        internal bool SuppliesConnectionTo(string? callFilePath)
+            => DeclaresConnectionAsLocal
+                && !string.IsNullOrWhiteSpace(ConnectionExpression)
+                && !string.IsNullOrEmpty(SourceFilePath)
+                && SourceFilePath == callFilePath;
+    }
 }
