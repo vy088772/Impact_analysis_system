@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, List, Dict, Literal, Union
+from typing import Any, List, Dict, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 WrapperContractSelector = Union[str, List[str], None]
@@ -454,6 +454,24 @@ class RefreshSqlProgressResponse(BaseModel):
     message: str = ""
     error: str = ""
     updated_at: float = 0.0
+
+
+class ScanRecordEntry(BaseModel):
+    """GET /scan_records 的一列：一份 SQL 快取的身分與 Scan Record（掃描時間）。
+
+    scanned_at 為 None 代表這份快取的 Scan Record 缺失或無法讀取——快取本身
+    仍然存在、仍然列出，只是掃描時間不可得；呼叫端不可把 None 當成「從未
+    掃描」以外的其他狀態誤讀，也不可把它跟空字串混為一談。
+    """
+
+    server: str = ""
+    database: str = ""
+    db_schema: str = ""               # 欄位名稱不用 schema，避免與 BaseModel.schema() 名稱衝突
+    scanned_at: Optional[str] = None
+
+
+class ScanRecordListResponse(BaseModel):
+    records: List[ScanRecordEntry] = Field(default_factory=list)
 
 
 class FlowChainRequest(BaseModel):

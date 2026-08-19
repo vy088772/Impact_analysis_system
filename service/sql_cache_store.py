@@ -24,7 +24,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from config.settings import settings
 
@@ -67,6 +67,21 @@ def _safe_name(text: str) -> str:
 
 def _key_of(*parts: str) -> str:
     return _KEY_SEPARATOR.join(_safe_name(part) for part in parts)
+
+
+def _parse_key(stem: str) -> tuple[str, str, str]:
+    """_key_of() 的反操作：把一個快取檔名（去掉副檔名後）拆回 (server, database, schema)。
+
+    快取檔名的形狀只在 _key_of() 這一處定義；這裡是它唯一的反解出口，供
+    list_caches() 在 meta 檔缺失/無法讀取、需要從檔名反推身分時使用，避免
+    這條反解邏輯散落、各自重寫一份。server 一律在最前、schema 一律在最後，
+    中間全部併回 database——database 本身含 `__` 時也能正確反解。
+    """
+    parts = stem.split(_KEY_SEPARATOR)
+    if len(parts) >= 3:
+        return parts[0], _KEY_SEPARATOR.join(parts[1:-1]), parts[-1]
+    padded = (parts + ["", "", ""])[:3]
+    return padded[0], padded[1], padded[2]
 
 
 def normalize_server(server: str) -> str:
@@ -166,6 +181,69 @@ def resolve_server(database: str, schema: str = "dbo") -> str:
             )
         return ""
     return servers[0]
+
+
+@dataclass(frozen=True)
+class ScanRecordListing:
+    """list_caches() 的一列：一份 SQL 快取的身分與 Scan Record（掃描時間）。
+
+    與 CacheIdentity 不同——這裡不正規化也不驗證，純粹反映磁碟上讀到的內容，
+    連身分不完整的異常檔案都要能被列出（規格要求「never omitted from listing」）。
+    scanned_at 為 None 代表 Scan Record 缺失或無法讀取，不是「從未掃描」與
+    「讀不到」的混淆表達——呼叫端據此決定要不要顯示「never scanned」。
+    """
+
+    server: str
+    database: str
+    schema: str
+    scanned_at: Optional[str]
+
+
+def list_caches() -> List[ScanRecordListing]:
+    """列出磁碟上每一份 SQL 快取的 (server, database, schema) 與 Scan Record。
+
+    純目錄列舉，不連線 SQL Server、不觸發掃描、不修改任何快取檔案；供
+    GET /scan_records 這個唯讀端點使用。判準與 has_cache() 完全一致：資料檔
+    （.json，非 .meta.json）存在即列出。Database Registry 完全不參與判斷——
+    一份用 --server/--database 直接掃描、Registry 裡沒登記的快取，一樣會出現
+    在這份清單裡。
+
+    每一列的 scan 時間來自同目錄下的 sibling meta 檔（.meta.json）；meta 檔
+    缺失或無法解析時該列仍然列出，scanned_at 回 None，而不是整列被跳過。
+    身分欄位優先採 meta 檔內容（較不受檔名安全化規則影響），meta 讀不到或某
+    欄位缺漏時才退回從檔名反推。
+
+    回傳依 (server, database, schema) 排序，讓同一份清單在多次呼叫間穩定
+    （不受掃描先後影響）。
+    """
+    root = _cache_root()
+    rows: List[ScanRecordListing] = []
+    for data_path in root.glob(f"*{_DATA_SUFFIX}"):
+        name = data_path.name
+        if name.endswith(_META_SUFFIX):
+            continue
+        stem = name[: -len(_DATA_SUFFIX)]
+        server, database, schema = _parse_key(stem)
+
+        scanned_at: Optional[str] = None
+        meta_path = data_path.with_name(f"{stem}{_META_SUFFIX}")
+        try:
+            info = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            info = None
+        if isinstance(info, dict):
+            server = str(info.get("server") or server)
+            database = str(info.get("database") or database)
+            schema = str(info.get("schema") or schema)
+            saved_at = info.get("saved_at")
+            if saved_at:
+                scanned_at = str(saved_at)
+
+        rows.append(
+            ScanRecordListing(server=server, database=database, schema=schema, scanned_at=scanned_at)
+        )
+    rows.sort(key=lambda row: (row.server, row.database, row.schema))
+    return rows
 
 
 def _same_scope(actual: object, expected: str) -> bool:

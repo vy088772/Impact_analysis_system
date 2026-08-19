@@ -1554,6 +1554,52 @@
         "title": "SPMatchProgram",
         "type": "object"
       },
+      "ScanRecordEntry": {
+        "description": "GET /scan_records 的一列：一份 SQL 快取的身分與 Scan Record（掃描時間）。\n\nscanned_at 為 None 代表這份快取的 Scan Record 缺失或無法讀取——快取本身\n仍然存在、仍然列出，只是掃描時間不可得；呼叫端不可把 None 當成「從未\n掃描」以外的其他狀態誤讀，也不可把它跟空字串混為一談。",
+        "properties": {
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "db_schema": {
+            "default": "",
+            "title": "Db Schema",
+            "type": "string"
+          },
+          "scanned_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scanned At"
+          },
+          "server": {
+            "default": "",
+            "title": "Server",
+            "type": "string"
+          }
+        },
+        "title": "ScanRecordEntry",
+        "type": "object"
+      },
+      "ScanRecordListResponse": {
+        "properties": {
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/ScanRecordEntry"
+            },
+            "title": "Records",
+            "type": "array"
+          }
+        },
+        "title": "ScanRecordListResponse",
+        "type": "object"
+      },
       "TableMatchProgram": {
         "properties": {
           "access_type": {
@@ -2554,6 +2600,25 @@
           }
         },
         "summary": "Refresh Sql Status"
+      }
+    },
+    "/scan_records": {
+      "get": {
+        "description": "唯讀列出磁碟上每一份 SQL 快取的身分與 Scan Record（掃描時間）。\n\n純目錄列舉（sql_cache_store.list_caches()）：不連線 SQL Server、不觸發\n掃描、不修改任何快取，也不讀 llamaindex-spec-rag 的 Database Registry——\n兩者本來就是分開記錄的兩件事（intent vs. fact），這個端點只讀 fact。",
+        "operationId": "scan_records_scan_records_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanRecordListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Scan Records"
       }
     },
     "/wrapper_contracts/accept": {

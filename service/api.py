@@ -28,6 +28,9 @@
                         cache_only=True 時不觸發 clone）
     POST /path_evidence → PathEvidenceResponse（依 path_id 還原單一路徑的 C#、SQL
                          definition 與 terminal operation evidence）
+    GET  /scan_records → ScanRecordListResponse（唯讀列出磁碟上每一份 SQL 快取
+                        的 server/database/schema 與 Scan Record 掃描時間；不
+                        連線、不觸發掃描、不讀 Database Registry）
 """
 from __future__ import annotations
 
@@ -52,8 +55,10 @@ from .schemas import (
     FlowChainResponse,
     PathEvidenceRequest,
     PathEvidenceResponse,
+    ScanRecordEntry,
+    ScanRecordListResponse,
 )
-from . import analyze_service, contract_acceptance, refresh_progress
+from . import analyze_service, contract_acceptance, refresh_progress, sql_cache_store
 
 app = FastAPI(
     title="Impact Analysis Service",
@@ -298,6 +303,27 @@ def refresh_sql_status(job_id: str) -> RefreshSqlProgressResponse:
     if snapshot is None:
         raise HTTPException(status_code=404, detail="找不到這個 refresh job")
     return RefreshSqlProgressResponse(**snapshot)
+
+
+@app.get("/scan_records", response_model=ScanRecordListResponse)
+def scan_records() -> ScanRecordListResponse:
+    """唯讀列出磁碟上每一份 SQL 快取的身分與 Scan Record（掃描時間）。
+
+    純目錄列舉（sql_cache_store.list_caches()）：不連線 SQL Server、不觸發
+    掃描、不修改任何快取，也不讀 llamaindex-spec-rag 的 Database Registry——
+    兩者本來就是分開記錄的兩件事（intent vs. fact），這個端點只讀 fact。
+    """
+    return ScanRecordListResponse(
+        records=[
+            ScanRecordEntry(
+                server=row.server,
+                database=row.database,
+                db_schema=row.schema,
+                scanned_at=row.scanned_at,
+            )
+            for row in sql_cache_store.list_caches()
+        ]
+    )
 
 
 def main() -> None:

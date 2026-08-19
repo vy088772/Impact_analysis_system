@@ -325,6 +325,99 @@ def test_get_or_dump_refuses_to_key_a_cache_by_the_display_alias() -> None:
         sql_cache_store.get_or_dump("Y-Docs_TTPUR", server="vmsystest07")
 
 
+# -------------------------------------------------------------- list_caches
+
+
+def test_list_caches_returns_every_cache_with_its_four_fields() -> None:
+    with CacheRoot() as cache_root:
+        write_cache(
+            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+        )
+
+        rows = sql_cache_store.list_caches()
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.server == "vmsystest07.topmost.com.tw"
+        assert row.database == "PUR"
+        assert row.schema == "dbo"
+        assert row.scanned_at == "2026-08-04 13:29:13"
+
+
+def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_missing() -> None:
+    with CacheRoot() as cache_root:
+        (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.json").write_text(
+            json.dumps(_payload("PUR"), ensure_ascii=False), encoding="utf-8"
+        )
+
+        rows = sql_cache_store.list_caches()
+
+        assert len(rows) == 1
+        assert rows[0].server == "vmsystest07.topmost.com.tw"
+        assert rows[0].database == "PUR"
+        assert rows[0].schema == "dbo"
+        assert rows[0].scanned_at is None
+
+
+def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_unreadable() -> None:
+    with CacheRoot() as cache_root:
+        write_cache(
+            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+        )
+        (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.meta.json").write_text(
+            "{not valid json", encoding="utf-8"
+        )
+
+        rows = sql_cache_store.list_caches()
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.scanned_at is None
+        # Identity still comes from the filename when meta cannot be read.
+        assert row.server == "vmsystest07.topmost.com.tw"
+        assert row.database == "PUR"
+        assert row.schema == "dbo"
+
+
+def test_list_caches_never_lists_a_scan_record_file_as_a_cache() -> None:
+    with CacheRoot() as cache_root:
+        # A meta file with no sibling data file must never surface as a row.
+        (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.meta.json").write_text(
+            json.dumps(
+                {
+                    "server": "vmsystest07.topmost.com.tw",
+                    "database": "PUR",
+                    "schema": "dbo",
+                    "saved_at": "2026-08-04 13:29:13",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert sql_cache_store.list_caches() == []
+
+
+def test_list_caches_orders_rows_by_server_then_database_then_schema() -> None:
+    with CacheRoot() as cache_root:
+        write_cache(
+            cache_root, "vmsystest08.topmost.com.tw__PUR__dbo", _payload("PUR")
+        )
+        write_cache(
+            cache_root, "vmsystest07.topmost.com.tw__STC__dbo", _payload("STC")
+        )
+        write_cache(
+            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+        )
+
+        rows = sql_cache_store.list_caches()
+
+        assert [(row.server, row.database, row.schema) for row in rows] == [
+            ("vmsystest07.topmost.com.tw", "PUR", "dbo"),
+            ("vmsystest07.topmost.com.tw", "STC", "dbo"),
+            ("vmsystest08.topmost.com.tw", "PUR", "dbo"),
+        ]
+
+
 # ----------------------------------------------------- analyze-side read path
 
 
