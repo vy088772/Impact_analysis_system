@@ -208,7 +208,7 @@ The SQL cache version is incremented. A cache without `sql_execution_graph` is i
 After deployment, run:
 
 ```powershell
-python -m impact_orch.refresh_sql_cli <system_id>
+python -m impact_orch.refresh_sql_cli --system_id <system_id>
 ```
 
 If no new graph exists, the analysis reports that SQL execution-flow cache has not been rebuilt.

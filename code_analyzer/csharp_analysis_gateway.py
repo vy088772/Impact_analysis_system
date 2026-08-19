@@ -383,6 +383,7 @@ def wrapper_observation_fields(
         else evidence.reason if evidence is not None else "inline_sql"
     )
     database = evidence.database if evidence is not None else None
+    server = evidence.server if evidence is not None else None
     database_candidates = (
         list(evidence.database_candidates) if evidence is not None else []
     )
@@ -465,7 +466,7 @@ def wrapper_observation_fields(
             evidence.procedure_name_hint if evidence is not None else None
         ),
         "database": database,
-        "server": evidence.server if evidence is not None else None,
+        "server": server,
         "database_candidates": database_candidates,
         "database_attribution": (
             "resolved"
