@@ -34,8 +34,16 @@ _Avoid_: wrapper allowlist, regex SP detector
 The normalized stored-procedure inventory for one refreshed database, used to validate a candidate invocation against its resolved database source.
 _Avoid_: global SP-name match
 
+**Resolved Connection Source**:
+The `{server, database}` shape a `connection_sources` entry takes once the Web.config connection-string resolver has worked it out — it names the physical target the connection really opens, and carries a server so it can drive a cache lookup. See [ADR-0008](docs/adr/0008-web-config-connection-string-resolution.md).
+_Avoid_: connection info, connection dict, resolved database
+
+**Legacy Connection Label**:
+The bare-string shape a `connection_sources` entry still carries when it was written by a scan that predates the Web.config connection-string resolver. It names nothing beyond an old system_id-shaped guess — no server, no proof it points at a real database — and is always replaced by a Resolved Connection Source the next time its file is re-scanned.
+_Avoid_: unresolved label, plain string, legacy string
+
 **Uncataloged Database**:
-A resolved connection target whose database is identified but has no matching SP Catalog scan yet — its SQL Cache Identity names no cache on disk. Distinct from a connection target that cannot be identified at all — the two are never reported under the same reason. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
+A resolved connection target whose database is identified but has no matching SP Catalog scan yet — its SQL Cache Identity names no cache on disk. Distinct from a connection target that cannot be identified at all — the two are never reported under the same reason. `llamaindex-spec-rag`'s `CONTEXT.md` carries the same concept under the same name, viewed from `refresh_cli`'s unresolved-summary layer instead of this gateway's classification layer. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
 _Avoid_: unresolved database, unknown database
 
 **Database Invocation**:

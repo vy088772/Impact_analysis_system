@@ -36,7 +36,7 @@
 - [x] `cache_filename()` has no caller outside its own test. Either give it the callers that justify it or delete it.
       **Done:** deleted as a free function; it lives on as `CacheIdentity.filename`/`.meta_filename`, called by `_paths()` and by the migration script.
 - [x] `tools/migrate_sql_cache_keys.py` rebuilds `_save()`'s meta-file dict by hand and reads the private `sql_cache_store._SQL_CACHE_VERSION`. Expose one meta-writing seam in `sql_cache_store` and have the migration use it, so the meta format lives in one place.
-      **Done:** `sql_cache_store.meta_payload()`/`write_meta()`; `_save()` and the migration both go through them, and the migration keeps the legacy file's `saved_at` because a rename is not a re-scan.
+      **Done:** `sql_cache_store.write_meta()` (backed by the private `_meta_payload()` helper, which has no caller outside it); `_save()` and the migration both go through `write_meta()`, and the migration keeps the legacy file's `saved_at` because a rename is not a re-scan.
 
 ## Tests
 

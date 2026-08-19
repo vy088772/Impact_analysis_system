@@ -56,13 +56,12 @@ class WebConfigConnections:
 # 連線字串欄位同義字表：
 # server / Data Source / Address / Addr -> server
 # database / Initial Catalog -> database
-# uid / User ID -> uid
-# pwd / Password -> pwd
 #
-# uid/pwd 目前只被解析出來、歸一化，尚未有任何呼叫方讀取——ADR-0010 的掃描工具
-# 憑證覆寫（per (server, database) 的 credential override）之後會用到，這裡先
-# 把同義字規則做完整，留給那張票直接使用，而不是這裡先丟棄再讓那張票重新解析
-# 一次連線字串。
+# 刻意不解析 uid/pwd：ADR-0010 的掃描工具憑證永遠只能來自 SQLServerData.json
+# 的 per-server credential override 或全域 DB_AUTH_MODE，絕不能讀取或衍生自
+# 被掃描應用程式自己的 Web.config。這裡連解析都不做，讓「掃描身分與應用程式
+# 憑證無關」這件事在程式碼層級就不可能被繞過，而不是解析出來又靠呼叫方自律
+# 不去讀它。
 _FIELD_SYNONYMS: Dict[str, str] = {
     "server": "server",
     "data source": "server",
@@ -70,10 +69,6 @@ _FIELD_SYNONYMS: Dict[str, str] = {
     "addr": "server",
     "database": "database",
     "initial catalog": "database",
-    "uid": "uid",
-    "user id": "uid",
-    "pwd": "pwd",
-    "password": "pwd",
 }
 
 

@@ -12,6 +12,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -29,6 +31,16 @@ TTPUR_WEB_CONFIG = PROJECT_ROOT / "data/repos/System_Dept_1/Y-DOCs/TTPUR/Web.con
 RESPONSE_WEB_CONFIG = PROJECT_ROOT / "data/repos/System_Dept_1/Y-DOCs/Response/Web.config"
 STC_GLOBAL_ASAX = PROJECT_ROOT / "data/repos/System_Dept_1/STC/STC/Global.asax.cs"
 
+requires_web_config_fixtures = pytest.mark.skipif(
+    not (
+        STC_WEB_CONFIG.exists()
+        and TTPUR_WEB_CONFIG.exists()
+        and RESPONSE_WEB_CONFIG.exists()
+        and STC_GLOBAL_ASAX.exists()
+    ),
+    reason="local data/repos/System_Dept_1 fixture checkout is not present",
+)
+
 
 # ============================================================
 # webconfig_connection_resolver：直接解析 Web.config 內容
@@ -36,6 +48,7 @@ STC_GLOBAL_ASAX = PROJECT_ROOT / "data/repos/System_Dept_1/STC/STC/Global.asax.c
 
 
 class TestParseWebConfigConnections:
+    @requires_web_config_fixtures
     def test_appsettings_short_hostname_style(self):
         """STC 自己的 <appSettings key="error">——鎖住這張票要修的 bug 本身：
         查找鍵 "error" 與真正的資料庫 SysErrorRecord 完全不同。"""
@@ -44,6 +57,7 @@ class TestParseWebConfigConnections:
             server="vmsystest07", database="SysErrorRecord"
         )
 
+    @requires_web_config_fixtures
     def test_appsettings_key_can_coincidentally_equal_database_name(self):
         """STC 的 "STC" 鍵巧合等於資料庫名稱，但兩者仍必須各自從值解析出來，
         不能只是把查找鍵原樣搬過去當資料庫名稱。"""
@@ -52,6 +66,7 @@ class TestParseWebConfigConnections:
             server="vmsystest07", database="STC"
         )
 
+    @requires_web_config_fixtures
     def test_connectionstrings_fqdn_style_with_named_instance(self):
         """TTPUR 的 <connectionStrings name="TTOA">——查找鍵 "TTOA" 與真正的
         資料庫 EFNETDB 完全不同；伺服器帶有具名執行個體後綴，維持未正規化
@@ -62,6 +77,7 @@ class TestParseWebConfigConnections:
             database="EFNETDB",
         )
 
+    @requires_web_config_fixtures
     def test_connectionstrings_active_entry_in_ttpur(self):
         """TTPUR 的 Web.config 裡 "ErrLog" 是一個活躍（未被註解）的
         <connectionStrings> entry，同樣解析成真正的資料庫 SysErrorRecord，
@@ -71,12 +87,14 @@ class TestParseWebConfigConnections:
             server="vmsystest07.topmost.com.tw", database="SysErrorRecord"
         )
 
+    @requires_web_config_fixtures
     def test_connectionstrings_active_entry_in_response(self):
         resolved = parse_web_config_file(RESPONSE_WEB_CONFIG)
         assert resolved.connection_strings["PUR-FAQ"] == ResolvedConnection(
             server="vmsystest07", database="Response"
         )
 
+    @requires_web_config_fixtures
     def test_commented_out_entries_never_resolve(self):
         """Response 的 Web.config 裡 "PUR" 與 "ErrLog" 兩個 <connectionStrings>
         entry 都被整段註解掉（"ErrLog" 這個查找鍵在 TTPUR 是活躍的，但在
@@ -86,6 +104,7 @@ class TestParseWebConfigConnections:
         assert "PUR" not in resolved.connection_strings
         assert "ErrLog" not in resolved.connection_strings
 
+    @requires_web_config_fixtures
     def test_entries_without_a_database_are_omitted(self):
         """沒有資料庫可解析的 appSettings entry（純郵件伺服器、路徑設定等）
         不該出現在結果裡。"""
@@ -156,6 +175,7 @@ class TestDBConnectionTrackerWithResolver:
     def _stc_resolver():
         return parse_web_config_file(STC_WEB_CONFIG)
 
+    @requires_web_config_fixtures
     def test_direct_sqlconnection_from_appsettings_resolves_real_database(self):
         """鎖住這張票要修的核心 bug：STC/Global.asax.cs 的
         `SqlConnection cn = new SqlConnection(ConfigurationManager.AppSettings["error"])`
@@ -169,6 +189,7 @@ class TestDBConnectionTrackerWithResolver:
         assert connections["cn"].server == "vmsystest07"
         assert connections["cn"].connection_string_key == "error"
 
+    @requires_web_config_fixtures
     def test_direct_sqlconnection_from_connectionstrings_resolves_real_database(self):
         """TTOA -> EFNETDB，不是連線字串的 name "TTOA"。"""
         content = (
@@ -187,6 +208,7 @@ class TestDBConnectionTrackerWithResolver:
         assert connections["cn"].database_name == "EFNETDB"
         assert connections["cn"].server == "vmsystest08.topmost.com.tw\\vmsystest08_pdcs"
 
+    @requires_web_config_fixtures
     def test_unresolvable_key_produces_no_connection_when_resolver_present(self):
         """一旦提供了 connection_resolver，查找不到的鍵就不再退回猜測——維持
         unresolved，而不是捏造一個資料庫名稱。"""
@@ -206,6 +228,7 @@ class TestDBConnectionTrackerWithResolver:
         assert connections["obj"].database_name == "PUR"
         assert connections["obj"].server is None
 
+    @requires_web_config_fixtures
     def test_pattern4_flexible_heuristic_is_removed(self):
         """舊的「模式4」會把任何 `Type var = new Type(...)` 建構式裡 2-10 個
         字母的字串常數當成資料庫名稱（不論是否透過 ConfigurationManager 存
@@ -215,6 +238,7 @@ class TestDBConnectionTrackerWithResolver:
         connections = tracker.analyze_connections(content)
         assert "instance" not in connections
 
+    @requires_web_config_fixtures
     def test_sqlfunc_appsettings_resolves_through_web_config(self):
         content = 'SQLFunc obj = new SQLFunc(ConfigurationManager.AppSettings["error"]);'
         tracker = DBConnectionTracker(connection_resolver=self._stc_resolver())
@@ -222,6 +246,7 @@ class TestDBConnectionTrackerWithResolver:
         assert connections["obj"].database_name == "SysErrorRecord"
         assert connections["obj"].server == "vmsystest07"
 
+    @requires_web_config_fixtures
     def test_sqlobject_connectionstrings_resolves_through_web_config(self):
         content = (
             'SQLObject obj = new SQLObject(ConfigurationManager.ConnectionStrings["TTOA"].ConnectionString);'
@@ -269,6 +294,7 @@ class TestDBConnectionTrackerWithResolver:
 # ============================================================
 
 
+@requires_web_config_fixtures
 def test_project_scanner_resolves_stc_global_asax_connection_source():
     """驗收條件：掃描 STC/Global.asax.cs 應該讓 connection_sources 裡 "cn"
     這個項目 database=SysErrorRecord, server=vmsystest07（未正規化——正規化
