@@ -6489,6 +6489,28 @@ def test_resolved_but_uncataloged_server_database_pair_is_not_in_resolved_catalo
     assert invocation.server == "vmsystest07"
 
 
+def test_uncataloged_database_observation_carries_its_server() -> None:
+    """llamaindex-spec-rag ticket 07: `refresh_cli`'s hint needs the server
+    alongside the database to print a directly runnable scan command. The
+    `DbInvocation` already carries `.server` (see the test above) but the
+    projected review-item dict `/refresh` actually returns did not -- this
+    closes that gap."""
+    catalog = SpCatalog.from_databases({"STC": ["usp_SO_Delete"]})
+    gateway = CSharpAnalysisGateway(
+        catalog,
+        connection_sources={"cn": {"database": "SysErrorRecord", "server": "vmsystest07"}},
+    )
+
+    observation = gateway.reconcile_wrapper_observation(
+        "Global.asax.cs",
+        _raw_invocation(connection_expression="cn", command_text="spAddRecordError"),
+    )
+
+    assert observation["evidence_reason"] == "not_in_resolved_catalog"
+    assert observation["database"] == "SysErrorRecord"
+    assert observation["server"] == "vmsystest07"
+
+
 def test_wrapper_owning_its_connection_reports_that_connection_at_its_call_site() -> None:
     """Global.asax.cs's shape end-to-end: WriteDB opens its own connection.
 

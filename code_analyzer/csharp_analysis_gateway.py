@@ -465,6 +465,7 @@ def wrapper_observation_fields(
             evidence.procedure_name_hint if evidence is not None else None
         ),
         "database": database,
+        "server": evidence.server if evidence is not None else None,
         "database_candidates": database_candidates,
         "database_attribution": (
             "resolved"
