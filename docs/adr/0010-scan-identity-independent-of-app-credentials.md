@@ -1,6 +1,6 @@
 # The SQL Scan Tool's Identity Is Independent of Each Application's Runtime Credentials
 
-**Status:** Accepted
+**Status:** Accepted; the credential-storage clause superseded by `llamaindex-spec-rag`'s [ADR-0004](../../../llamaindex-spec-rag/docs/adr/0004-scan-credentials-stored-as-env-var-names.md)
 **Date:** 2026-08-18
 
 ## Context
@@ -12,6 +12,8 @@ Each scanned application's Web.config carries its own SQL login for its own runt
 The scan tool's connecting identity stays a separate trust boundary from the credentials embedded in scanned application config. Web.config's `uid`/`pwd` are used only to help identify which database a call resolves to (as evidence for the SP Catalog lookup) — never to build the live connection the scan tool itself opens.
 
 Optionally, one server may carry an explicit credential override, recorded as `uid`/`pwd` on that server's `SQLServerData.json` entry in `llamaindex-spec-rag` and shared by every database listed under it (used only when both are non-blank); when either is blank, the scan falls back to the existing global `DB_AUTH_MODE` identity. The caller sends the pair as `db_user_id`/`db_password` on the `/refresh_sql` request, and `build_database_config()` applies it only for that one scan. `SQLServerData.json` is a local, `.gitignore`d data file, so the override never enters version control.
+
+> **Superseded in part (2026-08-19).** The override is still optional, still per-server, still shared by every database under that server, still used only when fully specified, and is still sent by the caller as `db_user_id`/`db_password` on the request — this ADR's trust boundary is unchanged. What changed is where the caller reads the values from: `SQLServerData.json` now records the *names* of two environment variables rather than the values themselves, because the registry is the file operators circulate when onboarding a server. See [`llamaindex-spec-rag` ADR-0004](../../../llamaindex-spec-rag/docs/adr/0004-scan-credentials-stored-as-env-var-names.md).
 
 ## Consequences
 

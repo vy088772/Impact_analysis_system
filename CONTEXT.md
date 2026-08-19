@@ -42,6 +42,9 @@ _Avoid_: connection info, connection dict, resolved database
 The bare-string shape a `connection_sources` entry still carries when it was written by a scan that predates the Web.config connection-string resolver. It names nothing beyond an old system_id-shaped guess — no server, no proof it points at a real database — and is always replaced by a Resolved Connection Source the next time its file is re-scanned.
 _Avoid_: unresolved label, plain string, legacy string
 
+**Scan Record**:
+The record that one SQL Cache Identity was actually scanned, and when — written beside the scan results at save time. It is the only record that a scan happened; the caller's Database Registry records which Databases *should* exist, never whether any were scanned, so the two are read separately and can never disagree. See `llamaindex-spec-rag`'s [ADR-0005](../llamaindex-spec-rag/docs/adr/0005-registry-records-intent-cache-metadata-records-fact.md).
+
 **Uncataloged Database**:
 A resolved connection target whose database is identified but has no matching SP Catalog scan yet — its SQL Cache Identity names no cache on disk. Distinct from a connection target that cannot be identified at all — the two are never reported under the same reason. `llamaindex-spec-rag`'s `CONTEXT.md` carries the same concept under the same name, viewed from `refresh_cli`'s unresolved-summary layer instead of this gateway's classification layer. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
 _Avoid_: unresolved database, unknown database
