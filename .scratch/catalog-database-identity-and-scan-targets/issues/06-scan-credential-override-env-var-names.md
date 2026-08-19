@@ -4,16 +4,16 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A Scan Credential Override in the Database Registry records two environment variable names in place of the credential value fields.
-- [ ] Both fields blank means "use the global scan identity", exactly as today. This is the current state of every registered server, so the default path is observably unchanged.
-- [ ] Exactly one field filled raises. A half-applied edit is an error, not a fallback to the global identity.
-- [ ] Both fields filled with either named variable unset or empty raises, naming the variable that could not be read. It never falls back to the global identity under any circumstance.
-- [ ] Both fields filled and both variables readable yields that credential pair for that server, shared by every Database registered under it.
-- [ ] The values are read from this repo's environment file, loaded through the mechanism the config module already applies at import. No new declared configuration setting is introduced — a variable name is registry data, not a setting.
-- [ ] Both variable-name fields appear in the environment example file as commented examples, so the mechanism is discoverable without a live secret.
-- [ ] The scan request contract is unchanged: the caller still sends the resolved credential pair by value. The analysis service requires no change, and its trust boundary — that the scan tool's identity never derives from a scanned application's own configuration — is untouched.
-- [ ] No credential value, and no credential-variable name, is stored in the System catalog.
-- [ ] The stale comment beside the registry path setting, which still asserts the file never stores credentials, is rewritten to describe the variable-name rule that now holds.
-- [ ] Tests cover every resolution branch: both blank; one filled; both filled with a variable unset; both filled with a variable empty; and both filled and readable.
+- [x] A Scan Credential Override in the Database Registry records two environment variable names in place of the credential value fields.
+- [x] Both fields blank means "use the global scan identity", exactly as today. This is the current state of every registered server, so the default path is observably unchanged.
+- [x] Exactly one field filled raises. A half-applied edit is an error, not a fallback to the global identity.
+- [x] Both fields filled with either named variable unset or empty raises, naming the variable that could not be read. It never falls back to the global identity under any circumstance.
+- [x] Both fields filled and both variables readable yields that credential pair for that server, shared by every Database registered under it.
+- [x] The values are read from this repo's environment file, loaded through the mechanism the config module already applies at import. No new declared configuration setting is introduced — a variable name is registry data, not a setting.
+- [x] Both variable-name fields appear in the environment example file as commented examples, so the mechanism is discoverable without a live secret.
+- [x] The scan request contract is unchanged: the caller still sends the resolved credential pair by value. The analysis service requires no change, and its trust boundary — that the scan tool's identity never derives from a scanned application's own configuration — is untouched.
+- [x] No credential value, and no credential-variable name, is stored in the System catalog.
+- [x] The stale comment beside the registry path setting, which still asserts the file never stores credentials, is rewritten to describe the variable-name rule that now holds.
+- [x] Tests cover every resolution branch: both blank; one filled; both filled with a variable unset; both filled with a variable empty; and both filled and readable.
