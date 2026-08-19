@@ -23,11 +23,16 @@ def _normalize(name: str) -> str:
     return core.lower()
 
 
-def _from_cache(table_names: List[str], database_alias: Optional[str], max_def_chars: int) -> tuple[List[dict], List[str]]:
+def _from_cache(
+    table_names: List[str],
+    database_alias: Optional[str],
+    max_def_chars: int,
+    db_server: Optional[str] = None,
+) -> tuple[List[dict], List[str]]:
     if not database_alias:
         return [], []  # 無資料庫可查，視為「無法判斷」，不當作快取缺漏去即時連線（避免誤連）
 
-    cached = load_cached(database_alias)
+    cached = load_cached(database_alias, server=db_server or "")
     if not cached:
         return [], []
 
@@ -54,14 +59,17 @@ def fetch_view_definitions(
     table_names: List[str],
     database_alias: Optional[str] = None,
     max_def_chars: int = 8000,
+    db_server: Optional[str] = None,
 ) -> List[dict]:
     """從 table_names 中挑出「其實是 View」的項目，回傳其完整定義清單。
 
     每筆：{name, exists, definition, truncated}。不是 View 的名稱不會出現在結果
     裡（沒有「不存在」的空白項目，避免跟一般資料表混淆）。無資料庫或無快取時
     回傳空清單（純資料表分析仍可正常運作，不影響主流程）。
+
+    db_server：要讀哪一台伺服器上的快取；省略時由 sql_cache_store 從磁碟回推。
     """
     if not table_names:
         return []
-    found, _ = _from_cache(table_names, database_alias, max_def_chars)
+    found, _ = _from_cache(table_names, database_alias, max_def_chars, db_server)
     return found

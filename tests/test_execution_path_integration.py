@@ -157,7 +157,7 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: _cached_sql_graph(),
+        lambda database, schema, server="": _cached_sql_graph(),
     )
 
     response = analyze_service.analyze(
@@ -249,7 +249,7 @@ def test_analyze_keeps_source_wrapper_method_flow_in_execution_path(monkeypatch,
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: _cached_sql_graph(),
+        lambda database, schema, server="": _cached_sql_graph(),
     )
 
     response = analyze_service.analyze(
@@ -324,7 +324,7 @@ def test_analyze_keeps_missing_graph_target_as_unresolved(monkeypatch, tmp_path:
         },
         connection_sources={str(source_file.resolve()): {"conn": "PUR"}},
     )
-    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema: None)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": None)
 
     paths, compact_payload = analyze_service._build_program_execution_paths(
         AnalyzeRequest(program_names=["OrderPage"], include_snippets=False),
@@ -512,7 +512,7 @@ def test_analyze_keeps_multiple_connection_labels_database_scoped(monkeypatch, t
             }
         },
     )
-    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema: _cached_sql_graph())
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": _cached_sql_graph())
 
     paths, _ = analyze_service._build_program_execution_paths(
         AnalyzeRequest(database="OrdersDb", program_names=["OrderPage"], include_snippets=False),
@@ -568,7 +568,7 @@ def test_analyze_catalog_preserves_schema_qualified_procedure(monkeypatch, tmp_p
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: _cached_schema_sql_graph(),
+        lambda database, schema, server="": _cached_schema_sql_graph(),
     )
 
     paths, _ = analyze_service._build_program_execution_paths(

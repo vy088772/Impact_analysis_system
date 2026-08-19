@@ -157,13 +157,15 @@ def resolve_fk_related(
     行為與舊版相同，適用真的有建 FK 約束的資料庫）。
 
     無資料庫、無快取又連線失敗時回傳空清單（不丟例外）。db_server/db_name 由
-    呼叫端（catalog）提供；未提供時退回舊行為（查 .env 的 DB_DATABASES/database_alias）。
+    呼叫端（catalog）提供：db_server 同時指名要讀哪一台伺服器上的快取，省略時
+    由 sql_cache_store 從磁碟回推；連線那條路則退回舊行為（查 .env 的
+    DB_DATABASES/database_alias）。
     """
     if depth < 1 or not base_tables:
         return []
 
     if database_alias:
-        cached = load_cached(database_alias)
+        cached = load_cached(database_alias, server=db_server or "")
         if cached:
             adj, display = _build_pk_naming_adjacency(cached)
             return _bfs_related(adj, display, base_tables, depth, max_related)

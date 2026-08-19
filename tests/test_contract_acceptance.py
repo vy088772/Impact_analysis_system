@@ -250,7 +250,7 @@ def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, 
     monkeypatch.setattr(
         contract_acceptance_module.analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {
+        lambda database, schema, server="": {
             "database": "OrdersDb",
             "schema": "dbo",
             "procedures": [{"name": "dbo.usp_SaveOrder"}],

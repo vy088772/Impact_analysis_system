@@ -214,7 +214,7 @@ def test_path_evidence_returns_only_selected_branch_and_source_methods(monkeypat
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: cached,
+        lambda database, schema, server="": cached,
     )
 
     evidence = analyze_service.get_path_evidence(
@@ -339,7 +339,7 @@ def test_multi_root_path_evidence_uses_repo_relative_source_snapshot(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: cached,
+        lambda database, schema, server="": cached,
     )
 
     evidence = analyze_service.get_path_evidence(
@@ -363,7 +363,7 @@ def test_path_evidence_rejects_stale_source_snapshot(monkeypatch, tmp_path: Path
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: cached,
+        lambda database, schema, server="": cached,
     )
 
     with pytest.raises(analyze_service.PathEvidenceError) as error:
@@ -385,7 +385,7 @@ def test_path_evidence_rejects_unknown_path_id(monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: cached,
+        lambda database, schema, server="": cached,
     )
 
     with pytest.raises(analyze_service.PathEvidenceError) as error:
@@ -473,7 +473,7 @@ def test_path_evidence_retains_unverified_literal_sp_candidate(monkeypatch, tmp_
     monkeypatch.setattr(
         analyze_service,
         "fetch_sp_definitions",
-        lambda sp_names, database_alias=None: [
+        lambda sp_names, database_alias=None, db_server=None: [
             {
                 "name": sp_names[0],
                 "exists": True,

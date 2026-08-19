@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -15,37 +14,24 @@ if str(PROJECT_ROOT) not in sys.path:
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 from code_analyzer import sql_analyzer
 from code_analyzer.sql_analyzer import SQLAnalyzer
-from config.settings import settings
 from service import sql_cache_store
+from tests.sql_cache_fixtures import CacheRoot, write_cache
 
 
 TEST_SERVER = "vmsystest07"
 
 
 def _write_sql_cache_fixture(
-    cache_dir: str,
+    cache_root: Path,
     database: str,
     payload: dict,
     cache_version: int | None = None,
 ) -> None:
-    cache_root = Path(cache_dir)
-    key = sql_cache_store.cache_key(TEST_SERVER, database, "dbo")
-    (cache_root / f"{key}.json").write_text(
-        json.dumps(payload), encoding="utf-8"
-    )
-    (cache_root / f"{key}.meta.json").write_text(
-        json.dumps(
-            {
-                "cache_version": (
-                    sql_cache_store._SQL_CACHE_VERSION
-                    if cache_version is None
-                    else cache_version
-                ),
-                "database": database,
-                "schema": "dbo",
-            }
-        ),
-        encoding="utf-8",
+    write_cache(
+        cache_root,
+        sql_cache_store.CacheIdentity.of(TEST_SERVER, database, "dbo").key,
+        payload,
+        cache_version,
     )
 
 
@@ -78,26 +64,17 @@ def test_dump_all_sql_objects_keeps_sp_helpers_on_sql_analyzer() -> None:
 
 
 def test_sql_cache_rejects_graphless_payload() -> None:
-    previous_cache_root = settings.SQL_CACHE_ROOT
-    previous_mem_cache = dict(sql_cache_store._mem_cache)
-    with tempfile.TemporaryDirectory() as cache_dir:
-        settings.SQL_CACHE_ROOT = cache_dir
-        sql_cache_store._mem_cache.clear()
+    with CacheRoot() as cache_root:
         _write_sql_cache_fixture(
-            cache_dir,
+            cache_root,
             "TestDb",
             {"database": "TestDb", "schema": "dbo", "procedures": []},
         )
 
         assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
-    sql_cache_store._mem_cache.clear()
-    sql_cache_store._mem_cache.update(previous_mem_cache)
-    settings.SQL_CACHE_ROOT = previous_cache_root
 
 
 def test_sql_cache_rejects_database_mismatch_from_memory_and_disk() -> None:
-    previous_cache_root = settings.SQL_CACHE_ROOT
-    previous_mem_cache = dict(sql_cache_store._mem_cache)
     mismatched_payload = {
         "database": "OtherDb",
         "schema": "dbo",
@@ -109,30 +86,21 @@ def test_sql_cache_rejects_database_mismatch_from_memory_and_disk() -> None:
             "parse_errors": [],
         },
     }
-    with tempfile.TemporaryDirectory() as cache_dir:
-        settings.SQL_CACHE_ROOT = cache_dir
-        sql_cache_store._mem_cache.clear()
-        _write_sql_cache_fixture(cache_dir, "TestDb", mismatched_payload)
+    with CacheRoot() as cache_root:
+        _write_sql_cache_fixture(cache_root, "TestDb", mismatched_payload)
 
         assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
 
         sql_cache_store._mem_cache[
-            sql_cache_store.cache_key(TEST_SERVER, "TestDb", "dbo")
+            sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo").key
         ] = mismatched_payload
         assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
-    sql_cache_store._mem_cache.clear()
-    sql_cache_store._mem_cache.update(previous_mem_cache)
-    settings.SQL_CACHE_ROOT = previous_cache_root
 
 
 def test_sql_cache_rejects_stale_payload_version() -> None:
-    previous_cache_root = settings.SQL_CACHE_ROOT
-    previous_mem_cache = dict(sql_cache_store._mem_cache)
-    with tempfile.TemporaryDirectory() as cache_dir:
-        settings.SQL_CACHE_ROOT = cache_dir
-        sql_cache_store._mem_cache.clear()
+    with CacheRoot() as cache_root:
         _write_sql_cache_fixture(
-            cache_dir,
+            cache_root,
             "TestDb",
             {
                 "database": "TestDb",
@@ -149,19 +117,12 @@ def test_sql_cache_rejects_stale_payload_version() -> None:
         )
 
         assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
-    sql_cache_store._mem_cache.clear()
-    sql_cache_store._mem_cache.update(previous_mem_cache)
-    settings.SQL_CACHE_ROOT = previous_cache_root
 
 
 def test_sql_cache_rejects_stale_graph_version() -> None:
-    previous_cache_root = settings.SQL_CACHE_ROOT
-    previous_mem_cache = dict(sql_cache_store._mem_cache)
-    with tempfile.TemporaryDirectory() as cache_dir:
-        settings.SQL_CACHE_ROOT = cache_dir
-        sql_cache_store._mem_cache.clear()
+    with CacheRoot() as cache_root:
         _write_sql_cache_fixture(
-            cache_dir,
+            cache_root,
             "TestDb",
             {
                 "database": "TestDb",
@@ -177,9 +138,6 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
         )
 
         assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
-    sql_cache_store._mem_cache.clear()
-    sql_cache_store._mem_cache.update(previous_mem_cache)
-    settings.SQL_CACHE_ROOT = previous_cache_root
 
 
 def test_sql_host_emits_typed_operations_with_module_and_source_evidence() -> None:
@@ -300,11 +258,7 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
                 },
             }
 
-    previous_cache_root = settings.SQL_CACHE_ROOT
-    previous_mem_cache = dict(sql_cache_store._mem_cache)
-    with tempfile.TemporaryDirectory() as cache_dir:
-        settings.SQL_CACHE_ROOT = cache_dir
-        sql_cache_store._mem_cache.clear()
+    with CacheRoot():
         original_analyzer = sql_analyzer.SQLAnalyzer
         sql_analyzer.SQLAnalyzer = FakeSqlAnalyzer
         try:
@@ -355,9 +309,6 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             assert "write_dependencies" not in reloaded
         finally:
             sql_analyzer.SQLAnalyzer = original_analyzer
-            sql_cache_store._mem_cache.clear()
-            sql_cache_store._mem_cache.update(previous_mem_cache)
-            settings.SQL_CACHE_ROOT = previous_cache_root
 
 
 if __name__ == "__main__":

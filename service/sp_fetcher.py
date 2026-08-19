@@ -75,14 +75,20 @@ def _graph_tables_for_procedure(cached: dict, procedure_name: str) -> List[str]:
     return sorted(table for table in tables if table)
 
 
-def _from_cache(sp_names: List[str], database_alias: Optional[str], max_def_chars: int) -> tuple[List[dict], List[str]]:
+def _from_cache(
+    sp_names: List[str],
+    database_alias: Optional[str],
+    max_def_chars: int,
+    db_server: Optional[str] = None,
+) -> tuple[List[dict], List[str]]:
     """從本機 SQL 快取查找；回傳 (已找到的定義清單, 快取中找不到的名稱清單)。
     快取本身不存在（從未 /refresh_sql 過）時，全部視為「找不到」交給即時查詢補上。
+    db_server 指名要讀哪一台伺服器的快取；省略時由 sql_cache_store 從磁碟回推。
     """
     if not database_alias:
         return [], sp_names
 
-    cached = load_cached(database_alias)
+    cached = load_cached(database_alias, server=db_server or "")
     if not cached:
         return [], sp_names
 
@@ -190,7 +196,7 @@ def fetch_sp_definitions(
     if not sp_names:
         return []
 
-    found, missing = _from_cache(sp_names, database_alias, max_def_chars)
+    found, missing = _from_cache(sp_names, database_alias, max_def_chars, db_server)
     if missing:
         found.extend(_from_live_query(missing, database_alias, max_def_chars, db_server, db_name))
     return found

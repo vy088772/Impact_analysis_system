@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.settings import settings
-from service import sql_cache_store
+from service import analyze_service, sql_cache_store
+from service.sql_cache_store import CacheIdentity
 from service.sql_execution_graph import GRAPH_VERSION
-from tools.migrate_sql_cache_keys import LEGACY_CACHE_SCOPES, migrate_cache_keys
+from tests.sql_cache_fixtures import CacheRoot, write_cache
+from tools.migrate_sql_cache_keys import LEGACY_CACHE_SCOPES, Scope, migrate_cache_keys
 
 
 def _payload(database: str) -> dict:
@@ -33,43 +35,6 @@ def _payload(database: str) -> dict:
             "parse_errors": [],
         },
     }
-
-
-def _write_legacy_cache(cache_root: Path, legacy_key: str, payload: dict) -> None:
-    (cache_root / f"{legacy_key}.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (cache_root / f"{legacy_key}.meta.json").write_text(
-        json.dumps(
-            {
-                "cache_version": sql_cache_store._SQL_CACHE_VERSION,
-                "database": payload["database"],
-                "schema": payload["schema"],
-                "saved_at": "2026-08-04 13:29:13",
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-
-class _CacheRoot:
-    """Point settings.SQL_CACHE_ROOT at a temp dir and clear the in-process cache."""
-
-    def __enter__(self) -> Path:
-        self._previous_root = settings.SQL_CACHE_ROOT
-        self._previous_mem = dict(sql_cache_store._mem_cache)
-        self._tmp = tempfile.TemporaryDirectory()
-        settings.SQL_CACHE_ROOT = self._tmp.name
-        sql_cache_store._mem_cache.clear()
-        return Path(self._tmp.name)
-
-    def __exit__(self, *exc: object) -> None:
-        settings.SQL_CACHE_ROOT = self._previous_root
-        sql_cache_store._mem_cache.clear()
-        sql_cache_store._mem_cache.update(self._previous_mem)
-        self._tmp.cleanup()
 
 
 # ---------------------------------------------------------------- normalization
@@ -109,57 +74,53 @@ def test_empty_server_normalizes_to_empty() -> None:
 # ------------------------------------------------------------------ cache key
 
 
-def test_cache_filename_is_built_from_server_database_and_schema() -> None:
-    assert (
-        sql_cache_store.cache_filename("vmsystest07", "STC", "dbo")
-        == "vmsystest07.topmost.com.tw__STC__dbo.json"
-    )
+def test_a_cache_identity_names_its_own_files() -> None:
+    identity = CacheIdentity.of("vmsystest07", "STC", "dbo")
+
+    assert identity.filename == "vmsystest07.topmost.com.tw__STC__dbo.json"
+    assert identity.meta_filename == "vmsystest07.topmost.com.tw__STC__dbo.meta.json"
 
 
-def test_cache_filename_defaults_to_the_dbo_schema() -> None:
+def test_a_cache_identity_defaults_to_the_dbo_schema() -> None:
     assert (
-        sql_cache_store.cache_filename("vmsystest07.topmost.com.tw", "PUR")
+        CacheIdentity.of("vmsystest07.topmost.com.tw", "PUR").filename
         == "vmsystest07.topmost.com.tw__PUR__dbo.json"
     )
 
 
 def test_one_shared_database_has_one_key_regardless_of_which_system_asks() -> None:
     """SysErrorRecord is referenced by many systems; its cache key must not vary."""
-    assert sql_cache_store.cache_key("vmsystest07", "SysErrorRecord") == sql_cache_store.cache_key(
-        "VMSYSTEST07.topmost.com.tw\\pdcs", "SysErrorRecord"
+    assert (
+        CacheIdentity.of("vmsystest07", "SysErrorRecord").key
+        == CacheIdentity.of("VMSYSTEST07.topmost.com.tw\\pdcs", "SysErrorRecord").key
     )
 
 
 def test_same_database_name_on_two_servers_gets_two_keys() -> None:
-    assert sql_cache_store.cache_key("vmsystest07", "PUR") != sql_cache_store.cache_key(
-        "vmsystest08", "PUR"
+    assert (
+        CacheIdentity.of("vmsystest07", "PUR").key
+        != CacheIdentity.of("vmsystest08", "PUR").key
     )
 
 
-def test_cache_key_rejects_an_unknown_server() -> None:
-    try:
-        sql_cache_store.cache_key("", "PUR")
-    except ValueError:
-        return
-    raise AssertionError("cache_key() must refuse to build a key without a server")
+def test_a_cache_identity_rejects_an_unknown_server() -> None:
+    with pytest.raises(ValueError):
+        CacheIdentity.of("", "PUR")
 
 
-def test_cache_key_rejects_an_unknown_database() -> None:
-    try:
-        sql_cache_store.cache_key("vmsystest07", "")
-    except ValueError:
-        return
-    raise AssertionError("cache_key() must refuse to build a key without a database")
+def test_a_cache_identity_rejects_an_unknown_database() -> None:
+    with pytest.raises(ValueError):
+        CacheIdentity.of("vmsystest07", "")
 
 
 # ------------------------------------------------------- catalog membership
 
 
 def test_a_database_is_cataloged_exactly_when_its_cache_file_exists() -> None:
-    with _CacheRoot() as cache_root:
+    with CacheRoot() as cache_root:
         assert sql_cache_store.has_cache("SysErrorRecord", "dbo", server="vmsystest07") is False
 
-        _write_legacy_cache(
+        write_cache(
             cache_root,
             "vmsystest07.topmost.com.tw__SysErrorRecord__dbo",
             _payload("SysErrorRecord"),
@@ -169,8 +130,8 @@ def test_a_database_is_cataloged_exactly_when_its_cache_file_exists() -> None:
 
 
 def test_a_cache_written_for_one_server_is_not_found_under_another() -> None:
-    with _CacheRoot() as cache_root:
-        _write_legacy_cache(
+    with CacheRoot() as cache_root:
+        write_cache(
             cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
         )
 
@@ -178,8 +139,8 @@ def test_a_cache_written_for_one_server_is_not_found_under_another() -> None:
 
 
 def test_a_caller_without_a_server_resolves_the_only_cache_for_that_database() -> None:
-    with _CacheRoot() as cache_root:
-        _write_legacy_cache(
+    with CacheRoot() as cache_root:
+        write_cache(
             cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
         )
 
@@ -190,11 +151,11 @@ def test_a_caller_without_a_server_resolves_the_only_cache_for_that_database() -
 
 
 def test_a_caller_without_a_server_refuses_an_ambiguous_database_name() -> None:
-    with _CacheRoot() as cache_root:
-        _write_legacy_cache(
+    with CacheRoot() as cache_root:
+        write_cache(
             cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
         )
-        _write_legacy_cache(
+        write_cache(
             cache_root, "vmsystest08.topmost.com.tw__PUR__dbo", _payload("PUR")
         )
 
@@ -203,8 +164,8 @@ def test_a_caller_without_a_server_refuses_an_ambiguous_database_name() -> None:
 
 def test_a_system_id_is_not_a_cache_key() -> None:
     """Y-Docs_TTPUR is a system_id; the cached database is named PUR."""
-    with _CacheRoot() as cache_root:
-        _write_legacy_cache(
+    with CacheRoot() as cache_root:
+        write_cache(
             cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
         )
 
@@ -215,10 +176,10 @@ def test_a_system_id_is_not_a_cache_key() -> None:
 
 
 def test_migration_renames_a_legacy_cache_file_to_the_new_key() -> None:
-    with _CacheRoot() as cache_root:
-        _write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
+    with CacheRoot() as cache_root:
+        write_cache(cache_root, "STC__dbo", _payload("STC"))
 
-        migrate_cache_keys(cache_root, [("STC__dbo", "vmsystest07", "STC", "dbo")])
+        migrate_cache_keys(cache_root, [Scope("STC__dbo", "vmsystest07", "STC", "dbo")])
 
         assert (cache_root / "vmsystest07.topmost.com.tw__STC__dbo.json").exists()
         assert (cache_root / "vmsystest07.topmost.com.tw__STC__dbo.meta.json").exists()
@@ -228,11 +189,11 @@ def test_migration_renames_a_legacy_cache_file_to_the_new_key() -> None:
 
 def test_a_migrated_cache_reads_back_identically_under_its_new_name() -> None:
     """Smoke test: rename only — the parsed payload must not change."""
-    with _CacheRoot() as cache_root:
+    with CacheRoot() as cache_root:
         before = _payload("STC")
-        _write_legacy_cache(cache_root, "STC__dbo", before)
+        write_cache(cache_root, "STC__dbo", before)
 
-        migrate_cache_keys(cache_root, [("STC__dbo", "vmsystest07", "STC", "dbo")])
+        migrate_cache_keys(cache_root, [Scope("STC__dbo", "vmsystest07", "STC", "dbo")])
 
         after = sql_cache_store.load_cached("STC", "dbo", server="vmsystest07")
         assert after == before
@@ -240,11 +201,11 @@ def test_a_migrated_cache_reads_back_identically_under_its_new_name() -> None:
 
 def test_migration_corrects_a_payload_whose_identity_was_a_system_id() -> None:
     """Y-Docs_TTPUR__dbo holds database PUR; only the identity fields may change."""
-    with _CacheRoot() as cache_root:
+    with CacheRoot() as cache_root:
         before = _payload("Y-Docs_TTPUR")
-        _write_legacy_cache(cache_root, "Y-Docs_TTPUR__dbo", before)
+        write_cache(cache_root, "Y-Docs_TTPUR__dbo", before)
 
-        migrate_cache_keys(cache_root, [("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
+        migrate_cache_keys(cache_root, [Scope("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
 
         after = sql_cache_store.load_cached("PUR", "dbo", server="vmsystest07")
         assert after is not None
@@ -257,11 +218,11 @@ def test_migration_corrects_a_payload_whose_identity_was_a_system_id() -> None:
 
 
 def test_migration_does_not_rescan_the_procedure_definitions() -> None:
-    with _CacheRoot() as cache_root:
+    with CacheRoot() as cache_root:
         before = _payload("Y-Docs_TTPUR")
-        _write_legacy_cache(cache_root, "Y-Docs_TTPUR__dbo", before)
+        write_cache(cache_root, "Y-Docs_TTPUR__dbo", before)
 
-        migrate_cache_keys(cache_root, [("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
+        migrate_cache_keys(cache_root, [Scope("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
 
         after = json.loads(
             (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.json").read_text(encoding="utf-8")
@@ -271,7 +232,7 @@ def test_migration_does_not_rescan_the_procedure_definitions() -> None:
 
 def test_migration_touches_only_the_identity_bytes() -> None:
     """No re-scan means no rewrite: even the line endings must survive."""
-    with _CacheRoot() as cache_root:
+    with CacheRoot() as cache_root:
         before = _payload("Y-Docs_TTPUR")
         raw = (
             json.dumps(before, ensure_ascii=False, indent=2)
@@ -291,16 +252,16 @@ def test_migration_touches_only_the_identity_bytes() -> None:
             encoding="utf-8",
         )
 
-        migrate_cache_keys(cache_root, [("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
+        migrate_cache_keys(cache_root, [Scope("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
 
         after = (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.json").read_bytes()
         assert after == raw.replace(b'"database": "Y-Docs_TTPUR"', b'"database": "PUR"')
 
 
 def test_migration_is_idempotent() -> None:
-    with _CacheRoot() as cache_root:
-        _write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
-        scopes = [("STC__dbo", "vmsystest07", "STC", "dbo")]
+    with CacheRoot() as cache_root:
+        write_cache(cache_root, "STC__dbo", _payload("STC"))
+        scopes = [Scope("STC__dbo", "vmsystest07", "STC", "dbo")]
 
         first = migrate_cache_keys(cache_root, scopes)
         second = migrate_cache_keys(cache_root, scopes)
@@ -311,10 +272,14 @@ def test_migration_is_idempotent() -> None:
 
 
 def test_migration_dry_run_changes_nothing() -> None:
-    with _CacheRoot() as cache_root:
-        _write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
+    with CacheRoot() as cache_root:
+        write_cache(cache_root, "STC__dbo", _payload("STC"))
 
-        migrate_cache_keys(cache_root, [("STC__dbo", "vmsystest07", "STC", "dbo")], dry_run=True)
+        migrate_cache_keys(
+            cache_root,
+            [Scope("STC__dbo", "vmsystest07", "STC", "dbo")],
+            dry_run=True,
+        )
 
         assert (cache_root / "STC__dbo.json").exists()
         assert not (cache_root / "vmsystest07.topmost.com.tw__STC__dbo.json").exists()
@@ -325,3 +290,90 @@ def test_the_shipped_migration_scopes_cover_both_existing_cache_files() -> None:
         ("STC__dbo", "vmsystest07", "STC", "dbo"),
         ("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo"),
     ]
+
+
+def test_the_migration_writes_the_meta_the_store_itself_would_write() -> None:
+    """The meta format lives in sql_cache_store; the migration must not fork it."""
+    with CacheRoot() as cache_root:
+        write_cache(cache_root, "STC__dbo", _payload("STC"))
+
+        migrate_cache_keys(cache_root, [Scope("STC__dbo", "vmsystest07", "STC", "dbo")])
+
+        identity = CacheIdentity.of("vmsystest07", "STC", "dbo")
+        migrated = json.loads(
+            (cache_root / identity.meta_filename).read_text(encoding="utf-8")
+        )
+        sql_cache_store._save(CacheIdentity.of("vmsystest08", "STC", "dbo"), _payload("STC"))
+        saved = json.loads(
+            (cache_root / CacheIdentity.of("vmsystest08", "STC", "dbo").meta_filename)
+            .read_text(encoding="utf-8")
+        )
+
+        assert migrated.keys() == saved.keys()
+        assert migrated["cache_version"] == saved["cache_version"]
+        assert migrated["server"] == "vmsystest07.topmost.com.tw"
+        # A rename is not a re-scan: the legacy scan time survives untouched.
+        assert migrated["saved_at"] == "2026-08-04 13:29:13"
+
+
+# ---------------------------------------------------------------- get_or_dump
+
+
+def test_get_or_dump_refuses_to_key_a_cache_by_the_display_alias() -> None:
+    """database is a display label; without db_name there is no cache identity."""
+    with pytest.raises(ValueError):
+        sql_cache_store.get_or_dump("Y-Docs_TTPUR", server="vmsystest07")
+
+
+# ----------------------------------------------------- analyze-side read path
+
+
+def _payload_with_procedure(database: str, procedure: str) -> dict:
+    payload = _payload(database)
+    payload["procedures"] = [{"name": procedure, "definition": "CREATE PROCEDURE x AS SELECT 1"}]
+    payload["sql_execution_graph"]["nodes"] = [
+        {"id": f"stored_procedure:dbo.{procedure}", "type": "stored_procedure",
+         "name": procedure, "schema": "dbo"}
+    ]
+    return payload
+
+
+def test_the_analyze_read_path_reads_the_server_the_request_named() -> None:
+    """Two servers hold a PUR cache; db_server decides which one /analyze reads."""
+    with CacheRoot() as cache_root:
+        write_cache(
+            cache_root,
+            "vmsystest07.topmost.com.tw__PUR__dbo",
+            _payload_with_procedure("PUR", "spOnSeven"),
+        )
+        write_cache(
+            cache_root,
+            "vmsystest08.topmost.com.tw__PUR__dbo",
+            _payload_with_procedure("PUR", "spOnEight"),
+        )
+
+        catalog, _graph, _database = analyze_service._execution_sql_context("PUR", "vmsystest08")
+
+        assert catalog.contains("PUR", "sponeight") is True
+        assert catalog.contains("PUR", "sponseven") is False
+
+
+def test_the_analyze_read_path_without_a_server_cannot_pick_between_two() -> None:
+    """The ambiguity is reported as "no cache", not silently resolved to one server."""
+    with CacheRoot() as cache_root:
+        write_cache(
+            cache_root,
+            "vmsystest07.topmost.com.tw__PUR__dbo",
+            _payload_with_procedure("PUR", "spOnSeven"),
+        )
+        write_cache(
+            cache_root,
+            "vmsystest08.topmost.com.tw__PUR__dbo",
+            _payload_with_procedure("PUR", "spOnEight"),
+        )
+
+        with pytest.raises(analyze_service.SqlExecutionGraphRequiredError):
+            analyze_service._require_sql_execution_graph("PUR")
+
+        cached, _graph = analyze_service._require_sql_execution_graph("PUR", "vmsystest07")
+        assert cached["database"] == "PUR"

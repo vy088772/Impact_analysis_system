@@ -45,13 +45,15 @@ def fetch_called_sp_names(
     sp_definition: str,
     database_alias: Optional[str] = None,
     exclude_name: str = "",
+    db_server: Optional[str] = None,
 ) -> List[str]:
     """從某支 SP 自己的定義文字中，比對出它實際以 EXEC/EXECUTE 呼叫到的其他已知
     SP 名稱清單（只回傳名稱本身，不含完整定義——呼叫端可再用這些名稱透過
     sp_fetcher/本機快取取得各自的完整定義，逐層組成巢狀呼叫鏈）。
 
     sp_definition：該支 SP 自己的完整 T-SQL 定義文字。
-    database_alias：對應 sql_cache_store 快取鍵（通常是 system_id）。
+    database_alias：要讀哪一份 SQL 快取的資料庫名稱。
+    db_server：那份快取所在的伺服器；省略時由 sql_cache_store 從磁碟回推。
     exclude_name：排除這個名稱本身（避免自我遞迴這種邊界情況誤判為呼叫自己）。
 
     只比對「EXEC/EXECUTE + （可能的 schema 前綴）+ 名稱」這種明確呼叫形式，且該
@@ -62,7 +64,7 @@ def fetch_called_sp_names(
     if not sp_definition or not database_alias:
         return []
 
-    cached = load_cached(database_alias)
+    cached = load_cached(database_alias, server=db_server or "")
     if not cached:
         return []
 

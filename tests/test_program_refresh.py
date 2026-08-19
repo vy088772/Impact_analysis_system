@@ -1082,7 +1082,7 @@ def test_refresh_reconciliation_uses_database_scoped_sp_catalog(monkeypatch, tmp
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {
+        lambda database, schema, server="": {
             "database": "OrdersDb",
             "schema": "dbo",
             "procedures": [{"name": "dbo.usp_SaveOrder"}],

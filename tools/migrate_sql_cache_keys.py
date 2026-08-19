@@ -19,7 +19,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, NamedTuple, Sequence, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -27,14 +27,26 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from service import sql_cache_store  # noqa: E402
 
-# 現存的兩份快取：(舊快取鍵, server, 真正的資料庫名稱, schema)。
-# 這是一次性搬移的完整清單——本專案只有這兩份快取，之後寫出的快取一律用新鍵。
-LEGACY_CACHE_SCOPES: List[Tuple[str, str, str, str]] = [
-    ("STC__dbo", "vmsystest07", "STC", "dbo"),
-    ("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo"),
-]
 
-Scope = Tuple[str, str, str, str]
+class Scope(NamedTuple):
+    """一筆搬移：舊快取鍵，加上它真正的 (server, database, schema) 身分。"""
+
+    legacy_key: str
+    server: str
+    database: str
+    schema: str
+
+    @property
+    def identity(self) -> sql_cache_store.CacheIdentity:
+        return sql_cache_store.CacheIdentity.of(self.server, self.database, self.schema)
+
+
+# 現存的兩份快取。這是一次性搬移的完整清單——本專案只有這兩份快取，
+# 之後寫出的快取一律用新鍵。
+LEGACY_CACHE_SCOPES: List[Scope] = [
+    Scope("STC__dbo", "vmsystest07", "STC", "dbo"),
+    Scope("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo"),
+]
 
 
 def _identity_aliases(payload: object, database: str) -> List[str]:
@@ -71,16 +83,17 @@ def _retag_identity(raw: bytes, database: str) -> Tuple[bytes, bool]:
 
 
 def _migrate_one(cache_root: Path, scope: Scope, dry_run: bool) -> Dict[str, object]:
-    legacy_key, server, database, schema = scope
-    new_key = sql_cache_store.cache_key(server, database, schema)
+    legacy_key = scope.legacy_key
+    database = scope.database
+    identity = scope.identity
     legacy_data = cache_root / f"{legacy_key}.json"
     legacy_meta = cache_root / f"{legacy_key}.meta.json"
-    new_data = cache_root / f"{new_key}.json"
-    new_meta = cache_root / f"{new_key}.meta.json"
+    new_data = cache_root / identity.filename
+    new_meta = cache_root / identity.meta_filename
 
     entry: Dict[str, object] = {
         "legacy_key": legacy_key,
-        "new_key": new_key,
+        "new_key": identity.key,
         "action": "missing",
         "retagged": False,
     }
@@ -103,24 +116,19 @@ def _migrate_one(cache_root: Path, scope: Scope, dry_run: bool) -> Dict[str, obj
         new_data.write_bytes(raw)
     entry["retagged"] = changed
 
-    meta = {}
-    if new_meta.exists():
-        try:
-            meta = json.loads(new_meta.read_text(encoding="utf-8"))
-        except Exception:
-            meta = {}
-    meta.update(
-        {
-            "cache_version": sql_cache_store._SQL_CACHE_VERSION,
-            "server": sql_cache_store.normalize_server(server),
-            "database": database,
-            "schema": schema,
-        }
-    )
-    new_meta.write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    # meta 的格式由 sql_cache_store 定義，這裡只補上「這份快取真正的身分」。
+    # saved_at 沿用舊檔案記的時間：搬移不是重新掃描。
+    sql_cache_store.write_meta(new_meta, identity, saved_at=_saved_at(new_meta))
     return entry
+
+
+def _saved_at(meta_path: Path) -> str:
+    if not meta_path.exists():
+        return ""
+    try:
+        return str(json.loads(meta_path.read_text(encoding="utf-8")).get("saved_at") or "")
+    except Exception:
+        return ""
 
 
 def migrate_cache_keys(

@@ -4,6 +4,10 @@ This context defines the SQL execution-analysis vocabulary used to trace applica
 
 ## SQL Execution Analysis
 
+**SQL Cache Identity**:
+The normalized `(server, database, schema)` triple that names one SQL cache, independent of any System. The server part drops a named-instance suffix, gains the internal domain when it has none, and is lowercased, so one host never holds two identities. A Database shared by many Systems has exactly one identity, and so exactly one cache. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
+_Avoid_: system_id cache key, per-System cache, database name alone
+
 **SQL Execution Graph**:
 A typed static graph of stored procedures, views, functions, tables, calls, and DML operations produced from SQL AST analysis. It is the sole source of SQL relationship and flow evidence.
 _Avoid_: dependencies, depends_on, depended_by
@@ -31,7 +35,7 @@ The normalized stored-procedure inventory for one refreshed database, used to va
 _Avoid_: global SP-name match
 
 **Uncataloged Database**:
-A resolved connection target whose database is identified but has no matching SP Catalog scan yet. Distinct from a connection target that cannot be identified at all — the two are never reported under the same reason. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
+A resolved connection target whose database is identified but has no matching SP Catalog scan yet — its SQL Cache Identity names no cache on disk. Distinct from a connection target that cannot be identified at all — the two are never reported under the same reason. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
 _Avoid_: unresolved database, unknown database
 
 **Database Invocation**:

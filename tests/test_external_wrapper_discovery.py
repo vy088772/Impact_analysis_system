@@ -208,7 +208,7 @@ def test_report_evidence_and_provenance_match_refresh_reconciliation(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {
+        lambda database, schema, server="": {
             "database": "OrdersDb",
             "schema": "dbo",
             "procedures": [{"name": "dbo.usp_SO_Delete"}],
@@ -268,7 +268,7 @@ def test_refresh_reconciliation_drops_reviewed_exclusions_from_totals_and_detail
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {
+        lambda database, schema, server="": {
             "database": "OrdersDb",
             "schema": "dbo",
             "procedures": [{"name": "dbo.usp_SO_Delete"}],

@@ -212,7 +212,12 @@ def _expand_sp_chain(
         if depth >= max_depth or not definition:
             continue
 
-        nested = fetch_called_sp_names(definition, database_alias=database_alias, exclude_name=name)
+        nested = fetch_called_sp_names(
+            definition,
+            database_alias=database_alias,
+            exclude_name=name,
+            db_server=db_server,
+        )
         for nested_name in nested:
             if _normalize_name(nested_name) not in visited:
                 queue.append((nested_name, name, depth + 1))

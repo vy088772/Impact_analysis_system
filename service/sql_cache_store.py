@@ -14,6 +14,7 @@ SQL 物件（預存程序/View/使用者定義函數/資料表 Schema）的本�
 快取鍵是 (server, database, schema) 這組正規化三元組，與 system_id 無關
 （見 docs/adr/0009-sql-cache-identity-decoupled-from-system.md）：同一個
 Database 被幾套 System 參照、或不屬於任何 System，都只掃描與快取一次。
+這組三元組在模組內一律以 CacheIdentity 型別、一種參數順序傳遞。
 「這個 Database 有沒有建檔」完全由對應的快取檔在不在磁碟上決定，沒有其他名單。
 """
 from __future__ import annotations
@@ -21,6 +22,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -53,9 +55,18 @@ _mem_cache: Dict[str, Dict] = {}
 # 這是一條演算法規則，不是對照表——新的主機（如未來的 vmsystest09）不需要改設定。
 SERVER_DOMAIN_SUFFIX = ".topmost.com.tw"
 
+# 快取檔名的形狀只在這裡定義一次：{server}__{database}__{schema}.json。
+_KEY_SEPARATOR = "__"
+_DATA_SUFFIX = ".json"
+_META_SUFFIX = ".meta.json"
+
 
 def _safe_name(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", text or "").strip("_") or "default"
+
+
+def _key_of(*parts: str) -> str:
+    return _KEY_SEPARATOR.join(_safe_name(part) for part in parts)
 
 
 def normalize_server(server: str) -> str:
@@ -75,20 +86,42 @@ def normalize_server(server: str) -> str:
     return host.lower()
 
 
-def cache_key(server: str, database: str, schema: str = "dbo") -> str:
-    """(server, database, schema) 三元組的快取鍵；不吃 system_id。"""
-    normalized_server = normalize_server(server)
-    database = str(database or "").strip()
-    if not normalized_server or not database:
-        raise ValueError(
-            f"SQL 快取鍵需要 server 與 database（server={server!r}, database={database!r}）"
-        )
-    return f"{_safe_name(normalized_server)}__{_safe_name(database)}__{_safe_name(schema)}"
+@dataclass(frozen=True)
+class CacheIdentity:
+    """一份 SQL 快取的身分：正規化過的 (server, database, schema) 三元組。
 
+    模組內所有需要這組三元組的函式都收這一個值、用這一個順序；快取鍵與檔名
+    都由它算出來，不再由呼叫端各自拼。用 of() 建立，不要直接呼叫建構式——
+    of() 才會正規化 server、並檢查 server 與 database 都有值（schema 可省略，
+    空字串等同 _safe_name() 的 "default"）。
+    """
 
-def cache_filename(server: str, database: str, schema: str = "dbo") -> str:
-    """該三元組的快取檔名（含 .json）。"""
-    return f"{cache_key(server, database, schema)}.json"
+    server: str
+    database: str
+    schema: str
+
+    @classmethod
+    def of(cls, server: str, database: str, schema: str = "dbo") -> "CacheIdentity":
+        normalized_server = normalize_server(server)
+        database = str(database or "").strip()
+        schema = str(schema or "").strip()
+        if not normalized_server or not database:
+            raise ValueError(
+                f"SQL 快取鍵需要 server 與 database（server={server!r}, database={database!r}）"
+            )
+        return cls(normalized_server, database, schema)
+
+    @property
+    def key(self) -> str:
+        return _key_of(self.server, self.database, self.schema)
+
+    @property
+    def filename(self) -> str:
+        return f"{self.key}{_DATA_SUFFIX}"
+
+    @property
+    def meta_filename(self) -> str:
+        return f"{self.key}{_META_SUFFIX}"
 
 
 def _cache_root() -> Path:
@@ -97,9 +130,9 @@ def _cache_root() -> Path:
     return root
 
 
-def _paths(server: str, database: str, schema: str) -> tuple[Path, Path]:
-    k = cache_key(server, database, schema)
-    return _cache_root() / f"{k}.json", _cache_root() / f"{k}.meta.json"
+def _paths(identity: CacheIdentity) -> tuple[Path, Path]:
+    root = _cache_root()
+    return root / identity.filename, root / identity.meta_filename
 
 
 def resolve_server(database: str, schema: str = "dbo") -> str:
@@ -107,16 +140,22 @@ def resolve_server(database: str, schema: str = "dbo") -> str:
 
     找不到、或同名 database 在多台 server 上都有快取（無法判斷是哪一台）時回傳
     空字串——寧可查無快取，也不猜錯資料庫。
+
+    結構上沒有 server 可帶的呼叫端有三個：/find_by_sp 與 /find_by_table
+    （FindBySPRequest/FindByTableRequest 沒有 db_server 欄位），以及 refresh 流程的
+    analyze_service.reconcile_refresh_wrappers()（含 tools/discover_external_wrappers.py）。
+    /analyze、/path_evidence、/flow_chain 會把請求的 db_server 一路帶到這裡，
+    指名讀哪一台；那些請求沒填 db_server 時同樣落到這條回推。
     """
     database = str(database or "").strip()
     if not database:
         return ""
-    suffix = f"__{_safe_name(database)}__{_safe_name(schema)}.json"
+    suffix = f"{_KEY_SEPARATOR}{_key_of(database, schema)}{_DATA_SUFFIX}"
     servers = sorted(
         {
             path.name[: -len(suffix)]
             for path in _cache_root().glob(f"*{suffix}")
-            if not path.name.endswith(".meta.json") and len(path.name) > len(suffix)
+            if not path.name.endswith(_META_SUFFIX) and len(path.name) > len(suffix)
         }
     )
     if len(servers) != 1:
@@ -133,7 +172,7 @@ def _same_scope(actual: object, expected: str) -> bool:
     return str(actual or "").strip().casefold() == str(expected or "").strip().casefold()
 
 
-def _is_valid_cache(data: object, database: str, schema: str) -> bool:
+def _is_valid_cache(data: object, identity: CacheIdentity) -> bool:
     if not isinstance(data, dict):
         return False
     graph = data.get("sql_execution_graph")
@@ -148,11 +187,11 @@ def _is_valid_cache(data: object, database: str, schema: str) -> bool:
         for field in ("nodes", "relationships", "parse_errors")
     ):
         return False
-    if not _same_scope(data.get("database"), database):
+    if not _same_scope(data.get("database"), identity.database):
         return False
-    if not _same_scope(data.get("schema"), schema):
+    if not _same_scope(data.get("schema"), identity.schema):
         return False
-    return _same_scope(graph.get("database"), database)
+    return _same_scope(graph.get("database"), identity.database)
 
 
 def _without_legacy_dependency_fields(data: Dict) -> Dict:
@@ -167,8 +206,30 @@ def has_cache(database: str, schema: str = "dbo", server: str = "") -> bool:
     return load_cached(database, schema, server=server) is not None
 
 
-def _load(server: str, database: str, schema: str) -> Optional[Dict]:
-    data_path, meta_path = _paths(server, database, schema)
+def _meta_payload(identity: CacheIdentity, saved_at: str) -> Dict[str, object]:
+    return {
+        "cache_version": _SQL_CACHE_VERSION,
+        "server": identity.server,
+        "database": identity.database,
+        "schema": identity.schema,
+        "saved_at": saved_at,
+    }
+
+
+def write_meta(meta_path: Path, identity: CacheIdentity, saved_at: str) -> None:
+    """把 meta 檔寫到指定路徑。meta 格式只在這裡定義一次。
+
+    _save() 與一次性搬移工具（tools/migrate_sql_cache_keys.py）共用這一個出口。
+    saved_at 照傳照寫、不補值：搬移不是重新掃描，不該冒出一個沒發生過的掃描時間。
+    """
+    Path(meta_path).write_text(
+        json.dumps(_meta_payload(identity, saved_at), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _load(identity: CacheIdentity) -> Optional[Dict]:
+    data_path, meta_path = _paths(identity)
     if not data_path.exists():
         return None
     try:
@@ -177,40 +238,27 @@ def _load(server: str, database: str, schema: str) -> Optional[Dict]:
         info = json.loads(meta_path.read_text(encoding="utf-8"))
         if info.get("cache_version") != _SQL_CACHE_VERSION:
             return None
-        if not _same_scope(info.get("database"), database):
+        if not _same_scope(info.get("database"), identity.database):
             return None
-        if not _same_scope(info.get("schema"), schema):
+        if not _same_scope(info.get("schema"), identity.schema):
             return None
-        if info.get("server") and not _same_scope(info.get("server"), normalize_server(server)):
+        if info.get("server") and not _same_scope(info.get("server"), identity.server):
             return None
         data = json.loads(data_path.read_text(encoding="utf-8"))
-        if not _is_valid_cache(data, database, schema):
+        if not _is_valid_cache(data, identity):
             return None
         return data
     except Exception:
         return None
 
 
-def _save(server: str, database: str, schema: str, data: Dict) -> None:
-    data_path, meta_path = _paths(server, database, schema)
+def _save(identity: CacheIdentity, data: Dict) -> None:
+    data_path, meta_path = _paths(identity)
     try:
         data_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        meta_path.write_text(
-            json.dumps(
-                {
-                    "cache_version": _SQL_CACHE_VERSION,
-                    "server": normalize_server(server),
-                    "database": database,
-                    "schema": schema,
-                    "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+        write_meta(meta_path, identity, time.strftime("%Y-%m-%d %H:%M:%S"))
     except Exception as exc:  # 寫檔失敗不致命
         print(f"⚠️  SQL 快取寫出失敗（非致命）：{exc}")
 
@@ -224,15 +272,15 @@ def load_cached(database: str, schema: str = "dbo", server: str = "") -> Optiona
     server = normalize_server(server) or resolve_server(database, schema)
     if not server:
         return None
-    key = cache_key(server, database, schema)
-    if key in _mem_cache:
-        cached = _mem_cache[key]
-        if _is_valid_cache(cached, database, schema):
+    identity = CacheIdentity.of(server, database, schema)
+    if identity.key in _mem_cache:
+        cached = _mem_cache[identity.key]
+        if _is_valid_cache(cached, identity):
             return cached
-        _mem_cache.pop(key, None)
-    cached = _load(server, database, schema)
+        _mem_cache.pop(identity.key, None)
+    cached = _load(identity)
     if cached is not None:
-        _mem_cache[key] = cached
+        _mem_cache[identity.key] = cached
     return cached
 
 
@@ -251,8 +299,8 @@ def get_or_dump(
     連線 SQL Server 撈取整庫定義並覆寫快取。
 
     server/db_name：實際連線目標，同時也是快取鍵的兩個組成（第三個是 schema），
-    由呼叫端如 spec-rag 的 catalog 逐資料庫提供。db_name 省略時退回用 database
-    當資料庫名稱；缺 server 即由 SQLAnalyzer 直接報錯、不嘗試連線
+    由呼叫端如 spec-rag 的 catalog 逐資料庫提供，兩者皆必填。db_name 為空即
+    直接報錯，不猜資料庫名稱；缺 server 則由 SQLAnalyzer 報錯、不嘗試連線
     （見 config.settings.build_database_config）。
 
     database：顯示用簡稱；不參與快取鍵計算。
@@ -261,7 +309,11 @@ def get_or_dump(
     .env 的全域 DB_AUTH_MODE 身分（見 docs/adr/0010-scan-identity-independent-of-app-credentials.md）。
     掃描用的連線身分永遠不從被掃應用程式的 Web.config 推導。
     """
-    db = str(db_name or database or "").strip()
+    db = str(db_name or "").strip()
+    if not db:
+        raise ValueError(
+            f"get_or_dump() 需要 db_name（實際資料庫名稱）；database={database!r} 只是顯示用簡稱。"
+        )
 
     if not refresh:
         cached = load_cached(db, schema, server=server)
@@ -292,18 +344,19 @@ def get_or_dump(
 
     from .sql_execution_graph import build_sql_execution_graph
 
+    identity = CacheIdentity.of(server, db, schema)
     data = _without_legacy_dependency_fields(data)
     data["sql_execution_graph"] = build_sql_execution_graph(
         data,
         progress_callback=progress_callback,
     )
-    if not _is_valid_cache(data, db, schema):
+    if not _is_valid_cache(data, identity):
         raise ValueError(
             f"SQL cache payload database identity mismatch: {db}.{schema}"
         )
-    _mem_cache[cache_key(server, db, schema)] = data
+    _mem_cache[identity.key] = data
     _report_progress(progress_callback, "saving", 0, 1, "SQL cache")
-    _save(server, db, schema, data)
+    _save(identity, data)
     _report_progress(progress_callback, "saving", 1, 1, "SQL cache")
     return data
 

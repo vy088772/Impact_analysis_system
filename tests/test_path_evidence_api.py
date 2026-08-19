@@ -156,7 +156,7 @@ def test_analyze_route_maps_graph_readiness_to_conflict(monkeypatch) -> None:
 
 
 def test_require_sql_execution_graph_exposes_machine_readable_failure(monkeypatch) -> None:
-    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema: None)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": None)
 
     with pytest.raises(analyze_service.SqlExecutionGraphRequiredError) as error:
         analyze_service._require_sql_execution_graph("OrdersDb")

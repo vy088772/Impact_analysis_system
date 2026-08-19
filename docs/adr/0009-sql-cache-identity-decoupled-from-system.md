@@ -11,7 +11,7 @@
 
 The cache key becomes the normalized triple `(server, database, schema)`, independent of any System. Cache filenames take the form `{server}__{database}__{schema}.json`.
 
-Server normalization is algorithmic, not a lookup table: a bare host with no `.` gets `.topmost.com.tw` appended; a host that already contains `.` is left as-is. This assumes every internal SQL Server host lives under the single domain `topmost.com.tw` — confirmed against STC's, TTPUR's, and Y-DOCs/Response's actual Web.config content at decision time. A named SQL Server instance suffix (`host\instance`) is discarded during normalization — only the host is used to reach the server in practice.
+Server normalization is algorithmic, not a lookup table: a host that already contains `.` keeps the domain it has; a bare host with no `.` gets `.topmost.com.tw` appended. Hostnames are case-insensitive, so the normalized form is lowercased: a `VMSYSTEST07` in one Web.config and a `vmsystest07` in another name the same server and must therefore share one cache file, not open two. This assumes every internal SQL Server host lives under the single domain `topmost.com.tw` — confirmed against STC's, TTPUR's, and Y-DOCs/Response's actual Web.config content at decision time. A named SQL Server instance suffix (`host\instance`) is discarded during normalization — only the host is used to reach the server in practice.
 
 Whether a Database is cataloged is determined solely by whether its normalized cache file exists on disk. No separate whitelist or registry gates this check.
 

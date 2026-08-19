@@ -186,7 +186,7 @@ def test_find_by_table_write_only_uses_graph_writers(monkeypatch, tmp_path: Path
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
     )
 
     response = analyze_service.find_by_table(
@@ -230,7 +230,7 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {
+        lambda database, schema, server="": {
             "database": "OrdersDb",
             "schema": "dbo",
             "procedures": [
@@ -348,7 +348,7 @@ def test_find_by_sp_accepts_schema_qualified_name(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
     )
 
     response = analyze_service.find_by_sp(
@@ -373,7 +373,7 @@ def test_find_by_sp_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_pat
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
     )
 
     response = analyze_service.find_by_sp(
@@ -403,7 +403,7 @@ def test_backward_flow_preserves_graph_path_and_ui_anchor(monkeypatch, tmp_path:
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
     )
 
     response = analyze_service.flow_chain(
@@ -442,7 +442,7 @@ def test_find_by_table_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
     )
 
     response = analyze_service.find_by_table(
@@ -471,7 +471,7 @@ def test_backward_flow_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
     )
 
     response = analyze_service.flow_chain(
@@ -500,7 +500,7 @@ def test_analyze_keeps_likely_invocation_diagnostic_out_of_formal_counts(monkeyp
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema: {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
     )
 
     response = analyze_service.analyze(

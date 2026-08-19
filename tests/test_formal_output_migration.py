@@ -106,7 +106,7 @@ def test_sp_fetcher_uses_graph_lineage_and_keeps_dynamic_sql_unresolved(monkeypa
     monkeypatch.setattr(
         sp_fetcher,
         "load_cached",
-        lambda database, schema="dbo": {
+        lambda database, schema="dbo", server="": {
             "database": database,
             "schema": schema,
             "procedures": procedures,

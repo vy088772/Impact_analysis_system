@@ -670,10 +670,22 @@ def _populate_decompilation_proposals(
     return _decompilation_summary(attempts, reason=reason)
 
 
-def _execution_sql_context(database_alias: str) -> Tuple[SpCatalog, Dict, str]:
-    """Load one SQL cache scope and build its graph-backed SP catalog."""
+def _execution_sql_context(
+    database_alias: str,
+    db_server: str = "",
+) -> Tuple[SpCatalog, Dict, str]:
+    """Load one SQL cache scope and build its graph-backed SP catalog.
+
+    ``db_server`` names the server whose cache to read. Requests that carry a
+    ``db_server`` always pass it, so the lookup never depends on which other
+    cache files happen to sit in the cache directory.
+    """
     database_alias = str(database_alias or "").strip()
-    cached = sql_cache_store.load_cached(database_alias, "dbo") if database_alias else None
+    cached = (
+        sql_cache_store.load_cached(database_alias, "dbo", server=str(db_server or ""))
+        if database_alias
+        else None
+    )
     graph = dict((cached or {}).get("sql_execution_graph") or {})
     graph_database = str(
         graph.get("database")
@@ -710,18 +722,22 @@ def _execution_sql_context(database_alias: str) -> Tuple[SpCatalog, Dict, str]:
 
 
 def load_sp_catalog(database: str = "") -> SpCatalog:
-    """Return the read-only stored-procedure catalog for a SQL cache scope."""
+    """Return the read-only stored-procedure catalog for a SQL cache scope.
+
+    No caller of this one has a server to give: the refresh path and
+    tools/discover_external_wrappers.py only know a database name.
+    """
     catalog, _, _ = _execution_sql_context(database)
     return catalog
 
 
-def _require_sql_execution_graph(database: str) -> Tuple[Dict, Dict]:
+def _require_sql_execution_graph(database: str, db_server: str = "") -> Tuple[Dict, Dict]:
     database = str(database or "").strip()
     if not database:
         raise ValueError(
             "database 不可為空；Gateway path analysis 需要指定 SQL execution graph cache。"
         )
-    cached = sql_cache_store.load_cached(database, "dbo")
+    cached = sql_cache_store.load_cached(database, "dbo", server=str(db_server or ""))
     graph = (cached or {}).get("sql_execution_graph") if cached else None
     if not cached or not graph:
         raise SqlExecutionGraphRequiredError(
@@ -963,7 +979,8 @@ def _rated_execution_invocations(
 ) -> Tuple[List[DbInvocation], Dict[str, object]]:
     """Rate raw C# facts once so path discovery and evidence use the same join."""
     catalog, graph, graph_database = _execution_sql_context(
-        str(getattr(req, "database", "") or "")
+        str(getattr(req, "database", "") or ""),
+        str(getattr(req, "db_server", "") or ""),
     )
     rated_invocations = []
     raw_by_file = getattr(scan, "db_invocations", {})
@@ -1155,7 +1172,7 @@ def _build_program_execution_paths(
 ) -> Tuple[List[Dict], Dict[str, object]]:
     """Join one program's raw C# facts to the selected SQL execution graph."""
     if req.database:
-        _require_sql_execution_graph(req.database)
+        _require_sql_execution_graph(req.database, req.db_server)
     rated_invocations, graph = _rated_execution_invocations(req, scan, matched_files, root)
 
     paths = build_execution_paths(rated_invocations, graph)
@@ -1177,7 +1194,7 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
     if not path_id:
         raise PathEvidenceError("invalid_path_id", "path_id 不可為空")
 
-    cached, graph = _require_sql_execution_graph(req.database)
+    cached, graph = _require_sql_execution_graph(req.database, req.db_server)
 
     roots = resolve_source(req)  # type: ignore[arg-type]
     if not roots:
@@ -1233,6 +1250,7 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
         scan,
         cached,
         joined_graph,
+        db_server=req.db_server,
     )
 
 
@@ -1242,6 +1260,7 @@ def _materialize_path_evidence(
     scan: ProjectScanResult,
     cached: Mapping[str, object],
     graph: Mapping[str, object],
+    db_server: str = "",
 ) -> PathEvidenceResponse:
     nodes = {
         str(node.get("id")): node
@@ -1315,6 +1334,7 @@ def _materialize_path_evidence(
             definitions = fetch_sp_definitions(
                 [invocation.raw_command_text or invocation.procedure_name],
                 database_alias=database_alias,
+                db_server=db_server or None,
             )
             if definitions:
                 definition = definitions[0]
@@ -1671,6 +1691,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             view_definitions = fetch_view_definitions(
                 table_names,
                 database_alias=req.database or None,
+                db_server=req.db_server or None,
             )
 
         # 使用者定義函數（UDF）完整定義（選用）：靜態解析沒有專門的「UDF 呼叫」
@@ -1690,6 +1711,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 udf_definitions = fetch_udf_definitions(
                     sql_texts,
                     database_alias=req.database or None,
+                    db_server=req.db_server or None,
                 )
 
         # 跨程式呼叫參照展開（類似 Copilot 跟隨參照）：
@@ -1884,6 +1906,8 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
             "find_by_sp 需要 database 以載入 SQL execution graph；"
             "請提供 system_id 並先執行 refresh_sql_cli。"
         )
+    # FindBySPRequest 沒有 db_server 欄位，這裡只能給 database；
+    # sql_cache_store.resolve_server() 會從磁碟回推唯一一份同名快取。
     _cached, _graph = _require_sql_execution_graph(req.database)
     rated_invocations, _ = _rated_execution_invocations(
         req,
@@ -2010,6 +2034,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     # Stored-procedure access is joined through Gateway invocations and the graph.
     # Do not fall back to SQL dependency dictionaries or definition-text guesses.
     if req.database:
+        # FindByTableRequest 同樣沒有 db_server 欄位；理由見 find_by_sp。
         _sql_cache, graph = _require_sql_execution_graph(req.database)
         rated_invocations, graph = _rated_execution_invocations(
             req,
@@ -2136,7 +2161,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
         rated_invocations: List[DbInvocation] = []
         execution_graph: Dict[str, object] = {}
         if req.database:
-            _cached, execution_graph = _require_sql_execution_graph(req.database)
+            _cached, execution_graph = _require_sql_execution_graph(req.database, req.db_server)
             rated_invocations, execution_graph = _rated_execution_invocations(
                 req,
                 scan,
@@ -2173,7 +2198,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     rated_invocations: List[DbInvocation] = []
     execution_graph: Dict[str, object] = {}
     if req.database:
-        _cached, execution_graph = _require_sql_execution_graph(req.database)
+        _cached, execution_graph = _require_sql_execution_graph(req.database, req.db_server)
         rated_invocations, execution_graph = _rated_execution_invocations(
             req,
             scan,
@@ -2355,6 +2380,8 @@ def reconcile_refresh_wrappers(
         ]
     else:
         normalized_contract = explicit_contract
+    # refresh 流程只知道 database 名稱（沒有請求帶 db_server 進來），
+    # 由 sql_cache_store.resolve_server() 回推。
     catalog = load_sp_catalog(database)
     wrapper_review_exclusions = load_wrapper_review_exclusions(database)
 
@@ -2989,8 +3016,8 @@ def refresh_sql_source(
     """更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與
     資料表 Schema，覆寫本機落地快取（data/sql_cache/）。
 
-    database：快取鍵／顯示簡稱。
-    server/db_name：實際連線目標，由呼叫端（catalog）提供；缺一時
+    database：顯示／工單用簡稱，不參與快取鍵計算。
+    server/db_name：實際連線目標，也是快取鍵的兩個組成，由呼叫端（catalog）提供；缺一時
     get_or_dump()→SQLAnalyzer 會直接報錯，不嘗試連線。
     user_id/password：這台伺服器的掃描帳密覆寫，兩者都有值才生效（ADR-0010）。
 
