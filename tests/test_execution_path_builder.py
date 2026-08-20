@@ -366,6 +366,68 @@ def test_compact_summary_prioritizes_writes_and_question_matches() -> None:
     assert [item["path_id"] for item in summary] == ["P-z", "P-y"]
 
 
+# --- llamaindex-spec-rag ticket 01 of `question-aware-compact-path-selection`:
+# the analysis question actually reaches this ranking, reproducing the real
+# `transactionapp` / `STCSupplier` case from the spec's Problem Statement. ---
+
+_REAL_TRANSACTIONAPP_QUESTION = "transactionapp 的 Page_Load，讀取 STCSupplier"
+
+
+def _unrelated_transactionapp_path(index: int) -> dict:
+    return {
+        "path_id": f"P-unrelated-{index:02d}",
+        "entry_method": f"TransactionApp.btn{index}_Click",
+        "method_chain": [f"btn{index}_Click"],
+        "sp_chain": [f"dbo.spSTCProc{index}"],
+        "reads": [f"STCOrder{index}"],
+        "writes": [],
+        "evidence": "proven",
+    }
+
+
+def _stcsupplier_path() -> dict:
+    # path_id 刻意排在字母序最後（"z" > "u"）：question 為空時的 hash/path_id
+    # 平手規則本來就會把它排到 20 條的截斷線之外，重現規格書描述的真實缺陷。
+    return {
+        "path_id": "P-zz-stcsupplier",
+        "entry_method": "TransactionApp.Page_Load",
+        "method_chain": ["Page_Load"],
+        "sp_chain": ["dbo.spGetSTCSupplier"],
+        "reads": ["STCSupplier"],
+        "writes": [],
+        "evidence": "proven",
+        "risk_flags": [],
+    }
+
+
+def test_compact_summary_discards_the_proven_row_when_question_is_empty() -> None:
+    """空字串問題（今天的行為）：這一列被證實、且真的回答了問題的路徑，
+    仍然只是眾多 proven 路徑之一，被任意的 path_id 排序截在 20 條之外——
+    這正是規格書 Problem Statement 描述的那個真實缺陷，這裡先釘住它，
+    下一個測試再證明帶問題後這個缺陷消失。
+    """
+    paths = [_unrelated_transactionapp_path(i) for i in range(20)] + [_stcsupplier_path()]
+
+    summary = build_compact_execution_path_summary(paths, max_paths=20)
+
+    assert len(summary) == 20
+    assert "P-zz-stcsupplier" not in [item["path_id"] for item in summary]
+
+
+def test_compact_summary_ranks_the_real_transactionapp_stcsupplier_case_first() -> None:
+    """同一組 21 條路徑，帶上真實重現過的問題後，那一條被證實的
+    STCSupplier 路徑改為排在最前面，不再被截斷丟棄。
+    """
+    paths = [_unrelated_transactionapp_path(i) for i in range(20)] + [_stcsupplier_path()]
+
+    summary = build_compact_execution_path_summary(
+        paths, max_paths=20, question=_REAL_TRANSACTIONAPP_QUESTION
+    )
+
+    assert summary[0]["path_id"] == "P-zz-stcsupplier"
+    assert summary[0]["evidence"] == "proven"
+
+
 def test_raw_direct_invocation_is_catalog_validated_before_graph_join() -> None:
     raw_invocation = {
         "class_name": "OrderPage",

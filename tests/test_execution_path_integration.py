@@ -340,6 +340,94 @@ def test_analyze_keeps_missing_graph_target_as_unresolved(monkeypatch, tmp_path:
     assert compact_payload["total_paths"] == 1
 
 
+def _single_invocation_scan(tmp_path: Path) -> tuple:
+    """一支程式、一個已解析的 SP 呼叫——question 是否有傳到排序無關，只借
+    這組最小 fixture 當運送問題的載具。"""
+    source_file = tmp_path / "OrderPage.cs"
+    file_result = FileAnalysisResult(
+        file_path=str(source_file),
+        file_type=FileType.CSHARP,
+        framework=FrameworkType.WEBFORMS,
+        classes=[
+            ClassInfo(
+                name="OrderPage",
+                namespace="",
+                file_path=str(source_file),
+                methods=[MethodInfo(name="SaveData", access_modifier="private", return_type="void")],
+            )
+        ],
+    )
+    scan = ProjectScanResult(
+        project_root=str(tmp_path),
+        project_name="orders",
+        scan_time=datetime.now(),
+        csharp_results=[file_result],
+        db_invocations={
+            str(source_file.resolve()): [
+                {
+                    "class_name": "OrderPage",
+                    "method_name": "SaveData",
+                    "command_text_kind": "literal",
+                    "command_text": "dbo.usp_SaveOrder",
+                    "command_type_stored_procedure": True,
+                    "terminal_sink": "ExecuteNonQuery",
+                    "connection_expression": "conn",
+                    "start_offset": 10,
+                    "end_offset": 90,
+                }
+            ]
+        },
+        connection_sources={str(source_file.resolve()): {"conn": "PUR"}},
+    )
+    return scan, file_result
+
+
+def _captured_question_reaching_ranking(monkeypatch, tmp_path: Path, *, question: str) -> str:
+    """跑一次 `_build_program_execution_paths()`，回傳它實際傳給
+    `build_compact_execution_path_payload()` 的 `question` 值。"""
+    scan, file_result = _single_invocation_scan(tmp_path)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": None)
+
+    captured: dict = {}
+    original_payload = analyze_service.build_compact_execution_path_payload
+
+    def spy_payload(paths, max_paths=20, *, question=""):
+        captured["question"] = question
+        return original_payload(paths, max_paths=max_paths, question=question)
+
+    monkeypatch.setattr(analyze_service, "build_compact_execution_path_payload", spy_payload)
+
+    kwargs = {"program_names": ["OrderPage"], "include_snippets": False}
+    if question:
+        kwargs["question"] = question
+    analyze_service._build_program_execution_paths(
+        AnalyzeRequest(**kwargs), scan, [file_result], tmp_path,
+    )
+    return captured["question"]
+
+
+def test_analyze_passes_the_request_question_into_compact_path_ranking(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """llamaindex-spec-rag ticket 01 of `question-aware-compact-path-selection`:
+    `AnalyzeRequest.question` must reach `build_compact_execution_path_payload()`'s
+    existing `question` parameter unchanged — the ranking logic itself is not
+    touched here, only the missing input.
+    """
+    assert _captured_question_reaching_ranking(
+        monkeypatch, tmp_path, question="轉帳 STCSupplier"
+    ) == "轉帳 STCSupplier"
+
+
+def test_analyze_defaults_the_request_question_to_empty(monkeypatch, tmp_path: Path) -> None:
+    """既有呼叫端（未帶 question 的 AnalyzeRequest）維持今天的行為：空字串，
+    排序在空 question 下是 no-op（見 test_execution_path_builder.py 的
+    inert 測試），這裡只釘住「預設值真的是空字串，不是漏了不傳」。
+    """
+    assert AnalyzeRequest(program_names=["OrderPage"]).question == ""
+    assert _captured_question_reaching_ranking(monkeypatch, tmp_path, question="") == ""
+
+
 def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_path: Path) -> None:
     source_file = tmp_path / "OrderPage.cs"
     file_result = FileAnalysisResult(

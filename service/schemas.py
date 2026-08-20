@@ -46,6 +46,7 @@ class AnalyzeRequest(BaseModel):
     refresh: bool = False                    # True → git pull + 重新解析，覆寫快取
     include_view_layer: bool = False         # 是否帶出 View 層資訊（aspx/razor/vue 解析摘要）
     include_execution_paths: bool = True     # 是否組出 C# → SQL Execution Graph paths
+    question: str = ""                       # 分析師/agent 的原始問題；用於 Compact Path Candidates 的相關性排序
 
 
 class PathEvidenceRequest(BaseModel):

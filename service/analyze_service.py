@@ -1184,7 +1184,7 @@ def _build_program_execution_paths(
                 if targets and "." not in targets[0]:
                     targets[0] = f"dbo.{targets[0]}"
                 path["unresolved_targets"] = targets[:1]
-    compact_payload = build_compact_execution_path_payload(paths)
+    compact_payload = build_compact_execution_path_payload(paths, question=req.question)
     return paths, compact_payload
 
 
