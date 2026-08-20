@@ -12,7 +12,13 @@ from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 
 # v2: nested CALL branches, unresolved dynamic SQL nodes, typed View/UDF uses,
 # and bounded CTE/temp-table lineage are persisted in the graph payload.
-GRAPH_VERSION = 2
+# v3: newline-safe temp-file writes keep ScriptDom offsets aligned with the
+# persisted definition text (ticket 01), and every dml_operation/
+# unresolved_dynamic_sql node records its module's definition length for
+# staleness detection (ticket 02). Bumped so every cache built before this
+# fix is rejected until tools/repair_sql_execution_graphs.py (ticket 03)
+# repairs it — offsets from a v2 cache can be silently wrong.
+GRAPH_VERSION = 3
 _MODULE_COLLECTIONS = (
     ("procedures", "stored_procedure"),
     ("views", "view"),

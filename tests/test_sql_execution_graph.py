@@ -15,7 +15,7 @@ from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 from code_analyzer import sql_analyzer
 from code_analyzer.sql_analyzer import SQLAnalyzer
 from service import sql_cache_store
-from service.sql_execution_graph import build_sql_execution_graph
+from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
 from tests.sql_cache_fixtures import CacheRoot, write_cache
 
 
@@ -80,7 +80,7 @@ def test_sql_cache_rejects_database_mismatch_from_memory_and_disk() -> None:
         "database": "OtherDb",
         "schema": "dbo",
         "sql_execution_graph": {
-            "graph_version": 2,
+            "graph_version": GRAPH_VERSION,
             "database": "OtherDb",
             "nodes": [],
             "relationships": [],
@@ -107,7 +107,7 @@ def test_sql_cache_rejects_stale_payload_version() -> None:
                 "database": "TestDb",
                 "schema": "dbo",
                 "sql_execution_graph": {
-                    "graph_version": 2,
+                    "graph_version": GRAPH_VERSION,
                     "database": "TestDb",
                     "nodes": [],
                     "relationships": [],
@@ -121,6 +121,14 @@ def test_sql_cache_rejects_stale_payload_version() -> None:
 
 
 def test_sql_cache_rejects_stale_graph_version() -> None:
+    """Ticket 03: a cache built under the pre-repair version (2) must be rejected.
+
+    GRAPH_VERSION is bumped to 3 by ticket 03 specifically so caches carrying
+    the old, possibly-corrupted offsets fail this check until the repair tool
+    (tools/repair_sql_execution_graphs.py) rebuilds them.
+    """
+    assert GRAPH_VERSION == 3
+
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(
             cache_root,
@@ -129,7 +137,7 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
                 "database": "TestDb",
                 "schema": "dbo",
                 "sql_execution_graph": {
-                    "graph_version": 1,
+                    "graph_version": GRAPH_VERSION - 1,
                     "database": "TestDb",
                     "nodes": [],
                     "relationships": [],
