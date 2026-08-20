@@ -101,6 +101,7 @@ def build_sql_execution_graph(
                         name,
                         module_id,
                         schema,
+                        len(definition),
                     )
                 _report_progress(progress_callback, "graph", index, len(module_specs), name)
 
@@ -212,6 +213,7 @@ def _add_operation(
     module_name: str,
     module_id: str,
     default_schema: str,
+    module_definition_length: int,
 ) -> None:
     module = {
         "type": module_type,
@@ -224,6 +226,7 @@ def _add_operation(
     source = dict(operation.get("source") or {})
     source["source_path"] = module_id
     source["module_id"] = module_id
+    source["module_definition_length"] = module_definition_length
     operation["source"] = source
     sequence = int(operation.get("sequence") or 0)
     operation_type = str(operation.get("operation_type") or "")

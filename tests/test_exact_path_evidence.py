@@ -378,6 +378,76 @@ def test_path_evidence_rejects_stale_source_snapshot(monkeypatch, tmp_path: Path
     assert error.value.code == "stale_path"
 
 
+def test_path_evidence_rejects_drifted_sql_definition_offset(monkeypatch, tmp_path: Path) -> None:
+    """A definition-length mismatch must fail loudly even when the recorded
+    offset still lands inside the current text's bounds — the failure mode
+    issue 01's ScriptDom-write fix alone cannot catch (ticket 02)."""
+    scan, cached, path_id = _cached_path_fixture(tmp_path)
+    definition = cached["procedures"][0]["definition"]
+    terminal_operation = next(
+        node
+        for node in cached["sql_execution_graph"]["nodes"]
+        if node["id"] == "dml_operation:stored_procedure:dbo.usp_SaveOrder:1"
+    )
+    terminal_operation["source"] = {
+        "start_offset": 0,
+        "length": 1,
+        "module_definition_length": len(definition) - 1,
+    }
+    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema, server="": cached,
+    )
+
+    with pytest.raises(analyze_service.PathEvidenceError) as error:
+        analyze_service.get_path_evidence(
+            PathEvidenceRequest(
+                path_id=path_id,
+                database="OrdersDb",
+                program_names=["OrderPage"],
+            )
+        )
+
+    assert error.value.code == "stale_path"
+
+
+def test_path_evidence_accepts_matching_sql_definition_offset(monkeypatch, tmp_path: Path) -> None:
+    """No behavior change when the recorded length still matches: evidence
+    expansion still slices the operation's source text normally."""
+    scan, cached, path_id = _cached_path_fixture(tmp_path)
+    definition = cached["procedures"][0]["definition"]
+    terminal_operation = next(
+        node
+        for node in cached["sql_execution_graph"]["nodes"]
+        if node["id"] == "dml_operation:stored_procedure:dbo.usp_SaveOrder:1"
+    )
+    terminal_operation["source"] = {
+        "start_offset": 0,
+        "length": 6,
+        "module_definition_length": len(definition),
+    }
+    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema, server="": cached,
+    )
+
+    evidence = analyze_service.get_path_evidence(
+        PathEvidenceRequest(
+            path_id=path_id,
+            database="OrdersDb",
+            program_names=["OrderPage"],
+        )
+    )
+
+    assert evidence.operations[0]["source_text"] == "CREATE"
+
+
 def test_path_evidence_rejects_unknown_path_id(monkeypatch, tmp_path: Path) -> None:
     scan, cached, _ = _cached_path_fixture(tmp_path)
     monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])

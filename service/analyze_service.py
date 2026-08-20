@@ -1301,9 +1301,25 @@ def _materialize_path_evidence(
         operation_module_id = str(operation.get("module_id") or "")
         operation_module = module_objects.get(operation_module_id)
         if operation_module is not None and source_location:
+            current_definition = str(operation_module.get("definition") or "")
+            recorded_length = source_location.get("module_definition_length")
+            if recorded_length is not None:
+                try:
+                    length_matches = int(recorded_length) == len(current_definition)
+                except (TypeError, ValueError) as exc:
+                    raise PathEvidenceError(
+                        "stale_path",
+                        f"SQL module definition length 記錄已失效：{operation_module_id}（{exc}）",
+                    ) from exc
+                if not length_matches:
+                    raise PathEvidenceError(
+                        "stale_path",
+                        "SQL module definition 長度已變更，offset 已失效："
+                        f"{operation_module_id}（記錄 {recorded_length}，目前 {len(current_definition)}）",
+                    )
             try:
                 source_text = _slice_utf16(
-                    str(operation_module.get("definition") or ""),
+                    current_definition,
                     int(source_location.get("start_offset") or 0),
                     int(source_location.get("length") or 0),
                 )
