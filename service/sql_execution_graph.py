@@ -80,7 +80,7 @@ def build_sql_execution_graph(
             for index, (object_type, object_schema, name, definition) in enumerate(module_specs, start=1):
                 module_id = _node_id(object_type, object_schema, name)
                 input_path = temp_root / f"{index:05d}_{_safe_name(name)}.sql"
-                input_path.write_text(definition, encoding="utf-8")
+                input_path.write_text(definition, encoding="utf-8", newline="")
                 result = analyzer.analyze_sql(input_path)
                 for error in result.get("parse_errors", []) or []:
                     parse_errors.append(

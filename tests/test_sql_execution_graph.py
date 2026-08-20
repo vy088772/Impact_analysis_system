@@ -15,6 +15,7 @@ from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 from code_analyzer import sql_analyzer
 from code_analyzer.sql_analyzer import SQLAnalyzer
 from service import sql_cache_store
+from service.sql_execution_graph import build_sql_execution_graph
 from tests.sql_cache_fixtures import CacheRoot, write_cache
 
 
@@ -309,6 +310,73 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             assert "write_dependencies" not in reloaded
         finally:
             sql_analyzer.SQLAnalyzer = original_analyzer
+
+
+def _crlf_procedure_definition() -> str:
+    """A stored-procedure definition long enough to expose offset drift, using \\r\\n line endings."""
+    lines = ["CREATE PROCEDURE dbo.usp_PadDelete AS", "BEGIN"]
+    for index in range(40):
+        lines.append(f"    -- pad line {index}")
+    lines.append("    DELETE FROM dbo.PadTarget;")
+    lines.append("END;")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def test_graph_offsets_stay_within_definition_length_for_crlf_source() -> None:
+    """The newline-safe write path must not let ScriptDom offsets outrun the cached definition text."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    definition = _crlf_procedure_definition()
+    data = {
+        "database": "TestDb",
+        "schema": "dbo",
+        "procedures": [{"name": "usp_PadDelete", "definition": definition, "parameters": []}],
+        "views": [],
+        "functions": [],
+        "tables": [{"name": "PadTarget", "columns": []}],
+    }
+
+    graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
+
+    operation_nodes = [node for node in graph["nodes"] if node["type"] == "dml_operation"]
+    assert operation_nodes, "expected the DELETE statement to produce an operation node"
+    for node in operation_nodes:
+        source = node["source"]
+        end_offset = source["start_offset"] + source["length"]
+        assert end_offset <= len(definition)
+
+
+def test_pre_fix_crlf_doubling_produces_out_of_bounds_offsets() -> None:
+    """Reproduces the corruption the old write_text() call produced on a Windows host.
+
+    Windows text-mode writes translate every '\\n' to '\\r\\n'. A definition that
+    already used '\\r\\n' line endings became '\\r\\r\\n' on disk, so ScriptDom parsed
+    a longer string than the one persisted to the JSON cache. This test recreates
+    that inflated file directly (bypassing the fixed write path) and asserts the
+    resulting offsets overrun the original definition's length, proving this is
+    the bug the fix addresses rather than an assertion with no failing baseline.
+    """
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    definition = _crlf_procedure_definition()
+    corrupted = definition.replace("\r\n", "\r\r\n")
+    assert len(corrupted) > len(definition)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        input_path = Path(temp_dir) / "usp_PadDelete.sql"
+        input_path.write_text(corrupted, encoding="utf-8", newline="")
+        result = host.analyze_sql(input_path)
+
+    operations = result["operations"]
+    assert operations, "expected the DELETE statement to produce an operation"
+    overruns = [
+        operation
+        for operation in operations
+        if operation["source"]["start_offset"] + operation["source"]["length"] > len(definition)
+    ]
+    assert overruns, "expected the \\r\\n doubling to push at least one offset past the definition length"
 
 
 if __name__ == "__main__":
