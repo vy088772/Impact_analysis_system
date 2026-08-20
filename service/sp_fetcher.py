@@ -2,12 +2,13 @@
 """
 預存程序（SP）定義擷取（盡力而為）。
 
-給定程式呼叫到的 SP 名稱，優先從本機 SQL 快取（sql_cache_store.py，由
+給定程式呼叫到的 SP 名稱，從本機 SQL 快取（sql_cache_store.py，由
 「更新 SQL 快取」指令 /refresh_sql 落地）取得每個 SP 的完整定義（T-SQL 內文）、
-參數與引用資料表；快取沒有時才即時連線 SQL Server 補查（安全網，避免使用者
-忘記先跑 /refresh_sql 就整個沒資料）。
+參數與引用資料表。快取沒有的名稱直接略過，不即時連線 SQL Server 補查——
+一個缺口代表快取過期，需要重新 /refresh_sql，而不是默默用即時連線掩蓋它
+（見 docs/adr/0011-remove-live-query-fallbacks.md）。
 
-設計為「盡力而為」：無資料庫設定、無快取、連線失敗時回傳空清單，不丟例外。
+設計為「盡力而為」：無資料庫設定、無快取時回傳空清單，不丟例外。
 """
 from __future__ import annotations
 
@@ -82,7 +83,7 @@ def _from_cache(
     db_server: Optional[str] = None,
 ) -> tuple[List[dict], List[str]]:
     """從本機 SQL 快取查找；回傳 (已找到的定義清單, 快取中找不到的名稱清單)。
-    快取本身不存在（從未 /refresh_sql 過）時，全部視為「找不到」交給即時查詢補上。
+    快取本身不存在（從未 /refresh_sql 過）時，全部視為「找不到」。
     db_server 指名要讀哪一台伺服器的快取；省略時由 sql_cache_store 從磁碟回推。
     """
     if not database_alias:
@@ -117,68 +118,6 @@ def _from_cache(
     return found, missing
 
 
-def _from_live_query(
-    sp_names: List[str],
-    database_alias: Optional[str],
-    max_def_chars: int,
-    db_server: Optional[str] = None,
-    db_name: Optional[str] = None,
-) -> List[dict]:
-    """即時連線 SQL Server 查詢（快取沒有時的補查路徑）。
-
-    優先用明確提供的 db_server/db_name（由 catalog 逐系統提供）建立連線；
-    兩者都未提供時才退回舊行為（查 .env 的 DB_DATABASES/database_alias）。
-    """
-    if not sp_names:
-        return []
-
-    try:
-        from code_analyzer.sql_analyzer import SQLAnalyzer
-        analyzer = SQLAnalyzer(database_alias, server=db_server, database_name=db_name)
-    except Exception:
-        return []
-
-    if not analyzer.connect():
-        return []
-
-    out: List[dict] = []
-    seen: set[str] = set()
-    try:
-        for raw in sp_names:
-            key = _normalize(raw)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            try:
-                info = analyzer.quick_analyze_sp(raw)
-            except Exception:
-                continue
-            if not getattr(info, "exists", False):
-                out.append({
-                    "name": raw, "exists": False, "parameters": [],
-                    "tables": [], "complexity": "", "definition": "", "truncated": False,
-                })
-                continue
-            definition = info.definition or ""
-            truncated = len(definition) > max_def_chars
-            out.append({
-                "name": raw,
-                "exists": True,
-                "parameters": list(info.parameters),
-                "tables": [],
-                "dependency_source": "unavailable_without_execution_graph",
-                "complexity": info.estimated_complexity,
-                "definition": definition[:max_def_chars],
-                "truncated": truncated,
-            })
-    finally:
-        try:
-            analyzer.disconnect()
-        except Exception:
-            pass
-    return out
-
-
 def fetch_sp_definitions(
     sp_names: List[str],
     database_alias: Optional[str] = None,
@@ -189,15 +128,13 @@ def fetch_sp_definitions(
     """回傳每個 SP 的定義摘要清單。
 
     每筆：{name, exists, parameters, tables, complexity, definition, truncated}
-    優先讀本機 SQL 快取；快取版的 tables 來自 SQL Execution Graph。快取沒有的
-    名稱才即時連線補查（需 db_server/db_name，由 catalog 提供），即時補查只提供
-    SQL object definition，不宣稱 table lineage。無資料庫或全部失敗時回傳空清單。
+    只讀本機 SQL 快取；快取版的 tables 來自 SQL Execution Graph。快取沒有的
+    名稱直接略過，不即時連線補查（見 docs/adr/0011-remove-live-query-fallbacks.md）。
+    無資料庫或無快取時回傳空清單。db_name 參數保留供呼叫端相容，本函式不使用它。
     """
     if not sp_names:
         return []
 
-    found, missing = _from_cache(sp_names, database_alias, max_def_chars, db_server)
-    if missing:
-        found.extend(_from_live_query(missing, database_alias, max_def_chars, db_server, db_name))
+    found, _missing = _from_cache(sp_names, database_alias, max_def_chars, db_server)
     return found
 
