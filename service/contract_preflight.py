@@ -488,6 +488,9 @@ def _stage_complete_proposals(
                     fingerprint,
                 )
             staged_names[name] = copy.deepcopy(item["entry"])
+            # Later proposals in this same batch must see this fingerprint as taken too,
+            # or a repeated fingerprint within one run keeps minting new revision names.
+            existing_by_fingerprint[fingerprint] = name
             lifecycle = "created"
         item["contract_name"] = name
         item["lifecycle_status"] = lifecycle

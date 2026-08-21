@@ -230,6 +230,20 @@ def test_multiple_complete_proposals_are_sorted_and_equivalent_fingerprint_is_re
     assert sorted(second.formal_registry["contracts"]) == ["alpha", "zeta"]
 
 
+def test_duplicate_fingerprint_proposals_in_one_run_reuse_the_same_name() -> None:
+    """A repeated fingerprint discovered multiple times in one run must collapse to
+    one entry, not mint an escalating chain of "<name>-<fingerprint prefix>" revisions."""
+    same_proposal = _proposal("sqlobject", "Vendor.Data")
+    scan = SimpleNamespace(
+        contract_proposals=[dict(same_proposal) for _ in range(4)]
+    )
+
+    result = run_contract_preflight([scan], selector=None, registry={"contracts": {}})
+
+    assert list(result.formal_registry["contracts"]) == ["sqlobject"]
+    assert [item["lifecycle_status"] for item in result.proposals] == ["created"]
+
+
 def _registry_renamed(registry: dict, old_name: str, new_name: str) -> dict:
     contracts = dict(registry["contracts"])
     contracts[new_name] = contracts.pop(old_name)
