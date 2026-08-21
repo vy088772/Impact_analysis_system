@@ -45,7 +45,11 @@ from config.settings import settings
 # v8：formal consumers no longer read legacy dependencies/write_dependencies;
 # rebuild the cache before using graph-backed reverse lookup and path selection.
 # v9：legacy dependency dictionaries are no longer persisted in refreshed caches.
-_SQL_CACHE_VERSION = 9
+# v10：fixed a bug where SP definitions longer than 4000 chars (ROUTINE_DEFINITION's
+# NVARCHAR(4000) limit) were silently truncated mid-statement instead of falling
+# back to OBJECT_DEFINITION; caches built before this fix may hold truncated SQL
+# text that fails ScriptDom parsing, so they must be rebuilt via refresh_sql_cli.
+_SQL_CACHE_VERSION = 10
 
 # 同 process 內的記憶體快取
 _mem_cache: Dict[str, Dict] = {}

@@ -731,13 +731,19 @@ class SQLAnalyzer:
         if not row:
             return None
         
-        # 強化定義抓取 (如果 INFORMATION_SCHEMA 取不到或太短，嘗試使用 OBJECT_DEFINITION)
-        definition = row[0]
-        if not definition or len(definition) < 10:
-             self.cursor.execute(f"SELECT OBJECT_DEFINITION(OBJECT_ID('{target_schema}.{target_name}'))")
-             def_row = self.cursor.fetchone()
-             if def_row and def_row[0]:
-                 definition = def_row[0]
+        # ROUTINE_DEFINITION is NVARCHAR(4000); anything that long may be
+        # truncated mid-statement, so re-fetch the untruncated body via
+        # OBJECT_DEFINITION (NVARCHAR(MAX)). Bound as a parameter, not
+        # string-formatted, to avoid SQL injection through the object name.
+        definition = row[0] or ""
+        if not definition or len(definition) >= 4000:
+            self.cursor.execute(
+                "SELECT OBJECT_DEFINITION(OBJECT_ID(?))",
+                f"{target_schema}.{target_name}",
+            )
+            def_row = self.cursor.fetchone()
+            if def_row and def_row[0]:
+                definition = def_row[0]
 
         # 取得參數
         param_query = """
@@ -765,7 +771,7 @@ class SQLAnalyzer:
             parameters.append(param_str)
         
         return {
-            'definition': row[0] or "",
+            'definition': definition,
             'created_date': str(row[1]) if row[1] else None,
             'modified_date': str(row[2]) if row[2] else None,
             'parameters': parameters
