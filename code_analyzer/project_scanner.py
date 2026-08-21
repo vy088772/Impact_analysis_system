@@ -632,6 +632,28 @@ class ProjectScanner:
 
         return found_files
     
+    def _analyze_csharp_with_progress(self, file_paths: List[str]) -> List[Dict]:
+        """Run the analyzer host over `file_paths`, reporting one line per finished batch.
+
+        Both the full scan and the incremental refresh go through here, because both pay the
+        same fixed cost per host invocation: the host re-parses every project source file as
+        analysis context before it looks at a single requested file — about fourteen seconds on
+        the 541-file Y-Docs TTPUR project. A refresh of one file is therefore silent for just as
+        long as a scan of five hundred, and silence reads as a hang. The progress line is what
+        tells the user the run is alive.
+        """
+        self.static_analyzer_host.ensure_ready()
+        self._refresh_semantic_binding_availability()
+        print(f"   C# analyzer 批次進度：0/{len(file_paths)}", flush=True)
+        return self.static_analyzer_host.analyze_csharp_files(
+            [Path(file_path) for file_path in file_paths],
+            source_roots=[Path(self.project_root)],
+            progress_callback=lambda current, total, item: print(
+                f"   C# analyzer 批次進度：{current}/{total}（{Path(item).name}）",
+                flush=True,
+            ),
+        )
+
     def _refresh_semantic_binding_availability(self) -> None:
         """Recompute Semantic Binding Availability for every project file under
         project_root, once per scan/refresh pass that touches C# files."""
@@ -685,17 +707,7 @@ class ProjectScanner:
         # 3. 解析 C# 檔案
         print(f"\n📝 解析 C# 檔案...")
         if csharp_files:
-            self.static_analyzer_host.ensure_ready()
-            self._refresh_semantic_binding_availability()
-            print(f"   C# analyzer 批次進度：0/{len(csharp_files)}", flush=True)
-            host_results = self.static_analyzer_host.analyze_csharp_files(
-                [Path(file_path) for file_path in csharp_files],
-                source_roots=[Path(self.project_root)],
-                progress_callback=lambda current, total, item: print(
-                    f"   C# analyzer 批次進度：{current}/{total}（{Path(item).name}）",
-                    flush=True,
-                ),
-            )
+            host_results = self._analyze_csharp_with_progress(csharp_files)
 
             for file_path, host_result in tqdm(
                 zip(csharp_files, host_results),
@@ -787,12 +799,8 @@ class ProjectScanner:
 
         refreshed_results: List[FileAnalysisResult] = []
         if current_files:
-            self.static_analyzer_host.ensure_ready()
-            self._refresh_semantic_binding_availability()
-            host_results = self.static_analyzer_host.analyze_csharp_files(
-                [Path(file_path) for file_path in current_files],
-                source_roots=[Path(self.project_root)],
-            )
+            print(f"\n📝 重新解析 C# 檔案（{len(current_files)} 個）...")
+            host_results = self._analyze_csharp_with_progress(current_files)
             for file_path, host_result in zip(current_files, host_results):
                 self.scan_result.capture_source_snapshot(file_path, host_result)
                 file_key = str(Path(file_path).resolve())

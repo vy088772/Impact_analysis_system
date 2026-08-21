@@ -337,7 +337,7 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
         def semantic_binding_availability(self, scan_roots):
             return []
 
-        def analyze_csharp_files(self, input_paths, source_roots):
+        def analyze_csharp_files(self, input_paths, source_roots, progress_callback=None):
             assert input_paths == [selected_file]
             assert source_roots == [root]
             return [
@@ -380,6 +380,71 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
     assert scan.connection_sources[str(untouched_file.resolve())] == {"conn": "UntouchedDb"}
     assert scan.source_snapshots["PUR_MasterEdit.aspx.cs"].content == "class Selected { }"
     assert scan.source_snapshots.get("PUR_SOQry.aspx.cs") is None
+
+
+def test_project_scanner_refresh_reports_batch_progress(tmp_path, capsys) -> None:
+    """The incremental refresh must report analyzer batch progress, like a full scan does.
+
+    Every analyzer host invocation re-parses every project source file as analysis context
+    before it looks at the requested files -- about fourteen seconds on the 541-file Y-Docs
+    TTPUR project -- so refreshing one file stays silent for just as long as scanning five
+    hundred. Only the full scan passed a progress callback, so the refresh path printed nothing
+    at all and read as a hang.
+    """
+    from code_analyzer.project_scanner import ProjectScanner
+
+    root = tmp_path / "TTPUR"
+    root.mkdir()
+    selected_file = root / "PUR_MasterEdit.aspx.cs"
+    selected_file.write_text("class Selected { }", encoding="utf-8")
+
+    scan = ProjectScanResult(
+        project_root=str(root),
+        project_name="TTPUR",
+        scan_time=datetime.now(),
+    )
+
+    class FakeHost:
+        def ensure_ready(self) -> None:
+            return None
+
+        def semantic_binding_availability(self, scan_roots):
+            return []
+
+        def analyze_csharp_files(self, input_paths, source_roots, progress_callback=None):
+            if progress_callback is not None:
+                progress_callback(len(input_paths), len(input_paths), str(input_paths[-1]))
+            return [
+                {
+                    "source_id": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "methods": [],
+                    "db_invocations": [],
+                }
+                for path in input_paths
+            ]
+
+    class FakeParser:
+        db_tracker = SimpleNamespace(connections={})
+
+        def parse_file(self, file_path: str) -> FileAnalysisResult:
+            return FileAnalysisResult(
+                file_path=file_path,
+                file_type=FileType.CSHARP,
+                framework=FrameworkType.WEBFORMS,
+            )
+
+    scanner = object.__new__(ProjectScanner)
+    scanner.project_root = str(root)
+    scanner.scan_result = None
+    scanner.csharp_parser = FakeParser()
+    scanner.static_analyzer_host = FakeHost()
+
+    scanner.refresh_csharp_files(scan, [str(selected_file)])
+
+    printed = capsys.readouterr().out
+    assert "C# analyzer 批次進度：0/1" in printed
+    assert "C# analyzer 批次進度：1/1" in printed
+    assert "PUR_MasterEdit.aspx.cs" in printed
 
 
 def test_refresh_api_forwards_program_names(monkeypatch) -> None:
@@ -966,6 +1031,7 @@ def test_partial_refresh_keeps_wrapper_source_lookup_inside_each_root(monkeypatc
                 self,
                 input_paths,
                 source_roots,
+                progress_callback=None,
                 selected_root=root,
                 selected_caller=caller_file,
             ):
