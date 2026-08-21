@@ -302,6 +302,7 @@ def test_compact_summary_is_bounded_and_excludes_source_material() -> None:
         "entry_method",
         "method_chain",
         "sp_chain",
+        "terminal_operation_id",
         "terminal_operation",
         "target",
         "written_columns",
@@ -316,7 +317,7 @@ def test_compact_summary_is_bounded_and_excludes_source_material() -> None:
     assert "source" not in summary[0]
 
 
-def test_compact_summary_hard_caps_at_twenty_paths() -> None:
+def test_compact_summary_defaults_to_twenty_paths() -> None:
     paths = [
         {
             "path_id": f"P-{index:02d}",
@@ -327,9 +328,23 @@ def test_compact_summary_hard_caps_at_twenty_paths() -> None:
         for index in range(25)
     ]
 
-    summary = build_compact_execution_path_summary(paths, max_paths=100)
+    summary = build_compact_execution_path_summary(paths)
 
     assert len(summary) == 20
+
+
+def test_compact_summary_recovery_limit_is_sixty_paths() -> None:
+    paths = [
+        {
+            "path_id": f"P-{index:02d}",
+            "entry_method": "OrderPage.SaveData",
+        }
+        for index in range(75)
+    ]
+
+    summary = build_compact_execution_path_summary(paths, max_paths=100)
+
+    assert len(summary) == 60
 
 
 def test_compact_summary_prioritizes_writes_and_question_matches() -> None:

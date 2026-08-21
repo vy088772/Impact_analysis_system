@@ -57,7 +57,11 @@ from .fk_resolver import resolve_fk_related
 from .sp_fetcher import fetch_sp_definitions
 from .view_fetcher import fetch_view_definitions
 from .udf_fetcher import fetch_udf_definitions
-from .execution_path_builder import build_compact_execution_path_payload, build_execution_paths
+from .execution_path_builder import (
+    MAX_COMPACT_PATHS,
+    build_compact_execution_path_payload,
+    build_execution_paths,
+)
 from .graph_queries import query_table_accesses
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
@@ -1184,7 +1188,11 @@ def _build_program_execution_paths(
                 if targets and "." not in targets[0]:
                     targets[0] = f"dbo.{targets[0]}"
                 path["unresolved_targets"] = targets[:1]
-    compact_payload = build_compact_execution_path_payload(paths, question=req.question)
+    compact_payload = build_compact_execution_path_payload(
+        paths,
+        max_paths=MAX_COMPACT_PATHS if req.max_paths is None else req.max_paths,
+        question=req.question,
+    )
     return paths, compact_payload
 
 

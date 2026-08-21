@@ -15,6 +15,7 @@ from code_analyzer.csharp_analysis_gateway import (
 )
 
 MAX_COMPACT_PATHS = 20
+MAX_COMPACT_PATHS_RECOVERY = 60
 
 
 def build_execution_paths(
@@ -291,13 +292,13 @@ def build_execution_paths_from_raw_invocations(
 
 def build_compact_execution_path_summary(
     paths: Iterable[Mapping[str, Any]],
-    max_paths: int = 20,
+    max_paths: int = MAX_COMPACT_PATHS,
     *,
     question: str = "",
 ) -> list[dict[str, Any]]:
     """Return only the fields needed for first-pass path selection."""
     summaries: list[dict[str, Any]] = []
-    limit = min(MAX_COMPACT_PATHS, max(0, max_paths))
+    limit = min(MAX_COMPACT_PATHS_RECOVERY, max(0, max_paths))
     question_tokens = _question_tokens(question)
     for path in sorted(
         paths,
@@ -308,6 +309,7 @@ def build_compact_execution_path_summary(
             "entry_method": path.get("entry_method", ""),
             "method_chain": list(path.get("method_chain", []) or []),
             "sp_chain": list(path.get("sp_chain", []) or []),
+            "terminal_operation_id": path.get("terminal_operation_id", ""),
             "terminal_operation": path.get("terminal_operation"),
             "target": path.get("target", ""),
             "written_columns": list(path.get("written_columns", []) or []),
@@ -326,7 +328,7 @@ def build_compact_execution_path_summary(
 
 def build_compact_execution_path_payload(
     paths: Iterable[Mapping[str, Any]],
-    max_paths: int = 20,
+    max_paths: int = MAX_COMPACT_PATHS,
     *,
     question: str = "",
 ) -> dict[str, Any]:
@@ -348,7 +350,7 @@ def build_compact_execution_path_payload(
 def build_execution_path_summary(
     invocations: Iterable[DbInvocation],
     graph: Mapping[str, Any],
-    max_paths: int = 20,
+    max_paths: int = MAX_COMPACT_PATHS,
     *,
     max_call_depth: int = 5,
     question: str = "",

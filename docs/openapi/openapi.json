@@ -54,12 +54,30 @@
             "title": "Include View Layer",
             "type": "boolean"
           },
+          "max_paths": {
+            "anyOf": [
+              {
+                "maximum": 60.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Paths"
+          },
           "program_names": {
             "items": {
               "type": "string"
             },
             "title": "Program Names",
             "type": "array"
+          },
+          "question": {
+            "default": "",
+            "title": "Question",
+            "type": "string"
           },
           "refresh": {
             "default": false,

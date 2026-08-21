@@ -428,6 +428,34 @@ def test_analyze_defaults_the_request_question_to_empty(monkeypatch, tmp_path: P
     assert _captured_question_reaching_ranking(monkeypatch, tmp_path, question="") == ""
 
 
+def test_analyze_passes_request_max_paths_into_compact_path_builder(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan, file_result = _single_invocation_scan(tmp_path)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema, server="": None,
+    )
+
+    captured: dict = {}
+    original_payload = analyze_service.build_compact_execution_path_payload
+
+    def spy_payload(paths, max_paths=20, *, question=""):
+        captured["max_paths"] = max_paths
+        return original_payload(paths, max_paths=max_paths, question=question)
+
+    monkeypatch.setattr(analyze_service, "build_compact_execution_path_payload", spy_payload)
+    analyze_service._build_program_execution_paths(
+        AnalyzeRequest(program_names=["OrderPage"], max_paths=37),
+        scan,
+        [file_result],
+        tmp_path,
+    )
+
+    assert captured["max_paths"] == 37
+
+
 def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_path: Path) -> None:
     source_file = tmp_path / "OrderPage.cs"
     file_result = FileAnalysisResult(
