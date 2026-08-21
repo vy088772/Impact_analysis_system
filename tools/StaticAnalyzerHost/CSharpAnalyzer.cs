@@ -1422,6 +1422,80 @@ internal static class SyntaxBranchAnalyzer
 
 internal static class WrapperAnalyzer
 {
+    // Three whole-corpus walks below -- GetKnownTypeIdentities, GetDefinitions, and
+    // FindUsedWrapperMethodIdentities -- are pure functions of the parsed source roots. One
+    // `csharp` invocation parses those roots once and then hands the same syntax-tree instances
+    // to CSharpAnalyzer.Analyze for every --input file, so each walk produced an identical
+    // result and was thrown away, making one scan cost O(inputs x corpus). On the 541-file
+    // Y-Docs TTPUR project one ten-file batch ran for over five minutes without finishing, while
+    // the 25-file STC project scanned fine -- a project 21 times larger was hundreds of times
+    // slower. Batching could not help: every batch repeated the same walks.
+    //
+    // Memoize on the roots' object identity, not on their content: the analyzer never mutates a
+    // syntax tree, so the same tree instances always yield the same corpus facts, and a caller
+    // that parses fresh trees (the single-file Analyze overload, or a new host invocation) gets
+    // a miss and a correct recompute. A memoized result is shared, so a caller must read it and
+    // never mutate it. The assembly-identity GetDefinitions overload stays uncached: the
+    // decompiler passes it one synthetic root per receiver type, not the project corpus.
+    private static IReadOnlyList<CompilationUnitSyntax>? _knownTypeIdentitiesRoots;
+    private static IReadOnlyList<string>? _knownTypeIdentitiesCache;
+    private static IReadOnlyList<CompilationUnitSyntax>? _definitionsRoots;
+    private static List<WrapperDefinition>? _definitionsCache;
+    private static IReadOnlyList<CompilationUnitSyntax>? _usedWrapperMethodIdentitiesRoots;
+    private static IReadOnlySet<string>? _usedWrapperMethodIdentitiesCache;
+    private static IReadOnlyList<CompilationUnitSyntax>? _classDeclarationIndexRoots;
+    private static Dictionary<string, List<ClassDeclarationSyntax>>? _classDeclarationIndex;
+
+    /// <summary>Whether two root lists hold the very same syntax-tree instances in the same
+    /// order. Reference identity is the point: a content comparison would cost more than the
+    /// walk it guards.</summary>
+    private static bool SameRoots(
+        IReadOnlyList<CompilationUnitSyntax> roots,
+        IReadOnlyList<CompilationUnitSyntax>? cachedRoots)
+    {
+        if (cachedRoots is null || cachedRoots.Count != roots.Count)
+            return false;
+        for (var index = 0; index < roots.Count; index++)
+            if (!ReferenceEquals(roots[index], cachedRoots[index]))
+                return false;
+        return true;
+    }
+
+    private static IReadOnlyList<CompilationUnitSyntax> AsRootList(
+        IEnumerable<CompilationUnitSyntax> sourceRoots)
+        => sourceRoots as IReadOnlyList<CompilationUnitSyntax> ?? sourceRoots.ToList();
+
+    /// <summary>
+    /// Every class declaration in the corpus that carries the given type identity, in corpus
+    /// order and deduplicated by (file, span start) so a partial class spread over several files
+    /// contributes each of its parts exactly once.
+    ///
+    /// Command Source resolution asks this question once per candidate method and once per call
+    /// site. Answering it by walking every syntax tree each time made resolution cost
+    /// O(sites x corpus), which still left one ten-file TTPUR batch running for over three and a
+    /// half minutes after the corpus facts above were memoized. Build the whole grouping once per
+    /// corpus instead and answer each question with a dictionary lookup: that same batch then
+    /// took 14.6 seconds, and the whole 541-file project 2.1 minutes.
+    /// </summary>
+    internal static IReadOnlyList<ClassDeclarationSyntax> GetClassDeclarations(
+        IEnumerable<CompilationUnitSyntax> sourceRoots,
+        string typeIdentity)
+    {
+        var roots = AsRootList(sourceRoots);
+        if (!SameRoots(roots, _classDeclarationIndexRoots))
+        {
+            _classDeclarationIndex = roots
+                .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<ClassDeclarationSyntax>())
+                .DistinctBy(candidate => (candidate.SyntaxTree?.FilePath ?? "", candidate.SpanStart))
+                .GroupBy(CSharpAnalyzer.GetTypeIdentity, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+            _classDeclarationIndexRoots = roots;
+        }
+        return _classDeclarationIndex!.TryGetValue(typeIdentity, out var classDeclarations)
+            ? classDeclarations
+            : Array.Empty<ClassDeclarationSyntax>();
+    }
+
     internal static bool IsSourceWrapperInvocation(
         InvocationExpressionSyntax call,
         MethodDeclarationSyntax caller,
@@ -1498,6 +1572,18 @@ internal static class WrapperAnalyzer
     }
 
     internal static IReadOnlySet<string> FindUsedWrapperMethodIdentities(
+        IEnumerable<CompilationUnitSyntax> sourceRoots)
+    {
+        var rootList = AsRootList(sourceRoots);
+        if (SameRoots(rootList, _usedWrapperMethodIdentitiesRoots))
+            return _usedWrapperMethodIdentitiesCache!;
+        var usedWrapperMethodIdentities = ComputeUsedWrapperMethodIdentities(rootList);
+        _usedWrapperMethodIdentitiesRoots = rootList;
+        _usedWrapperMethodIdentitiesCache = usedWrapperMethodIdentities;
+        return usedWrapperMethodIdentities;
+    }
+
+    private static IReadOnlySet<string> ComputeUsedWrapperMethodIdentities(
         IEnumerable<CompilationUnitSyntax> sourceRoots)
     {
         var roots = sourceRoots.ToList();
@@ -1685,7 +1771,15 @@ internal static class WrapperAnalyzer
 
     internal static List<WrapperDefinition> GetDefinitions(
         IEnumerable<CompilationUnitSyntax> sourceRoots)
-        => GetDefinitions(sourceRoots, "", "");
+    {
+        var roots = AsRootList(sourceRoots);
+        if (SameRoots(roots, _definitionsRoots))
+            return _definitionsCache!;
+        var definitions = GetDefinitions(roots, "", "");
+        _definitionsRoots = roots;
+        _definitionsCache = definitions;
+        return definitions;
+    }
 
     internal static List<WrapperDefinition> GetDefinitions(
         IEnumerable<CompilationUnitSyntax> sourceRoots,
@@ -1710,6 +1804,18 @@ internal static class WrapperAnalyzer
     }
 
     internal static IReadOnlyList<string> GetKnownTypeIdentities(
+        IEnumerable<CompilationUnitSyntax> sourceRoots)
+    {
+        var roots = AsRootList(sourceRoots);
+        if (SameRoots(roots, _knownTypeIdentitiesRoots))
+            return _knownTypeIdentitiesCache!;
+        var knownTypeIdentities = ComputeKnownTypeIdentities(roots);
+        _knownTypeIdentitiesRoots = roots;
+        _knownTypeIdentitiesCache = knownTypeIdentities;
+        return knownTypeIdentities;
+    }
+
+    private static IReadOnlyList<string> ComputeKnownTypeIdentities(
         IEnumerable<CompilationUnitSyntax> sourceRoots)
         => sourceRoots
             .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<TypeDeclarationSyntax>())
@@ -2371,11 +2477,7 @@ internal static class WrapperAnalyzer
         var classDeclaration = method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
         var className = classDeclaration?.Identifier.Text ?? "";
         var typeIdentity = CSharpAnalyzer.GetTypeIdentity(classDeclaration);
-        var classDeclarations = sourceRoots
-            .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<ClassDeclarationSyntax>())
-            .Where(candidate => CSharpAnalyzer.GetTypeIdentity(candidate) == typeIdentity)
-            .DistinctBy(candidate => (candidate.SyntaxTree?.FilePath ?? "", candidate.SpanStart))
-            .ToList();
+        var classDeclarations = GetClassDeclarations(sourceRoots, typeIdentity).ToList();
         if (classDeclaration is not null && !classDeclarations.Contains(classDeclaration))
             classDeclarations.Add(classDeclaration);
         var parameters = method.ParameterList.Parameters.Select(parameter => parameter.Identifier.Text).ToList();
@@ -2704,11 +2806,7 @@ internal static class WrapperAnalyzer
 
         var containingClass = caller.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
         var callerTypeIdentity = CSharpAnalyzer.GetTypeIdentity(containingClass);
-        var classDeclarations = sourceRoots
-            .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<ClassDeclarationSyntax>())
-            .Where(candidate => CSharpAnalyzer.GetTypeIdentity(candidate) == callerTypeIdentity)
-            .DistinctBy(candidate => (candidate.SyntaxTree?.FilePath ?? "", candidate.SpanStart))
-            .ToList();
+        var classDeclarations = GetClassDeclarations(sourceRoots, callerTypeIdentity).ToList();
         if (containingClass is not null && !classDeclarations.Contains(containingClass))
             classDeclarations.Add(containingClass);
 
@@ -3525,11 +3623,7 @@ internal static class WrapperAnalyzer
 
         var containingClass = caller.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
         var callerTypeIdentity = CSharpAnalyzer.GetTypeIdentity(containingClass);
-        var classDeclarations = sourceRoots
-            .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<ClassDeclarationSyntax>())
-            .Where(candidate => CSharpAnalyzer.GetTypeIdentity(candidate) == callerTypeIdentity)
-            .DistinctBy(candidate => (candidate.SyntaxTree?.FilePath ?? "", candidate.SpanStart))
-            .ToList();
+        var classDeclarations = GetClassDeclarations(sourceRoots, callerTypeIdentity).ToList();
         if (containingClass is not null
             && !classDeclarations.Contains(containingClass))
             classDeclarations.Add(containingClass);

@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -120,7 +121,156 @@ def test_get_or_scan_persists_latest_csharp_source_snapshot() -> None:
             shutil.rmtree(cache_dir, ignore_errors=True)
 
 
+def _write_corpus(root: Path, file_count: int) -> list[Path]:
+    """Write one old-style C# project that exercises the whole Command Source resolver.
+
+    File0 declares a wrapper type whose method builds and runs a `SqlCommand`. Every other file
+    both builds its own `SqlCommand` and calls that wrapper, so the analyzer has a wrapper
+    definition to resolve in every file and a wrapper call site in every file. That shape is what
+    drives the whole Command Source resolver: a corpus walk that runs per input file, per
+    candidate method, or per call site shows up as time here rather than being skipped as
+    "nothing in this project to resolve".
+    """
+    paths = []
+    (root / "File0.cs").write_text(
+        "using System;\n"
+        "using System.Data;\n"
+        "using System.Data.SqlClient;\n"
+        "namespace Corpus {\n"
+        "    public class SqlHelper {\n"
+        "        public SqlConnection Connection;\n"
+        "        public SqlHelper(SqlConnection connection) { Connection = connection; }\n"
+        "        public void ExeProc(string procedureName) {\n"
+        "            SqlCommand command = new SqlCommand(procedureName, Connection);\n"
+        "            command.CommandType = CommandType.StoredProcedure;\n"
+        "            command.ExecuteNonQuery();\n"
+        "        }\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    paths.append(root / "File0.cs")
+    for index in range(1, file_count):
+        path = root / f"File{index}.cs"
+        path.write_text(
+            "using System;\n"
+            "using System.Data;\n"
+            "using System.Data.SqlClient;\n"
+            "namespace Corpus {\n"
+            f"    public class Caller{index} {{\n"
+            f"        public void Direct{index}() {{\n"
+            '            SqlConnection connection = new SqlConnection("Server=s;Database=d;");\n'
+            f'            SqlCommand command = new SqlCommand("sp_direct_{index}", connection);\n'
+            "            command.CommandType = CommandType.StoredProcedure;\n"
+            "            command.ExecuteNonQuery();\n"
+            "        }\n"
+            f"        public void Wrapped{index}() {{\n"
+            '            SqlConnection connection = new SqlConnection("Server=s;Database=d;");\n'
+            "            SqlHelper helper = new SqlHelper(connection);\n"
+            f'            helper.ExeProc("sp_wrapped_{index}");\n'
+            "        }\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        paths.append(path)
+    compile_items = "\n".join(
+        f'    <Compile Include="File{index}.cs" />' for index in range(file_count)
+    )
+    (root / "Corpus.csproj").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<Project ToolsVersion="4.0" DefaultTargets="Build" '
+        'xmlns="http://schemas.microsoft.com/developer/msbuild/2003">\n'
+        "  <ItemGroup>\n"
+        '    <Reference Include="System" />\n'
+        '    <Reference Include="System.Data" />\n'
+        "  </ItemGroup>\n"
+        "  <ItemGroup>\n"
+        f"{compile_items}\n"
+        "  </ItemGroup>\n"
+        "</Project>\n",
+        encoding="utf-8",
+    )
+    return paths
+
+
+def test_one_batch_walks_the_corpus_once_not_once_per_input() -> None:
+    """A batch of ten input files must not cost ten whole-corpus walks.
+
+    The host parses every `.cs` file under `--source-root` as analysis context, then derives
+    corpus-wide facts from it: the known type identities, the wrapper definitions, the used
+    wrapper method identities, and the class declarations that carry a given type identity. All
+    of them are pure functions of that context, but they were recomputed for each `--input` file
+    and, in the resolver, for each call site, so one scan cost O(inputs x corpus). On the
+    541-file Y-Docs TTPUR project one ten-file batch ran for over three and a half minutes, and
+    no batch size could help, because every batch repeated the same walks.
+
+    Assert the shape of the cost, not a wall-clock threshold: ten inputs must cost about what
+    one input costs. The ratio holds on any machine; a second count would not.
+    """
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        paths = _write_corpus(root, 200)
+
+        start = time.perf_counter()
+        single = host.analyze_csharp_files(paths[1:2], source_roots=[root])
+        one_input_seconds = time.perf_counter() - start
+
+        start = time.perf_counter()
+        batch = host.analyze_csharp_files(paths[1:11], source_roots=[root])
+        ten_input_seconds = time.perf_counter() - start
+
+    assert len(single) == 1
+    assert len(batch) == 10
+    assert all(result["db_invocations"] for result in batch), (
+        "the corpus memo and the class-declaration index must not drop invocations"
+    )
+    assert ten_input_seconds < one_input_seconds * 3, (
+        f"ten inputs cost {ten_input_seconds:.2f}s against {one_input_seconds:.2f}s for one "
+        "input: the corpus walk is running per input file again"
+    )
+
+
+def test_command_source_resolution_stays_linear_in_corpus_size() -> None:
+    """Resolving one file must cost time proportional to the corpus, not to its square.
+
+    Command Source resolution answers "which class declarations carry this type identity?" once
+    per candidate method and once per call site. Answering it by walking every syntax tree made
+    the cost O(sites x corpus), so a project that doubled in size got four times slower. That
+    term is what kept one ten-file batch of the 541-file Y-Docs TTPUR project running for over
+    three and a half minutes even after the corpus facts were memoized.
+
+    Quadruple the corpus and analyze one file. A linear cost grows about fourfold, less once the
+    fixed process start is counted; the quadratic cost grew about ninefold on this corpus.
+    """
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+    seconds = []
+    for file_count in (200, 800):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paths = _write_corpus(root, file_count)
+            start = time.perf_counter()
+            results = host.analyze_csharp_files(paths[1:2], source_roots=[root])
+            seconds.append(time.perf_counter() - start)
+            assert len(results) == 1
+            assert results[0]["db_invocations"], (
+                "the class-declaration index must not drop invocations"
+            )
+
+    small_corpus_seconds, large_corpus_seconds = seconds
+    assert large_corpus_seconds < small_corpus_seconds * 6, (
+        f"a fourfold corpus cost {large_corpus_seconds:.2f}s against "
+        f"{small_corpus_seconds:.2f}s: Command Source resolution is walking the whole corpus "
+        "per call site again"
+    )
+
+
 if __name__ == "__main__":
     test_static_analyzer_host_contract()
     test_get_or_scan_persists_latest_csharp_source_snapshot()
+    test_one_batch_walks_the_corpus_once_not_once_per_input()
+    test_command_source_resolution_stays_linear_in_corpus_size()
     print("StaticAnalyzerHost tests passed")

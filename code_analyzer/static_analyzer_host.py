@@ -15,7 +15,13 @@ from .decompilation_cache import DecompilationAttemptCache
 
 CONTRACT_VERSION = 2
 _MAX_HOST_COMMAND_CHARS = 24_000
-_MAX_HOST_FILES_PER_BATCH = 10
+# Every host invocation re-parses every `.cs` file under the given source roots as analysis
+# context before it looks at a single --input file, so that context cost is paid once per
+# invocation, not once per file: on the 541-file Y-Docs TTPUR project it is about 14 seconds
+# against about 0.07 seconds per input file. Ten files per batch meant 55 invocations and 55
+# context parses; a hundred means six. _MAX_HOST_COMMAND_CHARS still bounds each batch, so a
+# project with long paths splits earlier on its own rather than overrunning the command line.
+_MAX_HOST_FILES_PER_BATCH = 100
 
 
 class StaticAnalyzerHostError(RuntimeError):
