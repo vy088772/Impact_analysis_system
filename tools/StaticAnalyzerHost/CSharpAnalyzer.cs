@@ -2607,6 +2607,15 @@ internal static class WrapperAnalyzer
             : null;
     }
 
+    // Binding placeholder for a call whose method name matches no wrapper at all: every caller
+    // of ResolveDefinition either re-derives its own empty methodName filter and returns before
+    // touching .Binding (IsSourceWrapperInvocation), reads only .Candidates
+    // (ComputeUsedWrapperMethodIdentities), or ignores the resolution and rebuilds its own
+    // receiver facts (WrapperAnalyzer.Analyze's CreateUnavailableCandidate) -- so this value is
+    // never actually read, only cheaply constructed once.
+    private static readonly ReceiverBinding NoMatchingWrapperMethodBinding = new(
+        "", "", "", Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
+
     private static WrapperResolution? ResolveDefinition(
         InvocationExpressionSyntax call,
         MethodDeclarationSyntax caller,
@@ -2624,6 +2633,16 @@ internal static class WrapperAnalyzer
         if (string.IsNullOrEmpty(methodName))
             return null;
 
+        // Almost every call site in a corpus names no wrapper method at all, so check that
+        // cheap name filter before paying for ResolveReceiverBinding's walk of the caller's
+        // locals/fields/assignments (and, for a class member, every partial-class declaration
+        // sharing its type identity) -- a walk whose result no caller would even look at here.
+        var methodCandidates = wrappers
+            .Where(wrapper => wrapper.MethodName == methodName)
+            .ToList();
+        if (methodCandidates.Count == 0)
+            return new WrapperResolution(Array.Empty<WrapperDefinition>(), NoMatchingWrapperMethodBinding);
+
         var binding = call.Expression is MemberAccessExpressionSyntax memberAccess
             ? ResolveReceiverBinding(
                 memberAccess.Expression,
@@ -2640,11 +2659,6 @@ internal static class WrapperAnalyzer
                     : new[] { callerTypeIdentity },
                 Array.Empty<string>(),
                 Array.Empty<string>());
-        var methodCandidates = wrappers
-            .Where(wrapper => wrapper.MethodName == methodName)
-            .ToList();
-        if (methodCandidates.Count == 0)
-            return new WrapperResolution(Array.Empty<WrapperDefinition>(), binding);
         if (binding.CandidateImplementations.Count == 0)
             return new WrapperResolution(
                 Array.Empty<WrapperDefinition>(),
