@@ -119,6 +119,32 @@ def _cache_root() -> Path:
     return root
 
 
+def _clone_root() -> Path:
+    return Path(settings.AZURE_CLONE_ROOT).resolve()
+
+
+def _clone_relative_root(root: Path) -> Optional[str]:
+    try:
+        return root.resolve().relative_to(_clone_root()).as_posix()
+    except ValueError:
+        return None
+
+
+def portable_root(root: Path) -> str:
+    """Return a cache metadata root that does not include the local workspace path."""
+    relative = _clone_relative_root(root)
+    return relative if relative is not None else root.resolve().as_posix()
+
+
+def resolve_cached_root(root_value: str) -> Path:
+    """Resolve a portable metadata root, while accepting legacy absolute roots."""
+    value = str(root_value or "").strip()
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return candidate
+    return (_clone_root() / candidate).resolve()
+
+
 def _key(root: Path) -> str:
     return hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
 
@@ -231,7 +257,7 @@ def _save(root: Path, result: ProjectScanResult) -> None:
             json.dumps(
                 {
                     "cache_version": _CACHE_VERSION,
-                    "root": str(root.resolve()),
+                    "root": portable_root(root),
                     "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "source_commit": _git_head_commit(root),
                 },

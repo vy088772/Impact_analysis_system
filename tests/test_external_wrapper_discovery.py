@@ -10,6 +10,7 @@ import sys
 import tools.discover_external_wrappers as discovery
 from code_analyzer.csharp_analysis_gateway import project_wrapper_evidence
 from service import analyze_service
+from service import scan_store
 
 
 def _record(**overrides: object) -> dict:
@@ -29,6 +30,75 @@ def _record(**overrides: object) -> dict:
     }
     record.update(overrides)
     return record
+
+
+def test_scan_cache_root_is_relative_to_clone_root(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    mac_clone_root = tmp_path / "mac" / "data" / "repos"
+    root = mac_clone_root / "System_Dept_1" / "STC"
+    cache_root = tmp_path / "cache"
+    monkeypatch.setattr(scan_store.settings, "AZURE_CLONE_ROOT", str(mac_clone_root))
+    monkeypatch.setattr(scan_store.settings, "SCAN_CACHE_ROOT", str(cache_root))
+
+    scan_store._save(root, {"scan": "cached"})
+    metadata = json.loads(scan_store._paths(root)[1].read_text(encoding="utf-8"))
+
+    assert metadata["root"] == "System_Dept_1/STC"
+
+    windows_clone_root = tmp_path / "windows" / "data" / "repos"
+    windows_root = windows_clone_root / "System_Dept_1" / "STC"
+    monkeypatch.setattr(scan_store.settings, "AZURE_CLONE_ROOT", str(windows_clone_root))
+
+    assert scan_store.resolve_cached_root(metadata["root"]) == windows_root.resolve()
+
+
+def test_cached_targets_resolve_relative_metadata_roots(monkeypatch, tmp_path: Path) -> None:
+    clone_root = tmp_path / "data" / "repos"
+    cache_root = tmp_path / "data" / "scan_cache"
+    cache_root.mkdir(parents=True)
+    monkeypatch.setattr(discovery.settings, "AZURE_CLONE_ROOT", str(clone_root))
+    monkeypatch.setattr(discovery.settings, "SCAN_CACHE_ROOT", str(cache_root))
+    (cache_root / "portable.meta.json").write_text(
+        json.dumps(
+            {
+                "cache_version": scan_store._CACHE_VERSION,
+                "root": "System_Dept_1/STC",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    targets = discovery._cached_targets()
+
+    assert targets == [
+        {
+            "system_id": "STC",
+            "root": (clone_root / "System_Dept_1" / "STC").resolve(),
+            "configured_contract": "",
+        }
+    ]
+
+
+def test_cached_targets_keep_repo_name_for_clone_root_metadata(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    clone_root = tmp_path / "data" / "repos" / "Y-DOCs"
+    cache_root = tmp_path / "data" / "scan_cache"
+    cache_root.mkdir(parents=True)
+    monkeypatch.setattr(discovery.settings, "AZURE_CLONE_ROOT", str(clone_root))
+    monkeypatch.setattr(discovery.settings, "SCAN_CACHE_ROOT", str(cache_root))
+    (cache_root / "portable.meta.json").write_text(
+        json.dumps({"root": "."}),
+        encoding="utf-8",
+    )
+
+    targets = discovery._cached_targets()
+
+    assert targets[0]["system_id"] == "Y-DOCs"
+    assert targets[0]["root"] == clone_root.resolve()
 
 
 def test_sqlobject_receiver_without_configured_contract_stays_unresolved() -> None:

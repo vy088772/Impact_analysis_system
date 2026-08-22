@@ -104,10 +104,11 @@ def _cached_targets() -> List[dict]:
             continue
         if not root_value:
             continue
+        root = scan_store.resolve_cached_root(root_value)
         targets.append(
             {
-                "system_id": Path(root_value).name or root_value,
-                "root": Path(root_value),
+                "system_id": root.name or root_value,
+                "root": root,
                 "configured_contract": "",
             }
         )
@@ -185,22 +186,13 @@ def _location(
 def _cache_state(root: Path) -> Tuple[bool, str]:
     if scan_store.has_cache(root):
         return True, ""
-
-    cache_root = Path(settings.SCAN_CACHE_ROOT)
-    resolved_root = str(root.resolve()).casefold()
-    for meta_path in cache_root.glob("*.meta.json"):
-        try:
-            metadata = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        cached_root = str(metadata.get("root") or "").strip()
-        if not cached_root or cached_root.casefold() != resolved_root:
-            continue
-        if metadata.get("cache_version") != getattr(scan_store, "_CACHE_VERSION", None):
-            return False, "scan_cache_stale"
-        if meta_path.with_suffix("").with_suffix(".pkl").exists():
-            return False, "scan_cache_invalid"
-        return False, "scan_cache_missing"
+    status = scan_store.cache_status(root)
+    if status == "current":
+        return True, ""
+    if status == "stale":
+        return False, "scan_cache_stale"
+    if status == "invalid":
+        return False, "scan_cache_invalid"
     return False, "scan_cache_missing"
 
 
