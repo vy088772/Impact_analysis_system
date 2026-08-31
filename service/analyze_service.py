@@ -46,6 +46,9 @@ from .schemas import (
     FindByTableRequest,
     FindByTableResponse,
     TableMatchProgram,
+    LocateObjectRequest,
+    LocateObjectResponse,
+    LocatedDatabase,
     FlowChainRequest,
     FlowChainResponse,
     PathEvidenceRequest,
@@ -2147,6 +2150,68 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         matches=sorted(matches_by_file.values(), key=lambda item: (item.program, item.file)),
         diagnostics=diagnostics,
         source_root=str(root),
+    )
+
+
+_LOCATE_OBJECT_KINDS = {"sp", "table"}
+
+
+def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
+    """從磁碟上每一份 SQL 快取的 Object Location Index 猜哪些 Database 可能持有這個
+    物件名稱，一律不開任何 SQL 快取本體（見 ADR-0012）。
+
+    kind="sp" 用 normalize_procedure_name 正規化查詢名稱，比對索引的 stored_procedures
+    桶——跟 find_by_sp() 比對 invocation 用同一個函式。kind="table" 用
+    sql_cache_store.normalize_table_name（= graph_queries._normalize_table）正規化，
+    比對索引的 tables 桶——跟 find_by_table() 經 SQL Execution Graph 比對表名用同一個
+    函式。索引因此不會剪掉一個對應端點其實找得到的名字。
+
+    一份索引新鮮且持有這個名稱 → matched；快取存在但索引依 staleness 規則判定缺席
+    （缺失/讀不了/舊/版本不符/身分不符）→ unindexed；索引新鮮但不持有這個名稱 →
+    兩份清單都不出現，那就是剪枝本身，是權威結果而非不確定。
+    """
+    kind = (req.kind or "").strip().casefold()
+    if kind not in _LOCATE_OBJECT_KINDS:
+        raise ValueError(f"kind 必須是 sp 或 table，收到：{req.kind!r}")
+
+    object_name = (req.object_name or "").strip()
+    normalized = (
+        normalize_procedure_name(object_name)
+        if kind == "sp"
+        else sql_cache_store.normalize_table_name(object_name)
+    )
+
+    matched: List[LocatedDatabase] = []
+    unindexed: List[LocatedDatabase] = []
+    indexes_consulted = 0
+
+    for row in sql_cache_store.list_caches():
+        try:
+            identity = sql_cache_store.CacheIdentity.of(row.server, row.database, row.schema)
+        except ValueError:
+            # A file whose name doesn't fit the {server}__{database}__{schema}
+            # shape (see list_caches()'s own docstring): no identity to report
+            # a caller could match against a Declared Database Dependency, so
+            # it is neither counted nor listed — not a cache this endpoint can
+            # answer for, in either direction.
+            continue
+        indexes_consulted += 1
+        located = LocatedDatabase(server=identity.server, database=identity.database)
+        index = sql_cache_store.load_object_location_index(identity)
+        if index is None:
+            unindexed.append(located)
+            continue
+        bucket = index.stored_procedures if kind == "sp" else index.tables
+        if normalized in bucket:
+            matched.append(located)
+        # else: a fresh index that does not hold the name — pruned, appears in neither list.
+
+    return LocateObjectResponse(
+        object_name=object_name,
+        kind=kind,
+        matched=matched,
+        unindexed=unindexed,
+        indexes_consulted=indexes_consulted,
     )
 
 

@@ -415,6 +415,43 @@ class FindByTableResponse(BaseModel):
     source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）
 
 
+class LocateObjectRequest(BaseModel):
+    """POST /locate_object 請求：從 Object Location Index 猜哪些 Database 可能持有這個
+    物件名稱，完全不開任何 SQL 快取——純索引比對。供 /find_by_sp、/find_by_table 的
+    呼叫端在真正逐 Database 發送請求之前，先把要問的範圍縮小成 Candidate Database Set。
+
+    kind 決定套用哪一種正規化、比對索引的哪一個桶：sp 對應 stored_procedures 桶
+    （procedure/view/function 名稱），table 對應 tables 桶（資料表名稱）。其他值視為
+    錯誤請求，不會被猜測成其中一種。
+    """
+    object_name: str                          # 要定位的物件名稱（不分大小寫比對）
+    kind: str                                  # "sp" 或 "table"
+
+
+class LocatedDatabase(BaseModel):
+    """一個 Database 的完整身分：(server, database)。不含 schema——呼叫端拿它跟
+    Declared Database Dependency 比對時，只認這兩個欄位。
+    """
+    server: str = ""
+    database: str = ""
+
+
+class LocateObjectResponse(BaseModel):
+    """POST /locate_object 回應：matched 與 unindexed 是兩份互斥的清單。
+
+    matched：索引存在、新鮮，且持有這個正規化過的名稱。
+    unindexed：快取存在，但依 staleness 規則判定索引缺席——呼叫端必須整份讀取這個
+    Database，服務無法代答。
+    一個索引新鮮但不持有這個名稱的 Database，兩份清單都不會出現——那就是剪枝本身，
+    是權威結果，不是不確定。
+    """
+    object_name: str = ""
+    kind: str = ""
+    matched: List[LocatedDatabase] = Field(default_factory=list)
+    unindexed: List[LocatedDatabase] = Field(default_factory=list)
+    indexes_consulted: int = 0                # 這次請求檢視了多少份索引，供呼叫端斷言成本
+
+
 class RefreshSqlRequest(BaseModel):
     """POST /refresh_sql 請求：重新連線 SQL Server 撷取整庫 SP/View/Function/資料表
     Schema，覆寫本機快取（data/sql_cache/）。

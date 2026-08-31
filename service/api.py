@@ -22,6 +22,9 @@
                         快取的掃描結果；cache_only=True 時不觸發 clone）
     POST /find_by_table → FindByTableResponse（反查哪些程式存取了指定資料表，
                         純比對已快取的掃描結果；cache_only=True 時不觸發 clone）
+    POST /locate_object → LocateObjectResponse（從 Object Location Index 猜哪些
+                        Database 可能持有指定物件名稱，完全不開任何 SQL 快取；
+                        供 /find_by_sp、/find_by_table 的呼叫端先縮小範圍）
     POST /flow_chain  → FlowChainResponse（組出變更影響「關係鏈」候選清單，純靜態
                         組裝、無 AI 判斷；forward：錨點方法→呼叫鏈→SP→SP→資料表；
                         backward：資料表（可選欄位）→SP→C#方法→UI控制項事件；
@@ -51,6 +54,8 @@ from .schemas import (
     FindBySPResponse,
     FindByTableRequest,
     FindByTableResponse,
+    LocateObjectRequest,
+    LocateObjectResponse,
     FlowChainRequest,
     FlowChainResponse,
     PathEvidenceRequest,
@@ -201,6 +206,17 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"資料表反查失敗：{exc}")
+
+
+@app.post("/locate_object", response_model=LocateObjectResponse)
+def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
+    """從 Object Location Index 猜哪些 Database 可能持有指定物件名稱，不開任何 SQL 快取。"""
+    try:
+        return analyze_service.locate_object(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"物件定位失敗：{exc}")
 
 
 @app.post("/flow_chain", response_model=FlowChainResponse)

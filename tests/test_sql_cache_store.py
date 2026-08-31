@@ -399,6 +399,21 @@ def test_list_caches_never_lists_a_scan_record_file_as_a_cache() -> None:
         assert sql_cache_store.list_caches() == []
 
 
+def test_list_caches_never_lists_an_object_location_index_file_as_a_cache() -> None:
+    """The index file also ends in ``.json``; it must not surface as a second row."""
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        assert (cache_root / identity.index_filename).exists()  # sanity: the index exists
+        rows = sql_cache_store.list_caches()
+        assert len(rows) == 1
+        assert rows[0].server == "vmsystest07.topmost.com.tw"
+        assert rows[0].database == "PUR"
+        assert rows[0].schema == "dbo"
+
+
 def test_list_caches_orders_rows_by_server_then_database_then_schema() -> None:
     with CacheRoot() as cache_root:
         write_cache(

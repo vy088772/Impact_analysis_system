@@ -240,7 +240,10 @@ def list_caches() -> List[ScanRecordListing]:
     rows: List[ScanRecordListing] = []
     for data_path in root.glob(f"*{_DATA_SUFFIX}"):
         name = data_path.name
-        if name.endswith(_META_SUFFIX):
+        # Both the Scan Record (.meta.json) and the Object Location Index
+        # (.index.json) end in ".json" too, so the glob above matches them —
+        # only the bare data file is a cache.
+        if name.endswith(_META_SUFFIX) or name.endswith(_INDEX_SUFFIX):
             continue
         stem = name[: -len(_DATA_SUFFIX)]
         server, database, schema = _parse_key(stem)

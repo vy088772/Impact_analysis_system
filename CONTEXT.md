@@ -8,6 +8,10 @@ This context defines the SQL execution-analysis vocabulary used to trace applica
 The normalized `(server, database, schema)` triple that names one SQL cache, independent of any System. The server part drops a named-instance suffix, gains the internal domain when it has none, and is lowercased, so one host never holds two identities. A Database shared by many Systems has exactly one identity, and so exactly one cache. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
 _Avoid_: system_id cache key, per-System cache, database name alone
 
+**Object Location Index**:
+The record of every object name one SQL cache can answer for, carried beside that cache under the same SQL Cache Identity. It holds the union of the declared object names and the SQL Execution Graph node names, so a table reached only inside a stored-procedure body stays findable. An index that reports no match is an authoritative negative: the reader skips that cache without opening it. An index that disagrees with the version of the cache it describes counts as absent, and the reader falls back to reading the whole cache — a stale index makes a search slow, never wrong.
+_Avoid_: name list, cache summary, object catalog
+
 **SQL Execution Graph**:
 A typed static graph of stored procedures, views, functions, tables, calls, and DML operations produced from SQL AST analysis. It is the sole source of SQL relationship and flow evidence.
 _Avoid_: dependencies, depends_on, depended_by

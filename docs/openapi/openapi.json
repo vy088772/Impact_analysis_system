@@ -534,6 +534,78 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "LocateObjectRequest": {
+        "description": "POST /locate_object 請求：從 Object Location Index 猜哪些 Database 可能持有這個\n物件名稱，完全不開任何 SQL 快取——純索引比對。供 /find_by_sp、/find_by_table 的\n呼叫端在真正逐 Database 發送請求之前，先把要問的範圍縮小成 Candidate Database Set。\n\nkind 決定套用哪一種正規化、比對索引的哪一個桶：sp 對應 stored_procedures 桶\n（procedure/view/function 名稱），table 對應 tables 桶（資料表名稱）。其他值視為\n錯誤請求，不會被猜測成其中一種。",
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "object_name": {
+            "title": "Object Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_name",
+          "kind"
+        ],
+        "title": "LocateObjectRequest",
+        "type": "object"
+      },
+      "LocateObjectResponse": {
+        "description": "POST /locate_object 回應：matched 與 unindexed 是兩份互斥的清單。\n\nmatched：索引存在、新鮮，且持有這個正規化過的名稱。\nunindexed：快取存在，但依 staleness 規則判定索引缺席——呼叫端必須整份讀取這個\nDatabase，服務無法代答。\n一個索引新鮮但不持有這個名稱的 Database，兩份清單都不會出現——那就是剪枝本身，\n是權威結果，不是不確定。",
+        "properties": {
+          "indexes_consulted": {
+            "default": 0,
+            "title": "Indexes Consulted",
+            "type": "integer"
+          },
+          "kind": {
+            "default": "",
+            "title": "Kind",
+            "type": "string"
+          },
+          "matched": {
+            "items": {
+              "$ref": "#/components/schemas/LocatedDatabase"
+            },
+            "title": "Matched",
+            "type": "array"
+          },
+          "object_name": {
+            "default": "",
+            "title": "Object Name",
+            "type": "string"
+          },
+          "unindexed": {
+            "items": {
+              "$ref": "#/components/schemas/LocatedDatabase"
+            },
+            "title": "Unindexed",
+            "type": "array"
+          }
+        },
+        "title": "LocateObjectResponse",
+        "type": "object"
+      },
+      "LocatedDatabase": {
+        "description": "一個 Database 的完整身分：(server, database)。不含 schema——呼叫端拿它跟\nDeclared Database Dependency 比對時，只認這兩個欄位。",
+        "properties": {
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "server": {
+            "default": "",
+            "title": "Server",
+            "type": "string"
+          }
+        },
+        "title": "LocatedDatabase",
+        "type": "object"
+      },
       "PathEvidenceRequest": {
         "description": "POST /path_evidence 請求。",
         "properties": {
@@ -2461,6 +2533,45 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/locate_object": {
+      "post": {
+        "description": "從 Object Location Index 猜哪些 Database 可能持有指定物件名稱，不開任何 SQL 快取。",
+        "operationId": "locate_object_locate_object_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocateObjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocateObjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Locate Object"
       }
     },
     "/path_evidence": {
