@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -470,3 +472,210 @@ def test_the_analyze_read_path_without_a_server_cannot_pick_between_two() -> Non
 
         cached, _graph = analyze_service._require_sql_execution_graph("PUR", "vmsystest07")
         assert cached["database"] == "PUR"
+
+
+# --------------------------------------------------- Object Location Index
+
+
+def _payload_with_graph_only_table(database: str) -> dict:
+    """A table reached only inside a stored-procedure body: absent from ``tables``.
+
+    ``Orders`` never appears in the declared ``tables`` list — only as a table
+    node the SQL Execution Graph produced from a procedure body. This is the
+    fixture the union bucket exists for (ticket 01's proof requirement).
+    """
+    payload = _payload(database)
+    payload["procedures"] = [
+        {"name": "spTouchesOrders", "definition": "CREATE PROCEDURE spTouchesOrders AS SELECT 1"}
+    ]
+    payload["tables"] = [{"name": "Customers", "columns": [], "primary_keys": []}]
+    payload["sql_execution_graph"] = {
+        "graph_version": GRAPH_VERSION,
+        "database": database,
+        "nodes": [
+            {
+                "id": "stored_procedure:dbo.spTouchesOrders",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "spTouchesOrders",
+            },
+            {"id": "table:dbo.Orders", "type": "table", "schema": "dbo", "name": "Orders"},
+        ],
+        "relationships": [],
+        "parse_errors": [],
+    }
+    return payload
+
+
+def test_the_stored_procedure_bucket_holds_procedures_views_and_functions_normalized() -> None:
+    identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+    data = _payload("PUR")
+    data["procedures"] = [{"name": "[dbo].[spDoThing]", "definition": ""}]
+    data["views"] = [{"name": "vwSomething", "definition": ""}]
+    data["functions"] = [{"name": "ufnCalc", "definition": ""}]
+
+    index = sql_cache_store.build_object_location_index(identity, data)
+
+    assert index.stored_procedures == {"spdothing", "vwsomething", "ufncalc"}
+
+
+def test_the_table_bucket_holds_the_declared_tables_normalized() -> None:
+    identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+    data = _payload("PUR")
+    data["tables"] = [{"name": "Customers", "columns": [], "primary_keys": []}]
+
+    index = sql_cache_store.build_object_location_index(identity, data)
+
+    assert index.tables == {"customers"}
+
+
+def test_table_name_normalization_drops_the_schema() -> None:
+    """dbo.Orders and sales.Orders must collapse to the same key."""
+    identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+    data = _payload("PUR")
+    data["tables"] = [{"name": "sales.Orders", "columns": [], "primary_keys": []}]
+
+    index = sql_cache_store.build_object_location_index(identity, data)
+
+    assert index.tables == {"orders"}
+
+
+def test_the_table_bucket_includes_a_table_reached_only_inside_a_stored_procedure_body() -> None:
+    """The union with graph node names is the point of the table bucket."""
+    identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+    data = _payload_with_graph_only_table("PUR")
+
+    index = sql_cache_store.build_object_location_index(identity, data)
+
+    assert "orders" in index.tables  # only a graph node, never in data["tables"]
+    assert "customers" in index.tables  # a declared table is still included too
+
+
+def test_the_index_carries_its_identity_and_the_cache_format_version() -> None:
+    identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+
+    index = sql_cache_store.build_object_location_index(identity, _payload("PUR"))
+
+    assert index.server == "vmsystest07.topmost.com.tw"
+    assert index.database == "PUR"
+    assert index.schema == "dbo"
+    assert index.cache_version == sql_cache_store._SQL_CACHE_VERSION
+
+
+def test_the_index_is_written_beside_the_cache_not_merged_into_the_scan_record() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        assert (cache_root / identity.index_filename).exists()
+        meta = json.loads((cache_root / identity.meta_filename).read_text(encoding="utf-8"))
+        assert "stored_procedures" not in meta
+        assert "tables" not in meta
+
+
+def test_a_refresh_writes_the_cache_before_the_index() -> None:
+    """An interrupted refresh must leave the index detectably older, never missing this order."""
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        data_mtime = (cache_root / identity.filename).stat().st_mtime
+        index_mtime = (cache_root / identity.index_filename).stat().st_mtime
+        assert index_mtime >= data_mtime
+
+
+def test_a_fresh_index_round_trips_through_load_object_location_index() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        data = _payload("PUR")
+        data["procedures"] = [{"name": "spAddRecordError", "definition": ""}]
+
+        sql_cache_store._save(identity, data)
+
+        loaded = sql_cache_store.load_object_location_index(identity)
+
+        assert loaded is not None
+        assert "spaddrecorderror" in loaded.stored_procedures
+
+
+def test_a_missing_index_file_counts_as_absent() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        write_cache(cache_root, identity.key, _payload("PUR"))
+
+        assert sql_cache_store.load_object_location_index(identity) is None
+
+
+def test_an_unreadable_index_file_counts_as_absent() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        write_cache(cache_root, identity.key, _payload("PUR"))
+        (cache_root / identity.index_filename).write_text("{not valid json", encoding="utf-8")
+
+        assert sql_cache_store.load_object_location_index(identity) is None
+
+
+def test_an_index_older_than_its_cache_counts_as_absent() -> None:
+    """Simulates a refresh that stopped halfway: the cache moved on, the index did not."""
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        old = time.time() - 1000
+        os.utime(cache_root / identity.index_filename, (old, old))
+
+        assert sql_cache_store.load_object_location_index(identity) is None
+
+
+def test_an_index_built_against_a_different_cache_format_version_counts_as_absent() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        index_path = cache_root / identity.index_filename
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        payload["cache_version"] = sql_cache_store._SQL_CACHE_VERSION - 1
+        index_path.write_text(json.dumps(payload), encoding="utf-8")
+        future = time.time() + 10
+        os.utime(index_path, (future, future))  # rule out the mtime check alone
+
+        assert sql_cache_store.load_object_location_index(identity) is None
+
+
+def test_an_index_moved_by_hand_to_a_different_identity_counts_as_absent() -> None:
+    """A reviewer must be able to detect a file moved/renamed by hand, not trust it."""
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        other = CacheIdentity.of("vmsystest08", "PUR", "dbo")
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        (cache_root / other.filename).write_bytes((cache_root / identity.filename).read_bytes())
+        (cache_root / other.meta_filename).write_bytes(
+            (cache_root / identity.meta_filename).read_bytes()
+        )
+        (cache_root / other.index_filename).write_bytes(
+            (cache_root / identity.index_filename).read_bytes()
+        )
+
+        assert sql_cache_store.load_object_location_index(other) is None
+
+
+def test_the_staleness_check_never_reads_the_cache_body() -> None:
+    """A 105 MB cache must never be parsed just to decide whether its index is fresh."""
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        data_path = cache_root / identity.filename
+        index_path = cache_root / identity.index_filename
+        # Corrupt the content only; keep the index's mtime at least as new as the
+        # cache's so the (valid) mtime rule alone cannot explain a fresh result.
+        data_path.write_text("{not valid json at all", encoding="utf-8")
+        fresh = data_path.stat().st_mtime + 10
+        os.utime(index_path, (fresh, fresh))
+
+        loaded = sql_cache_store.load_object_location_index(identity)
+
+        assert loaded is not None

@@ -26,7 +26,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from code_analyzer.csharp_analysis_gateway import normalize_procedure_name
 from config.settings import settings
+
+# 資料表名稱正規化跟 /find_by_table 比對 SQL Execution Graph 節點時用的同一個函式
+# （service/graph_queries.py 內部用來判斷一個 graph table 節點是否等於呼叫端要找的
+# 表名），特意重用而不是自己另寫一份等價邏輯——否則索引跟真正的比對邏輯日後可能
+# 悄悄長歪，讓索引誤刪一個 find_by_table 其實會找到的名字。
+from .graph_queries import _normalize_table as normalize_table_name
 
 # 快取格式版本：dump_all_sql_objects() 回傳結構若變動則遞增，讓舊快取自動失效
 # v2：tables[].primary_keys（供 fk_resolver.py 的 PK 命名慣例推論關聯使用）
@@ -63,6 +70,7 @@ SERVER_DOMAIN_SUFFIX = ".topmost.com.tw"
 _KEY_SEPARATOR = "__"
 _DATA_SUFFIX = ".json"
 _META_SUFFIX = ".meta.json"
+_INDEX_SUFFIX = ".index.json"
 
 
 def _safe_name(text: str) -> str:
@@ -142,6 +150,10 @@ class CacheIdentity:
     def meta_filename(self) -> str:
         return f"{self.key}{_META_SUFFIX}"
 
+    @property
+    def index_filename(self) -> str:
+        return f"{self.key}{_INDEX_SUFFIX}"
+
 
 def _cache_root() -> Path:
     root = Path(settings.SQL_CACHE_ROOT)
@@ -152,6 +164,10 @@ def _cache_root() -> Path:
 def _paths(identity: CacheIdentity) -> tuple[Path, Path]:
     root = _cache_root()
     return root / identity.filename, root / identity.meta_filename
+
+
+def _index_path(identity: CacheIdentity) -> Path:
+    return _cache_root() / identity.index_filename
 
 
 def resolve_server(database: str, schema: str = "dbo") -> str:
@@ -310,6 +326,125 @@ def write_meta(meta_path: Path, identity: CacheIdentity, saved_at: str) -> None:
     )
 
 
+@dataclass(frozen=True)
+class ObjectLocationIndex:
+    """一份 SQL 快取的 Object Location Index：這份快取能回答哪些物件名稱。
+
+    分兩個桶，各自正規化：stored_procedures（procedures/views/functions，用
+    normalize_procedure_name）與 tables（快取宣告的 tables ∪ SQL Execution
+    Graph 裡的 table 節點，用 normalize_table_name，並且已經去掉 schema——
+    dbo.Orders 與 sales.Orders 收斂成同一個 key，這是今天既有的比對行為）。
+    寧可多報也不能少報：多報頂多多讀一次快取，少報會漏掉一個本該找到的答案。
+    """
+
+    server: str
+    database: str
+    schema: str
+    cache_version: int
+    stored_procedures: frozenset[str]
+    tables: frozenset[str]
+
+
+def build_object_location_index(identity: CacheIdentity, data: Dict) -> ObjectLocationIndex:
+    """把一份已載入的 SQL 快取內容，轉成它的 Object Location Index。
+
+    refresh 路徑（_save()）與 backfill 工具共用這一個函式，不會有第二份實作。
+    """
+    stored_procedures: set[str] = set()
+    for collection in ("procedures", "views", "functions"):
+        for item in data.get(collection, []) or []:
+            name = str((item or {}).get("name") or "").strip()
+            if name:
+                stored_procedures.add(normalize_procedure_name(name))
+
+    tables: set[str] = set()
+    for item in data.get("tables", []) or []:
+        name = str((item or {}).get("name") or "").strip()
+        if name:
+            tables.add(normalize_table_name(name))
+
+    graph = data.get("sql_execution_graph")
+    if isinstance(graph, dict):
+        for node in graph.get("nodes", []) or []:
+            if not isinstance(node, dict) or node.get("type") != "table":
+                continue
+            name = str(node.get("name") or "").strip()
+            if name:
+                tables.add(normalize_table_name(name))
+
+    return ObjectLocationIndex(
+        server=identity.server,
+        database=identity.database,
+        schema=identity.schema,
+        cache_version=_SQL_CACHE_VERSION,
+        stored_procedures=frozenset(stored_procedures),
+        tables=frozenset(tables),
+    )
+
+
+def _index_payload(index: ObjectLocationIndex) -> Dict[str, object]:
+    return {
+        "server": index.server,
+        "database": index.database,
+        "schema": index.schema,
+        "cache_version": index.cache_version,
+        "stored_procedures": sorted(index.stored_procedures),
+        "tables": sorted(index.tables),
+    }
+
+
+def write_object_location_index(identity: CacheIdentity, index: ObjectLocationIndex) -> None:
+    """把索引寫到快取旁邊的獨立檔案——不併入 meta 檔，那是 Scan Record，意義不同。"""
+    _index_path(identity).write_text(
+        json.dumps(_index_payload(index), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_object_location_index(identity: CacheIdentity) -> Optional[ObjectLocationIndex]:
+    """讀取一份索引；staleness 規則只定義在這一處。
+
+    索引檔不存在、讀不了、修改時間早於它描述的快取資料檔、版本跟現在的
+    _SQL_CACHE_VERSION 對不上、或身分跟呼叫端要的 identity 對不上，都算「沒有
+    索引」——呼叫端接下來照舊打開整份快取，絕不會因為索引壞掉而少答一個答案。
+
+    這裡只取快取資料檔的修改時間（stat），從不 parse 它的內容——105 MB 的檔案
+    不該在這裡被打開，那正是索引想省下的成本。
+    """
+    data_path, _meta_path = _paths(identity)
+    index_path = _index_path(identity)
+    if not data_path.exists() or not index_path.exists():
+        return None
+    try:
+        if index_path.stat().st_mtime < data_path.stat().st_mtime:
+            return None
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("cache_version") != _SQL_CACHE_VERSION:
+        return None
+    if not _same_scope(payload.get("server"), identity.server):
+        return None
+    if not _same_scope(payload.get("database"), identity.database):
+        return None
+    if not _same_scope(payload.get("schema"), identity.schema):
+        return None
+    stored_procedures = payload.get("stored_procedures")
+    tables = payload.get("tables")
+    if not isinstance(stored_procedures, list) or not isinstance(tables, list):
+        return None
+    return ObjectLocationIndex(
+        server=identity.server,
+        database=identity.database,
+        schema=identity.schema,
+        cache_version=_SQL_CACHE_VERSION,
+        stored_procedures=frozenset(str(name) for name in stored_procedures),
+        tables=frozenset(str(name) for name in tables),
+    )
+
+
 def _load(identity: CacheIdentity) -> Optional[Dict]:
     data_path, meta_path = _paths(identity)
     if not data_path.exists():
@@ -343,6 +478,14 @@ def _save(identity: CacheIdentity, data: Dict) -> None:
         write_meta(meta_path, identity, time.strftime("%Y-%m-%d %H:%M:%S"))
     except Exception as exc:  # 寫檔失敗不致命
         print(f"⚠️  SQL 快取寫出失敗（非致命）：{exc}")
+        return
+    # 索引一定寫在快取之後：中斷在這一步之前的 refresh，索引就是舊檔或缺席，
+    # 而不是跟半成品快取一起看起來「完整但錯」。索引寫出失敗同樣不致命——
+    # 索引缺席時呼叫端就照舊讀整份快取，不會少答任何一個答案。
+    try:
+        write_object_location_index(identity, build_object_location_index(identity, data))
+    except Exception as exc:
+        print(f"⚠️  Object Location Index 寫出失敗（非致命）：{exc}")
 
 
 def load_cached(database: str, schema: str = "dbo", server: str = "") -> Optional[Dict]:
