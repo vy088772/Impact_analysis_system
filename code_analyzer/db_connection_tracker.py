@@ -8,7 +8,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-from .webconfig_connection_resolver import WebConfigConnections
+from .webconfig_connection_resolver import WebConfigConnections, ResolvedConnection
 
 
 @dataclass
@@ -60,7 +60,7 @@ class DBConnectionTracker:
         if not self.connection_resolver:
             return key, None
 
-        table: Dict[str, "ResolvedConnection"] = getattr(self.connection_resolver, kind)
+        table: Dict[str, ResolvedConnection] = getattr(self.connection_resolver, kind)
         resolved = table.get(key)
         if resolved is None:
             folded = key.casefold()
