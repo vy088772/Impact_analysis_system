@@ -444,6 +444,8 @@ class LocateObjectResponse(BaseModel):
     Database，服務無法代答。
     一個索引新鮮但不持有這個名稱的 Database，兩份清單都不會出現——那就是剪枝本身，
     是權威結果，不是不確定。
+    每個 (server, database) 至多出現一次，且只會出現在其中一份清單裡：同一個
+    Database 的多個 schema 各有自己的索引，任何一份說「持有」就算 matched。
     """
     object_name: str = ""
     kind: str = ""

@@ -86,3 +86,23 @@ Both lists name each Database by its full `(server, database)` identity, so a ca
   by skipping (not counting, not listing) a row whose identity can't be
   constructed — it isn't a cache this endpoint can answer for in either
   direction — instead of crashing the whole request.
+- **Second code-review finding, fixed:** caches exist per
+  `(server, database, schema)` but `LocatedDatabase` reports only
+  `(server, database)`, so two schemas of one Database each carry their own
+  index and can answer differently. The first draft appended one entry per
+  cache row, so one Database could appear twice in a list, or once in
+  `matched` and once in `unindexed` at the same time — contradicting the
+  response's own documented "two mutually exclusive lists" contract and story
+  17's "matched vs. unindexed tells me 'holds it' from 'read it'". The
+  Candidate Database Set the caller computes is the union of both lists, so
+  no answer ever changed; the reply was just unusable for anything that reads
+  the lists apart. Fixed by keying both lists on `(server, database)`:
+  a Database appears at most once, and `matched` wins over `unindexed`
+  (one index saying "holds it" is a definite yes; the other schema's absent
+  index adds nothing, and the Database gets read either way). The union is
+  therefore byte-identical to before. `indexes_consulted` deliberately stays
+  a per-index count — it measures cost, not Databases. Regression tests:
+  `test_two_schemas_of_one_database_never_land_in_both_lists`,
+  `test_two_schemas_that_both_hold_the_name_report_the_database_once`,
+  `test_two_schemas_that_are_both_unindexed_report_the_database_once` in
+  `tests/test_locate_object.py` (16 cases in the file now, up from 13).

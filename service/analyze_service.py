@@ -17,7 +17,7 @@ import os
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
@@ -2169,6 +2169,11 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
     一份索引新鮮且持有這個名稱 → matched；快取存在但索引依 staleness 規則判定缺席
     （缺失/讀不了/舊/版本不符/身分不符）→ unindexed；索引新鮮但不持有這個名稱 →
     兩份清單都不出現，那就是剪枝本身，是權威結果而非不確定。
+
+    快取以 (server, database, schema) 逐份存在，回報的身分卻只有 (server, database)，
+    所以同一個 Database 的多個 schema 可能給出不同答案。一份索引說「持有」就是持有，
+    因此 matched 蓋過 unindexed，每個 Database 只出現一次，兩份清單互斥。
+    indexes_consulted 仍逐份索引計數——它量的是成本，不是 Database 數。
     """
     kind = (req.kind or "").strip().casefold()
     if kind not in _LOCATE_OBJECT_KINDS:
@@ -2181,8 +2186,9 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
         else sql_cache_store.normalize_table_name(object_name)
     )
 
-    matched: List[LocatedDatabase] = []
-    unindexed: List[LocatedDatabase] = []
+    databases: Dict[Tuple[str, str], LocatedDatabase] = {}
+    matched_keys: Set[Tuple[str, str]] = set()
+    unindexed_keys: Set[Tuple[str, str]] = set()
     indexes_consulted = 0
 
     for row in sql_cache_store.list_caches():
@@ -2196,21 +2202,28 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
             # answer for, in either direction.
             continue
         indexes_consulted += 1
-        located = LocatedDatabase(server=identity.server, database=identity.database)
+        key = (identity.server, identity.database)
+        databases.setdefault(
+            key, LocatedDatabase(server=identity.server, database=identity.database)
+        )
         index = sql_cache_store.load_object_location_index(identity)
         if index is None:
-            unindexed.append(located)
+            unindexed_keys.add(key)
             continue
         bucket = index.stored_procedures if kind == "sp" else index.tables
         if normalized in bucket:
-            matched.append(located)
+            matched_keys.add(key)
         # else: a fresh index that does not hold the name — pruned, appears in neither list.
 
     return LocateObjectResponse(
         object_name=object_name,
         kind=kind,
-        matched=matched,
-        unindexed=unindexed,
+        matched=[db for key, db in databases.items() if key in matched_keys],
+        unindexed=[
+            db
+            for key, db in databases.items()
+            if key in unindexed_keys and key not in matched_keys
+        ],
         indexes_consulted=indexes_consulted,
     )
 

@@ -554,7 +554,7 @@
         "type": "object"
       },
       "LocateObjectResponse": {
-        "description": "POST /locate_object 回應：matched 與 unindexed 是兩份互斥的清單。\n\nmatched：索引存在、新鮮，且持有這個正規化過的名稱。\nunindexed：快取存在，但依 staleness 規則判定索引缺席——呼叫端必須整份讀取這個\nDatabase，服務無法代答。\n一個索引新鮮但不持有這個名稱的 Database，兩份清單都不會出現——那就是剪枝本身，\n是權威結果，不是不確定。",
+        "description": "POST /locate_object 回應：matched 與 unindexed 是兩份互斥的清單。\n\nmatched：索引存在、新鮮，且持有這個正規化過的名稱。\nunindexed：快取存在，但依 staleness 規則判定索引缺席——呼叫端必須整份讀取這個\nDatabase，服務無法代答。\n一個索引新鮮但不持有這個名稱的 Database，兩份清單都不會出現——那就是剪枝本身，\n是權威結果，不是不確定。\n每個 (server, database) 至多出現一次，且只會出現在其中一份清單裡：同一個\nDatabase 的多個 schema 各有自己的索引，任何一份說「持有」就算 matched。",
         "properties": {
           "indexes_consulted": {
             "default": 0,

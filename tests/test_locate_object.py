@@ -15,10 +15,12 @@ from service.sql_execution_graph import GRAPH_VERSION
 from tests.sql_cache_fixtures import CacheRoot, write_cache
 
 
-def _payload(database: str, procedures=None, tables=None, graph_nodes=None) -> dict:
+def _payload(
+    database: str, procedures=None, tables=None, graph_nodes=None, schema: str = "dbo"
+) -> dict:
     return {
         "database": database,
-        "schema": "dbo",
+        "schema": schema,
         "procedures": procedures or [],
         "views": [],
         "functions": [],
@@ -175,6 +177,68 @@ def test_table_kind_finds_a_table_reached_only_inside_a_stored_procedure_body() 
         assert [(d.server, d.database) for d in response.matched] == [
             ("vmsystest07.topmost.com.tw", "PUR")
         ]
+
+
+def test_two_schemas_of_one_database_never_land_in_both_lists() -> None:
+    with CacheRoot() as cache_root:
+        matching = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        sql_cache_store._save(
+            matching,
+            _payload("PUR", procedures=[{"name": "dbo.spAddRecordError", "definition": ""}]),
+        )
+        unindexed = CacheIdentity.of("vmsystest07", "PUR", "sales")
+        write_cache(cache_root, unindexed.key, _payload("PUR", schema="sales"))
+
+        response = analyze_service.locate_object(
+            LocateObjectRequest(object_name="spAddRecordError", kind="sp")
+        )
+
+        assert [(d.server, d.database) for d in response.matched] == [
+            ("vmsystest07.topmost.com.tw", "PUR")
+        ]
+        assert response.unindexed == []
+        assert response.indexes_consulted == 2
+
+
+def test_two_schemas_that_both_hold_the_name_report_the_database_once() -> None:
+    with CacheRoot():
+        for schema in ("dbo", "sales"):
+            identity = CacheIdentity.of("vmsystest07", "PUR", schema)
+            sql_cache_store._save(
+                identity,
+                _payload(
+                    "PUR",
+                    procedures=[{"name": f"{schema}.spAddRecordError", "definition": ""}],
+                    schema=schema,
+                ),
+            )
+
+        response = analyze_service.locate_object(
+            LocateObjectRequest(object_name="spAddRecordError", kind="sp")
+        )
+
+        assert [(d.server, d.database) for d in response.matched] == [
+            ("vmsystest07.topmost.com.tw", "PUR")
+        ]
+        assert response.unindexed == []
+        assert response.indexes_consulted == 2
+
+
+def test_two_schemas_that_are_both_unindexed_report_the_database_once() -> None:
+    with CacheRoot() as cache_root:
+        for schema in ("dbo", "sales"):
+            identity = CacheIdentity.of("vmsystest07", "PUR", schema)
+            write_cache(cache_root, identity.key, _payload("PUR", schema=schema))
+
+        response = analyze_service.locate_object(
+            LocateObjectRequest(object_name="spAddRecordError", kind="sp")
+        )
+
+        assert response.matched == []
+        assert [(d.server, d.database) for d in response.unindexed] == [
+            ("vmsystest07.topmost.com.tw", "PUR")
+        ]
+        assert response.indexes_consulted == 2
 
 
 def test_an_unknown_kind_is_rejected_rather_than_guessed() -> None:
