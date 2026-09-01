@@ -90,3 +90,27 @@ documented and accepted), and Spec confirmed the scope's three components
 match ADR-0013 exactly, all seven derivation call sites and the one
 `_build_program_execution_paths` call site are migrated, and no reuse/
 caching behaviour was added ahead of ticket 04/05.
+
+**Follow-up (re-review after ticket 04 landed):** re-ran the Standards and
+Spec axes against this ticket's actual committed diff (`0f21b59...5213cb4`),
+this time against the current working tree so ticket 04's later additions
+were visible for comparison. Spec came back fully clean: all 8 checklist
+items verified independently against the diff (not just the Note above), no
+scope creep (confirmed the ticket 04 retention machinery visible in the
+current tree is genuinely absent from this ticket's own diff range), and the
+Note's claims matched the actual code. Standards flagged three real,
+verified inconsistencies in `DerivedExecutionEvidenceScope`'s docstring and
+`.of()`'s signature — a Markdown-style `[ADR-0013](../docs/adr/...)` link
+(this file cites ADRs as plain inline text everywhere else, e.g. `ADR-0009`,
+`（ADR-0012）`) and two unnecessary quoted forward references (`"Derived
+ExecutionEvidenceScope"`) despite the file already having
+`from __future__ import annotations`, which makes every annotation in it a
+string at runtime already. Both were fixed directly (plain `ADR-0013` text;
+unquoted type hints), and the identical Markdown-link pattern was also found
+and fixed in ticket 04's own `_RatedInvocationsValidityStamp` docstring for
+consistency, since it would otherwise have reintroduced the same flagged
+smell two commits later in the same file. A claimed "this file's docstrings
+are one-liners" finding was checked and rejected: a direct count found 16
+multi-line vs. 14 single-line docstrings in this file, so the class's
+longer, multi-paragraph docstring was left as-is. Full suite re-run after the
+fix: identical 12 pre-existing failures, 593 passed (no regressions).

@@ -982,8 +982,7 @@ def _overlay_method_class_chain(
 class DerivedExecutionEvidenceScope:
     """The identity Derived Execution Evidence is derived for.
 
-    Named in the domain glossary (``CONTEXT.md``) and decided in
-    [ADR-0013](../docs/adr/0013-derived-execution-evidence-computed-once-per-scope.md):
+    Named in the domain glossary (``CONTEXT.md``) and decided in ADR-0013:
     the repository scan roots, the complete Database identity a request
     routes to, and the wrapper contract selector in force -- exactly the
     inputs `_rated_execution_invocations` reads, and nothing it does not.
@@ -1001,7 +1000,7 @@ class DerivedExecutionEvidenceScope:
     wrapper_contract: str
 
     @classmethod
-    def of(cls, req: object, roots: Iterable[Path]) -> "DerivedExecutionEvidenceScope":
+    def of(cls, req: object, roots: Iterable[Path]) -> DerivedExecutionEvidenceScope:
         """Build the scope from a request and its already-resolved scan roots.
 
         This is the one place a scope is assembled; every derivation call
@@ -1025,8 +1024,7 @@ class DerivedExecutionEvidenceScope:
 class _RatedInvocationsValidityStamp:
     """Everything the rating step reads besides `scope` itself.
 
-    [ADR-0013](../docs/adr/0013-derived-execution-evidence-computed-once-per-scope.md)
-    names five inputs a retained rating result must track: the repository
+    ADR-0013 names five inputs a retained rating result must track: the repository
     scan, the SQL cache it is joined against, and the three configuration
     reads that shape rating -- the external wrapper contract, the contract
     registry, and the wrapper review exclusions. A mismatch on any one of
@@ -1331,7 +1329,7 @@ def _build_program_execution_paths(
     matched_files: List,
     root: Path,
     *,
-    scope: Optional["DerivedExecutionEvidenceScope"] = None,
+    scope: Optional[DerivedExecutionEvidenceScope] = None,
 ) -> Tuple[List[Dict], Dict[str, object]]:
     """Join one program's raw C# facts to the selected SQL execution graph.
 
