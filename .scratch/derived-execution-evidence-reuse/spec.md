@@ -286,3 +286,7 @@ before and after measurement runs, not by the unit suite.
   run one routing mode, at fewer than three repetitions, with final answer
   synthesis enabled. The before and after measurements use it rather than adding
   a measurement to this repository.
+- Outcome: the target was missed. Ticket 07 records the after measurement —
+  table-naming ninetieth percentile 82.2 seconds against a target of under
+  thirty. The derivation reuse works and saves under two seconds per question.
+  Final answer synthesis, at a median of 54.8 seconds, is where the wait is.
