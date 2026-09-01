@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import os
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -1109,12 +1110,49 @@ class _RetainedRatedInvocations:
 
 
 # Derived Execution Evidence's rating half, retained per scope (ADR-0013).
-# Unbounded for now: ticket 06 states and justifies a retention limit against
-# the number of systems one Cross-system Lookup visits. This ticket only
-# introduces the retention and its freshness rule, on the smaller of the two
-# reverse lookups (the stored-procedure lookup skips path-building), so the
-# freshness design is proven before the bulk of the measured wait is touched.
-_rated_invocations_retention: Dict[DerivedExecutionEvidenceScope, _RetainedRatedInvocations] = {}
+# Bounded by `settings.DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT` (ticket 06):
+# a single Cross-system Lookup visits every system in the catalog once before
+# returning to the first, so a bound smaller than that visit count would evict
+# a scope before the lookup could ever reuse it, buying nothing while still
+# paying the cost of deriving it. An `OrderedDict` in insertion order gives a
+# FIFO eviction that matches that sweep: the scope visited longest ago is the
+# one evicted, exactly the one a round-trip sweep would otherwise be about to
+# revisit last. See `_evict_for_new_scope` for the eviction itself.
+#
+# The pre-existing unbounded in-memory retention this reuse work builds on top
+# of -- `_scan_cache` above, and the process-level caches in `scan_store` and
+# `sql_cache_store` -- is deliberately left alone here. Those predate this
+# effort and carry their own risk; bounding them is not this ticket's scope.
+_rated_invocations_retention: OrderedDict[DerivedExecutionEvidenceScope, _RetainedRatedInvocations] = (
+    OrderedDict()
+)
+
+
+def _evict_for_new_scope(scope: DerivedExecutionEvidenceScope) -> None:
+    """Evict the oldest retained scope if adding `scope` would exceed the bound.
+
+    A no-op when `scope` is already retained -- replacing an existing entry's
+    value (a stamp mismatch or an explicit refresh) never grows the retention,
+    so it never needs to evict. Eviction never changes an answer: the evicted
+    scope simply re-derives from scratch on its next request, the same way any
+    scope does the first time it is ever seen. It is printed so a service whose
+    reuse has stopped working -- because the catalog outgrew the configured
+    bound -- reports that instead of merely being slow again (ADR-0013).
+    """
+    if scope in _rated_invocations_retention:
+        return
+    limit = max(1, int(settings.DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT))
+    if len(_rated_invocations_retention) < limit:
+        return
+    evicted_scope, _ = _rated_invocations_retention.popitem(last=False)
+    print(
+        "⚠️  Derived Execution Evidence retention 已達上限"
+        f"（limit={limit}），淘汰最舊的 scope 以容納新的 scope："
+        f"evicted database={evicted_scope.database!r} db_server={evicted_scope.db_server!r} "
+        f"repo_roots={evicted_scope.repo_roots!r} / "
+        f"new database={scope.database!r} db_server={scope.db_server!r} "
+        f"repo_roots={scope.repo_roots!r}"
+    )
 
 
 def _rated_execution_invocations_for_scope(
@@ -1146,6 +1184,7 @@ def _rated_execution_invocations_for_scope(
             return retained.rated_invocations, retained.graph
 
     rated_invocations, graph = _rated_execution_invocations(scope, merged_scan, matched_files, root)
+    _evict_for_new_scope(scope)
     _rated_invocations_retention[scope] = _RetainedRatedInvocations(stamp, rated_invocations, graph)
     return rated_invocations, graph
 

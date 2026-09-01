@@ -137,6 +137,19 @@ class Settings:
     SQL_CACHE_ROOT: str = os.getenv('SQL_CACHE_ROOT', './data/sql_cache')
 
     # ========================================
+    # Derived Execution Evidence 保留上限（ADR-0013 / ticket 06）
+    # ========================================
+    # 一次 Cross-system Lookup 會把目錄裡的每個系統各造訪一次才會回到第一個；
+    # 目錄預期成長到約一百個系統。上限若小於單次 Cross-system Lookup 造訪的
+    # 系統數，最早建立的 scope 會在還沒被下一輪問到之前就被淘汰，reuse 因此
+    # 完全發揮不到效果、卻還是要付出建置成本——這正是這個上限存在的理由：
+    # 數字要對著這個造訪次數寫，不能憑空挑一個。目錄成長時只要調整這個環境
+    # 變數即可放寬上限，不需要改程式碼。
+    DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT: int = int(
+        os.getenv('DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT', '100')
+    )
+
+    # ========================================
     # 檔案路徑設定
     # ========================================
     FILE_LIST_PATH: str = os.getenv('FILE_LIST_PATH', 'data/檔案一覽表.xlsx')
