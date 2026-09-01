@@ -12,6 +12,10 @@ _Avoid_: system_id cache key, per-System cache, database name alone
 The record of every object name one SQL cache can answer for, carried beside that cache under the same SQL Cache Identity. It holds the union of the declared object names and the SQL Execution Graph node names, so a table reached only inside a stored-procedure body stays findable. An index that reports no match is an authoritative negative: the reader skips that cache without opening it. An index that disagrees with the version of the cache it describes counts as absent, and the reader falls back to reading the whole cache — a stale index makes a search slow, never wrong.
 _Avoid_: name list, cache summary, object catalog
 
+**Derived Execution Evidence**:
+The full set of evidence-rated Database Invocations and the Execution Paths built from them, for one repository scan crossed with one SQL Cache Identity. It is independent of any object a question names — the name filters this evidence only at the end, and never scopes how the evidence is built. Its identity is the pair of repository scan and SQL Cache Identity it was derived from; either one changing invalidates it. See [ADR-0013](docs/adr/0013-derived-execution-evidence-computed-once-per-scope.md).
+_Avoid_: cached results, invocation cache, precomputed paths
+
 **SQL Execution Graph**:
 A typed static graph of stored procedures, views, functions, tables, calls, and DML operations produced from SQL AST analysis. It is the sole source of SQL relationship and flow evidence.
 _Avoid_: dependencies, depends_on, depended_by
