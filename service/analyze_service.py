@@ -1021,6 +1021,126 @@ class DerivedExecutionEvidenceScope:
         )
 
 
+@dataclass
+class _RatedInvocationsValidityStamp:
+    """Everything the rating step reads besides `scope` itself.
+
+    [ADR-0013](../docs/adr/0013-derived-execution-evidence-computed-once-per-scope.md)
+    names five inputs a retained rating result must track: the repository
+    scan, the SQL cache it is joined against, and the three configuration
+    reads that shape rating -- the external wrapper contract, the contract
+    registry, and the wrapper review exclusions. A mismatch on any one of
+    them means a retained result may no longer be correct, so it is never
+    served -- unlike the Object Location Index's tolerant staleness rule
+    (ADR-0012), a stale match here is a wrong answer, not a slow one.
+
+    `scan_identity`/`sql_cache_identity` compare by Python object identity,
+    not content: `scan_store`/`sql_cache_store` hand back the exact same
+    in-memory object on every call until a `refresh` replaces it in their
+    own process caches (unbounded and never evicted today), so identity
+    already means "has this input moved since the last derivation", more
+    cheaply than hashing a scan's full contents on every request. The three
+    configuration reads have no such identity guarantee -- they are parsed
+    fresh from disk on every call -- so they are compared by value instead.
+    """
+
+    scan_identity: Tuple[int, ...]
+    sql_cache_identity: Optional[int]
+    external_wrapper_contract: Optional[Dict[str, Any]]
+    contract_registry: Dict[str, Any]
+    wrapper_review_exclusions: Tuple[Dict[str, Any], ...]
+
+
+def _rating_config_inputs(
+    scope: DerivedExecutionEvidenceScope,
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Tuple[Dict[str, Any], ...]]:
+    """The three configuration reads that shape rating, read fresh every time.
+
+    Backs both the rating step and its validity stamp below: ADR-0013
+    requires the freshness check to see a configuration edit exactly as soon
+    as the rating step itself would, so neither may cache these separately
+    from the other.
+    """
+    return (
+        load_external_wrapper_contract(scope.wrapper_contract),
+        load_contract_registry(),
+        load_wrapper_review_exclusions(scope.database),
+    )
+
+
+def _rated_invocations_validity_stamp(
+    scope: DerivedExecutionEvidenceScope,
+    scans: Iterable[ProjectScanResult],
+) -> _RatedInvocationsValidityStamp:
+    """Take a fresh reading of every input `_rated_execution_invocations` depends on."""
+    sql_cache = (
+        sql_cache_store.load_cached(scope.database, "dbo", server=scope.db_server)
+        if scope.database
+        else None
+    )
+    external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
+        _rating_config_inputs(scope)
+    )
+    return _RatedInvocationsValidityStamp(
+        scan_identity=tuple(id(scan) for scan in scans),
+        sql_cache_identity=(id(sql_cache) if sql_cache is not None else None),
+        external_wrapper_contract=external_wrapper_contract,
+        contract_registry=contract_registry,
+        wrapper_review_exclusions=wrapper_review_exclusions,
+    )
+
+
+@dataclass
+class _RetainedRatedInvocations:
+    """One scope's rated Database Invocations, kept until a stamp mismatch or an explicit refresh."""
+
+    stamp: _RatedInvocationsValidityStamp
+    rated_invocations: List[DbInvocation]
+    graph: Dict[str, object]
+
+
+# Derived Execution Evidence's rating half, retained per scope (ADR-0013).
+# Unbounded for now: ticket 06 states and justifies a retention limit against
+# the number of systems one Cross-system Lookup visits. This ticket only
+# introduces the retention and its freshness rule, on the smaller of the two
+# reverse lookups (the stored-procedure lookup skips path-building), so the
+# freshness design is proven before the bulk of the measured wait is touched.
+_rated_invocations_retention: Dict[DerivedExecutionEvidenceScope, _RetainedRatedInvocations] = {}
+
+
+def _rated_execution_invocations_for_scope(
+    scope: DerivedExecutionEvidenceScope,
+    per_root_scans: List[ProjectScanResult],
+    merged_scan: ProjectScanResult,
+    matched_files: List,
+    root: Path,
+    *,
+    refresh: bool = False,
+) -> Tuple[List[DbInvocation], Dict[str, object]]:
+    """One scope's rated Database Invocations, reused across requests (ADR-0013).
+
+    `refresh` always re-derives and replaces what is retained: the one
+    action a caller takes to force freshness may never be served from
+    retention. Otherwise a retained result is served only when its validity
+    stamp still matches every tracked input; any mismatch re-derives.
+
+    `per_root_scans` is the caller's list of per-root scans, taken *before*
+    any multi-root merge -- `_get_scan` hands back a stable object per root
+    until a refresh replaces it, whereas merging always builds a brand-new
+    `ProjectScanResult` even when nothing changed, so `merged_scan` can never
+    itself serve as the "has the scan moved" signal.
+    """
+    stamp = _rated_invocations_validity_stamp(scope, per_root_scans)
+    if not refresh:
+        retained = _rated_invocations_retention.get(scope)
+        if retained is not None and retained.stamp == stamp:
+            return retained.rated_invocations, retained.graph
+
+    rated_invocations, graph = _rated_execution_invocations(scope, merged_scan, matched_files, root)
+    _rated_invocations_retention[scope] = _RetainedRatedInvocations(stamp, rated_invocations, graph)
+    return rated_invocations, graph
+
+
 def _rated_execution_invocations(
     scope: DerivedExecutionEvidenceScope,
     scan: ProjectScanResult,
@@ -1034,9 +1154,9 @@ def _rated_execution_invocations(
     )
     rated_invocations = []
     raw_by_file = getattr(scan, "db_invocations", {})
-    external_wrapper_contract = load_external_wrapper_contract(scope.wrapper_contract)
-    contract_registry = load_contract_registry()
-    wrapper_review_exclusions = load_wrapper_review_exclusions(scope.database)
+    external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
+        _rating_config_inputs(scope)
+    )
 
     for file_result in matched_files:
         file_key = str(Path(file_result.file_path).resolve())
@@ -1986,11 +2106,13 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
     # sql_cache_store.resolve_server() 會從磁碟回推唯一一份同名快取。
     _cached, _graph = _require_sql_execution_graph(req.database)
     scope = DerivedExecutionEvidenceScope.of(req, roots)
-    rated_invocations, _ = _rated_execution_invocations(
+    rated_invocations, _ = _rated_execution_invocations_for_scope(
         scope,
+        scans,
         scan,
         list(scan.csharp_results),
         root,
+        refresh=req.refresh,
     )
     for invocation in rated_invocations:
         if (
