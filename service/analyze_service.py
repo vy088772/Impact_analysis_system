@@ -978,28 +978,65 @@ def _overlay_method_class_chain(
     return result
 
 
+@dataclass(frozen=True)
+class DerivedExecutionEvidenceScope:
+    """The identity Derived Execution Evidence is derived for.
+
+    Named in the domain glossary (``CONTEXT.md``) and decided in
+    [ADR-0013](../docs/adr/0013-derived-execution-evidence-computed-once-per-scope.md):
+    the repository scan roots, the complete Database identity a request
+    routes to, and the wrapper contract selector in force -- exactly the
+    inputs `_rated_execution_invocations` reads, and nothing it does not.
+    Two requests that agree on these three produce the same derived
+    evidence; a request field outside them cannot change it. Frozen and
+    built only from hashable field types, so an instance is a valid
+    retention key by construction -- a later ticket does not have to
+    reshape it to key reuse on.
+    """
+
+    repo_roots: Tuple[str, ...]
+    database: str
+    db_server: str
+    db_name: str
+    wrapper_contract: str
+
+    @classmethod
+    def of(cls, req: object, roots: Iterable[Path]) -> "DerivedExecutionEvidenceScope":
+        """Build the scope from a request and its already-resolved scan roots.
+
+        This is the one place a scope is assembled; every derivation call
+        site is handed the result rather than reaching into ``req`` itself.
+        """
+        wrapper_contract = getattr(req, "wrapper_contract", "")
+        return cls(
+            repo_roots=tuple(str(Path(root)) for root in roots),
+            database=str(getattr(req, "database", "") or "").strip(),
+            db_server=sql_cache_store.normalize_server(
+                str(getattr(req, "db_server", "") or "")
+            ),
+            db_name=str(getattr(req, "db_name", "") or "").strip(),
+            wrapper_contract=(
+                wrapper_contract if isinstance(wrapper_contract, str) else ""
+            ),
+        )
+
+
 def _rated_execution_invocations(
-    req: AnalyzeRequest,
+    scope: DerivedExecutionEvidenceScope,
     scan: ProjectScanResult,
     matched_files: List,
     root: Path,
 ) -> Tuple[List[DbInvocation], Dict[str, object]]:
     """Rate raw C# facts once so path discovery and evidence use the same join."""
     catalog, graph, graph_database = _execution_sql_context(
-        str(getattr(req, "database", "") or ""),
-        str(getattr(req, "db_server", "") or ""),
+        scope.database,
+        scope.db_server,
     )
     rated_invocations = []
     raw_by_file = getattr(scan, "db_invocations", {})
-    external_wrapper_contract = load_external_wrapper_contract(
-        getattr(req, "wrapper_contract", "")
-        if isinstance(getattr(req, "wrapper_contract", ""), str)
-        else ""
-    )
+    external_wrapper_contract = load_external_wrapper_contract(scope.wrapper_contract)
     contract_registry = load_contract_registry()
-    wrapper_review_exclusions = load_wrapper_review_exclusions(
-        str(getattr(req, "database", "") or "")
-    )
+    wrapper_review_exclusions = load_wrapper_review_exclusions(scope.database)
 
     for file_result in matched_files:
         file_key = str(Path(file_result.file_path).resolve())
@@ -1012,10 +1049,7 @@ def _rated_execution_invocations(
                 scan,
                 file_result.file_path,
                 graph_database,
-                database_aliases=(
-                    getattr(req, "database", ""),
-                    getattr(req, "db_name", ""),
-                ),
+                database_aliases=(scope.database, scope.db_name),
             ),
             external_wrapper_contract=external_wrapper_contract,
             external_wrapper_contracts=contract_registry,
@@ -1026,7 +1060,7 @@ def _rated_execution_invocations(
             relative_path,
             raw_invocations,
             scan_root=str(root),
-            explicit_contract=getattr(req, "wrapper_contract", "") or None,
+            explicit_contract=scope.wrapper_contract or None,
         ):
             method_chain = _merge_method_chains(
                 _method_chain_for_file(file_result, invocation.class_name, invocation.method_name),
@@ -1176,11 +1210,23 @@ def _build_program_execution_paths(
     scan: ProjectScanResult,
     matched_files: List,
     root: Path,
+    *,
+    scope: Optional["DerivedExecutionEvidenceScope"] = None,
 ) -> Tuple[List[Dict], Dict[str, object]]:
-    """Join one program's raw C# facts to the selected SQL execution graph."""
+    """Join one program's raw C# facts to the selected SQL execution graph.
+
+    `scope` lets a caller that already built the request's
+    `DerivedExecutionEvidenceScope` -- because it derives over the full set
+    of repository scan roots, not just this one merged `root` -- pass it
+    through so every derivation in one request shares one scope identity.
+    A caller with no such scope (including the direct unit tests exercising
+    this function below the request layer) gets one built from `root` alone.
+    """
     if req.database:
         _require_sql_execution_graph(req.database, req.db_server)
-    rated_invocations, graph = _rated_execution_invocations(req, scan, matched_files, root)
+    if scope is None:
+        scope = DerivedExecutionEvidenceScope.of(req, [root])
+    rated_invocations, graph = _rated_execution_invocations(scope, scan, matched_files, root)
 
     paths = build_execution_paths(rated_invocations, graph)
     if not graph and not req.database:
@@ -1227,8 +1273,9 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
     else:
         matched_files = list(scan.csharp_results)
 
+    scope = DerivedExecutionEvidenceScope.of(req, roots)
     rated_invocations, joined_graph = _rated_execution_invocations(
-        req, scan, matched_files, root  # type: ignore[arg-type]
+        scope, scan, matched_files, root  # type: ignore[arg-type]
     )
     selected_path: Dict | None = None
     selected_invocation: DbInvocation | None = None
@@ -1617,6 +1664,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     root = roots[0] if len(roots) == 1 else repo_dir(
         req.source.project if req.source else "", req.source.repo if req.source else ""
     )
+    scope = DerivedExecutionEvidenceScope.of(req, roots)
 
     programs: List[ProgramAnalysis] = []
     not_found: List[str] = []
@@ -1634,7 +1682,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         rated_invocations: List[DbInvocation] = []
         if matched_files:
             rated_invocations, _ = _rated_execution_invocations(
-                req,
+                scope,
                 scan,
                 matched_files,
                 root,
@@ -1790,6 +1838,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 scan,
                 matched_files,
                 root,
+                scope=scope,
             )
             compact_execution_paths = compact_payload["paths"]
             compact_execution_paths_meta = {
@@ -1936,8 +1985,9 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
     # FindBySPRequest 沒有 db_server 欄位，這裡只能給 database；
     # sql_cache_store.resolve_server() 會從磁碟回推唯一一份同名快取。
     _cached, _graph = _require_sql_execution_graph(req.database)
+    scope = DerivedExecutionEvidenceScope.of(req, roots)
     rated_invocations, _ = _rated_execution_invocations(
-        req,
+        scope,
         scan,
         list(scan.csharp_results),
         root,
@@ -2063,8 +2113,9 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     if req.database:
         # FindByTableRequest 同樣沒有 db_server 欄位；理由見 find_by_sp。
         _sql_cache, graph = _require_sql_execution_graph(req.database)
+        scope = DerivedExecutionEvidenceScope.of(req, roots)
         rated_invocations, graph = _rated_execution_invocations(
-            req,
+            scope,
             scan,
             list(scan.csharp_results),
             root,
@@ -2258,6 +2309,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     database_alias = req.database or None
     db_server = req.db_server or None
     db_name = req.db_name or None
+    scope = DerivedExecutionEvidenceScope.of(req, roots)
 
     if req.direction == "backward":
         rated_invocations: List[DbInvocation] = []
@@ -2265,7 +2317,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
         if req.database:
             _cached, execution_graph = _require_sql_execution_graph(req.database, req.db_server)
             rated_invocations, execution_graph = _rated_execution_invocations(
-                req,
+                scope,
                 scan,
                 list(scan.csharp_results),
                 root,
@@ -2302,7 +2354,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     if req.database:
         _cached, execution_graph = _require_sql_execution_graph(req.database, req.db_server)
         rated_invocations, execution_graph = _rated_execution_invocations(
-            req,
+            scope,
             scan,
             matched_files,
             root,
