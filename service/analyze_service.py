@@ -65,7 +65,7 @@ from .execution_path_builder import (
     build_compact_execution_path_payload,
     build_execution_paths,
 )
-from .graph_queries import query_table_accesses
+from .graph_queries import filter_table_accesses
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import cache_status, cached_commit, get_or_scan, has_cache, save_scan
@@ -1090,11 +1090,22 @@ def _rated_invocations_validity_stamp(
 
 @dataclass
 class _RetainedRatedInvocations:
-    """One scope's rated Database Invocations, kept until a stamp mismatch or an explicit refresh."""
+    """One scope's rated Database Invocations, kept until a stamp mismatch or an explicit refresh.
+
+    `execution_paths` (ticket 05) piggybacks on this same entry and the same
+    stamp instead of a second retention dict: Execution Paths are a pure
+    function of exactly the two fields above (`rated_invocations`, `graph`), so
+    whatever invalidates one already invalidates the other. `None` means "not
+    built yet for this entry" -- `find_by_sp` never needs path-building, so it
+    never populates this field, and a stamp mismatch or `refresh=True` always
+    replaces the whole entry (see `_rated_execution_invocations_for_scope`),
+    which resets this back to `None`.
+    """
 
     stamp: _RatedInvocationsValidityStamp
     rated_invocations: List[DbInvocation]
     graph: Dict[str, object]
+    execution_paths: Optional[List[Dict[str, object]]] = None
 
 
 # Derived Execution Evidence's rating half, retained per scope (ADR-0013).
@@ -1137,6 +1148,42 @@ def _rated_execution_invocations_for_scope(
     rated_invocations, graph = _rated_execution_invocations(scope, merged_scan, matched_files, root)
     _rated_invocations_retention[scope] = _RetainedRatedInvocations(stamp, rated_invocations, graph)
     return rated_invocations, graph
+
+
+def _execution_paths_for_scope(
+    scope: DerivedExecutionEvidenceScope,
+    per_root_scans: List[ProjectScanResult],
+    merged_scan: ProjectScanResult,
+    matched_files: List,
+    root: Path,
+    *,
+    refresh: bool = False,
+    max_call_depth: int = 5,
+) -> Tuple[List[DbInvocation], Dict[str, object], List[Dict[str, object]]]:
+    """One scope's Execution Paths, reused across requests and across tables (ticket 05).
+
+    Extends `_rated_execution_invocations_for_scope`'s retention rather than
+    adding a second, weaker set of freshness rules: Execution Paths are a pure
+    function of that call's own two outputs (`rated_invocations`, `graph`), so
+    this function carries no validity stamp of its own. It relies on the
+    invariant documented on `_RetainedRatedInvocations`: the call below always
+    leaves a matching entry behind in `_rated_invocations_retention` -- left
+    untouched on a stamp hit, so a previously-built `execution_paths` survives
+    and is reused across every table asked in the same scope; replaced with a
+    fresh `execution_paths=None` entry on a stamp mismatch or `refresh=True`, so
+    a lookup that follows one of those never reuses a stale path list. Building
+    therefore happens only when the entry we get back does not already carry
+    paths built from these exact inputs.
+    """
+    rated_invocations, graph = _rated_execution_invocations_for_scope(
+        scope, per_root_scans, merged_scan, matched_files, root, refresh=refresh,
+    )
+    retained = _rated_invocations_retention[scope]
+    if retained.execution_paths is None:
+        retained.execution_paths = build_execution_paths(
+            rated_invocations, graph, max_call_depth=max_call_depth
+        )
+    return rated_invocations, graph, retained.execution_paths
 
 
 def _rated_execution_invocations(
@@ -2234,20 +2281,27 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         # FindByTableRequest 同樣沒有 db_server 欄位；理由見 find_by_sp。
         _sql_cache, graph = _require_sql_execution_graph(req.database)
         scope = DerivedExecutionEvidenceScope.of(req, roots)
-        rated_invocations, graph = _rated_execution_invocations(
+        # 重用同一 scope 的 rated invocations 與 Execution Paths（ticket 04/05）：
+        # 同一 scope 內問第二個 table，不必重新 rate C# facts、也不必重建
+        # Execution Paths —— 兩者共用 find_by_sp() 已經在用的同一份 retention
+        # 與同一條 validity stamp／explicit-refresh 規則，見
+        # `_execution_paths_for_scope` docstring。
+        rated_invocations, graph, execution_paths = _execution_paths_for_scope(
             scope,
+            scans,
             scan,
             list(scan.csharp_results),
             root,
+            refresh=req.refresh,
         )
         diagnostics.extend(
             _invocation_diagnostic(invocation, requested_table=table_name)
             for invocation in rated_invocations
             if invocation.evidence is not InvocationEvidence.PROVEN
         )
-        for access_record in query_table_accesses(
+        for access_record in filter_table_accesses(
+            execution_paths,
             graph,
-            rated_invocations,
             table_name,
             access="all",
         ):

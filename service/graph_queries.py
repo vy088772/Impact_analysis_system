@@ -23,6 +23,29 @@ def query_table_accesses(
     Each result is one terminal path/table pair. ``write`` only returns confirmed
     DML paths; View, Function, and unresolved dynamic-SQL paths therefore cannot
     become confirmed writers by accident.
+
+    Builds Execution Paths itself, once, from ``invocations``. A caller that
+    already holds Execution Paths for the same invocations and graph -- for
+    example one asking about more than one table in the same scope -- should call
+    `filter_table_accesses` directly instead, so paths are not rebuilt per table.
+    """
+    paths = build_execution_paths(invocations, graph, max_call_depth=max_call_depth)
+    return filter_table_accesses(paths, graph, table_name, access=access)
+
+
+def filter_table_accesses(
+    paths: Iterable[Mapping[str, Any]],
+    graph: Mapping[str, Any],
+    table_name: str,
+    *,
+    access: str = "all",
+) -> list[dict[str, Any]]:
+    """Return C#-to-table facts proven by already-built Execution Paths.
+
+    Split out of `query_table_accesses` so a caller holding one scope's Execution
+    Paths (see `service.analyze_service._execution_paths_for_scope`) can query
+    more than one table without rebuilding them -- the paths themselves do not
+    depend on which table is being asked about.
     """
     if access not in _ACCESS_MODES:
         raise ValueError(f"unsupported table access mode: {access}")
@@ -32,7 +55,7 @@ def query_table_accesses(
         return []
 
     accesses: list[dict[str, Any]] = []
-    for path in build_execution_paths(invocations, graph, max_call_depth=max_call_depth):
+    for path in paths:
         writes = _matching_names(path.get("writes", []), target_name)
         reads = _matching_names(path.get("reads", []), target_name)
         is_dynamic = "dynamic_sql" in set(path.get("risk_flags", []) or [])
