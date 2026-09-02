@@ -6658,3 +6658,158 @@ if __name__ == "__main__":
     test_unknown_connection_source_and_unknown_name_is_unresolved()
     test_gateway_detects_real_direct_sqlclient_invocation_via_static_analyzer_host()
     print("CSharpAnalysisGateway tests passed")
+
+
+def _sqlobject_createdataset_contract(*, with_required_counts: bool = True) -> dict:
+    """Mirrors the real sqlobject contract's CreateDataSet overload set.
+
+    Both overloads end in an optional parameter, so a three-argument call is
+    admissible to each by count alone -- `(…, int ExecLimitTime)` needs two, and
+    `(…, string CmdType, int ExecLimitTime)` needs three. Only the second declares
+    a `command_type` role, and only it has a string parameter free to have carried
+    the call site's `"SP"`.
+    """
+    overloads = [
+        {
+            "method_identity": "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[],int)",
+            "arity": 3,
+            "required_parameter_count": 2,
+            "parameter_types": ["string", "system.data.sqlclient.sqlparameter[]", "int"],
+            "argument_roles": {"command_text": 0},
+            "mode": "inline_sql",
+            "sink": "Fill",
+        },
+        {
+            "method_identity": (
+                "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[],string,int)"
+            ),
+            "arity": 4,
+            "required_parameter_count": 3,
+            "parameter_types": [
+                "string",
+                "system.data.sqlclient.sqlparameter[]",
+                "string",
+                "int",
+            ],
+            "argument_roles": {"command_text": 0, "command_type": 2},
+            "mode": "call_site",
+            "sink": "Fill",
+        },
+    ]
+    if not with_required_counts:
+        for overload in overloads:
+            overload.pop("required_parameter_count")
+    return {
+        "name": "sqlobject",
+        "receiver_types": ["SQLObject"],
+        "methods": {"CreateDataSet": overloads},
+    }
+
+
+def _createdataset_raw(**overrides) -> dict:
+    """`obj.CreateDataSet("[dbo].[usp_SaveOrder]", par.ToArray(), "SP")` as scanned."""
+    call = {
+        "invocation_kind": "source_wrapper",
+        "method_name": "ModifyData",
+        "command_text": "[dbo].[usp_SaveOrder]",
+        "wrapper_method_name": "CreateDataSet",
+        "wrapper_receiver_type": "SQLObject",
+        "wrapper_source_available": False,
+        "wrapper_mode": "stored_procedure",
+        "wrapper_method_arity": 3,
+        "terminal_sink": "Fill",
+        "connection_expression": "conn",
+    }
+    call.update(overrides)
+    return _raw_invocation(**call)
+
+
+def test_a_call_binds_to_an_overload_whose_trailing_parameter_is_optional() -> None:
+    """Three arguments bind to the four-parameter overload, the way C# binds them.
+
+    Comparing the argument count to the arity alone picks the three-parameter
+    sibling, declares the call inline SQL, and loses the stored-procedure name
+    with neither a match nor a diagnostic.
+    """
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    contract = _sqlobject_createdataset_contract()
+
+    reconciliation = gateway.reconcile_wrapper(
+        "OrderPage.cs", _createdataset_raw(), explicit_contract=contract
+    )
+
+    assert reconciliation.status == "explicit_selected"
+    assert reconciliation.contract_mode == "call_site"
+    assert reconciliation.stored_procedure_mode is True
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs", [_createdataset_raw()], explicit_contract=contract
+    )[0]
+    assert invocation.procedure_name == "usp_saveorder"
+    assert invocation.evidence is InvocationEvidence.PROVEN
+
+
+def test_an_overload_without_a_required_parameter_count_keeps_strict_arity() -> None:
+    """A registry written before the count existed selects exactly as it does today."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    contract = _sqlobject_createdataset_contract(with_required_counts=False)
+
+    reconciliation = gateway.reconcile_wrapper(
+        "OrderPage.cs", _createdataset_raw(), explicit_contract=contract
+    )
+
+    assert reconciliation.status == "explicit_selected"
+    assert reconciliation.contract_mode == "inline_sql"
+
+
+def test_more_arguments_than_the_arity_never_bind_to_an_overload() -> None:
+    """Optional parameters let a caller pass fewer arguments, never more."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    reconciliation = gateway.reconcile_wrapper(
+        "OrderPage.cs",
+        _createdataset_raw(wrapper_method_arity=5),
+        explicit_contract=_sqlobject_createdataset_contract(),
+    )
+
+    assert reconciliation.status == "unresolved_method"
+    assert reconciliation.reason == "overload_not_found"
+
+
+def test_a_tie_stands_when_the_call_site_resolved_no_command_type_mode() -> None:
+    """Nothing is narrowed by a mode argument the call site never resolved."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    reconciliation = gateway.reconcile_wrapper(
+        "OrderPage.cs",
+        _createdataset_raw(wrapper_mode="unknown"),
+        explicit_contract=_sqlobject_createdataset_contract(),
+    )
+
+    assert reconciliation.status == "ambiguous_overload"
+    assert reconciliation.reason == "ambiguous_overload"
+
+
+def test_a_tie_stands_when_every_tied_overload_could_carry_the_mode_argument() -> None:
+    """Narrowing turns a tie into a decision only when one overload survives it."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    contract = _sqlobject_createdataset_contract()
+    # Give the losing overload a spare string parameter too: now both could have
+    # carried the observed "SP", and neither is the one the call site named.
+    contract["methods"]["CreateDataSet"][0]["parameter_types"] = [
+        "string",
+        "system.data.sqlclient.sqlparameter[]",
+        "string",
+    ]
+
+    reconciliation = gateway.reconcile_wrapper(
+        "OrderPage.cs", _createdataset_raw(), explicit_contract=contract
+    )
+
+    assert reconciliation.status == "ambiguous_overload"
+    assert reconciliation.reason == "ambiguous_overload"

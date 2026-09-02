@@ -177,12 +177,30 @@ def _branch_rules(operation: Mapping[str, Any]) -> object:
     return _canonical_value(rules)
 
 
+def _required_parameter_count(operation: Mapping[str, Any]) -> Optional[int]:
+    """How many arguments a caller must supply for this overload, or ``None``.
+
+    ``None`` is the honest answer for a snapshot taken before the decompiler
+    reported the count: nothing here derives it from the parameter list, because
+    a derived count would claim every parameter is required and silently narrow
+    which calls the overload accepts.
+    """
+    value = _first(operation, "required_parameter_count", "required_parameters")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _canonical_operation(operation: Mapping[str, Any]) -> dict[str, Any]:
     parameters = _parameter_types(
         _first(operation, "parameter_types", "parameters", "parameter_type_names")
     )
     arity_value = _first(operation, "method_arity", "arity")
     arity = int(arity_value) if arity_value is not None else len(parameters)
+    required = _required_parameter_count(operation)
     mode = _mode(
         _first(
             operation,
@@ -214,6 +232,7 @@ def _canonical_operation(operation: Mapping[str, Any]) -> dict[str, Any]:
         "method_identity": identity,
         "method_name": _normalized_text(_first(operation, "method_name", "wrapper_method_name", "name")),
         "method_arity": arity,
+        "required_parameter_count": required,
         "parameter_types": list(parameters),
         "argument_roles": argument_roles,
         "effective_command_semantics": mode,
@@ -550,6 +569,7 @@ def _normalized_method_projection(value: object) -> dict[str, Any]:
                 "default_mode",
                 "method_identity",
                 "method_arity",
+                "required_parameter_count",
                 "parameter_types",
                 "argument_roles",
                 "branch_rules",
@@ -638,6 +658,9 @@ def _snapshot_method_projection(
             int(operation_arity) if operation_arity is not None else len(operation_parameters),
         )
         normalized.setdefault("parameter_types", list(operation_parameters))
+        operation_required = _required_parameter_count(operation)
+        if operation_required is not None:
+            normalized["required_parameter_count"] = operation_required
         for key in ("argument_roles", "branch_rules", "connection_behavior_boundary"):
             if key in operation:
                 normalized[key] = copy.deepcopy(operation[key])

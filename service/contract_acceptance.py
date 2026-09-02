@@ -189,6 +189,7 @@ def _validate_methods(value: Any, contract_name: str) -> dict[str, Any]:
             for optional_key in (
                 "method_identity",
                 "method_arity",
+                "required_parameter_count",
                 "parameter_types",
                 "argument_roles",
                 "branch_rules",

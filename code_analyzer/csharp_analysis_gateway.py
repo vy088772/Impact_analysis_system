@@ -841,6 +841,97 @@ def _receiver_type_matches_contract(
     )
 
 
+def _candidate_arity(candidate: Mapping[str, Any]) -> Optional[int]:
+    arity = _optional_int_fact(_first_fact(candidate, "method_arity", "arity"))
+    if arity is not None:
+        return arity
+    parameters = _text_facts(_first_fact(candidate, "parameter_types", "parameters"))
+    return len(parameters) if parameters else None
+
+
+def _candidate_admits_arity(
+    candidate: Mapping[str, Any], method_arity: Optional[int]
+) -> bool:
+    """Whether a call with ``method_arity`` arguments can bind to ``candidate``.
+
+    An exact count always binds. A shorter call binds only when the candidate says
+    how many parameters it actually requires -- C# lets a caller leave trailing
+    optional parameters out, and an overload set that differs only by such a
+    parameter is exactly where comparing counts alone picks the wrong sibling. A
+    candidate that reports no Required Parameter Count keeps the strict equality it
+    has today, so a registry written before the count existed selects unchanged.
+    A call can never pass more arguments than the overload declares.
+    """
+    candidate_arity = _candidate_arity(candidate)
+    if method_arity is None or candidate_arity is None:
+        return candidate_arity == method_arity
+    if candidate_arity == method_arity:
+        return True
+    required = _optional_int_fact(
+        _first_fact(candidate, "required_parameter_count", "required_parameters")
+    )
+    return required is not None and required <= method_arity < candidate_arity
+
+
+_STRING_PARAMETER_TYPES = {"string", "system.string"}
+
+
+def _is_string_parameter(parameter_type: str) -> bool:
+    return _normalize_type_identity(parameter_type).rstrip("?") in _STRING_PARAMETER_TYPES
+
+
+def _carries_mode_argument(
+    candidate: Mapping[str, Any], method_arity: Optional[int]
+) -> Optional[bool]:
+    """Whether ``candidate`` has a parameter that could have received the call
+    site's command-type mode argument, or ``None`` when it does not say.
+
+    A mode argument is a string. An overload that declares a ``command_type``
+    argument role carries it when that role sits inside the observed argument
+    count and the parameter there is a string. An overload that declares no such
+    role carries it only if some other string parameter, inside the observed count
+    and not the command-text parameter, was free to take it. This is C# binding,
+    not a preference: a string literal has no conversion to an ``int`` parameter,
+    so an overload whose only spare parameter is numeric cannot be the overload
+    the compiler chose.
+    """
+    if method_arity is None:
+        return None
+    parameters = _text_facts(_first_fact(candidate, "parameter_types", "parameters"))
+    if not parameters:
+        return None
+    visible = parameters[:method_arity]
+    roles = _first_fact(candidate, "argument_roles", "parameter_roles", "roles")
+    if not isinstance(roles, Mapping):
+        return None
+    mode_index = _optional_int_fact(roles.get("command_type"))
+    if mode_index is not None:
+        return 0 <= mode_index < len(visible) and _is_string_parameter(visible[mode_index])
+    command_text_index = _optional_int_fact(roles.get("command_text"))
+    return any(
+        index != command_text_index and _is_string_parameter(parameter)
+        for index, parameter in enumerate(visible)
+    )
+
+
+def _narrow_by_mode_argument_carriage(
+    matching: tuple[Mapping[str, Any], ...], method_arity: Optional[int]
+) -> tuple[Mapping[str, Any], ...]:
+    """Break a tie by which overload could have carried the observed mode argument.
+
+    Only a narrowing to exactly one candidate is taken. Zero survivors means the
+    observation explains none of them, several means it separates none of them --
+    either way the tie is left exactly as it was, for the shared-mode merge and
+    the ambiguity report downstream to handle as they do today.
+    """
+    carriers = tuple(
+        candidate
+        for candidate in matching
+        if _carries_mode_argument(candidate, method_arity) is True
+    )
+    return carriers if len(carriers) == 1 else matching
+
+
 def _wrapper_contract_method(
     contract: Optional[Mapping[str, Any]],
     method_name: str,
@@ -848,6 +939,7 @@ def _wrapper_contract_method(
     method_identity: str = "",
     method_arity: Optional[int] = None,
     parameter_types: Iterable[str] = (),
+    command_type_mode_observed: bool = False,
 ) -> tuple[Optional[Mapping[str, Any]], str, tuple[Mapping[str, Any], ...]]:
     if contract is None:
         return None, "method_not_in_contract", ()
@@ -890,31 +982,22 @@ def _wrapper_contract_method(
                     _first_fact(candidate, "parameter_types", "parameters")
                 )
             )
-            candidate_arity = _optional_int_fact(
-                _first_fact(candidate, "method_arity", "arity")
-            )
-            if candidate_arity is None and candidate_parameters:
-                candidate_arity = len(candidate_parameters)
-            if method_arity is not None and candidate_arity != method_arity:
+            if method_arity is not None and not _candidate_admits_arity(
+                candidate, method_arity
+            ):
                 return False
             if observed_parameters and candidate_parameters != observed_parameters:
                 return False
             return bool(method_arity is not None or observed_parameters)
 
-        candidate_arity = _optional_int_fact(
-            _first_fact(candidate, "method_arity", "arity")
-        )
         candidate_parameters = tuple(
             _normalize_type_identity(item)
             for item in _text_facts(
                 _first_fact(candidate, "parameter_types", "parameters")
             )
         )
-        if candidate_arity is None and candidate_parameters:
-            candidate_arity = len(candidate_parameters)
-        if method_arity is not None:
-            if candidate_arity is None or candidate_arity != method_arity:
-                return False
+        if method_arity is not None and not _candidate_admits_arity(candidate, method_arity):
+            return False
         if observed_parameters:
             if not candidate_parameters or candidate_parameters != observed_parameters:
                 return False
@@ -944,6 +1027,8 @@ def _wrapper_contract_method(
         return None, "ambiguous_overload", tuple(named_methods)
 
     matching = tuple(candidate for candidate in named_methods if candidate_matches(candidate))
+    if len(matching) > 1 and command_type_mode_observed:
+        matching = _narrow_by_mode_argument_carriage(matching, method_arity)
     if len(matching) == 1:
         return matching[0], "", tuple(named_methods)
     if len(matching) > 1:
@@ -2181,6 +2266,7 @@ class CSharpAnalysisGateway:
             method_identity=observed_method_identity,
             method_arity=method_facts["method_arity"],
             parameter_types=observed_parameter_types,
+            command_type_mode_observed=raw_mode in {"stored_procedure", "inline_sql"},
         )
         method_candidate_names = tuple(
             _wrapper_contract_method_identity(candidate, wrapper_method)

@@ -380,6 +380,7 @@ internal static class DecompiledWrapperProposalBuilder
                 definition.MethodIdentity,
                 definition.MethodName,
                 definition.Parameters.Count,
+                definition.RequiredParameterCount,
                 definition.ParameterTypes,
                 argumentRoles,
                 definition.ConstructorConnectionParameterIndex >= 0
@@ -426,6 +427,7 @@ internal sealed record ImplementationSnapshotOperation(
     string MethodIdentity,
     string MethodName,
     int MethodArity,
+    int RequiredParameterCount,
     IReadOnlyList<string> ParameterTypes,
     IReadOnlyDictionary<string, int> ArgumentRoles,
     string ConnectionBehaviorBoundary,

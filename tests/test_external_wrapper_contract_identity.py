@@ -12,6 +12,7 @@ from code_analyzer.external_wrapper_contracts import (
     canonical_contract_behavior_signature,
     compare_implementation_snapshot,
     compute_contract_fingerprint,
+    versioned_contract_from_proposal,
 )
 from service.contract_acceptance import (
     ContractAcceptanceError,
@@ -591,3 +592,66 @@ def test_legacy_contract_apply_without_explicit_binding_is_rejected(tmp_path: Pa
         assert exc.code == "legacy_contract_requires_explicit_binding"
     else:
         raise AssertionError("legacy mutation without a selector must remain review-only")
+
+def _optional_parameter_operation(required: int) -> dict:
+    """One overload whose trailing parameter is optional -- four declared, `required` needed."""
+    return {
+        "method_identity": "Vendor.Data.SQLObject.Load(System.String,System.String,System.Int32)",
+        "method_name": "Load",
+        "method_arity": 3,
+        "required_parameter_count": required,
+        "parameter_types": ["System.String", "System.String", "System.Int32"],
+        "argument_roles": {"command_text": 0, "command_type": 1},
+        "effective_command_semantics": "call_site",
+        "terminal_sink": "Fill",
+        "connection_behavior_boundary": "constructor_connection",
+        "branch_rules": [{"mode": "call_site", "sink": "Fill"}],
+        "assembly_revision": "1.0.0",
+        "body_complete": True,
+    }
+
+
+def _optional_parameter_proposal(required: int) -> dict:
+    return {
+        "name": "vendor",
+        "receiver_types": ["Vendor.Data.SQLObject"],
+        "implementation_snapshot": _snapshot(_optional_parameter_operation(required)),
+    }
+
+
+def test_required_parameter_count_reaches_the_registry_entry() -> None:
+    """The registry has to be able to state how many arguments an overload needs.
+
+    A reader cannot recover from the entry what the entry cannot say, so the count
+    travels into both the method projection and the behavior signature.
+    """
+    entry, _report = versioned_contract_from_proposal(_optional_parameter_proposal(2))
+
+    assert entry["methods"]["Load"]["method_arity"] == 3
+    assert entry["methods"]["Load"]["required_parameter_count"] == 2
+    operation = entry["behavior_signature"]["operations"][0]
+    assert operation["required_parameter_count"] == 2
+
+
+def test_changing_the_required_parameter_count_changes_the_fingerprint() -> None:
+    """Two assemblies that differ only in which parameters are optional bind calls
+    differently, so they are two behavior surfaces, not one reused contract."""
+    two_required = compute_contract_fingerprint(_snapshot(_optional_parameter_operation(2)))
+    three_required = compute_contract_fingerprint(_snapshot(_optional_parameter_operation(3)))
+
+    assert two_required != three_required
+
+
+def test_an_operation_without_a_required_parameter_count_states_none() -> None:
+    """A snapshot that never reported the count must not have one invented for it --
+    a fabricated count would silently widen which calls bind to the overload."""
+    entry, _report = versioned_contract_from_proposal(
+        {
+            "name": "vendor",
+            "receiver_types": ["Vendor.Data.SQLObject"],
+            "implementation_snapshot": _snapshot(_operation()),
+        }
+    )
+
+    assert "required_parameter_count" not in entry["methods"]["Run"]
+    assert entry["behavior_signature"]["operations"][0]["required_parameter_count"] is None

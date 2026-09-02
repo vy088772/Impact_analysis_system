@@ -34,6 +34,16 @@ requires_dotnet = pytest.mark.skipif(
     reason="the .NET toolchain is not available",
 )
 
+TTPUR_CSPROJ = (
+    PROJECT_ROOT / "data" / "repos" / "System_Dept_1" / "Y-DOCs" / "TTPUR" / "TTPUR.csproj"
+)
+SQLOBJECT_DLL = TTPUR_CSPROJ.parent / "bin" / "SQLObject.dll"
+
+requires_sqlobject_fixture = pytest.mark.skipif(
+    not (TTPUR_CSPROJ.exists() and SQLOBJECT_DLL.exists()),
+    reason="local data/repos/System_Dept_1/Y-DOCs/TTPUR fixture checkout is not present",
+)
+
 
 def _definitions_by_method(wrapper_definitions: list[dict], method_name: str) -> list[dict]:
     return [d for d in wrapper_definitions if d["method_name"] == method_name]
@@ -505,3 +515,41 @@ def test_decompile_wrapper_console_command_caches_and_supports_rerun() -> None:
         assert changed["cache_status"] == "miss"
         assert changed["assembly_identity"] != first["assembly_identity"]
         assert first["attempt_outcome"] == cached["attempt_outcome"] == rerun["attempt_outcome"] == "incomplete"
+
+
+@requires_sqlobject_fixture
+def test_implementation_snapshot_operation_carries_required_parameter_count() -> None:
+    """A trailing optional parameter survives into the Implementation Snapshot.
+
+    `SQLObject.CreateDataSet(string, SqlParameter[], string, int)` declares four
+    parameters and requires three -- a three-argument call still binds to it. The
+    wrapper definition already knows that; overload selection reads the snapshot,
+    so the count has to reach the snapshot or the registry can never express it.
+    """
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    # A private cache root: the shared one is keyed by assembly identity alone, so it
+    # would serve a response recorded by an older build of the host.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        result = host.decompile_wrapper(
+            TTPUR_CSPROJ, "SQLObject", cache_root=Path(temp_dir)
+        )
+
+    assert result["status"] == "resolved"
+    definition = next(
+        definition
+        for definition in result["wrapper_definitions"]
+        if definition["method_identity"]
+        == "SQLObject.CreateDataSet(string,System.Data.SqlClient.SqlParameter[],string,int)"
+    )
+    assert definition["required_parameter_count"] == 3
+
+    operation = next(
+        operation
+        for operation in result["contract_proposals"][0]["implementation_snapshot"]["methods"]
+        if operation["method_identity"]
+        == "SQLObject.CreateDataSet(string,System.Data.SqlClient.SqlParameter[],string,int)"
+    )
+    assert operation["method_arity"] == 4
+    assert operation["required_parameter_count"] == 3
