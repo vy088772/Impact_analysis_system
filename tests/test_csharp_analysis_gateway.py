@@ -6717,6 +6717,7 @@ def _createdataset_raw(**overrides) -> dict:
         "wrapper_source_available": False,
         "wrapper_mode": "stored_procedure",
         "wrapper_method_arity": 3,
+        "command_type_argument_observed": True,
         "terminal_sink": "Fill",
         "connection_expression": "conn",
     }
@@ -6779,19 +6780,28 @@ def test_more_arguments_than_the_arity_never_bind_to_an_overload() -> None:
     assert reconciliation.reason == "overload_not_found"
 
 
-def test_a_tie_stands_when_the_call_site_resolved_no_command_type_mode() -> None:
-    """Nothing is narrowed by a mode argument the call site never resolved."""
+def test_a_tie_stands_when_the_call_site_passed_no_command_type_argument() -> None:
+    """Nothing is narrowed by a mode argument the call never passed.
+
+    `wrapper_mode` cannot gate this. The scanner also sets it from the method
+    name alone, and falls back to `inline_sql` when it finds no mode argument at
+    all, so only the scan's own `command_type_argument_observed` separates a mode
+    that was observed from one that was assumed.
+    """
     catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
     gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
 
-    reconciliation = gateway.reconcile_wrapper(
-        "OrderPage.cs",
-        _createdataset_raw(wrapper_mode="unknown"),
-        explicit_contract=_sqlobject_createdataset_contract(),
-    )
+    for assumed_mode in ("inline_sql", "stored_procedure", "unknown"):
+        reconciliation = gateway.reconcile_wrapper(
+            "OrderPage.cs",
+            _createdataset_raw(
+                wrapper_mode=assumed_mode, command_type_argument_observed=False
+            ),
+            explicit_contract=_sqlobject_createdataset_contract(),
+        )
 
-    assert reconciliation.status == "ambiguous_overload"
-    assert reconciliation.reason == "ambiguous_overload"
+        assert reconciliation.status == "ambiguous_overload", assumed_mode
+        assert reconciliation.reason == "ambiguous_overload", assumed_mode
 
 
 def test_a_tie_stands_when_every_tied_overload_could_carry_the_mode_argument() -> None:
@@ -6813,3 +6823,86 @@ def test_a_tie_stands_when_every_tied_overload_could_carry_the_mode_argument() -
 
     assert reconciliation.status == "ambiguous_overload"
     assert reconciliation.reason == "ambiguous_overload"
+
+
+def test_a_tie_stands_when_no_tied_overload_could_carry_the_mode_argument() -> None:
+    """Narrowing that explains none of the tied overloads changes nothing.
+
+    The declared `command_type` parameter is numeric here, so the observed string
+    mode argument cannot have gone to it, and the sibling has no spare string
+    parameter either. Neither overload is explained, so neither is chosen.
+    """
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    contract = _sqlobject_createdataset_contract()
+    contract["methods"]["CreateDataSet"][1]["parameter_types"] = [
+        "string",
+        "system.data.sqlclient.sqlparameter[]",
+        "int",
+        "int",
+    ]
+
+    reconciliation = gateway.reconcile_wrapper(
+        "OrderPage.cs", _createdataset_raw(), explicit_contract=contract
+    )
+
+    assert reconciliation.status == "ambiguous_overload"
+    assert reconciliation.reason == "ambiguous_overload"
+
+
+def test_a_tie_stands_when_one_tied_overload_cannot_be_judged_for_carriage() -> None:
+    """An overload that says too little never hands the tie to its sibling.
+
+    A registry entry with no argument roles cannot be asked which parameter holds
+    its command text, so it cannot be asked what could have carried the mode
+    either. Dropping it would decide the tie on evidence it was never given.
+    """
+    catalog = SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+    contract = _sqlobject_createdataset_contract()
+    contract["methods"]["CreateDataSet"][0].pop("argument_roles")
+
+    reconciliation = gateway.reconcile_wrapper(
+        "OrderPage.cs", _createdataset_raw(), explicit_contract=contract
+    )
+
+    assert reconciliation.status == "ambiguous_overload"
+    assert reconciliation.reason == "ambiguous_overload"
+
+
+def test_static_analyzer_host_reports_whether_a_command_type_argument_was_passed() -> None:
+    """`wrapper_mode` conflates an observed mode with an assumed one; this fact does not.
+
+    `Assumed` passes no mode argument at all and still comes back as `inline_sql`,
+    which is exactly why overload narrowing cannot be gated on the mode.
+    """
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "SqlObjectPage.cs"
+        source_path.write_text(
+            "public class SqlObjectPage {\n"
+            "    private void Observed() {\n"
+            "        SQLObject obj = GetExternalSqlObject();\n"
+            "        obj.CreateDataSet(\"[dbo].[usp_Save]\", null, \"SP\");\n"
+            "    }\n"
+            "    private void Assumed() {\n"
+            "        SQLObject obj = GetExternalSqlObject();\n"
+            "        obj.CreateDataSet(\"[dbo].[usp_Save]\", null, 30);\n"
+            "    }\n"
+            "    private object GetExternalSqlObject() { return null; }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = host.analyze_csharp(source_path)
+
+    by_method = {
+        invocation["method_name"]: invocation
+        for invocation in result["db_invocations"]
+        if invocation.get("invocation_kind") == "source_wrapper"
+    }
+    assert by_method["Observed"]["command_type_argument_observed"] is True
+    assert by_method["Assumed"]["command_type_argument_observed"] is False
+    assert by_method["Assumed"]["wrapper_mode"] == "inline_sql"

@@ -90,8 +90,16 @@ The construct inside one wrapper method that supplies the method's command text 
 _Avoid_: SqlCommand construction, command builder
 
 **Implementation Snapshot**:
-A structured record of one receiver's public database operations (method identity, argument roles, effective command semantics, terminal sink) captured from local source, a verified external assembly, or a decompiled external assembly, submitted as a candidate for Contract Preflight.
+A structured record of one receiver's public database operations (method identity, argument roles, Required Parameter Count, effective command semantics, terminal sink) captured from local source, a verified external assembly, or a decompiled external assembly, submitted as a candidate for Contract Preflight.
 _Avoid_: method inventory, observed call list
+
+**Required Parameter Count**:
+How many arguments a caller must supply to one wrapper overload: its parameter count minus its trailing optional parameters. A call binds to an overload when this count is at or below the observed argument count and the overload's parameter count is at or above it. It is observed by the decompiler, never derived from a parameter list -- a derived count would claim every parameter is required and silently narrow which calls bind. An overload that reports no count is compared by exact argument count, the rule that predates this concept. See [ADR-0014](docs/adr/0014-required-parameter-count-joins-the-contract-behavior-signature.md).
+_Avoid_: minimum arity, optional parameter count, method arity
+
+**Mode Argument Carriage**:
+Whether one wrapper overload has a parameter that could have received the call site's command-type mode argument. An overload declaring a `command_type` argument role carries the mode when that role sits inside the observed argument count and the parameter there is a string; an overload declaring no such role carries it only if some other string parameter, inside the observed count and not the command-text parameter, was free to take it. It breaks a tie between overloads that are otherwise indistinguishable by count alone, and only when exactly one overload survives -- zero or several leaves the tie reported as a tie.
+_Avoid_: mode inference, command type guess
 
 **Verified Implementation Snapshot**:
 An Implementation Snapshot that has passed completeness validation — every relevant operation has a resolved body, mode, and sink, with a single exact assembly identity — and may therefore supply reusable wrapper semantics. Passing this bar does not itself prove a procedure target; it only qualifies the snapshot as evidence.

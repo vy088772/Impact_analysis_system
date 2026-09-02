@@ -655,3 +655,41 @@ def test_an_operation_without_a_required_parameter_count_states_none() -> None:
 
     assert "required_parameter_count" not in entry["methods"]["Run"]
     assert entry["behavior_signature"]["operations"][0]["required_parameter_count"] is None
+
+
+def test_the_shipped_sqlobject_contract_states_its_required_parameter_counts() -> None:
+    """The registry in the repository actually carries the counts overload selection needs.
+
+    Without them `CreateDataSet(sp, par, "SP")` binds to the three-parameter
+    sibling and the stored procedure it calls disappears from every reverse
+    lookup -- the defect this contract revision was rebuilt to fix.
+    """
+    registry = json.loads(
+        (Path(__file__).resolve().parent.parent / "config" / "external_wrapper_contracts.json")
+        .read_text(encoding="utf-8")
+    )
+    contracts = registry["contracts"]
+    sqlobject = next(
+        contract
+        for name, contract in contracts.items()
+        if name.casefold().startswith("sqlobject")
+        and any(
+            str(overload.get("method_identity", "")).startswith("sqlobject.createdataset")
+            for overload in contract["methods"]["CreateDataSet"]
+        )
+        and any(
+            overload.get("required_parameter_count") is not None
+            for overload in contract["methods"]["CreateDataSet"]
+        )
+    )
+    call_site_overload = next(
+        overload
+        for overload in sqlobject["methods"]["CreateDataSet"]
+        if overload["method_identity"]
+        == "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[],string,int)"
+    )
+
+    assert call_site_overload["method_arity"] == 4
+    assert call_site_overload["required_parameter_count"] == 3
+    assert call_site_overload["mode"] == "call_site"
+    assert call_site_overload["argument_roles"]["command_type"] == 2

@@ -861,10 +861,18 @@ def _candidate_admits_arity(
     candidate that reports no Required Parameter Count keeps the strict equality it
     has today, so a registry written before the count existed selects unchanged.
     A call can never pass more arguments than the overload declares.
+
+    An unobserved argument count (``None``) admits every candidate: there is
+    nothing to compare, which is not the same as a mismatch. The analyzer host
+    applies this same rule to a wrapper it can read the source of, in
+    ``CSharpAnalyzer.ResolveWrapperOverload``; the two tie-break differently
+    afterwards, because only the host has the call site's argument types.
     """
+    if method_arity is None:
+        return True
     candidate_arity = _candidate_arity(candidate)
-    if method_arity is None or candidate_arity is None:
-        return candidate_arity == method_arity
+    if candidate_arity is None:
+        return False
     if candidate_arity == method_arity:
         return True
     required = _optional_int_fact(
@@ -894,6 +902,13 @@ def _carries_mode_argument(
     not a preference: a string literal has no conversion to an ``int`` parameter,
     so an overload whose only spare parameter is numeric cannot be the overload
     the compiler chose.
+
+    ``None`` is the answer for a candidate that does not declare enough to be
+    judged -- no observed argument count, no parameter types, no argument roles,
+    or roles that never name the command-text parameter, which is the one this
+    rule has to set aside. It is not the same as "carries nothing": a legacy
+    entry excluded for saying too little could hand the tie to its sibling on
+    evidence it was never asked for.
     """
     if method_arity is None:
         return None
@@ -908,6 +923,8 @@ def _carries_mode_argument(
     if mode_index is not None:
         return 0 <= mode_index < len(visible) and _is_string_parameter(visible[mode_index])
     command_text_index = _optional_int_fact(roles.get("command_text"))
+    if command_text_index is None:
+        return None
     return any(
         index != command_text_index and _is_string_parameter(parameter)
         for index, parameter in enumerate(visible)
@@ -922,12 +939,16 @@ def _narrow_by_mode_argument_carriage(
     Only a narrowing to exactly one candidate is taken. Zero survivors means the
     observation explains none of them, several means it separates none of them --
     either way the tie is left exactly as it was, for the shared-mode merge and
-    the ambiguity report downstream to handle as they do today.
+    the ambiguity report downstream to handle as they do today. One candidate
+    that cannot be judged at all abandons the narrowing outright: a survivor
+    picked because a sibling said too little would be a decision made on missing
+    evidence, not on the observation.
     """
+    carriage = [_carries_mode_argument(candidate, method_arity) for candidate in matching]
+    if any(carried is None for carried in carriage):
+        return matching
     carriers = tuple(
-        candidate
-        for candidate in matching
-        if _carries_mode_argument(candidate, method_arity) is True
+        candidate for candidate, carried in zip(matching, carriage) if carried
     )
     return carriers if len(carriers) == 1 else matching
 
@@ -975,28 +996,20 @@ def _wrapper_contract_method(
             if observed_identity == candidate_identity:
                 return True
             return False
-        if observed_identity and not candidate_identity:
-            candidate_parameters = tuple(
-                _normalize_type_identity(item)
-                for item in _text_facts(
-                    _first_fact(candidate, "parameter_types", "parameters")
-                )
-            )
-            if method_arity is not None and not _candidate_admits_arity(
-                candidate, method_arity
-            ):
-                return False
-            if observed_parameters and candidate_parameters != observed_parameters:
-                return False
-            return bool(method_arity is not None or observed_parameters)
-
         candidate_parameters = tuple(
             _normalize_type_identity(item)
             for item in _text_facts(
                 _first_fact(candidate, "parameter_types", "parameters")
             )
         )
-        if method_arity is not None and not _candidate_admits_arity(candidate, method_arity):
+        if observed_identity and not candidate_identity:
+            if not _candidate_admits_arity(candidate, method_arity):
+                return False
+            if observed_parameters and candidate_parameters != observed_parameters:
+                return False
+            return bool(method_arity is not None or observed_parameters)
+
+        if not _candidate_admits_arity(candidate, method_arity):
             return False
         if observed_parameters:
             if not candidate_parameters or candidate_parameters != observed_parameters:
@@ -2266,7 +2279,7 @@ class CSharpAnalysisGateway:
             method_identity=observed_method_identity,
             method_arity=method_facts["method_arity"],
             parameter_types=observed_parameter_types,
-            command_type_mode_observed=raw_mode in {"stored_procedure", "inline_sql"},
+            command_type_mode_observed=bool(raw.get("command_type_argument_observed")),
         )
         method_candidate_names = tuple(
             _wrapper_contract_method_identity(candidate, wrapper_method)

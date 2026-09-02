@@ -1341,7 +1341,8 @@ internal sealed record DirectSqlInvocation(
     IReadOnlyList<string>? ConnectionExpressionCandidates = null,
     int? CommandTextSourceStartOffset = null,
     int? CommandTextSourceEndOffset = null,
-    string? CommandTextProvenance = null);
+    string? CommandTextProvenance = null,
+    bool CommandTypeArgumentObserved = false);
 
 /// <summary>One ambiguous/unavailable overload candidate's bound-implementation and signature facts.</summary>
 internal sealed record WrapperOverloadCandidateFact(
@@ -2100,7 +2101,8 @@ internal static class WrapperAnalyzer
             WrapperMethodArity: call.ArgumentList.Arguments.Count,
             WrapperMethodIdentity: boundSymbol?.MethodIdentity,
             WrapperParameterTypes: boundSymbol?.ParameterTypes,
-            WrapperAssemblyIdentity: boundSymbol?.AssemblyIdentity);
+            WrapperAssemblyIdentity: boundSymbol?.AssemblyIdentity,
+            CommandTypeArgumentObserved: HasModeLiteralArgument(call));
 
     /// <summary>One externally referenced wrapper call's uniquely bound method symbol facts —
     /// only ever built when the compiler resolved the call to exactly one method with no
@@ -2295,6 +2297,16 @@ internal static class WrapperAnalyzer
             || typeName.Equals("String", StringComparison.Ordinal)
             || typeName.EndsWith(".String", StringComparison.Ordinal);
     }
+
+    /// <summary>True when this call really passes a command-type mode literal.
+    /// `WrapperMode` cannot answer that: it is also set from the method name alone
+    /// (ExeProcRead, CreateReader, ...) and falls back to inline_sql when no mode
+    /// argument is found at all, so a reader of WrapperMode cannot tell a mode that
+    /// was observed from one that was assumed.</summary>
+    private static bool HasModeLiteralArgument(InvocationExpressionSyntax call)
+        => call.ArgumentList.Arguments.Any(argument =>
+            IsStoredModeLiteral(argument.Expression)
+            || IsInlineModeLiteral(argument.Expression));
 
     private static bool IsStoredModeLiteral(ExpressionSyntax expression)
         => expression is LiteralExpressionSyntax literal
@@ -2677,6 +2689,11 @@ internal static class WrapperAnalyzer
                 "implementation_not_found");
 
         var argumentCount = call.ArgumentList.Arguments.Count;
+        // The same admissibility rule the contract path applies to an external
+        // wrapper, in `csharp_analysis_gateway._candidate_admits_arity`. What
+        // follows diverges deliberately: here the call site's argument types are
+        // in hand, so the tie-break is by type; the contract path has only the
+        // registry, so it breaks the tie by Mode Argument Carriage instead.
         var matchingArity = candidates
             .Where(wrapper => wrapper.RequiredParameterCount <= argumentCount
                 && argumentCount <= wrapper.Parameters.Count)

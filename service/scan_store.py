@@ -107,7 +107,11 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # constructor-based adapter calls, and source-wrapper optional-arity semantics.
 # v28：ProjectScanResult 新增 semantic_binding_availability 欄位（每個掃描到的專案是否
 # 能建立 Roslyn Compilation／語意模型的誠實回報）；舊快取沒有這份紀錄，須重新掃描補上。
-_CACHE_VERSION = 28
+# v29：raw db_invocations 新增 command_type_argument_observed（這次呼叫是否真的傳了
+# command type 引數）。wrapper_mode 答不了這件事——它也會單憑方法名稱決定，且在找不到
+# mode 引數時退回 inline_sql，所以讀 wrapper_mode 分不出「觀察到」與「假設的」。overload
+# 選擇的 Mode Argument Carriage 只在真的觀察到時才收斂，舊快取沒有這份紀錄，須重新掃描。
+_CACHE_VERSION = 29
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

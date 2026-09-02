@@ -658,10 +658,12 @@ def _snapshot_method_projection(
             int(operation_arity) if operation_arity is not None else len(operation_parameters),
         )
         normalized.setdefault("parameter_types", list(operation_parameters))
-        operation_required = _required_parameter_count(operation)
-        if operation_required is not None:
-            normalized["required_parameter_count"] = operation_required
-        for key in ("argument_roles", "branch_rules", "connection_behavior_boundary"):
+        for key in (
+            "required_parameter_count",
+            "argument_roles",
+            "branch_rules",
+            "connection_behavior_boundary",
+        ):
             if key in operation:
                 normalized[key] = copy.deepcopy(operation[key])
         projection.setdefault(method_name, []).append(normalized)

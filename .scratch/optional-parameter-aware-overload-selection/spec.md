@@ -55,8 +55,9 @@ selected one; otherwise the tie stands and is reported as it is today.
 2. As an analyst, I want an overload tie that cannot be broken to stay reported as a tie, so that a guess is never dressed up as an answer.
 3. As a reviewer, I want a registry written before this change to select overloads exactly as it does today, so that the change cannot silently re-rate existing evidence.
 4. As a reviewer, I want the Required Parameter Count to come from the decompiler rather than be inferred from parameter names or types, so that the fact is observed, not guessed.
-5. As a reviewer, I want Mode Argument Carriage to narrow only when the call site actually resolved a command-type mode, so that overloads which never see a mode argument are untouched.
+5. As a reviewer, I want Mode Argument Carriage to narrow only when the call site actually passed a command-type argument, so that overloads which never see a mode argument are untouched.
 6. As a reviewer, I want narrowing that leaves zero or several overloads to change nothing, so that the rule can only ever turn a tie into a decision, never a decision into a different decision.
+9. As a reviewer, I want an overload that cannot be judged for carriage to abandon the narrowing rather than lose it, so that an entry saying too little never hands the tie to its sibling.
 7. As a maintainer, I want the Required Parameter Count inside the behavior signature, so that an assembly whose optional parameters changed produces a different Contract fingerprint instead of silently reusing the old one.
 8. As an operator, I want the fix to take effect after the refresh I already run, so that I do not have to learn a second command.
 
@@ -88,6 +89,26 @@ it.
 This is C# binding, not preference: a string literal has no conversion to
 `int`, so an overload whose only spare parameter is numeric cannot be the one
 the compiler chose.
+
+An overload that does not declare enough to be judged — no parameter types, no
+argument roles, or roles that never name the command-text parameter — answers
+"cannot say", which is not the same as "carries nothing". One such overload in
+the tied set abandons the narrowing entirely: a survivor picked because a
+sibling said too little would be a decision made on missing evidence.
+
+### Observing the mode argument
+
+Narrowing runs only when the scan says the call really passed a command-type
+argument, reported per invocation as `command_type_argument_observed`.
+
+The existing `wrapper_mode` cannot answer that question. The scanner also sets
+it from the method name alone — `ExeProcRead` is `stored_procedure`,
+`CreateReader` is `inline_sql`, whatever the arguments say — and falls back to
+`inline_sql` for `CreateTable`/`CreateDataSet` when it finds no mode argument
+at all. A reader of `wrapper_mode` therefore cannot tell a mode that was
+observed from one that was assumed, and gating on it would narrow ties on calls
+carrying no mode argument. The new fact is a raw scan fact, so it costs a scan
+cache version bump; a cache written before it simply never narrows.
 
 ### What this does not fix
 
