@@ -61,6 +61,14 @@ _Avoid_: unresolved database, unknown database
 An evidence-rated C# data-access call that represents stored-procedure execution, inline SQL execution, or an unresolved database operation, regardless of whether it crosses direct ADO.NET, a local wrapper, an external wrapper, Dapper, or Entity Framework.
 _Avoid_: assumed SP call
 
+**Embedded Procedure Target**:
+The stored procedure an inline SQL command text turns out to execute, rated against the SP Catalog for the invocation's resolved database. The text names it either with an explicit `EXEC`/`EXECUTE` or by being nothing but the procedure name, which T-SQL executes just the same; `target_source` keeps the two tellable apart. It is additional evidence beside the invocation, never a replacement for the `procedure_name` the call itself declared.
+_Avoid_: inline SP call, exec target, promoted procedure
+
+**Executed Procedure Name**:
+Which stored procedure one Database Invocation runs, whichever field knows: the `procedure_name` the call declared, or a `proven` Embedded Procedure Target when the call declared none. A rating below `proven` answers nothing, because a candidate is not a call. It is the one question `/find_by_sp` asks of an invocation, so no caller has to remember to read two fields.
+_Avoid_: effective procedure, resolved SP name, procedure_name fallback
+
 **Evidence Status**:
 The confidence state of a Database Invocation: `proven`, `likely`, `unresolved`, or `not_applicable`. It rates the available execution and target evidence independently from contract selection status. `not_applicable` marks an invocation with no database evidence to rate. This concept shares its name with, but is unrelated to, `llamaindex-spec-rag`'s per-path/query Evidence Status; see [ADR-0007](docs/adr/0007-evidence-status-name-collision-with-llamaindex-spec-rag.md).
 _Avoid_: contract status, scan success

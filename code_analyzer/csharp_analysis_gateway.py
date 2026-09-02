@@ -39,7 +39,14 @@ class InvocationSourceSpan:
 
 @dataclass(frozen=True)
 class EmbeddedProcedureTarget:
-    """Catalog evidence for a procedure named by inline SQL ``EXEC`` text."""
+    """Catalog evidence for a procedure named by inline SQL text.
+
+    ``target_source`` says how the text named it: ``exec_keyword`` for an
+    explicit ``EXEC``/``EXECUTE``, ``implicit_exec`` for a command text that is
+    nothing but the procedure name, which T-SQL executes just the same. Both
+    produce the same ``procedure_name``, so this field is the only place the
+    difference survives once the name is promoted onto the invocation.
+    """
 
     procedure_name: Optional[str]
     procedure_schema: Optional[str]
@@ -48,6 +55,7 @@ class EmbeddedProcedureTarget:
     reason: str = ""
     database_candidates: tuple[str, ...] = ()
     raw_target: str = ""
+    target_source: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -59,6 +67,7 @@ class EmbeddedProcedureTarget:
             "evidence_status": self.evidence.value,
             "reason": self.reason,
             "raw_target": self.raw_target,
+            "target_source": self.target_source,
         }
 
 
@@ -271,6 +280,40 @@ class DbInvocation:
     @property
     def embedded_procedure_evidence(self) -> Optional[InvocationEvidence]:
         return self.embedded_target.evidence if self.embedded_target else None
+
+    @property
+    def executed_procedure_name(self) -> Optional[str]:
+        """The stored procedure this invocation runs, however the call names it.
+
+        Usually that is ``procedure_name``: the call selected stored-procedure
+        mode and named its procedure directly. It can also be a proven Embedded
+        Procedure Target -- inline SQL text that executes a procedure, whether it
+        says ``EXEC`` or relies on T-SQL running a bare procedure name. Both are
+        calls the database really makes, and a reverse lookup that reads only the
+        first answers "no callers" for the second.
+
+        The two stay separate fields on purpose: ``procedure_name`` records what
+        the call itself declared, and the target records what its text turned out
+        to name, with the raw text and rating behind it. This property is the one
+        place that asks the question both answer. Nothing below ``proven`` is
+        offered -- a candidate is not a call.
+        """
+        if self.procedure_name:
+            return self.procedure_name
+        target = self.embedded_target
+        if target is not None and target.evidence is InvocationEvidence.PROVEN:
+            return target.procedure_name
+        return None
+
+    @property
+    def executed_procedure_schema(self) -> Optional[str]:
+        """The schema of `executed_procedure_name`, from whichever field named it."""
+        if self.procedure_name:
+            return self.procedure_schema
+        target = self.embedded_target
+        if target is not None and target.evidence is InvocationEvidence.PROVEN:
+            return target.procedure_schema
+        return None
 
     @property
     def wrapper_classification_status(self) -> str:
@@ -1742,13 +1785,42 @@ def _parse_embedded_exec_target_at(
     return target_match.group("target"), ""
 
 
-def _embedded_exec_target(raw_text: str) -> tuple[Optional[str], str]:
+def _embedded_exec_target(raw_text: str) -> tuple[Optional[str], str, str]:
+    """The procedure name this inline SQL text executes, and how it named it.
+
+    Returns ``(target, reason, target_source)``. ``target`` is ``None`` when the
+    text names no procedure, ``""`` when it executes one it cannot name.
+    """
     for start in _iter_sql_exec_offsets(raw_text):
         target, reason = _parse_embedded_exec_target_at(raw_text, start)
         if reason == "embedded_exec_as":
             continue
-        return target, reason
-    return None, ""
+        return target, reason, "exec_keyword"
+    implicit = _implicit_exec_target(raw_text)
+    if implicit is not None:
+        return implicit, "", "implicit_exec"
+    return None, "", ""
+
+
+def _implicit_exec_target(raw_text: str) -> Optional[str]:
+    """The procedure name a command text executes without saying ``EXECUTE``.
+
+    T-SQL runs a batch whose first statement is a bare procedure call with the
+    keyword omitted, so a command text that is one possibly-qualified identifier
+    and nothing else executes that identifier.
+
+    "Nothing else" is the whole guard, and it is what keeps ordinary inline SQL
+    untouched: a second token -- an argument, an operator, a statement separator,
+    another statement -- means this is not that shape, and no target is named.
+    The identifier still has to survive the catalog rating before it is anything.
+    """
+    body = raw_text[_skip_sql_leading_trivia(raw_text) :].strip()
+    if not body:
+        return None
+    match = _EMBEDDED_EXEC_TARGET.match(body)
+    if match is None or match.end() != len(body):
+        return None
+    return match.group("target")
 
 
 def _leading_sql_statement(raw_text: str) -> str:
@@ -2747,7 +2819,7 @@ class CSharpAnalysisGateway:
         database: Optional[str],
         connection_resolution_reason: str = "",
     ) -> Optional[EmbeddedProcedureTarget]:
-        raw_target, extraction_reason = _embedded_exec_target(command_text)
+        raw_target, extraction_reason, target_source = _embedded_exec_target(command_text)
         if raw_target is None:
             return None
         if not raw_target:
@@ -2757,6 +2829,7 @@ class CSharpAnalysisGateway:
                 database,
                 InvocationEvidence.UNRESOLVED,
                 extraction_reason,
+                target_source=target_source,
             )
 
         normalized_name = normalize_procedure_name(raw_target)
@@ -2770,6 +2843,7 @@ class CSharpAnalysisGateway:
                     InvocationEvidence.PROVEN,
                     "catalog_match",
                     raw_target=raw_target,
+                    target_source=target_source,
                 )
             return EmbeddedProcedureTarget(
                 normalized_name,
@@ -2778,6 +2852,7 @@ class CSharpAnalysisGateway:
                 InvocationEvidence.UNRESOLVED,
                 "not_in_resolved_catalog",
                 raw_target=raw_target,
+                target_source=target_source,
             )
 
         matches = self._catalog.databases_containing(normalized_name, procedure_schema)
@@ -2790,6 +2865,7 @@ class CSharpAnalysisGateway:
                 connection_resolution_reason,
                 tuple(matches),
                 raw_target,
+                target_source,
             )
         if len(matches) == 1:
             return EmbeddedProcedureTarget(
@@ -2800,6 +2876,7 @@ class CSharpAnalysisGateway:
                 "unique_across_catalogs",
                 tuple(matches),
                 raw_target,
+                target_source,
             )
         return EmbeddedProcedureTarget(
             normalized_name,
@@ -2809,6 +2886,7 @@ class CSharpAnalysisGateway:
             "unknown_database_source" if not matches else "ambiguous_cross_database",
             tuple(matches),
             raw_target,
+            target_source,
         )
 
     def _invocation_metadata(

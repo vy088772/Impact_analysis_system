@@ -386,3 +386,78 @@ def test_retention_fixture_snapshots_and_restores_around_a_test() -> None:
     # restored: the pre-existing entry is back, the test's own entry is gone
     assert list(analyze_service._rated_invocations_retention.keys()) == [scope]
     del analyze_service._rated_invocations_retention[scope]
+
+
+def _inline_scan(root: Path, command_text: str) -> ProjectScanResult:
+    """One program whose only database call is inline SQL text, mode explicitly text."""
+    alpha = _file(root, "AlphaPage.cs", "AlphaPage", "SaveAlpha")
+    return ProjectScanResult(
+        project_root=str(root),
+        project_name="orders",
+        scan_time=datetime.now(),
+        csharp_results=[alpha],
+        db_invocations={
+            str((root / "AlphaPage.cs").resolve()): [
+                {
+                    "class_name": "AlphaPage",
+                    "method_name": "SaveAlpha",
+                    "command_text_kind": "literal",
+                    "command_text": command_text,
+                    "command_type_stored_procedure": False,
+                    "command_type_mode": "text",
+                    "terminal_sink": "ExecuteNonQuery",
+                    "connection_expression": "conn",
+                    "start_offset": 10,
+                    "end_offset": 90,
+                }
+            ]
+        },
+        connection_sources={
+            str((root / "AlphaPage.cs").resolve()): {"conn": "OrdersDb"}
+        },
+    )
+
+
+def test_find_by_sp_finds_a_procedure_run_by_a_bare_name_in_inline_sql(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """T-SQL runs a batch whose first statement is a bare procedure name.
+
+    The call reaches the database through an inline-SQL wrapper overload, so the
+    invocation declares no procedure of its own -- but it runs one, and the
+    reverse lookup exists to find exactly that.
+    """
+    with RatedInvocationsRetention():
+        scan = _inline_scan(tmp_path, "[dbo].[usp_Alpha]")
+        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha"))
+
+        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+
+        assert [match.program for match in response.matches] == ["alphapage"]
+
+
+def test_find_by_sp_finds_a_procedure_run_by_inline_exec_text(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The same call, written with the EXECUTE keyword the batch may omit."""
+    with RatedInvocationsRetention():
+        scan = _inline_scan(tmp_path, "EXEC dbo.usp_Alpha @OrderId")
+        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha"))
+
+        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+
+        assert [match.program for match in response.matches] == ["alphapage"]
+
+
+def test_find_by_sp_ignores_a_procedure_merely_named_inside_inline_sql(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A name inside a larger statement is not a call, and never becomes a match."""
+    with RatedInvocationsRetention():
+        scan = _inline_scan(tmp_path, "SELECT * FROM usp_Alpha")
+        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha"))
+
+        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+
+        assert response.matches == []
+        assert response.diagnostics == []

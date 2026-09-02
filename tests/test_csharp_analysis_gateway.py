@@ -6906,3 +6906,135 @@ def test_static_analyzer_host_reports_whether_a_command_type_argument_was_passed
     assert by_method["Observed"]["command_type_argument_observed"] is True
     assert by_method["Assumed"]["command_type_argument_observed"] is False
     assert by_method["Assumed"]["wrapper_mode"] == "inline_sql"
+
+
+def _inline_text_invocation(command_text: str, **overrides) -> dict:
+    """One inline-SQL call whose command text is `command_text`, mode explicitly text."""
+    call = {
+        "command_text": command_text,
+        "command_type_stored_procedure": False,
+        "command_type_mode": "text",
+        "terminal_sink": "ExecuteNonQuery",
+    }
+    call.update(overrides)
+    return _raw_invocation(**call)
+
+
+def test_inline_sql_that_is_only_a_procedure_name_runs_that_procedure() -> None:
+    """T-SQL runs a batch whose first statement is a bare procedure name.
+
+    `SQLObject.CreateTable(strSql, strTableName)` is a real inline-SQL overload,
+    and `CreateTable("[dbo].[usp_SaveOrder]", "SP")` reaches the procedure through
+    it. Nothing extracted a target from that text, so the call was missing from
+    every reverse lookup.
+    """
+    catalog = SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs", [_inline_text_invocation("[dbo].[usp_SaveOrder]")]
+    )[0]
+
+    assert invocation.invocation_mode == "inline_sql"
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.embedded_procedure_target is not None
+    assert invocation.embedded_procedure_target.evidence is InvocationEvidence.PROVEN
+    assert invocation.embedded_procedure_target.target_source == "implicit_exec"
+    assert invocation.executed_procedure_name == "usp_saveorder"
+    assert invocation.executed_procedure_schema == "dbo"
+    # The call itself declared no procedure: the target stays additional evidence.
+    assert invocation.procedure_name is None
+
+
+def test_leading_comments_before_a_bare_procedure_name_still_name_it() -> None:
+    """The bare-name judgement skips the trivia the EXEC scan already skips."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [_inline_text_invocation("\n-- pick up the order\n/* v2 */ dbo.usp_SaveOrder \n")],
+    )[0]
+
+    assert invocation.executed_procedure_name == "usp_saveorder"
+
+
+def test_inline_sql_naming_a_procedure_inside_a_statement_runs_nothing() -> None:
+    """A name is only a call when it is the whole command text.
+
+    Anything after the identifier -- another token, an argument, a second
+    statement -- is an ordinary inline SQL statement, and recognising bare names
+    must not invent a call out of one.
+    """
+    catalog = SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    for command_text in (
+        "SELECT * FROM usp_SaveOrder",
+        "usp_SaveOrder @OrderId",
+        "dbo.usp_SaveOrder; SELECT 1",
+    ):
+        invocation = gateway.resolve_direct_invocations(
+            "OrderPage.cs", [_inline_text_invocation(command_text)]
+        )[0]
+
+        assert invocation.executed_procedure_name is None, command_text
+        assert invocation.embedded_procedure_target is None, command_text
+
+
+def test_only_a_proven_embedded_target_becomes_the_procedure_name() -> None:
+    """A candidate answering a reverse lookup would be a guess, not evidence."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs", [_inline_text_invocation("[dbo].[usp_NotInThisCatalog]")]
+    )[0]
+
+    assert invocation.embedded_procedure_target is not None
+    assert invocation.embedded_procedure_target.evidence is InvocationEvidence.UNRESOLVED
+    assert invocation.embedded_procedure_target.reason == "not_in_resolved_catalog"
+    assert invocation.executed_procedure_name is None
+
+
+def test_an_explicit_exec_target_stays_tellable_from_an_implicit_one() -> None:
+    """Both name the same procedure, so the target's own field is the only place
+    the provenance survives."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    explicit = gateway.resolve_direct_invocations(
+        "OrderPage.cs", [_inline_text_invocation("EXEC dbo.usp_SaveOrder @OrderId")]
+    )[0]
+    implicit = gateway.resolve_direct_invocations(
+        "OrderPage.cs", [_inline_text_invocation("dbo.usp_SaveOrder")]
+    )[0]
+
+    assert (
+        explicit.executed_procedure_name
+        == implicit.executed_procedure_name
+        == "usp_saveorder"
+    )
+    assert explicit.embedded_procedure_target.target_source == "exec_keyword"
+    assert implicit.embedded_procedure_target.target_source == "implicit_exec"
+
+
+def test_a_declared_procedure_name_wins_over_any_embedded_target() -> None:
+    """A stored-procedure call names its procedure from the call itself."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder", "dbo.usp_Other"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [
+            _raw_invocation(
+                command_text="usp_Other",
+                command_type_stored_procedure=True,
+                command_type_mode="storedprocedure",
+                terminal_sink="ExecuteNonQuery",
+            )
+        ],
+    )[0]
+
+    assert invocation.procedure_name == "usp_other"
+    assert invocation.executed_procedure_name == "usp_other"

@@ -2199,10 +2199,12 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         refresh=req.refresh,
     )
     for invocation in rated_invocations:
-        if (
-            not invocation.procedure_name
-            or normalize_procedure_name(invocation.procedure_name) != sp_lower
-        ):
+        # `executed_procedure_name`, not `procedure_name`: a call whose inline SQL
+        # text runs a procedure -- with `EXEC`, or relying on T-SQL running a bare
+        # procedure name -- declares no procedure of its own, and reading only the
+        # declared field answered "no callers" for a call the database really makes.
+        executed = invocation.executed_procedure_name
+        if not executed or normalize_procedure_name(executed) != sp_lower:
             continue
         csharp_file = _source_file_for_span(
             scan,
