@@ -434,6 +434,9 @@ def test_find_by_sp_finds_a_procedure_run_by_a_bare_name_in_inline_sql(
         response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
 
         assert [match.program for match in response.matches] == ["alphapage"]
+        # The row has to say which procedure it matched, and how it was named.
+        assert response.matches[0].procedure_name == "usp_alpha"
+        assert response.matches[0].procedure_name_source == "implicit_exec"
 
 
 def test_find_by_sp_finds_a_procedure_run_by_inline_exec_text(
@@ -447,6 +450,7 @@ def test_find_by_sp_finds_a_procedure_run_by_inline_exec_text(
         response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
 
         assert [match.program for match in response.matches] == ["alphapage"]
+        assert response.matches[0].procedure_name_source == "exec_keyword"
 
 
 def test_find_by_sp_ignores_a_procedure_merely_named_inside_inline_sql(
@@ -461,3 +465,15 @@ def test_find_by_sp_ignores_a_procedure_merely_named_inside_inline_sql(
 
         assert response.matches == []
         assert response.diagnostics == []
+
+
+def test_find_by_sp_marks_a_declared_procedure_row_as_declared(monkeypatch, tmp_path: Path) -> None:
+    """A call that selected stored-procedure mode names its own procedure."""
+    with RatedInvocationsRetention():
+        scan = _scan(tmp_path)
+        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
+
+        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+
+        assert response.matches[0].procedure_name_source == "declared"
+        assert response.matches[0].procedure_name == "usp_alpha"

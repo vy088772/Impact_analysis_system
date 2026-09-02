@@ -344,6 +344,11 @@ class SPMatchProgram(WrapperEvidenceFields):
     program: str = ""                         # 程式基底名（不含副檔名）
     file: str = ""                            # 相對 repo 根目錄的檔案路徑
 
+    # 這一列比對到的 SP 是怎麼被指名的：`declared` = 呼叫本身就選了 SP 模式並指名；
+    # `exec_keyword`／`implicit_exec` = 由 inline SQL 文字執行，寫了或省略了 EXEC。
+    # 後兩者的 procedure_name 來自 Embedded Procedure Target，不是呼叫自己宣告的。
+    procedure_name_source: str = ""
+
     invocation_mode: str = ""
     terminal_sink: str = ""
     connection_source: str = ""

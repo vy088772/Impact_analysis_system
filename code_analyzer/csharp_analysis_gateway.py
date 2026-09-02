@@ -44,8 +44,9 @@ class EmbeddedProcedureTarget:
     ``target_source`` says how the text named it: ``exec_keyword`` for an
     explicit ``EXEC``/``EXECUTE``, ``implicit_exec`` for a command text that is
     nothing but the procedure name, which T-SQL executes just the same. Both
-    produce the same ``procedure_name``, so this field is the only place the
-    difference survives once the name is promoted onto the invocation.
+    answer `DbInvocation.executed_procedure_name` identically, so this field is
+    the only place the difference between them survives. It is a plain string
+    beside ``reason``, which is one too.
     """
 
     procedure_name: Optional[str]
@@ -281,6 +282,19 @@ class DbInvocation:
     def embedded_procedure_evidence(self) -> Optional[InvocationEvidence]:
         return self.embedded_target.evidence if self.embedded_target else None
 
+    def _answering_embedded_target(self) -> Optional[EmbeddedProcedureTarget]:
+        """The Embedded Procedure Target that answers for this invocation, if any.
+
+        Only when the call declared no procedure of its own, and only at
+        ``proven`` -- a candidate is not a call.
+        """
+        if self.procedure_name:
+            return None
+        target = self.embedded_target
+        if target is not None and target.evidence is InvocationEvidence.PROVEN:
+            return target
+        return None
+
     @property
     def executed_procedure_name(self) -> Optional[str]:
         """The stored procedure this invocation runs, however the call names it.
@@ -297,23 +311,28 @@ class DbInvocation:
         to name, with the raw text and rating behind it. This property is the one
         place that asks the question both answer. Nothing below ``proven`` is
         offered -- a candidate is not a call.
+
+        The answer is the normalized bare identity either way. A declared name
+        arrives however the call wrote it and a target's arrives already
+        normalized, and a property whose job is comparison must not hand back two
+        shapes for the same procedure.
         """
-        if self.procedure_name:
-            return self.procedure_name
-        target = self.embedded_target
-        if target is not None and target.evidence is InvocationEvidence.PROVEN:
-            return target.procedure_name
-        return None
+        target = self._answering_embedded_target()
+        raw_name = target.procedure_name if target is not None else self.procedure_name
+        return normalize_procedure_name(raw_name) if raw_name else None
 
     @property
     def executed_procedure_schema(self) -> Optional[str]:
         """The schema of `executed_procedure_name`, from whichever field named it."""
-        if self.procedure_name:
-            return self.procedure_schema
-        target = self.embedded_target
-        if target is not None and target.evidence is InvocationEvidence.PROVEN:
-            return target.procedure_schema
-        return None
+        target = self._answering_embedded_target()
+        return target.procedure_schema if target is not None else self.procedure_schema
+
+    @property
+    def executed_procedure_name_source(self) -> str:
+        """Where `executed_procedure_name` came from: ``declared`` when the call
+        named its own procedure, else the target's ``target_source``."""
+        target = self._answering_embedded_target()
+        return target.target_source if target is not None else "declared"
 
     @property
     def wrapper_classification_status(self) -> str:
@@ -1785,7 +1804,7 @@ def _parse_embedded_exec_target_at(
     return target_match.group("target"), ""
 
 
-def _embedded_exec_target(raw_text: str) -> tuple[Optional[str], str, str]:
+def _embedded_procedure_target(raw_text: str) -> tuple[Optional[str], str, str]:
     """The procedure name this inline SQL text executes, and how it named it.
 
     Returns ``(target, reason, target_source)``. ``target`` is ``None`` when the
@@ -1807,18 +1826,30 @@ def _implicit_exec_target(raw_text: str) -> Optional[str]:
 
     T-SQL runs a batch whose first statement is a bare procedure call with the
     keyword omitted, so a command text that is one possibly-qualified identifier
-    and nothing else executes that identifier.
+    and nothing else executes that identifier. Whitespace, comments, and one
+    optional statement terminator surround it without changing that.
 
     "Nothing else" is the whole guard, and it is what keeps ordinary inline SQL
-    untouched: a second token -- an argument, an operator, a statement separator,
-    another statement -- means this is not that shape, and no target is named.
-    The identifier still has to survive the catalog rating before it is anything.
+    untouched: a second token -- an argument, an operator, another statement --
+    means this is not that shape, and no target is named.
+
+    A lone word that is really a statement (`COMMIT`, `GO`) does fit the
+    identifier shape, and is deliberately left to the catalog rating that every
+    candidate goes through: no database defines a procedure called `commit`, so
+    it rates `not_in_resolved_catalog` and answers nothing. A denylist here would
+    be a second rule competing with the catalog, and one that could never be
+    complete.
     """
-    body = raw_text[_skip_sql_leading_trivia(raw_text) :].strip()
-    if not body:
-        return None
+    body = raw_text[_skip_sql_leading_trivia(raw_text) :]
     match = _EMBEDDED_EXEC_TARGET.match(body)
-    if match is None or match.end() != len(body):
+    if match is None:
+        return None
+    remainder = body[match.end() :]
+    remainder = remainder[_skip_sql_leading_trivia(remainder) :]
+    if remainder.startswith(";"):
+        remainder = remainder[1:]
+        remainder = remainder[_skip_sql_leading_trivia(remainder) :]
+    if remainder.strip():
         return None
     return match.group("target")
 
@@ -2819,7 +2850,7 @@ class CSharpAnalysisGateway:
         database: Optional[str],
         connection_resolution_reason: str = "",
     ) -> Optional[EmbeddedProcedureTarget]:
-        raw_target, extraction_reason, target_source = _embedded_exec_target(command_text)
+        raw_target, extraction_reason, target_source = _embedded_procedure_target(command_text)
         if raw_target is None:
             return None
         if not raw_target:
@@ -2863,9 +2894,9 @@ class CSharpAnalysisGateway:
                 None,
                 InvocationEvidence.UNRESOLVED,
                 connection_resolution_reason,
-                tuple(matches),
-                raw_target,
-                target_source,
+                database_candidates=tuple(matches),
+                raw_target=raw_target,
+                target_source=target_source,
             )
         if len(matches) == 1:
             return EmbeddedProcedureTarget(
@@ -2874,9 +2905,9 @@ class CSharpAnalysisGateway:
                 None,
                 InvocationEvidence.LIKELY,
                 "unique_across_catalogs",
-                tuple(matches),
-                raw_target,
-                target_source,
+                database_candidates=tuple(matches),
+                raw_target=raw_target,
+                target_source=target_source,
             )
         return EmbeddedProcedureTarget(
             normalized_name,
@@ -2884,9 +2915,9 @@ class CSharpAnalysisGateway:
             None,
             InvocationEvidence.UNRESOLVED,
             "unknown_database_source" if not matches else "ambiguous_cross_database",
-            tuple(matches),
-            raw_target,
-            target_source,
+            database_candidates=tuple(matches),
+            raw_target=raw_target,
+            target_source=target_source,
         )
 
     def _invocation_metadata(

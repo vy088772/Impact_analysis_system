@@ -6940,8 +6940,8 @@ def test_inline_sql_that_is_only_a_procedure_name_runs_that_procedure() -> None:
     assert invocation.embedded_procedure_target is not None
     assert invocation.embedded_procedure_target.evidence is InvocationEvidence.PROVEN
     assert invocation.embedded_procedure_target.target_source == "implicit_exec"
+    assert invocation.embedded_procedure_target.procedure_schema == "dbo"
     assert invocation.executed_procedure_name == "usp_saveorder"
-    assert invocation.executed_procedure_schema == "dbo"
     # The call itself declared no procedure: the target stays additional evidence.
     assert invocation.procedure_name is None
 
@@ -6973,6 +6973,7 @@ def test_inline_sql_naming_a_procedure_inside_a_statement_runs_nothing() -> None
         "SELECT * FROM usp_SaveOrder",
         "usp_SaveOrder @OrderId",
         "dbo.usp_SaveOrder; SELECT 1",
+        "usp_SaveOrder usp_SaveOrder",
     ):
         invocation = gateway.resolve_direct_invocations(
             "OrderPage.cs", [_inline_text_invocation(command_text)]
@@ -6982,7 +6983,7 @@ def test_inline_sql_naming_a_procedure_inside_a_statement_runs_nothing() -> None
         assert invocation.embedded_procedure_target is None, command_text
 
 
-def test_only_a_proven_embedded_target_becomes_the_procedure_name() -> None:
+def test_only_a_proven_embedded_target_answers_which_procedure_runs() -> None:
     """A candidate answering a reverse lookup would be a guess, not evidence."""
     catalog = SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]})
     gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
@@ -7038,3 +7039,62 @@ def test_a_declared_procedure_name_wins_over_any_embedded_target() -> None:
 
     assert invocation.procedure_name == "usp_other"
     assert invocation.executed_procedure_name == "usp_other"
+
+
+def test_a_terminator_or_trailing_comment_still_leaves_only_a_procedure_name() -> None:
+    """Whitespace, comments, and one statement terminator surround the name
+    without making the text something other than a call to it."""
+    catalog = SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    for command_text in (
+        "dbo.usp_SaveOrder;",
+        "dbo.usp_SaveOrder -- run it",
+        "dbo.usp_SaveOrder /* run it */",
+        "  dbo.usp_SaveOrder ;  -- done\n",
+    ):
+        invocation = gateway.resolve_direct_invocations(
+            "OrderPage.cs", [_inline_text_invocation(command_text)]
+        )[0]
+
+        assert invocation.executed_procedure_name == "usp_saveorder", command_text
+
+
+def test_a_lone_sql_statement_keyword_answers_nothing() -> None:
+    """`COMMIT` fits the identifier shape and is still a statement, not a call.
+
+    The catalog is what says so, and it is the only thing that says so: no
+    database defines a procedure called `commit`, so the candidate rates
+    `not_in_resolved_catalog` and answers nothing. A keyword denylist here would
+    be a second rule competing with the catalog, and one that could never be
+    complete.
+    """
+    catalog = SpCatalog.from_databases({"OrdersDb": ["dbo.usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "OrdersDb"})
+
+    for command_text in ("COMMIT", "rollback", "GO", "Select"):
+        invocation = gateway.resolve_direct_invocations(
+            "OrderPage.cs", [_inline_text_invocation(command_text)]
+        )[0]
+
+        assert invocation.executed_procedure_name is None, command_text
+        assert invocation.embedded_procedure_target.reason == "not_in_resolved_catalog"
+
+
+def test_a_likely_target_answers_nothing_either() -> None:
+    """A name unique across catalogs but not in the resolved one is a candidate.
+
+    `likely` is the rating between `proven` and `unresolved`, and it is exactly
+    the case where promoting a candidate into an answer would be tempting.
+    """
+    catalog = SpCatalog.from_databases({"OtherDb": ["dbo.usp_SaveOrder"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [_inline_text_invocation("dbo.usp_SaveOrder", connection_expression="unknown")],
+    )[0]
+
+    assert invocation.embedded_procedure_target.evidence is InvocationEvidence.LIKELY
+    assert invocation.executed_procedure_name is None
+    assert invocation.executed_procedure_name_source == "declared"

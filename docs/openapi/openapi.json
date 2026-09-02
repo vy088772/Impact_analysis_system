@@ -1545,6 +1545,11 @@
             "title": "Procedure Name",
             "type": "string"
           },
+          "procedure_name_source": {
+            "default": "",
+            "title": "Procedure Name Source",
+            "type": "string"
+          },
           "procedure_schema": {
             "default": "",
             "title": "Procedure Schema",

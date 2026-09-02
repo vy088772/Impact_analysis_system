@@ -54,7 +54,7 @@ stays `inline_sql`, because that is what the wrapper overload does with the text
 3. As an analyst, I want an inline SQL statement that merely mentions a procedure name in a larger query left alone, so that recognising bare names cannot invent a call.
 4. As a reviewer, I want only a `proven` target to answer the reverse lookup, so that a candidate is never promoted into an answer.
 5. As a reviewer, I want a bare name confirmed against the SP Catalog for the invocation's resolved database, so that a table or view name that happens to stand alone is not read as a procedure.
-6. As a reviewer, I want the target's own reason to record whether the name came from an explicit `EXEC` or an implicit one, so that the two are still tellable apart after promotion.
+6. As a reviewer, I want the target to record whether the name came from an explicit `EXEC` or an implicit one, so that the two stay tellable apart even though they answer the lookup identically.
 7. As a reviewer, I want the invocation's mode left at `inline_sql`, so that this change records a target and never re-rates a Contract.
 8. As a maintainer, I want one place that answers "which procedure does this invocation run", so that a reader never has to remember to check two fields.
 9. As a maintainer, I want `procedure_name` and the Embedded Procedure Target left as the separate fields they are, so that this change adds a question rather than reversing an existing answer.
@@ -71,9 +71,15 @@ comments, is one possibly-qualified identifier and nothing else is therefore an
 "Nothing else" is the whole guard. A command text with a second token — a
 `SELECT`, a parameter, an operator, a second statement — is not this shape and
 yields no target, which leaves every ordinary inline SQL statement exactly as it
-is today. The identifier still has to be confirmed against the SP Catalog by the
-existing rating step before it becomes anything; an unconfirmed name is rated
-the same way an unconfirmed `EXEC` target already is.
+is today. Trailing whitespace, comments, and one statement terminator are not
+that token: `usp_Foo;` runs `usp_Foo`.
+
+The identifier still has to be confirmed against the SP Catalog by the existing
+rating step before it becomes anything; an unconfirmed name is rated the same way
+an unconfirmed `EXEC` target already is. That includes a lone word that is really
+a statement — no database defines a procedure called `commit`, so the catalog
+rejects it. A keyword denylist here would be a second rule competing with the
+catalog, and one that could never be complete.
 
 ### Executed Procedure Name
 

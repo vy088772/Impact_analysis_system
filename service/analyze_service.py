@@ -2234,6 +2234,12 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
             {
                 "program": _normalize_program(Path(csharp_file).name),
                 "file": _rel(csharp_file, root),
+                # The row has to name the procedure it matched. `procedure_name`
+                # is empty on an invocation whose inline SQL text runs the
+                # procedure, so read the executed name and say where it came from.
+                "procedure_name": executed,
+                "procedure_schema": invocation.executed_procedure_schema or "",
+                "procedure_name_source": invocation.executed_procedure_name_source,
             }
         )
         matches.append(SPMatchProgram(**match_fields))
