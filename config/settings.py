@@ -148,6 +148,12 @@ class Settings:
     DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT: int = int(
         os.getenv('DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT', '100')
     )
+    # Derived Execution Evidence 的磁碟落地快取根目錄（pickle，ADR-0017／ticket 06）：
+    # 一個 scope 一個檔案，讓一個 scope 派生過一次後，跨行程重啟、或被記憶體
+    # retention 淘汰之後，都能直接從磁碟讀回，不必重新派生。
+    DERIVED_EXECUTION_EVIDENCE_STORE_ROOT: str = os.getenv(
+        'DERIVED_EXECUTION_EVIDENCE_STORE_ROOT', './data/derived_execution_evidence'
+    )
 
     # ========================================
     # 檔案路徑設定

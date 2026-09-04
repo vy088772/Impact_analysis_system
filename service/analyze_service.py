@@ -71,6 +71,7 @@ from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import cache_status, cached_commit, cached_saved_at, get_or_scan, has_cache, save_scan
 from . import sql_cache_store
+from . import derived_execution_evidence_store
 from . import flow_chain_builder
 from .contract_preflight import (
     load_system_contract_selector,
@@ -1235,6 +1236,15 @@ def _rated_execution_invocations_for_scope(
     until a refresh replaces it, whereas merging always builds a brand-new
     `ProjectScanResult` even when nothing changed, so `merged_scan` can never
     itself serve as the "has the scan moved" signal.
+
+    A memory miss falls through to `derived_execution_evidence_store` (ticket
+    06/ADR-0017) before paying for a real derivation: a scope derived in an
+    earlier process, or evicted from this one, is still sitting on disk with
+    the same stamp this call just computed, and reading it back costs a
+    deserialize instead of a re-rate. `refresh=True` skips this fallback
+    exactly as it skips the in-memory one -- an explicit refresh ignores the
+    stored file entirely, never treating it as fresh regardless of what its
+    stamp says.
     """
     stamp = _rated_invocations_validity_stamp(scope, per_root_scans)
     if not refresh:
@@ -1242,9 +1252,18 @@ def _rated_execution_invocations_for_scope(
         if retained is not None and retained.stamp == stamp:
             return retained.rated_invocations, retained.graph
 
+        stored = derived_execution_evidence_store.load(scope)
+        if stored is not None and stored.stamp == stamp:
+            _evict_for_new_scope(scope)
+            _rated_invocations_retention[scope] = _RetainedRatedInvocations(
+                stamp, stored.rated_invocations, stored.graph, stored.execution_paths
+            )
+            return stored.rated_invocations, stored.graph
+
     rated_invocations, graph = _rated_execution_invocations(scope, merged_scan, matched_files, root)
     _evict_for_new_scope(scope)
     _rated_invocations_retention[scope] = _RetainedRatedInvocations(stamp, rated_invocations, graph)
+    derived_execution_evidence_store.store(scope, stamp, rated_invocations, graph, execution_paths=None)
     return rated_invocations, graph
 
 
@@ -1280,6 +1299,19 @@ def _execution_paths_for_scope(
     if retained.execution_paths is None:
         retained.execution_paths = build_execution_paths(
             rated_invocations, graph, max_call_depth=max_call_depth
+        )
+        # Persist the now-complete evidence (ticket 06/ADR-0017): a disk hit
+        # above may have supplied `rated_invocations`/`graph` without paths
+        # yet built (a scope that had only ever answered find_by_sp()), so
+        # the file is written again here to carry the paths this call just
+        # built -- the same "write on every cold derivation" rule, applied to
+        # the half of the evidence that just went cold.
+        derived_execution_evidence_store.store(
+            scope,
+            retained.stamp,
+            retained.rated_invocations,
+            retained.graph,
+            execution_paths=retained.execution_paths,
         )
     return rated_invocations, graph, retained.execution_paths
 

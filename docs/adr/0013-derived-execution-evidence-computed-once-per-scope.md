@@ -50,6 +50,9 @@ decided for the index.
 - A reverse lookup's cost now scales with how often a scope's inputs change, not with how many
   requests ask about that scope. Two back-to-back requests against the same repository scan and
   SQL Cache Identity share one derivation.
+- That sharing was originally bounded to one process and one retention window; [ADR-0017](0017-derived-execution-evidence-is-also-retained-on-disk.md)
+  extends it to a disk-backed copy so a restart and an eviction reuse it too, under the same
+  freshness rule.
 - The retention bound is a capacity-planning decision, not a fixed constant: it must be
   revisited whenever the number of systems a single Cross-system Lookup can span changes.
 - Any future proposal to relax, widen, or skip the freshness check for Derived Execution

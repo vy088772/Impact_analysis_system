@@ -171,8 +171,11 @@ def test_eviction_never_changes_the_answer(monkeypatch, tmp_path: Path) -> None:
         analyze_service.find_by_sp(_request("Db2"))
         assert _scope_for("Db1", tmp_path) not in analyze_service._rated_invocations_retention
 
-        # Db1's next request finds nothing retained and derives again from scratch.
+        # Db1's next request finds nothing retained in memory, but ticket 06's
+        # disk-backed store still holds Db1's evidence from the first call --
+        # an eviction re-derives from scratch only when the disk store is also
+        # absent, which test_derived_execution_evidence_disk_retention.py covers directly.
         again = analyze_service.find_by_sp(_request("Db1"))
-        assert len(calls) == 3  # Db1 (1st), Db2, Db1 (re-derived)
+        assert len(calls) == 2  # Db1 (1st), Db2 -- Db1's second answer came from disk
 
         assert [(m.program, m.file) for m in first.matches] == [(m.program, m.file) for m in again.matches]
