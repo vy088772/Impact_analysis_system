@@ -1170,14 +1170,27 @@ class _RetainedRatedInvocations:
 
 
 # Derived Execution Evidence's rating half, retained per scope (ADR-0013).
-# Bounded by `settings.DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT` (ticket 06):
-# a single Cross-system Lookup visits every system in the catalog once before
-# returning to the first, so a bound smaller than that visit count would evict
-# a scope before the lookup could ever reuse it, buying nothing while still
-# paying the cost of deriving it. An `OrderedDict` in insertion order gives a
-# FIFO eviction that matches that sweep: the scope visited longest ago is the
-# one evicted, exactly the one a round-trip sweep would otherwise be about to
-# revisit last. See `_evict_for_new_scope` for the eviction itself.
+# Bounded by `settings.DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT` (ticket 06),
+# with least-recently-used eviction (ticket 07): the scope evicted when the
+# bound is reached is the one that has gone longest without being served, not
+# merely the one that arrived longest ago. On a shared service, requests from
+# many analysts interleave; an analyst asking many questions about one system
+# must not lose that scope just because a hundred unrelated scopes arrived in
+# between.
+#
+# A single Cross-system Lookup sweep, which visits every system in the
+# catalog once before returning to the first, is unaffected by this rule:
+# when every scope is touched exactly once, "least recently used" and
+# "arrived longest ago" name the same scope, so the sweep evicts in the same
+# order least-recently-used or first-in-first-out would. The two rules only
+# diverge -- and only least-recently-used helps -- once a scope is served more
+# than once, exactly the reused-scope case this ticket protects.
+#
+# An `OrderedDict` gives both rules for the price of one: every place a scope
+# is served calls `move_to_end` on it, keeping the least-recently-used entry
+# at the front regardless of arrival order, and `_evict_for_new_scope` still
+# evicts from the front with `popitem(last=False)`. See `_evict_for_new_scope`
+# for the eviction itself.
 #
 # The pre-existing unbounded in-memory retention this reuse work builds on top
 # of -- `_scan_cache` above, and the process-level caches in `scan_store` and
@@ -1188,8 +1201,21 @@ _rated_invocations_retention: OrderedDict[DerivedExecutionEvidenceScope, _Retain
 )
 
 
+def _retain(scope: DerivedExecutionEvidenceScope, value: _RetainedRatedInvocations) -> None:
+    """Record that `scope` was just served, keeping it at the newest position.
+
+    The single place `_rated_invocations_retention` is written, whether the
+    value is a fresh derivation, a disk hit, or an in-place update -- so a
+    served scope always moves to the back regardless of which path served it
+    (ticket 07). A brand-new key is already inserted at the back; `move_to_end`
+    also covers the case where `scope` was already present with a stale value.
+    """
+    _rated_invocations_retention[scope] = value
+    _rated_invocations_retention.move_to_end(scope)
+
+
 def _evict_for_new_scope(scope: DerivedExecutionEvidenceScope) -> None:
-    """Evict the oldest retained scope if adding `scope` would exceed the bound.
+    """Evict the least-recently-used retained scope if adding `scope` would exceed the bound.
 
     A no-op when `scope` is already retained -- replacing an existing entry's
     value (a stamp mismatch or an explicit refresh) never grows the retention,
@@ -1198,6 +1224,11 @@ def _evict_for_new_scope(scope: DerivedExecutionEvidenceScope) -> None:
     scope does the first time it is ever seen. It is printed so a service whose
     reuse has stopped working -- because the catalog outgrew the configured
     bound -- reports that instead of merely being slow again (ADR-0013).
+
+    `popitem(last=False)` pops the front of `_rated_invocations_retention`.
+    Every serve (see `_retain`) moves the served scope to the back, so the
+    front is always the scope least recently served, not merely the one that
+    arrived first (ticket 07).
     """
     if scope in _rated_invocations_retention:
         return
@@ -1250,19 +1281,23 @@ def _rated_execution_invocations_for_scope(
     if not refresh:
         retained = _rated_invocations_retention.get(scope)
         if retained is not None and retained.stamp == stamp:
+            _rated_invocations_retention.move_to_end(scope)
             return retained.rated_invocations, retained.graph
 
         stored = derived_execution_evidence_store.load(scope)
         if stored is not None and stored.stamp == stamp:
             _evict_for_new_scope(scope)
-            _rated_invocations_retention[scope] = _RetainedRatedInvocations(
-                stamp, stored.rated_invocations, stored.graph, stored.execution_paths
+            _retain(
+                scope,
+                _RetainedRatedInvocations(
+                    stamp, stored.rated_invocations, stored.graph, stored.execution_paths
+                ),
             )
             return stored.rated_invocations, stored.graph
 
     rated_invocations, graph = _rated_execution_invocations(scope, merged_scan, matched_files, root)
     _evict_for_new_scope(scope)
-    _rated_invocations_retention[scope] = _RetainedRatedInvocations(stamp, rated_invocations, graph)
+    _retain(scope, _RetainedRatedInvocations(stamp, rated_invocations, graph))
     derived_execution_evidence_store.store(scope, stamp, rated_invocations, graph, execution_paths=None)
     return rated_invocations, graph
 

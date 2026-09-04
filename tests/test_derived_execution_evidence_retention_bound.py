@@ -157,6 +157,50 @@ def test_exceeding_the_limit_evicts_the_oldest_scope_and_records_it(
         assert "Db1" in printed
 
 
+def test_a_served_scope_moves_to_the_newest_position(monkeypatch, tmp_path: Path) -> None:
+    """Ticket 07: serving an already-retained scope moves it to the newest
+    position, regardless of when it arrived."""
+    monkeypatch.setattr(analyze_service.settings, "DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT", 3)
+    with RatedInvocationsRetention():
+        scan = _scan(tmp_path)
+        _wire(monkeypatch, scan, tmp_path)
+
+        analyze_service.find_by_sp(_request("Db1"))
+        analyze_service.find_by_sp(_request("Db2"))
+        analyze_service.find_by_sp(_request("Db1"))  # re-served
+
+        retained = analyze_service._rated_invocations_retention
+        assert list(retained.keys())[-1] == _scope_for("Db1", tmp_path)
+
+
+def test_a_served_scope_survives_more_new_scopes_than_the_bound(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Ticket 07: with the bound at 2, a scope re-served before each new
+    arrival stays retained across two new arrivals -- more than a plain
+    first-in-first-out bound of 2 would allow a scope that only arrived
+    first, and eviction falls instead on the scope least recently served."""
+    monkeypatch.setattr(analyze_service.settings, "DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT", 2)
+    with RatedInvocationsRetention():
+        scan = _scan(tmp_path)
+        _wire(monkeypatch, scan, tmp_path)
+
+        analyze_service.find_by_sp(_request("Db1"))
+        analyze_service.find_by_sp(_request("Db2"))
+
+        analyze_service.find_by_sp(_request("Db1"))
+        analyze_service.find_by_sp(_request("Db3"))
+
+        analyze_service.find_by_sp(_request("Db1"))
+        analyze_service.find_by_sp(_request("Db4"))
+
+        retained = analyze_service._rated_invocations_retention
+        assert _scope_for("Db1", tmp_path) in retained
+        assert _scope_for("Db2", tmp_path) not in retained
+        assert _scope_for("Db3", tmp_path) not in retained
+        assert _scope_for("Db4", tmp_path) in retained
+
+
 def test_eviction_never_changes_the_answer(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(analyze_service.settings, "DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT", 1)
     with RatedInvocationsRetention():
