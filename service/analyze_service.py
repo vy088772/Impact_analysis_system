@@ -1202,13 +1202,12 @@ _rated_invocations_retention: OrderedDict[DerivedExecutionEvidenceScope, _Retain
 
 
 def _retain(scope: DerivedExecutionEvidenceScope, value: _RetainedRatedInvocations) -> None:
-    """Record that `scope` was just served, keeping it at the newest position.
+    """Write `value` for `scope`, and move it to the newest position.
 
-    The single place `_rated_invocations_retention` is written, whether the
-    value is a fresh derivation, a disk hit, or an in-place update -- so a
-    served scope always moves to the back regardless of which path served it
-    (ticket 07). A brand-new key is already inserted at the back; `move_to_end`
-    also covers the case where `scope` was already present with a stale value.
+    Called by `_evict_then_retain` for a fresh derivation or a disk hit; the
+    in-memory-hit path just below calls `move_to_end` directly instead, since
+    it has no new value to write. See the module comment above
+    `_rated_invocations_retention` for why every serve does this.
     """
     _rated_invocations_retention[scope] = value
     _rated_invocations_retention.move_to_end(scope)
@@ -1218,17 +1217,16 @@ def _evict_for_new_scope(scope: DerivedExecutionEvidenceScope) -> None:
     """Evict the least-recently-used retained scope if adding `scope` would exceed the bound.
 
     A no-op when `scope` is already retained -- replacing an existing entry's
-    value (a stamp mismatch or an explicit refresh) never grows the retention,
-    so it never needs to evict. Eviction never changes an answer: the evicted
-    scope simply re-derives from scratch on its next request, the same way any
-    scope does the first time it is ever seen. It is printed so a service whose
-    reuse has stopped working -- because the catalog outgrew the configured
-    bound -- reports that instead of merely being slow again (ADR-0013).
+    value never grows the retention, so it never needs to evict. Eviction
+    never changes an answer: the evicted scope simply re-derives from scratch
+    on its next request, the same way any scope does the first time it is
+    ever seen. It is printed so a service whose reuse has stopped working --
+    because the catalog outgrew the configured bound -- reports that instead
+    of merely being slow again (ADR-0013).
 
-    `popitem(last=False)` pops the front of `_rated_invocations_retention`.
-    Every serve (see `_retain`) moves the served scope to the back, so the
-    front is always the scope least recently served, not merely the one that
-    arrived first (ticket 07).
+    Called only through `_evict_then_retain`. See the module comment above
+    `_rated_invocations_retention` for why `popitem(last=False)` pops the
+    least-recently-served scope, not merely the oldest arrival.
     """
     if scope in _rated_invocations_retention:
         return
@@ -1244,6 +1242,18 @@ def _evict_for_new_scope(scope: DerivedExecutionEvidenceScope) -> None:
         f"new database={scope.database!r} db_server={scope.db_server!r} "
         f"repo_roots={scope.repo_roots!r}"
     )
+
+
+def _evict_then_retain(scope: DerivedExecutionEvidenceScope, value: _RetainedRatedInvocations) -> None:
+    """Make room for `scope` if needed, then record it as just served.
+
+    The one call a fresh derivation or a disk hit makes to enter `scope`
+    into `_rated_invocations_retention` -- pairing eviction with retention so
+    every caller that writes a new value gets both steps, instead of each
+    call site repeating the pair itself.
+    """
+    _evict_for_new_scope(scope)
+    _retain(scope, value)
 
 
 def _rated_execution_invocations_for_scope(
@@ -1286,8 +1296,7 @@ def _rated_execution_invocations_for_scope(
 
         stored = derived_execution_evidence_store.load(scope)
         if stored is not None and stored.stamp == stamp:
-            _evict_for_new_scope(scope)
-            _retain(
+            _evict_then_retain(
                 scope,
                 _RetainedRatedInvocations(
                     stamp, stored.rated_invocations, stored.graph, stored.execution_paths
@@ -1296,8 +1305,7 @@ def _rated_execution_invocations_for_scope(
             return stored.rated_invocations, stored.graph
 
     rated_invocations, graph = _rated_execution_invocations(scope, merged_scan, matched_files, root)
-    _evict_for_new_scope(scope)
-    _retain(scope, _RetainedRatedInvocations(stamp, rated_invocations, graph))
+    _evict_then_retain(scope, _RetainedRatedInvocations(stamp, rated_invocations, graph))
     derived_execution_evidence_store.store(scope, stamp, rated_invocations, graph, execution_paths=None)
     return rated_invocations, graph
 

@@ -59,14 +59,20 @@ Both are wanted, and neither replaces the other.
 ## Implementation note
 
 `_rated_invocations_retention` stayed an `OrderedDict`; only the write path
-changed. A new `_retain()` helper is now the single place that assigns into
-it -- it sets the value, then calls `move_to_end(scope)`, which covers both a
+changed. A `_retain()` helper is the single place that assigns into it -- it
+sets the value, then calls `move_to_end(scope)`, which covers both a
 brand-new key (already at the back) and a stale key being refreshed (moved
 there). The in-memory-hit path (`_rated_execution_invocations_for_scope`)
 calls `move_to_end(scope)` directly, since it does not write a new value.
 `_evict_for_new_scope` itself is unchanged: `popitem(last=False)` already
 pops "the front," and the front now means least-recently-served because
 every serve moves its scope to the back.
+
+After `/code-review`, the Standards axis flagged the fresh-derivation and
+disk-hit branches each repeating the same `_evict_for_new_scope(scope)` then
+`_retain(scope, value)` pair (Duplicated Code). Collapsed both into a single
+`_evict_then_retain(scope, value)` that both call sites now use. The Spec
+axis found no missing, extra, or wrong behaviour.
 
 Extended `tests/test_derived_execution_evidence_retention_bound.py` with two
 tests: one asserting a re-served scope is the newest key in the dict, one
