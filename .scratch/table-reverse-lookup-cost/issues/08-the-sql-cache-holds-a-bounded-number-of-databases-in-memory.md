@@ -23,18 +23,18 @@ dropped and reloaded database with unchanged content keeps every scope valid.
 **Blocked by:** 05 — Retention freshness compares recorded content, not object
 identity.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The SQL cache retains no more databases in memory than its bound allows.
-- [ ] The database unused for the longest time is the one dropped.
-- [ ] The bound is configurable, in the style of the existing retention bound.
-- [ ] A dropped database is read from disk again when next needed, and returns
+- [x] The SQL cache retains no more databases in memory than its bound allows.
+- [x] The database unused for the longest time is the one dropped.
+- [x] The bound is configurable, in the style of the existing retention bound.
+- [x] A dropped database is read from disk again when next needed, and returns
       the same content.
-- [ ] Dropping and reloading an unchanged database causes no scope to be
+- [x] Dropping and reloading an unchanged database causes no scope to be
       derived again.
-- [ ] A cached entry that fails its validity check is still discarded, as it is
+- [x] A cached entry that fails its validity check is still discarded, as it is
       today.
-- [ ] No answer changes as a result of the bound.
+- [x] No answer changes as a result of the bound.
 
 ## Notes
 
@@ -54,3 +54,48 @@ five repositories in the measured deployment, so it is not urgent.
 Choose a default bound that keeps the measured deployment fully cached, so this
 ticket changes nothing for a small installation and only takes effect where the
 database count is large.
+
+## Implementation Notes
+
+`sql_cache_store._mem_cache` changed from a plain `dict` to an `OrderedDict`,
+bounded by the new `settings.SQL_CACHE_MEMORY_RETENTION_LIMIT` (default 20;
+the measured deployment has 5 databases on disk, so this default leaves 4x
+headroom and changes nothing for it). Eviction mirrors
+`analyze_service._rated_invocations_retention` / `_evict_for_new_scope`
+(ticket 06/07) exactly: `move_to_end()` on every hit and every write,
+`popitem(last=False)` to drop the least-recently-used entry, one printed line
+per eviction naming the evicted and the new `(server, database, schema)`.
+
+Both call sites (`load_cached()`, `get_or_dump()`) now route through
+`_retain_in_mem_cache(identity, data)` instead of writing `_mem_cache`
+directly. Eviction only ever touches the in-memory copy — the disk-backed
+cache (`_save()`/`_load()`) is untouched, so a dropped database is re-read
+from disk on its next request rather than re-derived from SQL Server, and the
+existing "invalid entry gets discarded" path in `load_cached()` is unchanged.
+
+"Dropping and reloading an unchanged database causes no scope to be derived
+again" is not a new test in this ticket — it's the composition of two
+already-tested behaviours: this ticket proves a reload after eviction returns
+identical content, and ticket 05's content-comparison freshness rule (already
+merged, in `service/analyze_service.py`) is what makes identical content read
+as "unchanged" instead of invalidating a scope.
+
+Tests added to `tests/test_sql_cache_store.py` (5 new, 57 total in that file;
+669 passed / 0 new failures across the full suite — the 12 pre-existing
+failures are unrelated live-DB/environment issues, confirmed present on the
+branch before this change too):
+- bound is respected across more databases than it allows
+- least-recently-used (not first-arrived) is the one evicted, eviction is
+  printed
+- a re-served database survives more new arrivals than the bound
+- a database evicted from memory reloads from disk with identical content
+- eviction never makes a still-cataloged database unreadable
+
+Reviewed with `/code-review` (Standards + Spec axes, both passed with only
+judgement-call notes). Two Standards suggestions were applied: the two new
+functions now take `CacheIdentity` instead of a raw cache-key string (so the
+eviction log prints structured `server`/`database`/`schema` fields, matching
+`CacheIdentity`'s own documented convention), and their docstrings were
+written in Traditional Chinese to match the rest of this file (they had
+picked up English docstrings from mirroring `analyze_service.py`, which is
+English-documented).

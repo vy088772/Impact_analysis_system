@@ -721,3 +721,101 @@ def test_the_staleness_check_never_reads_the_cache_body() -> None:
         loaded = sql_cache_store.load_object_location_index(identity)
 
         assert loaded is not None
+
+
+# ------------------------------------------- bounded memory retention (ticket 08)
+
+
+def test_the_memory_cache_retains_no_more_databases_than_its_bound(monkeypatch) -> None:
+    with CacheRoot() as cache_root:
+        monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 2)
+        for name in ("Db1", "Db2", "Db3"):
+            write_cache(cache_root, f"vmsystest07.topmost.com.tw__{name}__dbo", _payload(name))
+
+        for name in ("Db1", "Db2", "Db3"):
+            assert sql_cache_store.load_cached(name, "dbo", server="vmsystest07") is not None
+
+        assert len(sql_cache_store._mem_cache) == 2
+
+
+def test_exceeding_the_bound_evicts_the_least_recently_used_database_and_records_it(
+    monkeypatch, capsys
+) -> None:
+    with CacheRoot() as cache_root:
+        monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 2)
+        for name in ("Db1", "Db2"):
+            write_cache(cache_root, f"vmsystest07.topmost.com.tw__{name}__dbo", _payload(name))
+
+        sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
+        sql_cache_store.load_cached("Db2", "dbo", server="vmsystest07")
+        capsys.readouterr()  # discard output from the first two, unbounded, insertions
+
+        write_cache(cache_root, "vmsystest07.topmost.com.tw__Db3__dbo", _payload("Db3"))
+        sql_cache_store.load_cached("Db3", "dbo", server="vmsystest07")
+
+        db1_key = CacheIdentity.of("vmsystest07", "Db1", "dbo").key
+        db2_key = CacheIdentity.of("vmsystest07", "Db2", "dbo").key
+        db3_key = CacheIdentity.of("vmsystest07", "Db3", "dbo").key
+        assert db1_key not in sql_cache_store._mem_cache
+        assert db2_key in sql_cache_store._mem_cache
+        assert db3_key in sql_cache_store._mem_cache
+
+        printed = capsys.readouterr().out
+        assert "已達上限" in printed
+        assert "Db1" in printed
+
+
+def test_a_served_database_survives_more_new_arrivals_than_the_bound(monkeypatch) -> None:
+    """A database re-served before each new arrival stays retained across two
+    new arrivals -- more than a plain first-in-first-out bound of 2 would
+    allow a database that only arrived first, because eviction falls instead
+    on the database least recently served."""
+    with CacheRoot() as cache_root:
+        monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 2)
+        for name in ("Db1", "Db2", "Db3", "Db4"):
+            write_cache(cache_root, f"vmsystest07.topmost.com.tw__{name}__dbo", _payload(name))
+
+        sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
+        sql_cache_store.load_cached("Db2", "dbo", server="vmsystest07")
+
+        sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
+        sql_cache_store.load_cached("Db3", "dbo", server="vmsystest07")
+
+        sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
+        sql_cache_store.load_cached("Db4", "dbo", server="vmsystest07")
+
+        retained = sql_cache_store._mem_cache
+        assert CacheIdentity.of("vmsystest07", "Db1", "dbo").key in retained
+        assert CacheIdentity.of("vmsystest07", "Db2", "dbo").key not in retained
+        assert CacheIdentity.of("vmsystest07", "Db3", "dbo").key not in retained
+        assert CacheIdentity.of("vmsystest07", "Db4", "dbo").key in retained
+
+
+def test_a_database_evicted_from_memory_is_read_from_disk_again_with_the_same_content(
+    monkeypatch,
+) -> None:
+    with CacheRoot() as cache_root:
+        monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 1)
+        write_cache(cache_root, "vmsystest07.topmost.com.tw__Db1__dbo", _payload("Db1"))
+        write_cache(cache_root, "vmsystest07.topmost.com.tw__Db2__dbo", _payload("Db2"))
+
+        first = sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
+        sql_cache_store.load_cached("Db2", "dbo", server="vmsystest07")  # evicts Db1 from memory
+        db1_key = CacheIdentity.of("vmsystest07", "Db1", "dbo").key
+        assert db1_key not in sql_cache_store._mem_cache  # sanity: really evicted
+
+        reloaded = sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
+
+        assert reloaded is not None
+        assert reloaded == first
+
+
+def test_eviction_never_changes_which_databases_answer_a_read(monkeypatch) -> None:
+    """A tighter bound must not make a still-cataloged database unreadable."""
+    with CacheRoot() as cache_root:
+        monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 1)
+        for name in ("Db1", "Db2", "Db3"):
+            write_cache(cache_root, f"vmsystest07.topmost.com.tw__{name}__dbo", _payload(name))
+
+        for name in ("Db1", "Db2", "Db3"):
+            assert sql_cache_store.load_cached(name, "dbo", server="vmsystest07")["database"] == name

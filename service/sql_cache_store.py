@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -58,8 +59,56 @@ from .graph_queries import _normalize_table as normalize_table_name
 # text that fails ScriptDom parsing, so they must be rebuilt via refresh_sql_cli.
 _SQL_CACHE_VERSION = 10
 
-# 同 process 內的記憶體快取
-_mem_cache: Dict[str, Dict] = {}
+# 同 process 內的記憶體快取。有界、LRU 淘汰（ticket 08，見
+# settings.SQL_CACHE_MEMORY_RETENTION_LIMIT 上方註解的動機）：淘汰只影響這份
+# 記憶體快取，磁碟落地檔（_save()/_load()）不受影響，被淘汰的 Database 下次
+# 被問到時直接重新讀檔，不必重新連線 SQL Server，答案不會因此改變。
+#
+# 用 OrderedDict 讓「淘汰最久未使用」跟「淘汰最早載入」同一份資料結構就能兩者
+# 兼得：每次命中或寫入都呼叫 move_to_end()，最久未使用的項目永遠留在最前面，
+# _evict_for_new_mem_cache_key() 就從最前面 popitem(last=False)。與
+# analyze_service._rated_invocations_retention 用的是同一套手法（ticket 07）。
+#
+# 型別標註不加引號：本檔已在最上方 `from __future__ import annotations`，
+# 所有標註本來就延遲求值，手動加引號只是多餘。
+_mem_cache: OrderedDict[str, Dict] = OrderedDict()
+
+
+def _evict_for_new_mem_cache_key(identity: CacheIdentity) -> None:
+    """為 identity 空出記憶體快取的位置：若加入它會超過上限，淘汰最久未使用的一筆。
+
+    identity 已經在記憶體快取裡時不做事——覆寫既有項目的內容從不會讓快取變大，
+    自然不需要淘汰誰。只透過 _retain_in_mem_cache() 呼叫。
+
+    收 CacheIdentity 而不是裸字串鍵，跟 CacheIdentity 文件說的「模組內所有需要
+    這組三元組的函式都收這一個值」一致，淘汰訊息才印得出 server/database/schema
+    三個欄位，而不是一段不易讀的快取鍵字串。
+    """
+    if identity.key in _mem_cache:
+        return
+    limit = max(1, int(settings.SQL_CACHE_MEMORY_RETENTION_LIMIT))
+    if len(_mem_cache) < limit:
+        return
+    evicted_key, _ = _mem_cache.popitem(last=False)
+    evicted_server, evicted_database, evicted_schema = _parse_key(evicted_key)
+    print(
+        "⚠️  SQL 快取記憶體保留已達上限"
+        f"（limit={limit}），淘汰最久未使用的資料庫："
+        f"evicted server={evicted_server!r} database={evicted_database!r} schema={evicted_schema!r} / "
+        f"new server={identity.server!r} database={identity.database!r} schema={identity.schema!r}"
+    )
+
+
+def _retain_in_mem_cache(identity: CacheIdentity, data: Dict) -> None:
+    """把 data 以 identity 的快取鍵寫入記憶體快取，並移到最新位置。
+
+    先淘汰、後寫入：淘汰時看到的是「加入 identity 之前」的快取內容，identity
+    本身若已在快取裡，_evict_for_new_mem_cache_key() 會判斷成不需要淘汰。跟
+    analyze_service._evict_then_retain() 同一種先後順序。
+    """
+    _evict_for_new_mem_cache_key(identity)
+    _mem_cache[identity.key] = data
+    _mem_cache.move_to_end(identity.key)
 
 
 # 內部 SQL Server 主機都在這個網域底下；短主機名補上這個尾綴即得完整位址。
@@ -526,11 +575,12 @@ def load_cached(database: str, schema: str = "dbo", server: str = "") -> Optiona
     if identity.key in _mem_cache:
         cached = _mem_cache[identity.key]
         if _is_valid_cache(cached, identity):
+            _mem_cache.move_to_end(identity.key)
             return cached
         _mem_cache.pop(identity.key, None)
     cached = _load(identity)
     if cached is not None:
-        _mem_cache[identity.key] = cached
+        _retain_in_mem_cache(identity, cached)
     return cached
 
 
@@ -604,7 +654,7 @@ def get_or_dump(
         raise ValueError(
             f"SQL cache payload database identity mismatch: {db}.{schema}"
         )
-    _mem_cache[identity.key] = data
+    _retain_in_mem_cache(identity, data)
     _report_progress(progress_callback, "saving", 0, 1, "SQL cache")
     _save(identity, data)
     _report_progress(progress_callback, "saving", 1, 1, "SQL cache")

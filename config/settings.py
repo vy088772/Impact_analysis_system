@@ -156,6 +156,21 @@ class Settings:
     )
 
     # ========================================
+    # SQL 快取記憶體保留上限（ticket 08）
+    # ========================================
+    # sql_cache_store 的行程內記憶體快取過去無界：每個載入過的 Database 永遠留在
+    # 記憶體，最大的一份量到 105 MB（見 docs/adr/0012）。部署成長到上百個
+    # Database 時（同一份 ADR 記錄的預期終態），行程記憶體隨之無界成長，只能靠
+    # 重啟回收。這個上限讓記憶體快取改採 LRU 淘汰：被淘汰的 Database 下次被問到
+    # 時直接重新讀磁碟落地檔（sql_cache_store._load()），不必重新連線 SQL
+    # Server。目前已知部署只落地了 5 個 Database（見 data/sql_cache），預設值
+    # 留了充足餘裕，讓這個上限在小型部署完全不生效，只在 Database 數量真的長大
+    # 時才開始淘汰。
+    SQL_CACHE_MEMORY_RETENTION_LIMIT: int = int(
+        os.getenv('SQL_CACHE_MEMORY_RETENTION_LIMIT', '20')
+    )
+
+    # ========================================
     # 檔案路徑設定
     # ========================================
     FILE_LIST_PATH: str = os.getenv('FILE_LIST_PATH', 'data/檔案一覽表.xlsx')
