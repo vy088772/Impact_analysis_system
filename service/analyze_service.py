@@ -2261,6 +2261,27 @@ def _normalize_table(name: str) -> str:
     return cleaned.rsplit(".", 1)[-1].lower()
 
 
+def _record_table_reverse_lookup(table_name: str, scope: DerivedExecutionEvidenceScope) -> None:
+    """Record the table name and the scope one table reverse lookup asked about.
+
+    Ticket 01 of `.scratch/table-reverse-lookup-cost/`: a later ticket decides
+    the stored evidence's shape from measured traffic, not from an assumption,
+    and that decision needs to know how many distinct tables one scope is
+    asked about before its inputs change. `find_by_table()` is the one place a
+    table reverse lookup enters this service, whether an Agent called it as a
+    tool or the service called it before an Agent existed (Object Kind
+    Ambiguity), so this is the one place that records it -- an Agent's own
+    tool-call record answers a different question and is not a second
+    recording point for this one.
+    """
+    print(
+        "🔎 資料表反查："
+        f"table={table_name!r} scope_database={scope.database!r} "
+        f"scope_db_server={scope.db_server!r} scope_db_name={scope.db_name!r} "
+        f"scope_repo_roots={scope.repo_roots!r} scope_wrapper_contract={scope.wrapper_contract!r}"
+    )
+
+
 def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     """反查「哪些程式存取了這張資料表」，結合 inline SQL facts 與 SQL Execution Graph，無 AI。
 
@@ -2291,6 +2312,11 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     scans = [_get_scan(r, refresh=req.refresh) for r in roots]
     scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
     root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
+
+    # 這一份 scope 是每個請求唯一組裝的一份身分（見 DerivedExecutionEvidenceScope.of
+    # docstring）；下面的 graph 查詢重用它，不重新組裝，避免兩份身分互相脫鉤。
+    scope = DerivedExecutionEvidenceScope.of(req, roots)
+    _record_table_reverse_lookup(table_name, scope)
 
     table_norm = _normalize_table(table_name)
     matches_by_file: Dict[str, TableMatchProgram] = {}
@@ -2327,7 +2353,6 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     if req.database:
         # FindByTableRequest 同樣沒有 db_server 欄位；理由見 find_by_sp。
         _sql_cache, graph = _require_sql_execution_graph(req.database)
-        scope = DerivedExecutionEvidenceScope.of(req, roots)
         # 重用同一 scope 的 rated invocations 與 Execution Paths（ticket 04/05）：
         # 同一 scope 內問第二個 table，不必重新 rate C# facts、也不必重建
         # Execution Paths —— 兩者共用 find_by_sp() 已經在用的同一份 retention
