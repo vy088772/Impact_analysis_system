@@ -229,6 +229,23 @@ def cached_commit(root: Path) -> Optional[str]:
         return None
 
 
+def cached_saved_at(root: Path) -> Optional[str]:
+    """讀取快取寫入當下記錄的時間戳（saved_at），僅供狀態檢查用途，不驗證
+    cache_version、不觸發任何掃描（同 cached_commit()，純粹反映『上次掃描是
+    幾時存的』）。與 cached_commit() 一起，供 analyze_service 的 validity
+    stamp 判斷這份掃描自上次derive後是否真的變動過，取代原本比對 Python
+    物件身分的做法。
+    """
+    _, meta = _paths(root)
+    if not meta.exists():
+        return None
+    try:
+        info = json.loads(meta.read_text(encoding="utf-8"))
+        return info.get("saved_at")
+    except Exception:
+        return None
+
+
 def current_commit(root: Path) -> Optional[str]:
     """讀取 root 所屬 git repo『目前』本機的 HEAD commit hash（不連網路、不觸發
     pull），用於跟 cached_commit() 比對是否有新 commit 尚未重新掃描。

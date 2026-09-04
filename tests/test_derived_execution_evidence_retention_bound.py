@@ -84,13 +84,24 @@ def _scan(root: Path) -> ProjectScanResult:
 
 
 def _wire(monkeypatch, scan: ProjectScanResult, tmp_path: Path) -> None:
+    """Fixed recorded state across calls: ticket 05 keys reuse off each
+    input's recorded save time, not object identity, so a stub must supply
+    those reads explicitly (see tests/test_derived_execution_evidence_reuse.py's
+    `_wire` docstring for why leaving them unset would defeat reuse)."""
     cache_payload = {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()}
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
+    monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
         lambda database, schema, server="": cache_payload,
+    )
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "cached_saved_at",
+        lambda database, schema="dbo", server="": "sql-cache-v1",
     )
 
 

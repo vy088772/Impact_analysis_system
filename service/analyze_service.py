@@ -69,7 +69,7 @@ from .execution_path_builder import (
 from .graph_queries import filter_table_accesses
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
-from .scan_store import cache_status, cached_commit, get_or_scan, has_cache, save_scan
+from .scan_store import cache_status, cached_commit, cached_saved_at, get_or_scan, has_cache, save_scan
 from . import sql_cache_store
 from . import flow_chain_builder
 from .contract_preflight import (
@@ -1021,6 +1021,39 @@ class DerivedExecutionEvidenceScope:
         )
 
 
+def _freshness_or_sentinel(recorded_value: Optional[str]) -> object:
+    """`recorded_value` if something was actually recorded, else a fresh sentinel.
+
+    A `None` here means the freshness read itself came back empty (the meta
+    file backing it is missing or unreadable), not that the tracked input has
+    some legitimate, stable "no value" state -- `scan_freshness` below already
+    handles the one legitimate case of that kind (no `.git` under a scan root)
+    by comparing the source commit only inside an otherwise-present reading.
+    A fresh `object()` never equals anything, including another sentinel from
+    a previous unreadable call, so an unreadable reading can never be mistaken
+    for "unchanged since last time" (ticket 05 -- missing is not a match).
+    """
+    return recorded_value if recorded_value is not None else object()
+
+
+def _scan_freshness(root: Path) -> object:
+    """The recorded save time and source commit for `root`'s disk-cached scan.
+
+    Read via `scan_store.cached_saved_at`/`cached_commit`, which reflect what
+    was last written to disk regardless of whether the in-memory scan object
+    handed to this call is the same instance that was scanned or a freshly
+    deserialized one -- exactly the identity dependency ticket 05 removes.
+    A missing save time (no meta recorded at all) is treated as unreadable
+    via `_freshness_or_sentinel`; a missing source commit alongside a present
+    save time (no `.git` under `root`) is a legitimate, stable value and
+    compares normally.
+    """
+    saved_at = cached_saved_at(root)
+    if saved_at is None:
+        return _freshness_or_sentinel(saved_at)
+    return (saved_at, cached_commit(root))
+
+
 @dataclass
 class _RatedInvocationsValidityStamp:
     """Everything the rating step reads besides `scope` itself.
@@ -1033,18 +1066,37 @@ class _RatedInvocationsValidityStamp:
     served -- unlike the Object Location Index's tolerant staleness rule
     (ADR-0012), a stale match here is a wrong answer, not a slow one.
 
-    `scan_identity`/`sql_cache_identity` compare by Python object identity,
-    not content: `scan_store`/`sql_cache_store` hand back the exact same
-    in-memory object on every call until a `refresh` replaces it in their
-    own process caches (unbounded and never evicted today), so identity
-    already means "has this input moved since the last derivation", more
-    cheaply than hashing a scan's full contents on every request. The three
-    configuration reads have no such identity guarantee -- they are parsed
-    fresh from disk on every call -- so they are compared by value instead.
+    `scan_freshness`/`sql_cache_freshness` (ticket 05) compare by each input's
+    own recorded save time (the scan additionally by its recorded source
+    commit) rather than by Python object identity: identity only meant "has
+    this input moved since the last derivation" because `scan_store`'s and
+    `sql_cache_store`'s process caches were unbounded and never evicted, so
+    the exact same in-memory object always came back until a `refresh`
+    replaced it. A bounded cache or a disk-backed retention breaks that --
+    a dropped-then-reread object is a new instance carrying unchanged
+    content, and object identity would wrongly call that a change. Comparing
+    the recorded save time (and, for the scan, the source commit -- the
+    better signal of the two, since two scans of unchanged code taken at
+    different times still share one commit) survives both: it names what
+    changed, not which object happens to represent it.
+
+    The scan's save time and source commit are compared together, not commit
+    alone: a partial refresh (`analyze_service`'s program-refresh flow, via
+    `scan_store.save_scan`) can change a scan's actual content -- and its
+    recorded save time -- without the repository's git commit moving at all
+    (a dirty working tree, or files refreshed ahead of a commit). Letting a
+    matching commit alone excuse a differing save time would let exactly that
+    change go undetected, which is the wrong-answer risk ADR-0013 forbids
+    trading for a latency win. Requiring both to match only ever costs an
+    extra derivation it did not strictly need; it never serves a stale one.
+
+    The three configuration reads have no identity guarantee either way --
+    they are parsed fresh from disk on every call -- so they are compared by
+    value.
     """
 
-    scan_identity: Tuple[int, ...]
-    sql_cache_identity: Optional[int]
+    scan_freshness: Tuple[object, ...]
+    sql_cache_freshness: object
     external_wrapper_contract: Optional[Dict[str, Any]]
     contract_registry: Dict[str, Any]
     wrapper_review_exclusions: Tuple[Dict[str, Any], ...]
@@ -1077,12 +1129,19 @@ def _rated_invocations_validity_stamp(
         if scope.database
         else None
     )
+    sql_cache_freshness = (
+        _freshness_or_sentinel(
+            sql_cache_store.cached_saved_at(scope.database, "dbo", server=scope.db_server)
+        )
+        if sql_cache is not None
+        else None
+    )
     external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
         _rating_config_inputs(scope)
     )
     return _RatedInvocationsValidityStamp(
-        scan_identity=tuple(id(scan) for scan in scans),
-        sql_cache_identity=(id(sql_cache) if sql_cache is not None else None),
+        scan_freshness=tuple(_scan_freshness(Path(scan.project_root)) for scan in scans),
+        sql_cache_freshness=sql_cache_freshness,
         external_wrapper_contract=external_wrapper_contract,
         contract_registry=contract_registry,
         wrapper_review_exclusions=wrapper_review_exclusions,

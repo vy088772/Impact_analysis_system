@@ -174,6 +174,33 @@ def test_a_system_id_is_not_a_cache_key() -> None:
         assert sql_cache_store.load_cached("Y-Docs_TTPUR", "dbo", server="vmsystest07") is None
 
 
+# --------------------------------------------------------- freshness (ticket 05)
+
+
+def test_cached_saved_at_reads_the_recorded_save_time() -> None:
+    with CacheRoot() as cache_root:
+        write_cache(
+            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+        )
+
+        assert sql_cache_store.cached_saved_at("PUR", "dbo", server="vmsystest07") == "2026-08-04 13:29:13"
+
+
+def test_cached_saved_at_resolves_the_server_the_same_way_load_cached_does() -> None:
+    """No server given, exactly one cache on disk -- resolved the same as load_cached()."""
+    with CacheRoot() as cache_root:
+        write_cache(
+            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+        )
+
+        assert sql_cache_store.cached_saved_at("PUR", "dbo") == "2026-08-04 13:29:13"
+
+
+def test_cached_saved_at_is_none_when_nothing_is_cached() -> None:
+    with CacheRoot():
+        assert sql_cache_store.cached_saved_at("NoSuchDb", "dbo", server="vmsystest07") is None
+
+
 # ---------------------------------------------------------------- migration
 
 

@@ -307,6 +307,28 @@ def has_cache(database: str, schema: str = "dbo", server: str = "") -> bool:
     return load_cached(database, schema, server=server) is not None
 
 
+def cached_saved_at(database: str, schema: str = "dbo", server: str = "") -> Optional[str]:
+    """讀取這個 (server, database, schema) 目前磁碟上 SQL 快取記錄的 saved_at。
+
+    與 load_cached() 收同一組參數、套用同一套 server 回推規則（server 省略時
+    由 resolve_server() 從磁碟回推），但只讀 meta 檔的 saved_at 一個欄位，不驗
+    證/載入完整快取內容、不連線、不觸發任何 dump。供只需要「這份快取自上次
+    derive 後有沒有變」信號的呼叫端使用（見 analyze_service 的 validity
+    stamp），取代原本比對 Python 物件身分的做法。
+    """
+    resolved_server = normalize_server(server) or resolve_server(database, schema)
+    if not resolved_server:
+        return None
+    _, meta_path = _paths(CacheIdentity.of(resolved_server, database, schema))
+    if not meta_path.exists():
+        return None
+    try:
+        info = json.loads(meta_path.read_text(encoding="utf-8"))
+        return info.get("saved_at")
+    except Exception:
+        return None
+
+
 def _meta_payload(identity: CacheIdentity, saved_at: str) -> Dict[str, object]:
     return {
         "cache_version": _SQL_CACHE_VERSION,

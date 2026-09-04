@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
 from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, FrameworkType, MethodInfo
@@ -87,23 +88,42 @@ def _scan(root: Path, *, alpha_calls: str = "usp_Alpha", beta_calls: str = "usp_
     )
 
 
-def _wire(monkeypatch, scan: ProjectScanResult, tmp_path: Path, graph: dict) -> None:
-    """Wire scan/cache lookups so repeated calls see the *same* objects.
+def _wire(
+    monkeypatch,
+    scan: ProjectScanResult,
+    tmp_path: Path,
+    graph: dict,
+    *,
+    scan_saved_at: str = "scan-v1",
+    scan_commit: Optional[str] = "commit-v1",
+    sql_cache_saved_at: str = "sql-cache-v1",
+) -> None:
+    """Wire scan/cache lookups so repeated calls see the same *recorded state*.
 
-    `sql_cache_store.load_cached()` hands back one stable object from its
-    in-memory cache in production until a refresh replaces it; a stub that
-    built a fresh dict on every call would make the SQL cache side of the
-    validity stamp look changed on every single request, defeating reuse for
-    a reason unrelated to whatever a test is isolating. The payload is built
-    once, outside the lambda, so its identity stays fixed across calls.
+    Production reads the scan's and the SQL cache's recorded save time (ticket
+    05) straight off disk, independently of whichever in-memory object a stub
+    hands back for `_get_scan`/`load_cached` -- so a test double must stub
+    those recorded-state reads explicitly, with a value that stays fixed
+    across calls unless a test is deliberately proving invalidation. A stub
+    that left them reading the real (nonexistent) disk state would return
+    "not recorded" on every call, which ticket 05 treats as never matching
+    itself -- that would force a fresh derivation on every request, defeating
+    reuse for a reason unrelated to whatever a test is isolating.
     """
     cache_payload = {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": graph}
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_at)
+    monkeypatch.setattr(analyze_service, "cached_commit", lambda root: scan_commit)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
         lambda database, schema, server="": cache_payload,
+    )
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "cached_saved_at",
+        lambda database, schema="dbo", server="": sql_cache_saved_at,
     )
 
 
@@ -232,6 +252,10 @@ def test_a_changed_repository_scan_causes_a_fresh_derivation(monkeypatch, tmp_pa
         first_scan = _scan(tmp_path)
         second_scan = _scan(tmp_path, alpha_calls="usp_Gamma")
         scans = [first_scan, second_scan]
+        # A real rescan updates the scan's recorded save time; this stub mirrors
+        # that instead of relying on `scans.pop(0)` handing back a new object,
+        # since ticket 05 no longer keys freshness off object identity.
+        scan_saved_ats = ["scan-v1", "scan-v2"]
         cache_payload = {
             "database": "OrdersDb",
             "schema": "dbo",
@@ -239,7 +263,12 @@ def test_a_changed_repository_scan_causes_a_fresh_derivation(monkeypatch, tmp_pa
         }
         monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
+        monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_ats.pop(0))
+        monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
         monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": cache_payload)
+        monkeypatch.setattr(
+            analyze_service.sql_cache_store, "cached_saved_at", lambda database, schema="dbo", server="": "sql-cache-v1"
+        )
         calls = _count_real_derivations(monkeypatch)
 
         before = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
@@ -257,18 +286,76 @@ def test_a_changed_sql_cache_causes_a_fresh_derivation(monkeypatch, tmp_path: Pa
             {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph("usp_Alpha", "usp_Beta")},
             {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph("usp_Beta")},  # usp_Alpha drops out
         ]
+        # A real SQL cache refresh updates its recorded save time; this stub
+        # mirrors that instead of relying on a swapped-in dict's object
+        # identity, since ticket 05 no longer keys freshness off identity.
+        sql_cache_saved_ats = ["sql-cache-v1", "sql-cache-v2"]
         monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+        monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
+        monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
         monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": payloads[0])
+        monkeypatch.setattr(
+            analyze_service.sql_cache_store,
+            "cached_saved_at",
+            lambda database, schema="dbo", server="": sql_cache_saved_ats[0],
+        )
         calls = _count_real_derivations(monkeypatch)
 
         before = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
         payloads.pop(0)
+        sql_cache_saved_ats.pop(0)
         after = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
 
         assert len(calls) == 2
         assert [m.program for m in before.matches] == ["alphapage"]
         assert after.matches == []
+
+
+def test_dropping_and_rereading_an_unchanged_repository_scan_does_not_rederive(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Ticket 05: a scan dropped from memory and read again -- a brand-new
+    `ProjectScanResult` instance, but with the same recorded save time and
+    source commit -- must reuse, not rederive. Identity-based freshness would
+    have failed this: two distinct objects, wrongly read as "changed"."""
+    with RatedInvocationsRetention():
+        scans = [_scan(tmp_path), _scan(tmp_path)]  # same content, two distinct instances
+        _wire(monkeypatch, scans[0], tmp_path, _graph("usp_Alpha", "usp_Beta"))
+        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
+        calls = _count_real_derivations(monkeypatch)
+
+        first = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+        second = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+
+        assert len(calls) == 1
+        assert [(m.program, m.file) for m in first.matches] == [(m.program, m.file) for m in second.matches]
+
+
+def test_dropping_and_rereading_an_unchanged_sql_cache_does_not_rederive(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Ticket 05: a SQL cache dropped from memory and read again -- a brand-new
+    dict with the same content, but the same recorded save time -- must
+    reuse, not rederive."""
+    with RatedInvocationsRetention():
+        scan = _scan(tmp_path)
+        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
+        graph = _graph("usp_Alpha", "usp_Beta")
+        # A fresh dict every call (proving reuse does not depend on getting the
+        # same object back), same content and same recorded save time every time.
+        monkeypatch.setattr(
+            analyze_service.sql_cache_store,
+            "load_cached",
+            lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": graph},
+        )
+        calls = _count_real_derivations(monkeypatch)
+
+        first = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+        second = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+
+        assert len(calls) == 1
+        assert [(m.program, m.file) for m in first.matches] == [(m.program, m.file) for m in second.matches]
 
 
 def test_a_changed_external_wrapper_contract_causes_a_fresh_derivation(monkeypatch, tmp_path: Path) -> None:
@@ -368,8 +455,8 @@ def test_retention_fixture_snapshots_and_restores_around_a_test() -> None:
         repo_roots=("preexisting",), database="Db", db_server="", db_name="", wrapper_contract=""
     )
     stamp = analyze_service._RatedInvocationsValidityStamp(
-        scan_identity=(1,),
-        sql_cache_identity=None,
+        scan_freshness=(("saved-v1", "commit-v1"),),
+        sql_cache_freshness=None,
         external_wrapper_contract=None,
         contract_registry={},
         wrapper_review_exclusions=(),

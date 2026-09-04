@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, FrameworkType, MethodInfo
@@ -130,16 +131,33 @@ def _scan(root: Path, *, alpha_calls: str = "usp_Alpha") -> ProjectScanResult:
     )
 
 
-def _wire(monkeypatch, scan: ProjectScanResult, tmp_path: Path, graph: dict) -> None:
-    """Same wiring as ticket 04's tests: fixed objects across calls, see that
-    file's `_wire` docstring for why the SQL cache payload is built once."""
+def _wire(
+    monkeypatch,
+    scan: ProjectScanResult,
+    tmp_path: Path,
+    graph: dict,
+    *,
+    scan_saved_at: str = "scan-v1",
+    scan_commit: Optional[str] = "commit-v1",
+    sql_cache_saved_at: str = "sql-cache-v1",
+) -> None:
+    """Same wiring as ticket 04's tests: fixed recorded state across calls, see
+    that file's `_wire` docstring for why the freshness reads are stubbed
+    explicitly (ticket 05 keys reuse off recorded save time, not identity)."""
     cache_payload = {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": graph}
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_at)
+    monkeypatch.setattr(analyze_service, "cached_commit", lambda root: scan_commit)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
         lambda database, schema, server="": cache_payload,
+    )
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "cached_saved_at",
+        lambda database, schema="dbo", server="": sql_cache_saved_at,
     )
 
 
@@ -344,11 +362,19 @@ def test_a_changed_repository_scan_causes_a_fresh_path_build(monkeypatch, tmp_pa
         first_scan = _scan(tmp_path)
         second_scan = _scan(tmp_path, alpha_calls="usp_Beta")
         scans = [first_scan, second_scan]
+        # A real rescan updates the scan's recorded save time; mirror that
+        # instead of relying on `scans.pop(0)` handing back a new object.
+        scan_saved_ats = ["scan-v1", "scan-v2"]
         cache_payload = {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()}
         monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
+        monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_ats.pop(0))
+        monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
         monkeypatch.setattr(
             analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": cache_payload
+        )
+        monkeypatch.setattr(
+            analyze_service.sql_cache_store, "cached_saved_at", lambda database, schema="dbo", server="": "sql-cache-v1"
         )
         rating_calls = _count_real_rating_derivations(monkeypatch)
         path_calls = _count_real_path_builds(monkeypatch)
