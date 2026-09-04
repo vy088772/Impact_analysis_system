@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, NamedTuple
+from collections import deque
+from typing import Any, Iterable, Mapping
 
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 
@@ -141,37 +142,55 @@ def _access_record(
     return record
 
 
-class _LineageIndexData(NamedTuple):
-    """The dictionaries one graph's `_LineageIndex` builds, as a single unit."""
-
-    nodes: dict[str, Mapping[str, Any]]
-    reads_by_source: dict[str, list[str]]
-    contains_by_source: dict[str, list[str]]
+# A table's normalized name to the raw names actually seen for it (there is
+# usually one raw name; more than one only happens if two differently-cased
+# or differently-schema'd table nodes normalize to the same key).
+_TableNames = dict[str, list[str]]
 
 
 class _LineageIndex:
-    """Reads/contains lookup for one graph, built at most once.
+    """Table reverse index for one graph, built at most once.
 
     A table reverse lookup asks this once per graph, not once per Execution
-    Path -- the underlying dictionaries depend on the graph alone, never on
-    the path or the table being asked about. The graph itself is kept only
-    inside this instance, so `read_lineage` never re-reads it: the index and
-    the graph it was built from stay paired by construction, and a caller
-    holding a `_LineageIndex` cannot hand it a different graph's data.
+    Path. Where ticket 03 cached the graph's raw `reads`/`contains`
+    dictionaries and still walked forward from each path's terminal
+    operation, this inverts them: one pass over the graph builds, for every
+    table the graph can reach, the terminal operations that reach it. A path
+    then costs one membership test against its target table's entry, not one
+    graph walk.
+
+    The inversion still respects the forward walk's own rules -- follow
+    `reads` only, and stop at a table node -- so the answer does not change.
+    A cycle among Views or Functions is resolved by a worklist fixed point
+    over the container graph (see `_ensure_built`), not by cutting a branch
+    short the first time it is visited: a container revisited while its own
+    computation is still in flight would otherwise cache an incomplete
+    answer, one that a *different*, non-cyclic caller reaching the same
+    container later would wrongly inherit. The fixed point terminates
+    because the table universe is finite and each step only adds table
+    names, never removes them.
+
+    The graph itself is kept only inside this instance, so `read_lineage`
+    never re-reads it: the index and the graph it was built from stay
+    paired by construction, and a caller holding a `_LineageIndex` cannot
+    hand it a different graph's data.
 
     Built lazily, on the first call to `read_lineage` -- a lookup whose
-    matches are all direct never constructs one.
+    matches are all direct never constructs one. Once built, the index
+    covers every table in the graph, so asking about a second table costs
+    only the membership test, not another build.
     """
 
-    __slots__ = ("_graph", "_data")
+    __slots__ = ("_graph", "_operations_by_table")
 
     def __init__(self, graph: Mapping[str, Any]) -> None:
         self._graph = graph
-        self._data: _LineageIndexData | None = None
+        self._operations_by_table: dict[str, dict[str, list[str]]] | None = None
 
-    def _ensure_built(self) -> _LineageIndexData:
-        if self._data is not None:
-            return self._data
+    def _ensure_built(self) -> dict[str, dict[str, list[str]]]:  # table -> {operation_id: names}
+        if self._operations_by_table is not None:
+            return self._operations_by_table
+
         nodes = {
             str(node.get("id")): node
             for node in self._graph.get("nodes", []) or []
@@ -190,8 +209,87 @@ class _LineageIndex:
                 reads_by_source.setdefault(source, []).append(target)
             elif relationship.get("type") == "contains":
                 contains_by_source.setdefault(source, []).append(target)
-        self._data = _LineageIndexData(nodes, reads_by_source, contains_by_source)
-        return self._data
+
+        # A View or Function's own reachable tables depend on what its child
+        # operations read -- a table directly, or another container, whose
+        # own reachable tables must be folded in too. Resolve that as a
+        # graph problem over containers alone: `direct_tables[container]` is
+        # what its children read directly; `successors[container]` /
+        # `predecessors[container]` are the edges to and from the other
+        # containers those children read.
+        direct_tables: dict[str, _TableNames] = {}
+        successors: dict[str, set[str]] = {}
+        predecessors: dict[str, set[str]] = {}
+
+        def _record_target(container_id: str, target_id: str) -> None:
+            node = nodes.get(target_id)
+            if not node:
+                return
+            node_type = node.get("type")
+            if node_type == "table":
+                name = str(node.get("name") or "")
+                if name:
+                    _add_table_name(direct_tables.setdefault(container_id, {}), name)
+            elif node_type in {"view", "function"}:
+                successors.setdefault(container_id, set()).add(target_id)
+                predecessors.setdefault(target_id, set()).add(container_id)
+
+        for container_id, child_operation_ids in contains_by_source.items():
+            for child_operation_id in child_operation_ids:
+                for target_id in reads_by_source.get(child_operation_id, []):
+                    _record_target(container_id, target_id)
+
+        # Worklist fixed point: each container starts at its own direct
+        # tables and grows by folding in each successor's tables, until a
+        # round adds nothing new. A container revisited through a cycle is
+        # simply reprocessed once its successor's own set has grown -- so a
+        # cycle changes the order tables are folded in, never the result.
+        reachable: dict[str, _TableNames] = {
+            container_id: {name: list(raws) for name, raws in tables.items()}
+            for container_id, tables in direct_tables.items()
+        }
+        for container_id in successors:
+            reachable.setdefault(container_id, {})
+
+        queue: deque[str] = deque(reachable.keys())
+        queued: set[str] = set(queue)
+        while queue:
+            container_id = queue.popleft()
+            queued.discard(container_id)
+            own = reachable[container_id]
+            changed = False
+            for successor_id in successors.get(container_id, ()):
+                if _merge_reachable(own, reachable.get(successor_id, {})):
+                    changed = True
+            if changed:
+                for predecessor_id in predecessors.get(container_id, ()):
+                    if predecessor_id not in queued:
+                        queue.append(predecessor_id)
+                        queued.add(predecessor_id)
+
+        # Every operation with `reads` edges (a path's own terminal operation,
+        # or one nested inside a container) resolves in one hop now: a table
+        # target counts directly, a container target counts via its already
+        # fully-resolved `reachable` entry.
+        operations_by_table: dict[str, dict[str, list[str]]] = {}
+        for operation_id, target_ids in reads_by_source.items():
+            reached: _TableNames = {}
+            for target_id in target_ids:
+                node = nodes.get(target_id)
+                if not node:
+                    continue
+                node_type = node.get("type")
+                if node_type == "table":
+                    name = str(node.get("name") or "")
+                    if name:
+                        _add_table_name(reached, name)
+                elif node_type in {"view", "function"}:
+                    _merge_reachable(reached, reachable.get(target_id, {}))
+            for table_name, raw_names in reached.items():
+                operations_by_table.setdefault(table_name, {})[operation_id] = raw_names
+
+        self._operations_by_table = operations_by_table
+        return operations_by_table
 
     def read_lineage(self, path: Mapping[str, Any], target_name: str) -> list[str]:
         """Resolve a path's View/UDF reads to base tables without inferring writes."""
@@ -199,30 +297,29 @@ class _LineageIndex:
         if not operation_id:
             return []
 
-        nodes, reads_by_source, contains_by_source = self._ensure_built()
+        table_entry = self._ensure_built().get(target_name)
+        if not table_entry:
+            return []
+        return list(table_entry.get(operation_id, []))
 
-        matched: list[str] = []
-        visited: set[str] = set()
-        frontier = list(reads_by_source.get(operation_id, []))
-        while frontier:
-            object_id = frontier.pop(0)
-            if object_id in visited:
-                continue
-            visited.add(object_id)
-            node = nodes.get(object_id)
-            if not node:
-                continue
-            if node.get("type") == "table":
-                name = str(node.get("name") or "")
-                if _normalize_table(name) == target_name:
-                    matched.append(name)
-                continue
-            if node.get("type") not in {"view", "function"}:
-                continue
-            for child_operation_id in contains_by_source.get(object_id, []):
-                frontier.extend(reads_by_source.get(child_operation_id, []))
 
-        return _ordered_unique(matched)
+def _add_table_name(reached: _TableNames, name: str) -> None:
+    """Record one raw table name under its normalized key, without duplicates."""
+    bucket = reached.setdefault(_normalize_table(name), [])
+    if name not in bucket:
+        bucket.append(name)
+
+
+def _merge_reachable(target: _TableNames, source: Mapping[str, list[str]]) -> bool:
+    """Fold `source`'s tables into `target`; report whether anything was new."""
+    changed = False
+    for key, names in source.items():
+        bucket = target.setdefault(key, [])
+        for name in names:
+            if name not in bucket:
+                bucket.append(name)
+                changed = True
+    return changed
 
 
 def _matching_names(names: Iterable[object], target_name: str) -> list[str]:
@@ -236,16 +333,6 @@ def _matching_names(names: Iterable[object], target_name: str) -> list[str]:
 def _normalize_table(name: str) -> str:
     cleaned = str(name or "").replace("[", "").replace("]", "").strip()
     return cleaned.rsplit(".", 1)[-1].casefold()
-
-
-def _ordered_unique(values: Iterable[str]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if value not in seen:
-            seen.add(value)
-            result.append(value)
-    return result
 
 
 def _access_sort_key(access: Mapping[str, Any]) -> tuple[str, str, str]:

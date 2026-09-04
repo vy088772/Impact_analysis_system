@@ -359,3 +359,459 @@ def test_query_table_accesses_excludes_partial_unresolved_reads() -> None:
         "dbo.SOrder",
         access="read",
     ) == []
+
+
+def test_query_table_accesses_resolves_two_levels_of_view_read_lineage() -> None:
+    graph = _graph()
+    graph["nodes"].extend(
+        [
+            {
+                "id": "stored_procedure:dbo.usp_ReadTwoLevelView",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_ReadTwoLevelView",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_ReadTwoLevelView:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_ReadTwoLevelView",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vLevel1"],
+            },
+            {
+                "id": "view:dbo.vLevel1",
+                "type": "view",
+                "schema": "dbo",
+                "name": "vLevel1",
+            },
+            {
+                "id": "dml_operation:view:dbo.vLevel1:1",
+                "type": "dml_operation",
+                "module_id": "view:dbo.vLevel1",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vSOrder"],
+            },
+        ]
+    )
+    graph["relationships"].extend(
+        [
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_ReadTwoLevelView",
+                "target": "dml_operation:stored_procedure:dbo.usp_ReadTwoLevelView:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_ReadTwoLevelView:1",
+                "target": "view:dbo.vLevel1",
+            },
+            {
+                "type": "contains",
+                "source": "view:dbo.vLevel1",
+                "target": "dml_operation:view:dbo.vLevel1:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:view:dbo.vLevel1:1",
+                "target": "view:dbo.vSOrder",
+            },
+        ]
+    )
+
+    reads = query_table_accesses(
+        graph,
+        [_invocation("ReadTwoLevelView", "usp_ReadTwoLevelView")],
+        "dbo.SOrder",
+        access="read",
+    )
+
+    assert [(item["table"], item["access_type"], item["is_indirect"]) for item in reads] == [
+        ("SOrder", "READ", True),
+    ]
+
+
+def test_query_table_accesses_resolves_function_only_read_lineage() -> None:
+    graph = _graph()
+    graph["nodes"].extend(
+        [
+            {
+                "id": "stored_procedure:dbo.usp_ReadFunction",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_ReadFunction",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_ReadFunction:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_ReadFunction",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.fnSOrderStatus"],
+            },
+        ]
+    )
+    graph["relationships"].extend(
+        [
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_ReadFunction",
+                "target": "dml_operation:stored_procedure:dbo.usp_ReadFunction:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_ReadFunction:1",
+                "target": "function:dbo.fnSOrderStatus",
+            },
+        ]
+    )
+
+    reads = query_table_accesses(
+        graph,
+        [_invocation("ReadFunction", "usp_ReadFunction")],
+        "dbo.SOrder",
+        access="read",
+    )
+
+    assert [(item["table"], item["access_type"], item["is_indirect"]) for item in reads] == [
+        ("SOrder", "READ", True),
+    ]
+
+
+def test_query_table_accesses_read_lineage_terminates_on_view_cycle() -> None:
+    graph = _graph()
+    graph["nodes"].extend(
+        [
+            {
+                "id": "stored_procedure:dbo.usp_ReadCycle",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_ReadCycle",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_ReadCycle:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_ReadCycle",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vCycleA"],
+            },
+            {"id": "view:dbo.vCycleA", "type": "view", "schema": "dbo", "name": "vCycleA"},
+            {
+                "id": "dml_operation:view:dbo.vCycleA:1",
+                "type": "dml_operation",
+                "module_id": "view:dbo.vCycleA",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vCycleB"],
+            },
+            {"id": "view:dbo.vCycleB", "type": "view", "schema": "dbo", "name": "vCycleB"},
+            {
+                "id": "dml_operation:view:dbo.vCycleB:1",
+                "type": "dml_operation",
+                "module_id": "view:dbo.vCycleB",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                # Cycles back to vCycleA *and* reaches a real table, so the
+                # cycle must not block the match that exists alongside it.
+                "read_tables": ["dbo.vCycleA", "dbo.SOrder"],
+            },
+        ]
+    )
+    graph["relationships"].extend(
+        [
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_ReadCycle",
+                "target": "dml_operation:stored_procedure:dbo.usp_ReadCycle:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_ReadCycle:1",
+                "target": "view:dbo.vCycleA",
+            },
+            {
+                "type": "contains",
+                "source": "view:dbo.vCycleA",
+                "target": "dml_operation:view:dbo.vCycleA:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:view:dbo.vCycleA:1",
+                "target": "view:dbo.vCycleB",
+            },
+            {
+                "type": "contains",
+                "source": "view:dbo.vCycleB",
+                "target": "dml_operation:view:dbo.vCycleB:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:view:dbo.vCycleB:1",
+                "target": "view:dbo.vCycleA",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:view:dbo.vCycleB:1",
+                "target": "table:dbo.SOrder",
+            },
+        ]
+    )
+
+    reads = query_table_accesses(
+        graph,
+        [_invocation("ReadCycle", "usp_ReadCycle")],
+        "dbo.SOrder",
+        access="read",
+    )
+
+    assert [(item["table"], item["access_type"], item["is_indirect"]) for item in reads] == [
+        ("SOrder", "READ", True),
+    ]
+
+
+def test_query_table_accesses_two_tables_in_one_request_return_their_own_records() -> None:
+    graph = _graph()
+    graph["nodes"].extend(
+        [
+            {"id": "table:dbo.SCustomer", "type": "table", "schema": "dbo", "name": "SCustomer"},
+            {
+                "id": "stored_procedure:dbo.usp_ReadCustomer",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_ReadCustomer",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_ReadCustomer:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_ReadCustomer",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vSCustomer"],
+            },
+            {
+                "id": "view:dbo.vSCustomer",
+                "type": "view",
+                "schema": "dbo",
+                "name": "vSCustomer",
+            },
+            {
+                "id": "dml_operation:view:dbo.vSCustomer:1",
+                "type": "dml_operation",
+                "module_id": "view:dbo.vSCustomer",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.SCustomer"],
+            },
+        ]
+    )
+    graph["relationships"].extend(
+        [
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_ReadCustomer",
+                "target": "dml_operation:stored_procedure:dbo.usp_ReadCustomer:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_ReadCustomer:1",
+                "target": "view:dbo.vSCustomer",
+            },
+            {
+                "type": "contains",
+                "source": "view:dbo.vSCustomer",
+                "target": "dml_operation:view:dbo.vSCustomer:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:view:dbo.vSCustomer:1",
+                "target": "table:dbo.SCustomer",
+            },
+        ]
+    )
+
+    invocations = [
+        _invocation("ReadOrder", "usp_ReadView"),
+        _invocation("ReadCustomer", "usp_ReadCustomer"),
+    ]
+    graph["nodes"].extend(
+        [
+            {
+                "id": "stored_procedure:dbo.usp_ReadView",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_ReadView",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_ReadView:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_ReadView",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vSOrder"],
+            },
+        ]
+    )
+    graph["relationships"].extend(
+        [
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_ReadView",
+                "target": "dml_operation:stored_procedure:dbo.usp_ReadView:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_ReadView:1",
+                "target": "view:dbo.vSOrder",
+            },
+        ]
+    )
+
+    order_reads = query_table_accesses(graph, invocations, "dbo.SOrder", access="read")
+    customer_reads = query_table_accesses(graph, invocations, "dbo.SCustomer", access="read")
+
+    assert [(item["table"], item["is_indirect"]) for item in order_reads] == [("SOrder", True)]
+    assert [(item["table"], item["is_indirect"]) for item in customer_reads] == [
+        ("SCustomer", True)
+    ]
+    assert {item["entry_method"] for item in order_reads} == {"OrderPage.ReadOrder"}
+    assert {item["entry_method"] for item in customer_reads} == {"OrderPage.ReadCustomer"}
+
+
+def test_query_table_accesses_read_lineage_survives_a_shared_cyclic_view() -> None:
+    """A container revisited mid-cycle must not cache a stunted answer.
+
+    `vDiamondA` has two children: one cycles to `vDiamondB`, the other reads
+    the table directly. `vDiamondB`'s only child cycles back to `vDiamondA`.
+    A caller reaching the table only through the cycle (`usp_ReadDiamondB`,
+    via `vDiamondB`) must still see it -- the same as a caller reaching it
+    directly (`usp_ReadDiamondA`). A build that resolves `vDiamondB` while
+    `vDiamondA` is still mid-computation, and caches that incomplete result,
+    would wrongly drop the table for `usp_ReadDiamondB` alone.
+    """
+    graph = _graph()
+    graph["nodes"].extend(
+        [
+            {
+                "id": "stored_procedure:dbo.usp_ReadDiamondA",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_ReadDiamondA",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_ReadDiamondA:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_ReadDiamondA",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vDiamondA"],
+            },
+            {
+                "id": "stored_procedure:dbo.usp_ReadDiamondB",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_ReadDiamondB",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_ReadDiamondB:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_ReadDiamondB",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vDiamondB"],
+            },
+            {"id": "view:dbo.vDiamondA", "type": "view", "schema": "dbo", "name": "vDiamondA"},
+            {
+                "id": "dml_operation:view:dbo.vDiamondA:1",
+                "type": "dml_operation",
+                "module_id": "view:dbo.vDiamondA",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vDiamondB"],
+            },
+            {
+                "id": "dml_operation:view:dbo.vDiamondA:2",
+                "type": "dml_operation",
+                "module_id": "view:dbo.vDiamondA",
+                "sequence": 2,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.SOrder"],
+            },
+            {"id": "view:dbo.vDiamondB", "type": "view", "schema": "dbo", "name": "vDiamondB"},
+            {
+                "id": "dml_operation:view:dbo.vDiamondB:1",
+                "type": "dml_operation",
+                "module_id": "view:dbo.vDiamondB",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vDiamondA"],
+            },
+        ]
+    )
+    graph["relationships"].extend(
+        [
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_ReadDiamondA",
+                "target": "dml_operation:stored_procedure:dbo.usp_ReadDiamondA:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_ReadDiamondA:1",
+                "target": "view:dbo.vDiamondA",
+            },
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_ReadDiamondB",
+                "target": "dml_operation:stored_procedure:dbo.usp_ReadDiamondB:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_ReadDiamondB:1",
+                "target": "view:dbo.vDiamondB",
+            },
+            {
+                "type": "contains",
+                "source": "view:dbo.vDiamondA",
+                "target": "dml_operation:view:dbo.vDiamondA:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:view:dbo.vDiamondA:1",
+                "target": "view:dbo.vDiamondB",
+            },
+            {
+                "type": "contains",
+                "source": "view:dbo.vDiamondA",
+                "target": "dml_operation:view:dbo.vDiamondA:2",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:view:dbo.vDiamondA:2",
+                "target": "table:dbo.SOrder",
+            },
+            {
+                "type": "contains",
+                "source": "view:dbo.vDiamondB",
+                "target": "dml_operation:view:dbo.vDiamondB:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:view:dbo.vDiamondB:1",
+                "target": "view:dbo.vDiamondA",
+            },
+        ]
+    )
+
+    invocations = [
+        _invocation("ReadDiamondA", "usp_ReadDiamondA"),
+        _invocation("ReadDiamondB", "usp_ReadDiamondB"),
+    ]
+    reads = query_table_accesses(graph, invocations, "dbo.SOrder", access="read")
+
+    assert {item["entry_method"] for item in reads} == {
+        "OrderPage.ReadDiamondA",
+        "OrderPage.ReadDiamondB",
+    }
+    assert all(item["table"] == "SOrder" and item["is_indirect"] for item in reads)
