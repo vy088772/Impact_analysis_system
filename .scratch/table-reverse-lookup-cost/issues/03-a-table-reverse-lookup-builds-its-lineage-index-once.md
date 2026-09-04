@@ -27,19 +27,19 @@ material ticket 04 inverts.
 **Blocked by:** 02 — The routing baseline is recorded before the first
 performance change.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The lineage index is built at most once for each table reverse lookup.
-- [ ] A lookup that never reaches the read branch builds no index at all.
-- [ ] The lineage resolution reads only the index it is given, not the graph.
-- [ ] The index and the graph it was derived from are passed together, so a
+- [x] The lineage index is built at most once for each table reverse lookup.
+- [x] A lookup that never reaches the read branch builds no index at all.
+- [x] The lineage resolution reads only the index it is given, not the graph.
+- [x] The index and the graph it was derived from are passed together, so a
       caller cannot pair an index with a different graph.
-- [ ] A table reached only through a View is still reported.
-- [ ] A table reached through two levels of View is still reported.
-- [ ] A table reached only through a Function is still reported.
-- [ ] A dynamic-SQL path and a non-proven path stay excluded.
-- [ ] Write matching is unchanged; the read lineage still infers no writes.
-- [ ] Every existing test in the graph query suite passes unchanged.
+- [x] A table reached only through a View is still reported.
+- [x] A table reached through two levels of View is still reported.
+- [x] A table reached only through a Function is still reported.
+- [x] A dynamic-SQL path and a non-proven path stay excluded.
+- [x] Write matching is unchanged; the read lineage still infers no writes.
+- [x] Every existing test in the graph query suite passes unchanged.
 
 ## Notes
 
@@ -58,3 +58,45 @@ in ticket 09, the measured seconds.
 The forward walk follows `reads` relationships only and treats a table node as
 terminal. Keep both rules. Inferring writes here would turn a Possible Writer
 into a Proven Writer.
+
+## Implementation note
+
+`service/graph_queries.py`: the module-level `_matching_graph_read_lineage`
+function -- which rebuilt the `nodes` / `reads_by_source` / `contains_by_source`
+dictionaries from `graph` on every call -- is replaced by a `_LineageIndex`
+class. `filter_table_accesses` holds one local `lineage_index: _LineageIndex
+| None = None` for the whole call and constructs it lazily, only the first
+time a path falls through to the lineage branch (no direct `reads` match);
+every later path in the same call reuses that one instance. A lookup that is
+`access="write"`, or where every match is direct, never constructs one.
+
+`_LineageIndex(graph)` stores the graph itself, not just its derived
+dictionaries, so `read_lineage(path, target_name)` -- the method the
+per-path loop calls -- takes no `graph` parameter at all; there is no
+signature through which a caller could hand it a different graph's index.
+The three built dictionaries are bundled into one `_LineageIndexData`
+NamedTuple returned by `_ensure_built()`, rather than three parallel
+`Optional` fields on the instance, so there is a single built/not-built
+state instead of three fields whose nullness has to stay in lockstep.
+
+The forward-walk algorithm inside `read_lineage` is a verbatim move of the
+old function's body -- same BFS over `reads` then `contains` edges, same
+table-terminal rule, same target-name match. No ticket 04 work (inverting
+the index to answer from the table instead of walking each path) is
+included here.
+
+Verified: `pytest tests/test_graph_queries.py` -- 5 passed, including
+`test_query_table_accesses_resolves_view_read_lineage_without_writer`
+unmodified (`git diff HEAD -- tests/test_graph_queries.py` shows no diff).
+Full suite (`pytest`, excluding the two files that require a live ODBC
+connection this environment doesn't have): 636 passed, the same 12
+pre-existing failures as on HEAD before this change (confirmed by running
+the same command against a stash of the diff) -- none in
+`service/graph_queries.py` or its tests.
+
+Reviewed with `/code-review` (fixed point: HEAD, `03f0419`) before commit.
+Spec axis: all ten checklist items satisfied, no scope creep into ticket
+04's territory. Standards axis: no documented standard in this repo to
+violate; one Fowler-baseline judgement call (Data Clumps: three parallel
+`Optional` fields) was raised and fixed by introducing `_LineageIndexData`
+before this note was written.

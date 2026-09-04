@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, NamedTuple
 
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 
@@ -55,6 +55,7 @@ def filter_table_accesses(
         return []
 
     accesses: list[dict[str, Any]] = []
+    lineage_index: _LineageIndex | None = None
     for path in paths:
         writes = _matching_names(path.get("writes", []), target_name)
         reads = _matching_names(path.get("reads", []), target_name)
@@ -69,7 +70,9 @@ def filter_table_accesses(
             if reads:
                 accesses.append(_access_record(path, reads[0], is_write=False))
                 continue
-            lineage_reads = _matching_graph_read_lineage(graph, path, target_name)
+            if lineage_index is None:
+                lineage_index = _LineageIndex(graph)
+            lineage_reads = lineage_index.read_lineage(path, target_name)
             for table in lineage_reads:
                 accesses.append(
                     _access_record(
@@ -138,58 +141,88 @@ def _access_record(
     return record
 
 
-def _matching_graph_read_lineage(
-    graph: Mapping[str, Any],
-    path: Mapping[str, Any],
-    target_name: str,
-) -> list[str]:
-    """Resolve a path's View/UDF reads to base tables without inferring writes."""
-    nodes = {
-        str(node.get("id")): node
-        for node in graph.get("nodes", []) or []
-        if node.get("id")
-    }
-    relationships = [
-        relationship
-        for relationship in graph.get("relationships", []) or []
-        if relationship.get("source") and relationship.get("target")
-    ]
-    reads_by_source: dict[str, list[str]] = {}
-    contains_by_source: dict[str, list[str]] = {}
-    for relationship in relationships:
-        source = str(relationship["source"])
-        target = str(relationship["target"])
-        if relationship.get("type") == "reads":
-            reads_by_source.setdefault(source, []).append(target)
-        elif relationship.get("type") == "contains":
-            contains_by_source.setdefault(source, []).append(target)
+class _LineageIndexData(NamedTuple):
+    """The dictionaries one graph's `_LineageIndex` builds, as a single unit."""
 
-    operation_id = str(path.get("terminal_operation_id") or "")
-    if not operation_id:
-        return []
+    nodes: dict[str, Mapping[str, Any]]
+    reads_by_source: dict[str, list[str]]
+    contains_by_source: dict[str, list[str]]
 
-    matched: list[str] = []
-    visited: set[str] = set()
-    frontier = list(reads_by_source.get(operation_id, []))
-    while frontier:
-        object_id = frontier.pop(0)
-        if object_id in visited:
-            continue
-        visited.add(object_id)
-        node = nodes.get(object_id)
-        if not node:
-            continue
-        if node.get("type") == "table":
-            name = str(node.get("name") or "")
-            if _normalize_table(name) == target_name:
-                matched.append(name)
-            continue
-        if node.get("type") not in {"view", "function"}:
-            continue
-        for child_operation_id in contains_by_source.get(object_id, []):
-            frontier.extend(reads_by_source.get(child_operation_id, []))
 
-    return _ordered_unique(matched)
+class _LineageIndex:
+    """Reads/contains lookup for one graph, built at most once.
+
+    A table reverse lookup asks this once per graph, not once per Execution
+    Path -- the underlying dictionaries depend on the graph alone, never on
+    the path or the table being asked about. The graph itself is kept only
+    inside this instance, so `read_lineage` never re-reads it: the index and
+    the graph it was built from stay paired by construction, and a caller
+    holding a `_LineageIndex` cannot hand it a different graph's data.
+
+    Built lazily, on the first call to `read_lineage` -- a lookup whose
+    matches are all direct never constructs one.
+    """
+
+    __slots__ = ("_graph", "_data")
+
+    def __init__(self, graph: Mapping[str, Any]) -> None:
+        self._graph = graph
+        self._data: _LineageIndexData | None = None
+
+    def _ensure_built(self) -> _LineageIndexData:
+        if self._data is not None:
+            return self._data
+        nodes = {
+            str(node.get("id")): node
+            for node in self._graph.get("nodes", []) or []
+            if node.get("id")
+        }
+        reads_by_source: dict[str, list[str]] = {}
+        contains_by_source: dict[str, list[str]] = {}
+        for relationship in self._graph.get("relationships", []) or []:
+            source = relationship.get("source")
+            target = relationship.get("target")
+            if not source or not target:
+                continue
+            source = str(source)
+            target = str(target)
+            if relationship.get("type") == "reads":
+                reads_by_source.setdefault(source, []).append(target)
+            elif relationship.get("type") == "contains":
+                contains_by_source.setdefault(source, []).append(target)
+        self._data = _LineageIndexData(nodes, reads_by_source, contains_by_source)
+        return self._data
+
+    def read_lineage(self, path: Mapping[str, Any], target_name: str) -> list[str]:
+        """Resolve a path's View/UDF reads to base tables without inferring writes."""
+        operation_id = str(path.get("terminal_operation_id") or "")
+        if not operation_id:
+            return []
+
+        nodes, reads_by_source, contains_by_source = self._ensure_built()
+
+        matched: list[str] = []
+        visited: set[str] = set()
+        frontier = list(reads_by_source.get(operation_id, []))
+        while frontier:
+            object_id = frontier.pop(0)
+            if object_id in visited:
+                continue
+            visited.add(object_id)
+            node = nodes.get(object_id)
+            if not node:
+                continue
+            if node.get("type") == "table":
+                name = str(node.get("name") or "")
+                if _normalize_table(name) == target_name:
+                    matched.append(name)
+                continue
+            if node.get("type") not in {"view", "function"}:
+                continue
+            for child_operation_id in contains_by_source.get(object_id, []):
+                frontier.extend(reads_by_source.get(child_operation_id, []))
+
+        return _ordered_unique(matched)
 
 
 def _matching_names(names: Iterable[object], target_name: str) -> list[str]:
