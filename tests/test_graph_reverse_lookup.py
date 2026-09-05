@@ -10,6 +10,10 @@ from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 from service import analyze_service
 from service.schemas import AnalyzeRequest, FindBySPRequest, FindByTableRequest, FlowChainRequest
 from service.sql_execution_graph import build_sql_execution_graph
+from tests.sql_cache_fixtures import (
+    case_variant_table_write_data,
+    case_variant_temp_table_write_data,
+)
 
 
 def _graph() -> dict:
@@ -240,25 +244,7 @@ def test_find_by_table_reports_writes_regardless_of_stored_procedure_case(
             ("LowerPage.cs", "LowerPage", "SaveLower", "dbo.usp_WriteLower"),
         ],
     )
-    graph = build_sql_execution_graph(
-        {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "procedures": [
-                {
-                    "name": "dbo.usp_WriteUpper",
-                    "definition": "CREATE PROCEDURE dbo.usp_WriteUpper AS INSERT INTO VQM (Id) VALUES (1);",
-                },
-                {
-                    "name": "dbo.usp_WriteLower",
-                    "definition": "CREATE PROCEDURE dbo.usp_WriteLower AS UPDATE vqm SET Id = 1;",
-                },
-            ],
-            "views": [],
-            "functions": [],
-            "tables": [],
-        }
-    )
+    graph = build_sql_execution_graph(case_variant_table_write_data())
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(
@@ -301,28 +287,7 @@ def test_find_by_table_keeps_a_real_write_behind_a_case_variant_temp_table_read(
         tmp_path,
         [("TempPage.cs", "TempPage", "SaveWithTemp", "dbo.usp_WriteWithTemp")],
     )
-    graph = build_sql_execution_graph(
-        {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "procedures": [
-                {
-                    "name": "dbo.usp_WriteWithTemp",
-                    "definition": """CREATE PROCEDURE dbo.usp_WriteWithTemp
-AS
-BEGIN
-    SELECT Id INTO #TempStage FROM dbo.SourceTable;
-    INSERT INTO dbo.RealTable (Id)
-        SELECT Id FROM #tempstage;
-END;
-""",
-                },
-            ],
-            "views": [],
-            "functions": [],
-            "tables": [{"name": "dbo.SourceTable"}, {"name": "dbo.RealTable"}],
-        }
-    )
+    graph = build_sql_execution_graph(case_variant_temp_table_write_data())
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(

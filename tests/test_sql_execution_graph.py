@@ -19,6 +19,8 @@ from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
 from tests.sql_cache_fixtures import (
     CacheRoot,
     assert_relationships_resolve_to_known_nodes,
+    case_variant_table_write_data,
+    case_variant_temp_table_write_data,
     write_cache,
 )
 
@@ -405,25 +407,7 @@ def test_referenced_node_id_resolves_despite_a_case_variant_first_reference() ->
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
 
-    data = {
-        "database": "TestDb",
-        "schema": "dbo",
-        "procedures": [
-            {
-                "name": "dbo.usp_WriteUpper",
-                "definition": "CREATE PROCEDURE dbo.usp_WriteUpper AS INSERT INTO VQM (Id) VALUES (1);",
-                "parameters": [],
-            },
-            {
-                "name": "dbo.usp_WriteLower",
-                "definition": "CREATE PROCEDURE dbo.usp_WriteLower AS UPDATE vqm SET Id = 1;",
-                "parameters": [],
-            },
-        ],
-        "views": [],
-        "functions": [],
-        "tables": [],
-    }
+    data = case_variant_table_write_data(database="TestDb")
 
     graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
     assert_relationships_resolve_to_known_nodes(graph)
@@ -457,27 +441,7 @@ def test_write_to_real_table_survives_a_case_variant_read_through_a_temp_table()
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
 
-    sql = """CREATE PROCEDURE dbo.usp_WriteWithTemp
-AS
-BEGIN
-    SELECT Id INTO #TempStage FROM dbo.SourceTable;
-    INSERT INTO dbo.RealTable (Id)
-        SELECT Id FROM #tempstage;
-END;
-"""
-    data = {
-        "database": "TestDb",
-        "schema": "dbo",
-        "procedures": [
-            {"name": "dbo.usp_WriteWithTemp", "definition": sql, "parameters": []},
-        ],
-        "views": [],
-        "functions": [],
-        "tables": [
-            {"name": "dbo.SourceTable", "columns": []},
-            {"name": "dbo.RealTable", "columns": []},
-        ],
-    }
+    data = case_variant_temp_table_write_data(database="TestDb")
 
     graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
     assert_relationships_resolve_to_known_nodes(graph)

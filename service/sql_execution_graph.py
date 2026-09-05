@@ -368,9 +368,9 @@ def _ensure_referenced_node(
     view_key = _node_key("view", object_schema, name)
     function_key = _node_key("function", object_schema, name)
     if view_key in node_by_key:
-        return node_by_key[view_key]["id"]
+        return str(node_by_key[view_key]["id"])
     if function_key in node_by_key:
-        return node_by_key[function_key]["id"]
+        return str(node_by_key[function_key]["id"])
 
     node = {
         "id": _node_id("table", object_schema, name),

@@ -94,6 +94,19 @@ target names a node the graph does not have.
   `test_derived_execution_evidence_reuse_table.py`,
   `test_table_reverse_lookup_traffic_record.py`, `test_sql_cache_store.py`):
   110 passed.
-- `/code-review` was not run: the `mattpocock-skills:code-review` skill is
-  disabled for model invocation in this session's `skillOverrides` setting.
-  Flag this to a human reviewer before merge.
+- `/code-review` (two-axis: Standards, Spec) run against `5885f41...HEAD`
+  after the commit above. **Spec axis:** clean, 0 findings — Decision 1 and
+  Decision 5 both verified correct, no scope creep, no discrepancy between
+  the Comments section above and the actual diff. **Standards axis:** 0 hard
+  violations, 2 judgement calls, both fixed:
+  - `_ensure_referenced_node()`'s view/function branches returned a bare
+    `node_by_key[...]["id"]` while the table branch (this ticket's fix)
+    wrapped its return in `str(...)`. Made all three branches consistent.
+  - The case-variant `VQM` and `#TempStage`/`#tempstage` SQL fixtures were
+    each written out twice, verbatim, once in `tests/test_sql_execution_graph.py`
+    and once in `tests/test_graph_reverse_lookup.py`. Extracted both into
+    `case_variant_table_write_data()` and `case_variant_temp_table_write_data()`
+    in `tests/sql_cache_fixtures.py`; both test files now import and call
+    them instead of holding their own copy.
+  - Re-ran the full suite after these two fixes: same 673 passed / 12
+    pre-existing failures as before — no regression.

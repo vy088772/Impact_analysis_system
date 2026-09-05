@@ -57,6 +57,68 @@ def assert_relationships_resolve_to_known_nodes(graph: dict) -> None:
     assert not dangling, f"relationship targets with no matching node: {dangling}"
 
 
+def case_variant_table_write_data(database: str = "OrdersDb") -> dict:
+    """Graph-builder input: two stored procedures write one table in different case.
+
+    Shared by tests/test_sql_execution_graph.py (graph-construction seam) and
+    tests/test_graph_reverse_lookup.py (analyst-facing seam) so the
+    reverse-lookup-drops-proven-writes ticket-01 fixture is defined once. Feed
+    this to `build_sql_execution_graph()` -- a hand-written graph dict cannot
+    reproduce the defect, which only exists in how the builder resolves a
+    second, case-different reference to the same object.
+    """
+    return {
+        "database": database,
+        "schema": "dbo",
+        "procedures": [
+            {
+                "name": "dbo.usp_WriteUpper",
+                "definition": "CREATE PROCEDURE dbo.usp_WriteUpper AS INSERT INTO VQM (Id) VALUES (1);",
+            },
+            {
+                "name": "dbo.usp_WriteLower",
+                "definition": "CREATE PROCEDURE dbo.usp_WriteLower AS UPDATE vqm SET Id = 1;",
+            },
+        ],
+        "views": [],
+        "functions": [],
+        "tables": [],
+    }
+
+
+def case_variant_temp_table_write_data(database: str = "OrdersDb") -> dict:
+    """Graph-builder input: a real write sits behind a case-variant temp-table read.
+
+    `#TempStage` is created in one case and read back in another, inside the
+    same DML operation that writes `dbo.RealTable` -- the same shape that made
+    `#Order` and `#tmpPart` the two largest sources of dangling ids in the PUR
+    cache (reverse-lookup-drops-proven-writes, ticket 01). Shared by
+    tests/test_sql_execution_graph.py and tests/test_graph_reverse_lookup.py;
+    see `case_variant_table_write_data` for why this must go through
+    `build_sql_execution_graph()`.
+    """
+    return {
+        "database": database,
+        "schema": "dbo",
+        "procedures": [
+            {
+                "name": "dbo.usp_WriteWithTemp",
+                "definition": """CREATE PROCEDURE dbo.usp_WriteWithTemp
+AS
+BEGIN
+    SELECT Id INTO #TempStage FROM dbo.SourceTable;
+    INSERT INTO dbo.RealTable (Id)
+        SELECT Id FROM #tempstage;
+END;
+""",
+            },
+        ],
+        "views": [],
+        "functions": [],
+        "tables": [{"name": "dbo.SourceTable"}, {"name": "dbo.RealTable"}],
+    }
+
+
 def write_cache(
     cache_root: Path,
     key: str,
