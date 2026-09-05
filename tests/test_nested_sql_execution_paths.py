@@ -13,6 +13,7 @@ from code_analyzer.csharp_analysis_gateway import (
 )
 from service.execution_path_builder import build_execution_paths
 from service.sql_execution_graph import build_sql_execution_graph
+from tests.sql_cache_fixtures import assert_relationships_resolve_to_known_nodes
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -142,6 +143,7 @@ END;
     }
 
     graph = build_sql_execution_graph(data)
+    assert_relationships_resolve_to_known_nodes(graph)
     nodes_by_id = {node["id"]: node for node in graph["nodes"]}
     calls = [relationship for relationship in graph["relationships"] if relationship["type"] == "calls"]
 
@@ -206,6 +208,7 @@ END;
             "tables": [{"name": "dbo.OrderItem"}],
         }
     )
+    assert_relationships_resolve_to_known_nodes(graph)
     invocation = DbInvocation(
         class_name="OrderPage",
         method_name="Save",
@@ -278,6 +281,7 @@ END;
         }
     )
 
+    assert_relationships_resolve_to_known_nodes(graph)
     nodes_by_id = {node["id"]: node for node in graph["nodes"]}
     relationships = graph["relationships"]
     operation_nodes = sorted(

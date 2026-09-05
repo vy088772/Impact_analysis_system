@@ -16,7 +16,11 @@ from code_analyzer import sql_analyzer
 from code_analyzer.sql_analyzer import SQLAnalyzer
 from service import sql_cache_store
 from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
-from tests.sql_cache_fixtures import CacheRoot, write_cache
+from tests.sql_cache_fixtures import (
+    CacheRoot,
+    assert_relationships_resolve_to_known_nodes,
+    write_cache,
+)
 
 
 TEST_SERVER = "vmsystest07"
@@ -121,13 +125,14 @@ def test_sql_cache_rejects_stale_payload_version() -> None:
 
 
 def test_sql_cache_rejects_stale_graph_version() -> None:
-    """Ticket 03: a cache built under the pre-repair version (2) must be rejected.
+    """A cache built under any earlier graph version must be rejected.
 
-    GRAPH_VERSION is bumped to 3 by ticket 03 specifically so caches carrying
-    the old, possibly-corrupted offsets fail this check until the repair tool
-    (tools/repair_sql_execution_graphs.py) rebuilds them.
+    GRAPH_VERSION is bumped each time a defect can leave the persisted graph
+    itself wrong -- most recently to 4, by the reverse-lookup-drops-proven-
+    writes repair (ticket 01), so a graph holding dangling relationship
+    targets fails this check until it is rebuilt.
     """
-    assert GRAPH_VERSION == 3
+    assert GRAPH_VERSION == 4
 
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(
@@ -281,6 +286,7 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             assert "dependencies" not in data
             assert "write_dependencies" not in data
             graph = data["sql_execution_graph"]
+            assert_relationships_resolve_to_known_nodes(graph)
             nodes_by_id = {node["id"]: node for node in graph["nodes"]}
             relationships = graph["relationships"]
 
@@ -346,6 +352,7 @@ def test_graph_offsets_stay_within_definition_length_for_crlf_source() -> None:
     }
 
     graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
+    assert_relationships_resolve_to_known_nodes(graph)
 
     operation_nodes = [node for node in graph["nodes"] if node["type"] == "dml_operation"]
     assert operation_nodes, "expected the DELETE statement to produce an operation node"
@@ -385,6 +392,102 @@ def test_pre_fix_crlf_doubling_produces_out_of_bounds_offsets() -> None:
         if operation["source"]["start_offset"] + operation["source"]["length"] > len(definition)
     ]
     assert overruns, "expected the \\r\\n doubling to push at least one offset past the definition length"
+
+
+def test_referenced_node_id_resolves_despite_a_case_variant_first_reference() -> None:
+    """Ticket 01: `_ensure_referenced_node()` must return an id that names a node.
+
+    `dbo.VQM` is referenced first in upper case, then again in lower case.
+    `_add_node()` keeps the first node under a case-insensitive key, so the
+    second reference must resolve back to that same node -- not to a second,
+    unadded id that names nothing.
+    """
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    data = {
+        "database": "TestDb",
+        "schema": "dbo",
+        "procedures": [
+            {
+                "name": "dbo.usp_WriteUpper",
+                "definition": "CREATE PROCEDURE dbo.usp_WriteUpper AS INSERT INTO VQM (Id) VALUES (1);",
+                "parameters": [],
+            },
+            {
+                "name": "dbo.usp_WriteLower",
+                "definition": "CREATE PROCEDURE dbo.usp_WriteLower AS UPDATE vqm SET Id = 1;",
+                "parameters": [],
+            },
+        ],
+        "views": [],
+        "functions": [],
+        "tables": [],
+    }
+
+    graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
+    assert_relationships_resolve_to_known_nodes(graph)
+
+    table_nodes = [
+        node
+        for node in graph["nodes"]
+        if node["type"] == "table" and node["name"].casefold() == "vqm"
+    ]
+    assert len(table_nodes) == 1, "one case-insensitive key must keep exactly one node"
+
+    writes = [
+        relationship
+        for relationship in graph["relationships"]
+        if relationship["type"] == "writes"
+    ]
+    assert len(writes) == 2
+    assert {relationship["target"] for relationship in writes} == {table_nodes[0]["id"]}
+
+
+def test_write_to_real_table_survives_a_case_variant_read_through_a_temp_table() -> None:
+    """Ticket 01: a case-variant temp-table reference must not unresolve a real write.
+
+    `#TempStage` is created in one case and read back in another, the same
+    shape that made `#Order` and `#tmpPart` the two largest sources of
+    dangling ids in the PUR cache. Before the repair, the INSERT's read of
+    `#tempstage` resolved to an id `_add_node()` never added, which put it in
+    `missing_targets` and downgraded the whole operation -- including its
+    proven write to `dbo.RealTable` -- to `unresolved`.
+    """
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    sql = """CREATE PROCEDURE dbo.usp_WriteWithTemp
+AS
+BEGIN
+    SELECT Id INTO #TempStage FROM dbo.SourceTable;
+    INSERT INTO dbo.RealTable (Id)
+        SELECT Id FROM #tempstage;
+END;
+"""
+    data = {
+        "database": "TestDb",
+        "schema": "dbo",
+        "procedures": [
+            {"name": "dbo.usp_WriteWithTemp", "definition": sql, "parameters": []},
+        ],
+        "views": [],
+        "functions": [],
+        "tables": [
+            {"name": "dbo.SourceTable", "columns": []},
+            {"name": "dbo.RealTable", "columns": []},
+        ],
+    }
+
+    graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
+    assert_relationships_resolve_to_known_nodes(graph)
+
+    writes = [
+        relationship
+        for relationship in graph["relationships"]
+        if relationship["type"] == "writes"
+    ]
+    assert any(relationship["target"] == "table:dbo.RealTable" for relationship in writes)
 
 
 if __name__ == "__main__":

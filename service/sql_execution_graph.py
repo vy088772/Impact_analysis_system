@@ -18,7 +18,13 @@ from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 # staleness detection (ticket 02). Bumped so every cache built before this
 # fix is rejected until tools/repair_sql_execution_graphs.py (ticket 03)
 # repairs it — offsets from a v2 cache can be silently wrong.
-GRAPH_VERSION = 3
+# v4: `_ensure_referenced_node()` now returns the id of the node `_add_node()`
+# actually kept, instead of the id of a same-key node it silently discarded
+# (reverse-lookup-drops-proven-writes, ticket 01). A v3 graph can hold
+# relationship targets that name no node in the same graph -- a dangling id
+# unresolves every proven fact in its Execution Path. Bumped once for the
+# whole effort, not once per ticket.
+GRAPH_VERSION = 4
 _MODULE_COLLECTIONS = (
     ("procedures", "stored_procedure"),
     ("views", "view"),
@@ -372,8 +378,8 @@ def _ensure_referenced_node(
         "schema": object_schema,
         "name": name,
     }
-    _add_node(nodes, node_by_key, node)
-    return node["id"]
+    kept_node = _add_node(nodes, node_by_key, node)
+    return str(kept_node["id"])
 
 
 def _known_object_node_id(
@@ -422,7 +428,14 @@ def _add_node(
     nodes: list[dict[str, Any]],
     node_by_key: dict[tuple[str, str, str], dict[str, Any]],
     node: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
+    """Add ``node`` unless a node already holds its case-insensitive key.
+
+    Returns the node that now occupies that key -- the existing node it kept,
+    or ``node`` itself when none existed. A caller that builds a relationship
+    target id from ``node`` must use this return value, not ``node["id"]``:
+    the id it built may name a node this call decided not to add.
+    """
     object_type = str(node.get("type", ""))
     schema = str(node.get("schema", "dbo"))
     name = str(node.get("name", ""))
@@ -432,9 +445,10 @@ def _add_node(
         "",
     )
     if key in node_by_key:
-        return
+        return node_by_key[key]
     node_by_key[key] = node
     nodes.append(node)
+    return node
 
 
 def _node_key(object_type: str, schema: str, name: str) -> tuple[str, str, str]:

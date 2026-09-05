@@ -9,6 +9,7 @@ from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, Framew
 from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 from service import analyze_service
 from service.schemas import AnalyzeRequest, FindBySPRequest, FindByTableRequest, FlowChainRequest
+from service.sql_execution_graph import build_sql_execution_graph
 
 
 def _graph() -> dict:
@@ -177,6 +178,175 @@ def _scan(root: Path) -> ProjectScanResult:
             for name in ("DirectPage.cs", "NestedPage.cs", "OrderPage.aspx.cs")
         },
     )
+
+
+def _scan_with_calls(
+    root: Path,
+    calls: list[tuple[str, str, str, str]],
+) -> ProjectScanResult:
+    """Build a scan where each `(file, class, method, procedure)` is one program.
+
+    A minimal variant of `_scan()` for tests that build their own SQL
+    Execution Graph from stored-procedure text (tickets that only exercise
+    graph construction, not the wrapper/ASPX surfaces `_scan()` also covers).
+    """
+    csharp_results = [
+        _file(root, file_name, [MethodInfo(name=method_name, access_modifier="private", return_type="void")])
+        for file_name, _, method_name, _ in calls
+    ]
+    raw = {
+        str((root / file_name).resolve()): [
+            {
+                "class_name": class_name,
+                "method_name": method_name,
+                "command_text_kind": "literal",
+                "command_text": procedure,
+                "command_type_stored_procedure": True,
+                "terminal_sink": "ExecuteNonQuery",
+                "connection_expression": "conn",
+                "start_offset": 10,
+                "end_offset": 90,
+            }
+        ]
+        for file_name, class_name, method_name, procedure in calls
+    }
+    return ProjectScanResult(
+        project_root=str(root),
+        project_name="orders",
+        scan_time=datetime.now(),
+        csharp_results=csharp_results,
+        aspx_results=[],
+        db_invocations=raw,
+        connection_sources={
+            str((root / file_name).resolve()): {"conn": "OrdersDb"} for file_name, _, _, _ in calls
+        },
+    )
+
+
+def test_find_by_table_reports_writes_regardless_of_stored_procedure_case(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Ticket 01: a lower-case write must count the same as an upper-case one.
+
+    Before the repair, `_ensure_referenced_node()` returned a dangling id for
+    whichever reference to `VQM` was registered second, unresolving that
+    write's whole Execution Path -- the analyst's response silently dropped
+    it, with nothing to signal that anything was missing.
+    """
+    scan = _scan_with_calls(
+        tmp_path,
+        [
+            ("UpperPage.cs", "UpperPage", "SaveUpper", "dbo.usp_WriteUpper"),
+            ("LowerPage.cs", "LowerPage", "SaveLower", "dbo.usp_WriteLower"),
+        ],
+    )
+    graph = build_sql_execution_graph(
+        {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "procedures": [
+                {
+                    "name": "dbo.usp_WriteUpper",
+                    "definition": "CREATE PROCEDURE dbo.usp_WriteUpper AS INSERT INTO VQM (Id) VALUES (1);",
+                },
+                {
+                    "name": "dbo.usp_WriteLower",
+                    "definition": "CREATE PROCEDURE dbo.usp_WriteLower AS UPDATE vqm SET Id = 1;",
+                },
+            ],
+            "views": [],
+            "functions": [],
+            "tables": [],
+        }
+    )
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema, server="": {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "sql_execution_graph": graph,
+        },
+    )
+
+    response = analyze_service.find_by_table(
+        FindByTableRequest(
+            source={"project": "orders", "repo": "orders"},
+            table_name="dbo.VQM",
+            database="OrdersDb",
+            cache_only=False,
+            write_only=True,
+        )
+    )
+
+    assert {match.program for match in response.matches} == {"upperpage", "lowerpage"}
+    assert all(match.evidence_status == "proven" for match in response.matches)
+
+
+def test_find_by_table_keeps_a_real_write_behind_a_case_variant_temp_table_read(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Ticket 01: a dangling temp-table id must not unresolve the write beside it.
+
+    `#TempStage` is created in one case and read back in another -- the same
+    shape that made `#Order` and `#tmpPart` the two largest sources of
+    dangling ids in the PUR cache. Before the repair, this put the temp
+    table's id in `missing_targets` and downgraded the whole operation --
+    including its proven write to `dbo.RealTable` -- to `unresolved`, so
+    `filter_table_accesses()` produced no record for it at all.
+    """
+    scan = _scan_with_calls(
+        tmp_path,
+        [("TempPage.cs", "TempPage", "SaveWithTemp", "dbo.usp_WriteWithTemp")],
+    )
+    graph = build_sql_execution_graph(
+        {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "procedures": [
+                {
+                    "name": "dbo.usp_WriteWithTemp",
+                    "definition": """CREATE PROCEDURE dbo.usp_WriteWithTemp
+AS
+BEGIN
+    SELECT Id INTO #TempStage FROM dbo.SourceTable;
+    INSERT INTO dbo.RealTable (Id)
+        SELECT Id FROM #tempstage;
+END;
+""",
+                },
+            ],
+            "views": [],
+            "functions": [],
+            "tables": [{"name": "dbo.SourceTable"}, {"name": "dbo.RealTable"}],
+        }
+    )
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema, server="": {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "sql_execution_graph": graph,
+        },
+    )
+
+    response = analyze_service.find_by_table(
+        FindByTableRequest(
+            source={"project": "orders", "repo": "orders"},
+            table_name="dbo.RealTable",
+            database="OrdersDb",
+            cache_only=False,
+            write_only=True,
+        )
+    )
+
+    assert [match.program for match in response.matches] == ["temppage"]
+    assert response.matches[0].evidence_status == "proven"
 
 
 def test_find_by_table_write_only_uses_graph_writers(monkeypatch, tmp_path: Path) -> None:

@@ -38,6 +38,25 @@ class CacheRoot:
         self._tmp.cleanup()
 
 
+def assert_relationships_resolve_to_known_nodes(graph: dict) -> None:
+    """Every relationship target in ``graph`` must name a node the same graph holds.
+
+    A relationship target with no matching node silently unresolves the whole
+    Execution Path it belongs to (reverse-lookup-drops-proven-writes, ticket
+    01) -- this is the structural invariant that repair restores. Call it over
+    every graph a test builds, not only a graph built to reproduce the defect.
+    """
+    node_ids = {node["id"] for node in graph["nodes"] if node.get("id")}
+    dangling = sorted(
+        {
+            (relationship.get("type"), relationship.get("target"))
+            for relationship in graph["relationships"]
+            if relationship.get("target") not in node_ids
+        }
+    )
+    assert not dangling, f"relationship targets with no matching node: {dangling}"
+
+
 def write_cache(
     cache_root: Path,
     key: str,
