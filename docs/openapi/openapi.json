@@ -358,6 +358,11 @@
             "title": "Diagnostics",
             "type": "array"
           },
+          "excluded_count": {
+            "default": 0,
+            "title": "Excluded Count",
+            "type": "integer"
+          },
           "matches": {
             "items": {
               "$ref": "#/components/schemas/TableMatchProgram"

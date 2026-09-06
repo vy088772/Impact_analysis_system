@@ -227,6 +227,50 @@ def _scan_with_calls(
     )
 
 
+def _scan_one_program_multiple_calls(
+    root: Path,
+    file_name: str,
+    class_name: str,
+    calls: list[tuple[str, str]],
+) -> ProjectScanResult:
+    """One C# file/class making several distinct stored-procedure calls.
+
+    `_scan_with_calls()` gives every call its own file, so it cannot build
+    the ticket-02 scenario where one *program* reaches a table through
+    several stored procedures. Each call gets its own source offset so its
+    Execution Path's `path_id` differs from the others.
+    """
+    methods = [
+        MethodInfo(name=method_name, access_modifier="private", return_type="void")
+        for method_name, _ in calls
+    ]
+    file_result = _file(root, file_name, methods)
+    resolved_path = str((root / file_name).resolve())
+    raw_entries = [
+        {
+            "class_name": class_name,
+            "method_name": method_name,
+            "command_text_kind": "literal",
+            "command_text": procedure_name,
+            "command_type_stored_procedure": True,
+            "terminal_sink": "ExecuteNonQuery",
+            "connection_expression": "conn",
+            "start_offset": index * 100 + 10,
+            "end_offset": index * 100 + 90,
+        }
+        for index, (method_name, procedure_name) in enumerate(calls)
+    ]
+    return ProjectScanResult(
+        project_root=str(root),
+        project_name="orders",
+        scan_time=datetime.now(),
+        csharp_results=[file_result],
+        aspx_results=[],
+        db_invocations={resolved_path: raw_entries},
+        connection_sources={resolved_path: {"conn": "OrdersDb"}},
+    )
+
+
 def test_find_by_table_reports_writes_regardless_of_stored_procedure_case(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -692,3 +736,405 @@ def test_analyze_without_database_keeps_source_facts_without_formal_relationship
     assert program.database_invocations[0]["evidence"] == "unresolved"
     assert program.execution_paths[0]["evidence"] == "unresolved"
     assert program.execution_paths[0]["writes"] == []
+
+
+# --------------------------------------------------- reverse-lookup-drops-proven-writes, ticket 02
+
+
+def test_find_by_table_reports_unresolved_dynamic_sql_and_write_only_excludes_it(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Ticket 02: Unresolved Dynamic SQL becomes visible instead of absent.
+
+    `usp_Dynamic` runs dynamic text the SQL analyzer never parses -- it has no
+    `reads`/`writes` of its own, so it can never match a table by name. No
+    repair will ever prove what it does; the reverse lookup can only say that
+    it exists and that the table asked about cannot be ruled out. It is not a
+    mutation: `write_only=True` must still exclude it, and must say so via
+    `excluded_count` instead of silently returning a shorter list.
+    """
+    data = {
+        "database": "OrdersDb",
+        "schema": "dbo",
+        "procedures": [
+            {
+                "name": "dbo.usp_Dynamic",
+                "definition": """CREATE PROCEDURE dbo.usp_Dynamic
+AS
+BEGIN
+    EXEC(@sql);
+END;
+""",
+            },
+        ],
+        "views": [],
+        "functions": [],
+        "tables": [],
+    }
+    graph = build_sql_execution_graph(data)
+    scan = _scan_with_calls(
+        tmp_path,
+        [("DynamicPage.cs", "DynamicPage", "SaveDynamic", "dbo.usp_Dynamic")],
+    )
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema, server="": {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "sql_execution_graph": graph,
+        },
+    )
+
+    touches = analyze_service.find_by_table(
+        FindByTableRequest(
+            source={"project": "orders", "repo": "orders"},
+            table_name="dbo.VQM",
+            database="OrdersDb",
+            cache_only=False,
+            write_only=False,
+        )
+    )
+
+    assert [match.program for match in touches.matches] == ["dynamicpage"]
+    match = touches.matches[0]
+    assert match.evidence_status == "unresolved"
+    assert match.reason == "unresolved_dynamic_sql"
+    assert match.access_type == "UNRESOLVED"
+    assert touches.excluded_count == 0
+
+    writes_only = analyze_service.find_by_table(
+        FindByTableRequest(
+            source={"project": "orders", "repo": "orders"},
+            table_name="dbo.VQM",
+            database="OrdersDb",
+            cache_only=False,
+            write_only=True,
+        )
+    )
+
+    assert writes_only.matches == []
+    assert writes_only.excluded_count == 1
+
+
+def test_find_by_table_reports_one_record_per_stored_procedure_reaching_the_table(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Ticket 02 / ADR-0016: one program, two stored procedures, two records.
+
+    `_prefer_table_match()` used to key by file and keep only the
+    highest-ranked access fact -- one program writing the same table through
+    two different stored procedures reported only one of them, and the
+    response did not say which, or that there were two.
+    """
+    data = {
+        "database": "OrdersDb",
+        "schema": "dbo",
+        "procedures": [
+            {
+                "name": "dbo.usp_WriteA",
+                "definition": "CREATE PROCEDURE dbo.usp_WriteA AS INSERT INTO dbo.Ledger (Id) VALUES (1);",
+            },
+            {
+                "name": "dbo.usp_WriteB",
+                "definition": "CREATE PROCEDURE dbo.usp_WriteB AS UPDATE dbo.Ledger SET Id = 1;",
+            },
+        ],
+        "views": [],
+        "functions": [],
+        "tables": [{"name": "dbo.Ledger"}],
+    }
+    graph = build_sql_execution_graph(data)
+    scan = _scan_one_program_multiple_calls(
+        tmp_path,
+        "LedgerPage.cs",
+        "LedgerPage",
+        [("SaveA", "dbo.usp_WriteA"), ("SaveB", "dbo.usp_WriteB")],
+    )
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema, server="": {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "sql_execution_graph": graph,
+        },
+    )
+
+    response = analyze_service.find_by_table(
+        FindByTableRequest(
+            source={"project": "orders", "repo": "orders"},
+            table_name="dbo.Ledger",
+            database="OrdersDb",
+            cache_only=False,
+            write_only=True,
+        )
+    )
+
+    assert {match.program for match in response.matches} == {"ledgerpage"}
+    assert len(response.matches) == 2
+    assert len({match.path_id for match in response.matches}) == 2
+    assert all(match.evidence_status == "proven" for match in response.matches)
+
+
+def test_find_by_table_reports_a_read_and_a_write_from_the_same_program(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Ticket 02 / ADR-0016: a read never hides a write for the same program.
+
+    One program reads `Ledger` through one stored procedure and writes it
+    through another. Both facts must survive -- the old file-keyed dedup kept
+    only the write.
+    """
+    data = {
+        "database": "OrdersDb",
+        "schema": "dbo",
+        "procedures": [
+            {
+                "name": "dbo.usp_ReadLedger",
+                "definition": "CREATE PROCEDURE dbo.usp_ReadLedger AS SELECT Id FROM dbo.Ledger;",
+            },
+            {
+                "name": "dbo.usp_WriteLedger",
+                "definition": "CREATE PROCEDURE dbo.usp_WriteLedger AS UPDATE dbo.Ledger SET Id = 1;",
+            },
+        ],
+        "views": [],
+        "functions": [],
+        "tables": [{"name": "dbo.Ledger"}],
+    }
+    graph = build_sql_execution_graph(data)
+    scan = _scan_one_program_multiple_calls(
+        tmp_path,
+        "LedgerPage.cs",
+        "LedgerPage",
+        [("Load", "dbo.usp_ReadLedger"), ("Save", "dbo.usp_WriteLedger")],
+    )
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema, server="": {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "sql_execution_graph": graph,
+        },
+    )
+
+    response = analyze_service.find_by_table(
+        FindByTableRequest(
+            source={"project": "orders", "repo": "orders"},
+            table_name="dbo.Ledger",
+            database="OrdersDb",
+            cache_only=False,
+            write_only=False,
+        )
+    )
+
+    assert {(match.access_type, match.evidence_status) for match in response.matches} == {
+        ("READ", "proven"),
+        ("UPDATE", "proven"),
+    }
+    assert len(response.matches) == 2
+
+
+def test_find_by_table_reports_a_proven_read_beside_an_unproven_write_from_the_same_program(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """ADR-0016's own motivating case: an unproven write must not win the file's
+    one seat and displace a proven read, or the reverse.
+
+    `usp_WriteLedger`'s write to `Ledger` sits in the same DML operation as a
+    read of a table the graph has no node for, so the whole path downgrades to
+    `unresolved` (decision 3) -- it produces an `UNRESOLVED` record, not an
+    `UPDATE` one. Under the old file-keyed dedup, `_table_match_rank()` scored
+    a write above a read regardless of Evidence Status, so this record would
+    have won the file's one seat and the proven read from `usp_ReadLedger`
+    would have been discarded with it. Both must survive as separate records.
+    """
+    graph = {
+        "graph_version": 4,
+        "database": "OrdersDb",
+        "nodes": [
+            {
+                "id": "stored_procedure:dbo.usp_ReadLedger",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_ReadLedger",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_ReadLedger:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_ReadLedger",
+                "sequence": 1,
+                "operation_type": "SELECT",
+            },
+            {
+                "id": "stored_procedure:dbo.usp_WriteLedger",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_WriteLedger",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_WriteLedger:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_WriteLedger",
+                "sequence": 1,
+                "operation_type": "UPDATE",
+            },
+            {"id": "table:dbo.Ledger", "type": "table", "schema": "dbo", "name": "Ledger"},
+        ],
+        "relationships": [
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_ReadLedger",
+                "target": "dml_operation:stored_procedure:dbo.usp_ReadLedger:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_ReadLedger:1",
+                "target": "table:dbo.Ledger",
+            },
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_WriteLedger",
+                "target": "dml_operation:stored_procedure:dbo.usp_WriteLedger:1",
+            },
+            {
+                "type": "writes",
+                "source": "dml_operation:stored_procedure:dbo.usp_WriteLedger:1",
+                "target": "table:dbo.Ledger",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_WriteLedger:1",
+                "target": "table:dbo.Missing",
+            },
+        ],
+        "parse_errors": [],
+    }
+    scan = _scan_one_program_multiple_calls(
+        tmp_path,
+        "LedgerPage.cs",
+        "LedgerPage",
+        [("Load", "dbo.usp_ReadLedger"), ("Save", "dbo.usp_WriteLedger")],
+    )
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema, server="": {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "sql_execution_graph": graph,
+        },
+    )
+
+    all_access = analyze_service.find_by_table(
+        FindByTableRequest(
+            source={"project": "orders", "repo": "orders"},
+            table_name="dbo.Ledger",
+            database="OrdersDb",
+            cache_only=False,
+            write_only=False,
+        )
+    )
+
+    assert {(match.access_type, match.evidence_status) for match in all_access.matches} == {
+        ("READ", "proven"),
+        ("UNRESOLVED", "unresolved"),
+    }
+    assert len(all_access.matches) == 2
+    assert all_access.excluded_count == 0
+
+    writes_only = analyze_service.find_by_table(
+        FindByTableRequest(
+            source={"project": "orders", "repo": "orders"},
+            table_name="dbo.Ledger",
+            database="OrdersDb",
+            cache_only=False,
+            write_only=True,
+        )
+    )
+
+    assert writes_only.matches == []
+    assert writes_only.excluded_count == 2
+
+
+def test_find_by_table_collapses_two_identical_execution_paths_into_one_record(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Ticket 02 / ADR-0016: two identical Execution Paths still collapse to one.
+
+    Deduplicating by Execution Path identity, not by file, must still collapse
+    a genuine repeat -- the same call site's fact reaching the response twice
+    is not two facts. Both raw invocations here share every field, including
+    the source span, so they produce the same `path_id`.
+    """
+    data = {
+        "database": "OrdersDb",
+        "schema": "dbo",
+        "procedures": [
+            {
+                "name": "dbo.usp_WriteLedger",
+                "definition": "CREATE PROCEDURE dbo.usp_WriteLedger AS UPDATE dbo.Ledger SET Id = 1;",
+            },
+        ],
+        "views": [],
+        "functions": [],
+        "tables": [{"name": "dbo.Ledger"}],
+    }
+    graph = build_sql_execution_graph(data)
+    file_path = tmp_path / "LedgerPage.cs"
+    duplicate_call = {
+        "class_name": "LedgerPage",
+        "method_name": "Save",
+        "command_text_kind": "literal",
+        "command_text": "dbo.usp_WriteLedger",
+        "command_type_stored_procedure": True,
+        "terminal_sink": "ExecuteNonQuery",
+        "connection_expression": "conn",
+        "start_offset": 10,
+        "end_offset": 90,
+    }
+    scan = ProjectScanResult(
+        project_root=str(tmp_path),
+        project_name="orders",
+        scan_time=datetime.now(),
+        csharp_results=[
+            _file(tmp_path, "LedgerPage.cs", [MethodInfo(name="Save", access_modifier="private", return_type="void")])
+        ],
+        aspx_results=[],
+        db_invocations={str(file_path.resolve()): [dict(duplicate_call), dict(duplicate_call)]},
+        connection_sources={str(file_path.resolve()): {"conn": "OrdersDb"}},
+    )
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda database, schema, server="": {
+            "database": "OrdersDb",
+            "schema": "dbo",
+            "sql_execution_graph": graph,
+        },
+    )
+
+    response = analyze_service.find_by_table(
+        FindByTableRequest(
+            source={"project": "orders", "repo": "orders"},
+            table_name="dbo.Ledger",
+            database="OrdersDb",
+            cache_only=False,
+            write_only=True,
+        )
+    )
+
+    assert len(response.matches) == 1
+    assert response.matches[0].program == "ledgerpage"

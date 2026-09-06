@@ -18,7 +18,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
@@ -2242,14 +2242,48 @@ def _source_file_for_span(
     return matches[0] if len(matches) == 1 else ""
 
 
+class _WriterEvidenceIdentity(NamedTuple):
+    """The Execution Path identity ADR-0016 deduplicates a table match by.
+
+    Program, file, `path_id`, entry method, stored-procedure chain, and
+    access type -- not file alone. Two records that agree on all of these are
+    one fact and collapse to one record; two that differ in any of them are
+    two facts, and both survive. This is the identity the companion
+    repository's glossary calls Writer Evidence Identity.
+    """
+
+    program: str
+    file: str
+    path_id: str
+    entry_method: str
+    sp_chain: Tuple[str, ...]
+    access_type: str
+
+
+def _table_match_identity(match: TableMatchProgram) -> _WriterEvidenceIdentity:
+    return _WriterEvidenceIdentity(
+        program=match.program,
+        file=match.file,
+        path_id=match.path_id,
+        entry_method=match.entry_method,
+        sp_chain=tuple(match.sp_chain),
+        access_type=match.access_type,
+    )
+
+
 def _prefer_table_match(
-    matches_by_file: Dict[str, TableMatchProgram],
+    existing: Dict[Any, TableMatchProgram],
+    key: Any,
     candidate: TableMatchProgram,
 ) -> None:
-    """Keep the strongest access fact when one file contributes many paths."""
-    current = matches_by_file.get(candidate.file)
+    """Keep the strongest of two records sharing ``key`` in ``existing``.
+
+    The key decides what counts as "the same fact"; see `_table_match_identity`
+    for the Execution Path identity ADR-0016 keys graph-derived matches by.
+    """
+    current = existing.get(key)
     if current is None or _table_match_rank(candidate) > _table_match_rank(current):
-        matches_by_file[candidate.file] = candidate
+        existing[key] = candidate
 
 
 def _table_match_rank(match: TableMatchProgram) -> tuple[int, int, int]:
@@ -2453,7 +2487,13 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     _record_table_reverse_lookup(table_name, scope)
 
     table_norm = _normalize_table(table_name)
-    matches_by_file: Dict[str, TableMatchProgram] = {}
+    # Graph-derived facts key by Execution Path identity, not by file
+    # (ADR-0016) -- see `_table_match_identity`. An inline C# SQL fact carries
+    # no such identity of its own; it keeps the pre-ticket file-scoped rule
+    # below, so it still loses to a stronger graph-derived fact for the same
+    # file instead of becoming a spurious extra record next to it.
+    matches_by_identity: Dict[_WriterEvidenceIdentity, TableMatchProgram] = {}
+    inline_matches_by_file: Dict[str, TableMatchProgram] = {}
     diagnostics: List[Dict] = []
     for rel in scan.table_relations:
         if _normalize_table(rel.table_name) != table_norm:
@@ -2480,7 +2520,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             caller_class=caller_class,
             caller_method=caller_method,
         )
-        _prefer_table_match(matches_by_file, candidate)
+        _prefer_table_match(inline_matches_by_file, candidate.file, candidate)
 
     # Stored-procedure access is joined through Gateway invocations and the graph.
     # Do not fall back to SQL dependency dictionaries or definition-text guesses.
@@ -2519,11 +2559,18 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             is_write = bool(access_record.get("is_write"))
             is_indirect = bool(access_record.get("is_indirect"))
             operation_type = str(access_record.get("operation_type") or "")
+            evidence_status = str(access_record.get("evidence") or "unresolved")
+            # A path that is not `proven` never reaches here with `is_write`
+            # True (see `graph_queries._access_record`), so this branch order
+            # only has to add one case: claim no direction at all for it,
+            # instead of mislabeling it READ (ADR-0015).
             access_type = (
                 "WRITE_INDIRECT"
                 if is_write and is_indirect
                 else operation_type
                 if is_write
+                else "UNRESOLVED"
+                if evidence_status != "proven"
                 else "READ_INDIRECT"
                 if is_indirect
                 else "READ"
@@ -2559,8 +2606,26 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
                 operation_type=operation_type,
                 **wrapper_projection,
             )
-            _prefer_table_match(matches_by_file, candidate)
+            _prefer_table_match(matches_by_identity, _table_match_identity(candidate), candidate)
 
+    # An inline fact joins the response only if no graph-derived fact for the
+    # same file already outranks it (`_table_match_rank`: write beats read,
+    # direct beats indirect, graph-derived beats inline) -- the blending rule
+    # `tests/test_derived_execution_evidence_reuse_table.py` fixes in place,
+    # predating this ticket. It never removes a graph-derived record: decision
+    # 4 is about not collapsing distinct Execution Paths into each other, and
+    # an inline fact is not an Execution Path, so it never enters
+    # `matches_by_identity` at all.
+    all_matches: List[TableMatchProgram] = list(matches_by_identity.values())
+    for file, inline_match in inline_matches_by_file.items():
+        outranked = any(
+            match.file == file and _table_match_rank(match) > _table_match_rank(inline_match)
+            for match in matches_by_identity.values()
+        )
+        if not outranked:
+            all_matches.append(inline_match)
+
+    excluded_count = 0
     if req.write_only:
         write_types = {
             "WRITE",
@@ -2570,15 +2635,18 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             "DELETE",
             "SELECT_INTO",
         }
-        matches_by_file = {
-            key: match
-            for key, match in matches_by_file.items()
-            if match.access_type in write_types
-        }
+        before = len(all_matches)
+        all_matches = [match for match in all_matches if match.access_type in write_types]
+        # `UNRESOLVED` and every read type fall out of `write_types`, so this
+        # also counts a path the graph could not prove -- `write_only=True`
+        # must keep meaning "proven writes and nothing else" (ADR-0015)
+        # without silently reading as a complete list.
+        excluded_count = before - len(all_matches)
 
     return FindByTableResponse(
         table_name=table_name,
-        matches=sorted(matches_by_file.values(), key=lambda item: (item.program, item.file)),
+        matches=sorted(all_matches, key=lambda item: (item.program, item.file)),
+        excluded_count=excluded_count,
         diagnostics=diagnostics,
         source_root=str(root),
     )

@@ -307,7 +307,16 @@ def test_query_table_accesses_excludes_likely_reads_from_formal_results() -> Non
     assert query_table_accesses(graph, [likely], "dbo.SOrder", access="read") == []
 
 
-def test_query_table_accesses_excludes_partial_unresolved_reads() -> None:
+def test_query_table_accesses_downgrades_partial_unresolved_reads_instead_of_dropping_them() -> None:
+    """ADR-0015: a read the service cannot fully prove is reported, not dropped.
+
+    `usp_PartialRead` reads `dbo.SOrder` directly, but a sibling read on the
+    same operation targets a table the graph has no node for -- the path's
+    evidence downgrades to `unresolved` even though the read on `SOrder`
+    itself resolved cleanly. Before this change `filter_table_accesses()`
+    required `evidence == "proven"` before even looking at `reads`/`writes`,
+    so this record vanished with nothing to say it had ever existed.
+    """
     graph = _graph()
     graph["nodes"].append(
         {
@@ -353,12 +362,92 @@ def test_query_table_accesses_excludes_partial_unresolved_reads() -> None:
 
     assert paths[0]["evidence"] == "unresolved"
     assert paths[0]["reads"] == ["dbo.SOrder"]
-    assert query_table_accesses(
+
+    accesses = query_table_accesses(
         graph,
         [_invocation("PartialRead", "usp_PartialRead")],
         "dbo.SOrder",
         access="read",
-    ) == []
+    )
+
+    assert [(item["table"], item["access_type"], item["is_write"]) for item in accesses] == [
+        ("dbo.SOrder", "UNRESOLVED", False)
+    ]
+    assert accesses[0]["evidence"] == "unresolved"
+    assert accesses[0]["unresolved_reason"] == "missing_graph_target"
+
+
+def test_query_table_accesses_downgrades_an_unresolved_view_lineage_read_instead_of_dropping_it() -> None:
+    """ADR-0015 applies to a lineage read too, not only a direct name match.
+
+    `usp_ReadViewPartial` reaches `SOrder` only through `vSOrder`'s own read --
+    the same View lineage `test_query_table_accesses_resolves_view_read_lineage_without_writer`
+    proves for a `proven` path. Here a sibling read in the same operation
+    targets a table the graph has no node for, so the path itself downgrades
+    to `unresolved`. The lineage lookup depends only on graph topology, not on
+    the path's evidence, so it must still find `SOrder` -- and the resulting
+    record must still claim no mutation and carry the Evidence Status, exactly
+    like a direct-match downgrade.
+    """
+    graph = _graph()
+    graph["nodes"].extend(
+        [
+            {
+                "id": "stored_procedure:dbo.usp_ReadViewPartial",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_ReadViewPartial",
+            },
+            {
+                "id": "dml_operation:stored_procedure:dbo.usp_ReadViewPartial:1",
+                "type": "dml_operation",
+                "module_id": "stored_procedure:dbo.usp_ReadViewPartial",
+                "sequence": 1,
+                "operation_type": "SELECT",
+                "read_tables": ["dbo.vSOrder"],
+            },
+        ]
+    )
+    graph["relationships"].extend(
+        [
+            {
+                "type": "contains",
+                "source": "stored_procedure:dbo.usp_ReadViewPartial",
+                "target": "dml_operation:stored_procedure:dbo.usp_ReadViewPartial:1",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_ReadViewPartial:1",
+                "target": "view:dbo.vSOrder",
+            },
+            {
+                "type": "reads",
+                "source": "dml_operation:stored_procedure:dbo.usp_ReadViewPartial:1",
+                "target": "table:dbo.Missing",
+            },
+        ]
+    )
+
+    paths = build_execution_paths(
+        [_invocation("ReadViewPartial", "usp_ReadViewPartial")],
+        graph,
+    )
+
+    assert paths[0]["evidence"] == "unresolved"
+    assert paths[0]["reads"] == ["dbo.vSOrder"]
+
+    accesses = query_table_accesses(
+        graph,
+        [_invocation("ReadViewPartial", "usp_ReadViewPartial")],
+        "dbo.SOrder",
+        access="read",
+    )
+
+    assert [(item["table"], item["access_type"], item["is_write"], item["is_indirect"]) for item in accesses] == [
+        ("SOrder", "UNRESOLVED", False, True)
+    ]
+    assert accesses[0]["evidence"] == "unresolved"
+    assert accesses[0]["unresolved_reason"] == "missing_graph_target"
 
 
 def test_query_table_accesses_resolves_two_levels_of_view_read_lineage() -> None:

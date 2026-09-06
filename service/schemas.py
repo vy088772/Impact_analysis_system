@@ -396,7 +396,9 @@ class TableMatchProgram(WrapperEvidenceFields):
     # 不是 C# inline SQL fact 的直接命中
     access_type: str = ""                     # 存取型態：C# 直接命中沿用 CSharpTableRelation.access_type
     # 直接命中可為 "READ"/"INSERT"/"UPDATE"/"DELETE"；Execution Graph 的巢狀
-    # 呼叫會保留原始 operation_type，間接寫入標示為 "WRITE_INDIRECT"。
+    # 呼叫會保留原始 operation_type，間接寫入標示為 "WRITE_INDIRECT"。evidence_status
+    # 非 "proven" 的命中一律是 "UNRESOLVED"——這筆 Execution Path 確實碰到這張表，
+    # 但服務無法證明它做了什麼，因此不聲稱是讀取或寫入（ADR-0015）。
     path_id: str = ""
     entry_method: str = ""
     sp_chain: List[str] = Field(default_factory=list)
@@ -415,6 +417,9 @@ class TableMatchProgram(WrapperEvidenceFields):
 class FindByTableResponse(BaseModel):
     table_name: str = ""
     matches: List[TableMatchProgram] = Field(default_factory=list)
+    excluded_count: int = 0                   # write_only=True 時，被「只留 proven 寫入」濾掉的
+    # 命中數（讀取、以及 evidence_status 非 proven 的命中）；write_only=False 時恆為 0。
+    # 讓一份較短的清單不會被誤讀成完整清單——見 reverse-lookup-drops-proven-writes ticket 02。
     diagnostics: List[Dict] = Field(default_factory=list)
     skipped: bool = False                     # True：該 repo 尚未 clone/分析過，本次未比對
     source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）

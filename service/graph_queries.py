@@ -19,11 +19,12 @@ def query_table_accesses(
     access: str = "all",
     max_call_depth: int = 5,
 ) -> list[dict[str, Any]]:
-    """Return C#-to-table facts proven by execution paths in ``graph``.
+    """Return C#-to-table facts held by execution paths in ``graph``.
 
-    Each result is one terminal path/table pair. ``write`` only returns confirmed
-    DML paths; View, Function, and unresolved dynamic-SQL paths therefore cannot
-    become confirmed writers by accident.
+    Each result is one terminal path/table pair. A path that is not `proven`
+    still produces a record -- see `filter_table_accesses` -- but its
+    ``is_write`` is always ``False``, so a View, a Function, or an unresolved
+    path can never become a confirmed writer by accident.
 
     Builds Execution Paths itself, once, from ``invocations``. A caller that
     already holds Execution Paths for the same invocations and graph -- for
@@ -41,7 +42,24 @@ def filter_table_accesses(
     *,
     access: str = "all",
 ) -> list[dict[str, Any]]:
-    """Return C#-to-table facts proven by already-built Execution Paths.
+    """Return every C#-to-table fact an already-built set of Execution Paths holds.
+
+    An Execution Path that reaches ``table_name`` produces a record whether or
+    not it is `proven` -- a path whose evidence is not `proven` is downgraded,
+    not dropped: its record claims no mutation (``is_write`` is always
+    ``False``, and ``access_type`` reads ``"UNRESOLVED"``), and carries the
+    path's Evidence Status and its reason instead. A caller that wants proven
+    facts only -- `write_only=True` at the `find_by_table` seam -- filters the
+    returned records on Evidence Status itself; this function does not do
+    that filtering, so it never has to report what it excluded. See
+    ADR-0015.
+
+    An Unresolved Dynamic SQL path names no table at all -- the dynamic text
+    was never parsed, so it has no ``reads``/``writes`` to match by name. Under
+    ``access="all"`` such a path is still surfaced, once per table asked
+    about, because the graph genuinely cannot rule out that it touches this
+    one. It is not surfaced for a directional ``access="read"``/``"write"``
+    request, which has no name match to hang a direction off of.
 
     Split out of `query_table_accesses` so a caller holding one scope's Execution
     Paths (see `service.analyze_service._execution_paths_for_scope`) can query
@@ -61,16 +79,28 @@ def filter_table_accesses(
         writes = _matching_names(path.get("writes", []), target_name)
         reads = _matching_names(path.get("reads", []), target_name)
         is_dynamic = "dynamic_sql" in set(path.get("risk_flags", []) or [])
-        is_confirmed = path.get("evidence") == "proven" and not is_dynamic
+        is_proven = path.get("evidence") == "proven" and not is_dynamic
 
-        if writes and access in {"all", "write"} and is_confirmed:
-            accesses.append(_access_record(path, writes[0], is_write=True))
+        if writes and access in {"all", "write"}:
+            accesses.append(_access_record(path, writes[0], is_write=True, is_proven=is_proven))
             continue
 
-        if access in {"all", "read"} and is_confirmed:
-            if reads:
-                accesses.append(_access_record(path, reads[0], is_write=False))
-                continue
+        if reads and access in {"all", "read"}:
+            accesses.append(_access_record(path, reads[0], is_write=False, is_proven=is_proven))
+            continue
+
+        if access == "all" and is_dynamic and not writes and not reads:
+            accesses.append(_access_record(path, table_name, is_write=False, is_proven=False))
+            continue
+
+        # A View/Function read reaches the table by lineage, not by name --
+        # `is_proven` gated this before, so a path downgraded by a co-occurring
+        # missing target elsewhere in the same operation (decision 3's own
+        # motivating shape) vanished here exactly as it did at the direct-match
+        # branches above. The lookup itself only depends on graph topology, not
+        # on the path's evidence, so it runs regardless; `is_proven` still
+        # decides whether the resulting record claims the read (ADR-0015).
+        if access in {"all", "read"} and not writes and not reads:
             if lineage_index is None:
                 lineage_index = _LineageIndex(graph)
             lineage_reads = lineage_index.read_lineage(path, target_name)
@@ -80,6 +110,7 @@ def filter_table_accesses(
                         path,
                         table,
                         is_write=False,
+                        is_proven=is_proven,
                         is_indirect_override=True,
                     )
                 )
@@ -92,14 +123,25 @@ def _access_record(
     table_name: str,
     *,
     is_write: bool,
+    is_proven: bool,
     is_indirect_override: bool | None = None,
 ) -> dict[str, Any]:
+    """Build one access record; a non-`proven` path never claims a mutation.
+
+    ``is_write`` states what the caller matched the path on (its ``writes``
+    list vs. its ``reads`` list); it becomes the record's ``is_write`` only
+    when the path is also `proven`. A `proven` write keeps its real operation
+    as ``access_type``; anything not `proven` -- write-shaped or not -- reads
+    ``"UNRESOLVED"``, per ADR-0015: the record states that the path reaches
+    the table, not what it does there.
+    """
     sp_chain = list(path.get("sp_chain", []) or [])
     operation = str(path.get("terminal_operation") or "")
+    confirmed_write = is_write and is_proven
     record = {
         "table": table_name,
-        "access_type": operation if is_write else "READ",
-        "is_write": is_write,
+        "access_type": (operation if confirmed_write else "READ") if is_proven else "UNRESOLVED",
+        "is_write": confirmed_write,
         "is_indirect": (
             is_indirect_override
             if is_indirect_override is not None
