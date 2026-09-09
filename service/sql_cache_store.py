@@ -148,11 +148,16 @@ def _parse_key(stem: str) -> tuple[str, str, str]:
 def normalize_server(server: str) -> str:
     """把連線字串裡的主機位址正規化成快取鍵用的完整位址。
 
-    規則只有兩條：具名執行個體尾綴（`host\\instance`）丟掉、只留主機；主機名
-    不含 `.` 時補上 SERVER_DOMAIN_SUFFIX。主機名不分大小寫，一律轉小寫。
+    規則有四條：`tcp:` 協定前綴丟掉；`,port` 埠號尾綴丟掉；具名執行個體尾綴
+    （`host\\instance`）丟掉、只留主機；主機名不含 `.` 時補上
+    SERVER_DOMAIN_SUFFIX。主機名不分大小寫，一律轉小寫。
     空字串進、空字串出（呼叫端自行決定要不要當成錯誤）。
     """
     host = str(server or "").strip()
+    if host.lower().startswith("tcp:"):
+        host = host[len("tcp:"):].strip()
+    if "," in host:
+        host = host.split(",", 1)[0].strip()
     if "\\" in host:
         host = host.split("\\", 1)[0].strip()
     if not host:

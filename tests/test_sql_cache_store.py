@@ -73,6 +73,38 @@ def test_empty_server_normalizes_to_empty() -> None:
     assert sql_cache_store.normalize_server("   ") == ""
 
 
+def test_tcp_protocol_prefix_is_discarded() -> None:
+    assert (
+        sql_cache_store.normalize_server("tcp:vmsystest07.topmost.com.tw")
+        == "vmsystest07.topmost.com.tw"
+    )
+
+
+def test_port_suffix_is_discarded() -> None:
+    assert (
+        sql_cache_store.normalize_server("vmsystest07.topmost.com.tw,1433")
+        == "vmsystest07.topmost.com.tw"
+    )
+
+
+def test_protocol_prefix_and_port_suffix_together_normalize_like_neither() -> None:
+    assert (
+        sql_cache_store.normalize_server("tcp:vmsystest07.topmost.com.tw,1433")
+        == sql_cache_store.normalize_server("vmsystest07.topmost.com.tw")
+    )
+
+
+def test_port_suffix_is_discarded_before_the_domain_suffix_is_added() -> None:
+    assert sql_cache_store.normalize_server("vmsystest07,1433") == "vmsystest07.topmost.com.tw"
+
+
+def test_port_suffix_with_named_instance_suffix_is_discarded() -> None:
+    assert (
+        sql_cache_store.normalize_server("vmsystest08.topmost.com.tw\\vmsystest08_pdcs,1433")
+        == "vmsystest08.topmost.com.tw"
+    )
+
+
 # ------------------------------------------------------------------ cache key
 
 
