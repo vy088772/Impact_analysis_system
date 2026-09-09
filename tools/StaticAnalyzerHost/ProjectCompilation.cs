@@ -99,6 +99,23 @@ internal static class ProjectCompilationResolver
                 new[] { $"csproj_unreadable: {exception.Message}" });
         }
 
+        // An SDK-style project (every ASP.NET Core project in the catalog) declares no explicit
+        // <Compile> items -- its source files come from implicit globbing, which this reader
+        // does not understand yet (Ticket 05). Without this check, zero source files and zero
+        // explicit references both read as "nothing unresolved", and the project below falls
+        // through to `available` holding an empty compilation: a degraded analysis that looks
+        // like a confident one. Report unavailable here, named distinctly from a project that
+        // failed to parse, so a maintainer can tell an unreadable project from an empty one.
+        // Skipped when the caller already supplied its own parsed trees (Ticket 06's
+        // ResolveCompilationForAnalysis): those trees are real source found by the caller's own
+        // globbing, so an empty explicit <Compile> list there is not an empty compilation.
+        if (overrideSyntaxTrees is null && description.CompileItems.Count == 0)
+            return ProjectSemanticBinding.Unavailable(
+                scanRoot,
+                projectFile,
+                "unavailable_reference_resolution_failed",
+                new[] { "no_compile_items: project declares no <Compile> source items" });
+
         var (references, unresolvedExternal) = ResolveExternalReferences(projectFile, description.References);
 
         // An old-style project's declared package assemblies live under a packages directory

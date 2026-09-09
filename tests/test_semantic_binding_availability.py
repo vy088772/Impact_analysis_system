@@ -83,6 +83,37 @@ def test_semantic_binding_reports_unavailable_no_project_file() -> None:
 
 
 @requires_dotnet
+def test_semantic_binding_reports_unavailable_for_sdk_style_project_with_no_source_files() -> None:
+    """Ticket 02: an SDK-style project (an ASP.NET Core project, in the real catalog) declares
+    no explicit <Compile> items -- its source files come from implicit globbing, which the
+    project reader does not understand yet. An empty explicit item list must never read as an
+    empty-but-successful compilation: it must report unavailable, and name why, so a maintainer
+    can tell this apart from a project that failed to parse."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as scan_root:
+        project_dir = Path(scan_root)
+        (project_dir / "CoreApp.csproj").write_text(
+            """<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+""",
+            encoding="utf-8",
+        )
+
+        result = host.semantic_binding_availability([project_dir])
+
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["availability"] == "unavailable_reference_resolution_failed"
+    assert entry["project_file"] == str(project_dir / "CoreApp.csproj")
+    assert any("no_compile_items" in reason for reason in entry["unresolved_references"])
+
+
+@requires_dotnet
 def test_semantic_binding_reports_unavailable_reference_resolution_failed() -> None:
     """A reference the compilation cannot resolve (neither the reference assembly package
     nor the project's own output directory) fails the whole project's attempt, and names
