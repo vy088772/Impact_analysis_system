@@ -14,6 +14,46 @@ internal static class ProjectPaths
             Directory(projectFile), relativePath.Replace('\\', Path.DirectorySeparatorChar)));
 }
 
+// One loaded project file, together with the XML namespace its elements carry -- an old-style
+// project declares one and an SDK-style project declares none, and every reader below would
+// otherwise have to carry both halves around to ask a single question. The two project shapes
+// differ in almost everything else, but both are read through exactly these four questions.
+internal sealed class ProjectXml
+{
+    private readonly XDocument _document;
+    private readonly XNamespace _namespace;
+
+    private ProjectXml(XDocument document)
+    {
+        _document = document;
+        _namespace = document.Root?.Name.Namespace ?? XNamespace.None;
+    }
+
+    internal static ProjectXml Load(string projectFile) => new(XDocument.Load(projectFile));
+
+    internal string? RootAttribute(string name) => _document.Root?.Attribute(name)?.Value;
+
+    internal IEnumerable<XElement> Elements(string name) => _document.Descendants(_namespace + name);
+
+    internal string? ChildValue(XElement element, string name)
+        => element.Element(_namespace + name)?.Value;
+
+    /// <summary>The value of one MSBuild property, or null when the project declares none. The
+    /// last declaration wins, which is how MSBuild evaluates a property.</summary>
+    internal string? Property(string name) => Elements(name).LastOrDefault()?.Value.Trim();
+
+    /// <summary>Every value one item attribute carries across the whole project file. A single
+    /// attribute may hold several values separated by semicolons, which MSBuild treats as
+    /// separate items, so they are yielded separately here too.</summary>
+    internal IEnumerable<string> ItemValues(string itemName, string attributeName)
+        => Elements(itemName)
+            .Select(element => element.Attribute(attributeName)?.Value)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .SelectMany(value => value!.Split(';', StringSplitOptions.RemoveEmptyEntries))
+            .Select(value => value.Trim())
+            .Where(value => value.Length > 0);
+}
+
 // Builds one Roslyn Compilation per MSBuild project file found under a scan root, so a later
 // ticket can bind a wrapper call to an exact method symbol through a real semantic model. This
 // ticket only builds the compilation and reports the result of that attempt — Semantic Binding
@@ -99,93 +139,153 @@ internal static class ProjectCompilationResolver
                 new[] { $"csproj_unreadable: {exception.Message}" });
         }
 
-        // An SDK-style project (every ASP.NET Core project in the catalog) declares no explicit
-        // <Compile> items -- its source files come from implicit globbing, which this reader
-        // does not understand yet (Ticket 05). Without this check, zero source files and zero
-        // explicit references both read as "nothing unresolved", and the project below falls
-        // through to `available` holding an empty compilation: a degraded analysis that looks
-        // like a confident one. Report unavailable here, named distinctly from a project that
-        // failed to parse, so a maintainer can tell an unreadable project from an empty one.
-        // Skipped when the caller already supplied its own parsed trees (Ticket 06's
-        // ResolveCompilationForAnalysis): those trees are real source found by the caller's own
-        // globbing, so an empty explicit <Compile> list there is not an empty compilation.
+        // A project that yields no source files at all holds an empty compilation, and zero source
+        // files plus zero references would otherwise read as "nothing unresolved" and fall through
+        // to `available`: a degraded analysis that looks like a confident one. Report unavailable
+        // here, named distinctly from a project that failed to parse, so a maintainer can tell an
+        // unreadable project from an empty one. Skipped when the caller already supplied its own
+        // parsed trees (Ticket 06's ResolveCompilationForAnalysis): those trees are real source
+        // found by the caller's own globbing.
         if (overrideSyntaxTrees is null && description.CompileItems.Count == 0)
             return ProjectSemanticBinding.Unavailable(
                 scanRoot,
                 projectFile,
                 "unavailable_reference_resolution_failed",
-                new[] { "no_compile_items: project declares no <Compile> source items" });
+                new[] { "no_compile_items: project contributes no C# source file" });
 
-        var (references, unresolvedExternal) = ResolveExternalReferences(projectFile, description.References);
+        var sourceFileCount = overrideSyntaxTrees?.Count ?? description.CompileItems.Count;
 
-        // An old-style project's declared package assemblies live under a packages directory
-        // that a fresh clone never populated. One restore attempt, then one re-resolution pass —
-        // never a retry loop, and never touched at all when every reference already resolves or
-        // the project declares no packages.config to restore from.
-        if (unresolvedExternal.Count > 0)
-        {
-            var packagesConfigPath = Path.Combine(ProjectPaths.Directory(projectFile), "packages.config");
-            if (File.Exists(packagesConfigPath))
-            {
-                var restoreFailure = PackageRestorer.RestoreDeclaredPackages(
-                    projectFile, packagesConfigPath, description.References);
-                // Re-resolve regardless of outcome: RestoreDeclaredPackages restores whatever it
-                // can before reporting a failure, so a package that landed on disk this run must
-                // stop being named unresolved even when a later package in the same restore failed.
-                (references, unresolvedExternal) = ResolveExternalReferences(projectFile, description.References);
-                if (restoreFailure is not null)
-                    unresolvedExternal.Add(restoreFailure);
-            }
-        }
-
-        var unresolved = new List<string>();
         // A <ProjectReference> names another project's own output, which this ticket does not
         // build (that would mean compiling that project's project file too, recursively). Report
         // it as unresolved rather than silently building an incomplete compilation that still
-        // claims `available` — a degraded analysis must never look like a confident one.
-        unresolved.AddRange(description.ProjectReferences);
-        unresolved.AddRange(unresolvedExternal);
+        // claims `available` — a degraded analysis must never look like a confident one. Nothing
+        // below can change that answer, so it is settled before any reference resolution runs:
+        // a project already known unavailable must never pay for a package restore.
+        if (description.ProjectReferences.Count > 0)
+            return ProjectSemanticBinding.Unavailable(
+                scanRoot,
+                projectFile,
+                "unavailable_reference_resolution_failed",
+                description.ProjectReferences,
+                sourceFileCount);
 
-        // An old-style (non-SDK) .csproj never lists mscorlib as an explicit <Reference>: csc.exe
-        // adds it implicitly to every compilation. Ticket 05 never needed it (it only checked
-        // whether each declared reference resolves as a file), but a real semantic model does --
-        // without it, every built-in type (object, string, ...) fails to bind and every call site
-        // becomes an unresolvable error, defeating the whole point of building a compilation.
-        var mscorlibPath = ResolveFrameworkReference(new ProjectReferenceItem("mscorlib", null));
-        if (mscorlibPath is null)
-            unresolved.Add("mscorlib");
-        else
-            references.Add(MetadataReference.CreateFromFile(mscorlibPath));
+        var (references, unresolved) = description.IsSdkStyle
+            ? ResolveSdkStyleReferences(projectFile, description)
+            : ResolveOldStyleReferences(projectFile, description);
 
         if (unresolved.Count > 0)
             return ProjectSemanticBinding.Unavailable(
-                scanRoot, projectFile, "unavailable_reference_resolution_failed", unresolved);
+                scanRoot,
+                projectFile,
+                "unavailable_reference_resolution_failed",
+                unresolved,
+                sourceFileCount);
 
-        var syntaxTrees = overrideSyntaxTrees ?? description.CompileItems
+        var syntaxTrees = overrideSyntaxTrees?.ToList() ?? description.CompileItems
             .Select(path => (SyntaxTree)CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path))
             .ToList();
+        // The implicit using directives belong to the project, not to any one of its files, so
+        // they join the compilation as their own tree -- the same place the .NET SDK's own
+        // generated global usings file occupies in a real build. It carries no declaration, so it
+        // is never a source file a caller could ask a question about, and never counted as one.
+        if (description.GlobalUsingsSource is not null)
+            syntaxTrees.Insert(0, CSharpSyntaxTree.ParseText(description.GlobalUsingsSource));
         var compilation = CSharpCompilation.Create(
             Path.GetFileNameWithoutExtension(projectFile),
             syntaxTrees,
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-        return ProjectSemanticBinding.Available(scanRoot, projectFile, compilation);
+        return ProjectSemanticBinding.Available(scanRoot, projectFile, compilation, sourceFileCount);
+    }
+
+    // An SDK-style project's package references name no file on disk: they resolve through the
+    // restore assets NuGet writes beside the project. Its <Reference> items, when it has any, name
+    // an assembly at a HintPath exactly as an old-style project's do.
+    private static (List<MetadataReference> References, List<string> Unresolved)
+        ResolveSdkStyleReferences(string projectFile, ProjectFileDescription description)
+    {
+        var (references, unresolved) = ResolveExternalReferences(
+            projectFile, description.References, isSdkStyle: true);
+        var resolution = ResolveRestoredReferences(projectFile, description);
+        references.AddRange(resolution.AssemblyPaths.Select(
+            path => (MetadataReference)MetadataReference.CreateFromFile(path)));
+        unresolved.AddRange(resolution.Unresolved);
+        return (references, unresolved);
+    }
+
+    // An old-style project's declared package assemblies live under a packages directory that a
+    // fresh clone never populated. One restore attempt, then one re-resolution pass — never a
+    // retry loop, and never touched at all when every reference already resolves or the project
+    // declares no packages.config to restore from.
+    private static (List<MetadataReference> References, List<string> Unresolved)
+        ResolveOldStyleReferences(string projectFile, ProjectFileDescription description)
+    {
+        var (references, unresolved) = ResolveExternalReferences(
+            projectFile, description.References, isSdkStyle: false);
+        var packagesConfigPath = Path.Combine(ProjectPaths.Directory(projectFile), "packages.config");
+        if (unresolved.Count > 0 && File.Exists(packagesConfigPath))
+        {
+            var restoreFailure = PackageRestorer.RestoreDeclaredPackages(
+                projectFile, packagesConfigPath, description.References);
+            // Re-resolve regardless of outcome: RestoreDeclaredPackages restores whatever it can
+            // before reporting a failure, so a package that landed on disk this run must stop
+            // being named unresolved even when a later package in the same restore failed.
+            (references, unresolved) = ResolveExternalReferences(
+                projectFile, description.References, isSdkStyle: false);
+            if (restoreFailure is not null)
+                unresolved.Add(restoreFailure);
+        }
+
+        // An old-style (non-SDK) .csproj never lists mscorlib as an explicit <Reference>: csc.exe
+        // adds it implicitly to every compilation. Without it, every built-in type (object,
+        // string, ...) fails to bind and every call site becomes an unresolvable error, defeating
+        // the whole point of building a compilation. An SDK-style project needs no such addition
+        // and must not get one: its own framework references already carry every built-in type,
+        // and a .NET Framework mscorlib beside them would declare every one of them twice.
+        var mscorlibPath = ResolveFrameworkReference(new ProjectReferenceItem("mscorlib", null));
+        if (mscorlibPath is null)
+            unresolved.Add("mscorlib");
+        else
+            references.Add(MetadataReference.CreateFromFile(mscorlibPath));
+        return (references, unresolved);
+    }
+
+    // A fresh clone carries no restore assets, so the project is restored once — never a retry
+    // loop, and never at all for a project that already has them.
+    private static SdkReferenceResolution ResolveRestoredReferences(
+        string projectFile, ProjectFileDescription description)
+    {
+        var assetsPath = RestoreAssetsReader.AssetsPath(ProjectPaths.Directory(projectFile));
+        if (!File.Exists(assetsPath))
+        {
+            var restoreFailure = SdkPackageRestorer.Restore(projectFile);
+            if (restoreFailure is not null)
+                return SdkReferenceResolution.Failed(restoreFailure);
+            if (!File.Exists(assetsPath))
+                return SdkReferenceResolution.Failed(
+                    "restore_produced_no_assets: the restore reported success but wrote no "
+                    + "project.assets.json");
+        }
+        return RestoreAssetsReader.Read(assetsPath, description.PackageReferences);
     }
 
     // Resolves every declared <Reference> against what is on disk right now, without touching
     // packages.config -- called once before any restore attempt, and once more after (Ticket 01)
     // if that attempt ran, so both passes share exactly the same resolution rule.
     private static (List<MetadataReference> References, List<string> Unresolved) ResolveExternalReferences(
-        string projectFile, IReadOnlyList<ProjectReferenceItem> referenceItems)
+        string projectFile, IReadOnlyList<ProjectReferenceItem> referenceItems, bool isSdkStyle)
     {
         var references = new List<MetadataReference>();
         var unresolved = new List<string>();
         foreach (var reference in referenceItems)
         {
+            // A bare <Reference> with no HintPath names a .NET Framework assembly the GAC would
+            // have resolved at build time. An SDK-style project targets .NET, where no such
+            // assembly exists, so one there names something this reader cannot resolve at all.
             var resolvedPath = reference.HintPath is not null
                 ? ResolveExternalReference(projectFile, reference)
-                : ResolveFrameworkReference(reference);
+                : isSdkStyle ? null : ResolveFrameworkReference(reference);
             if (resolvedPath is null)
             {
                 unresolved.Add(reference.AssemblyName);
@@ -212,47 +312,63 @@ internal static class ProjectCompilationResolver
             .FirstOrDefault(File.Exists);
 }
 
-// Reads the source file list and the reference list straight from an old-style (non-SDK) .csproj:
-// its explicit <Compile Include> items and <Reference Include> entries. A <Reference> with a
-// <HintPath> names an external assembly; one with no <HintPath> names a bare framework reference
-// (e.g. "System", "System.Data") that the GAC would have resolved at build time.
+// Reads the source file list and the reference list from a .csproj in either of the two shapes
+// this analyzer meets. An old-style (non-SDK) project states both outright: its explicit
+// <Compile Include> items and <Reference Include> entries, where a <Reference> with a <HintPath>
+// names an external assembly and one without names a bare framework reference (e.g. "System",
+// "System.Data") that the GAC would have resolved at build time. An SDK-style project states
+// almost nothing: its source files come from implicit globbing and its references from package
+// references, both of which SdkProjectReader works out.
 internal static class ProjectFileReader
 {
     internal static ProjectFileDescription Read(string projectFile)
     {
-        var document = XDocument.Load(projectFile);
-        var ns = document.Root?.Name.Namespace ?? XNamespace.None;
-        var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectFile)) ?? "";
+        var project = ProjectXml.Load(projectFile);
+        var projectDirectory = ProjectPaths.Directory(projectFile);
+        return SdkProjectReader.SdkName(project) is null
+            ? ReadOldStyle(project, projectDirectory)
+            : ReadSdkStyle(project, projectDirectory);
+    }
 
-        var compileItems = document.Descendants(ns + "Compile")
-            .Select(element => element.Attribute("Include")?.Value)
-            .Where(include => !string.IsNullOrWhiteSpace(include))
-            .Select(include => Path.GetFullPath(Path.Combine(
-                projectDirectory,
-                include!.Replace('\\', Path.DirectorySeparatorChar))))
-            .Where(File.Exists)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+    private static ProjectFileDescription ReadOldStyle(ProjectXml project, string projectDirectory)
+        => new(
+            CompileItems: project.ItemValues("Compile", "Include")
+                .Select(include => Path.GetFullPath(Path.Combine(
+                    projectDirectory, include.Replace('\\', Path.DirectorySeparatorChar))))
+                .Where(File.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            References: ReadReferences(project),
+            ProjectReferences: ReadProjectReferences(project),
+            IsSdkStyle: false,
+            PackageReferences: Array.Empty<string>(),
+            GlobalUsingsSource: null);
 
-        var references = document.Descendants(ns + "Reference")
+    private static ProjectFileDescription ReadSdkStyle(ProjectXml project, string projectDirectory)
+        => new(
+            CompileItems: SdkProjectReader.DiscoverCompileItems(projectDirectory, project),
+            References: ReadReferences(project),
+            ProjectReferences: ReadProjectReferences(project),
+            IsSdkStyle: true,
+            PackageReferences: SdkProjectReader.ReadPackageReferences(project),
+            GlobalUsingsSource: SdkImplicitUsings.SourceFor(project));
+
+    private static List<ProjectReferenceItem> ReadReferences(ProjectXml project)
+        => project.Elements("Reference")
             .Select(element => new ProjectReferenceItem(
                 (element.Attribute("Include")?.Value ?? "").Split(',')[0].Trim(),
-                element.Element(ns + "HintPath")?.Value))
+                project.ChildValue(element, "HintPath")))
             .Where(reference => !string.IsNullOrWhiteSpace(reference.AssemblyName))
             .ToList();
 
-        // <ProjectReference> names another project by path, not an assembly on disk; this ticket
-        // does not resolve it (see ProjectCompilationResolver.ResolveProject), but it must still
-        // be visible so its project isn't silently dropped from the reference list.
-        var projectReferences = document.Descendants(ns + "ProjectReference")
-            .Select(element => element.Attribute("Include")?.Value)
-            .Where(include => !string.IsNullOrWhiteSpace(include))
+    // <ProjectReference> names another project by path, not an assembly on disk; this ticket
+    // does not resolve it (see ProjectCompilationResolver.ResolveProject), but it must still
+    // be visible so its project isn't silently dropped from the reference list.
+    private static List<string> ReadProjectReferences(ProjectXml project)
+        => project.ItemValues("ProjectReference", "Include")
             .Select(include => Path.GetFileNameWithoutExtension(
-                include!.Trim().Replace('\\', Path.DirectorySeparatorChar)))
+                include.Replace('\\', Path.DirectorySeparatorChar)))
             .ToList();
-
-        return new ProjectFileDescription(compileItems, references, projectReferences);
-    }
 }
 
 internal sealed record ProjectReferenceItem(string AssemblyName, string? HintPath);
@@ -260,25 +376,39 @@ internal sealed record ProjectReferenceItem(string AssemblyName, string? HintPat
 internal sealed record ProjectFileDescription(
     IReadOnlyList<string> CompileItems,
     IReadOnlyList<ProjectReferenceItem> References,
-    IReadOnlyList<string> ProjectReferences);
+    IReadOnlyList<string> ProjectReferences,
+    bool IsSdkStyle,
+    IReadOnlyList<string> PackageReferences,
+    string? GlobalUsingsSource);
 
 /// <summary>One Semantic Binding Availability attempt for one project file (or, when a scan root
-/// holds no project file, for the scan root itself).</summary>
+/// holds no project file, for the scan root itself). SourceFileCount is how many source files the
+/// project reader found for it: an SDK-style project states none of them in its project file, so
+/// the count is the only place a maintainer can see whether implicit globbing found the source a
+/// project really builds, or whether a removal item took more of it than intended.</summary>
 internal sealed record ProjectSemanticBinding(
     string ScanRoot,
     string? ProjectFile,
     string Availability,
     IReadOnlyList<string> UnresolvedReferences,
-    CSharpCompilation? Compilation)
+    CSharpCompilation? Compilation,
+    int SourceFileCount)
 {
     internal static ProjectSemanticBinding Available(
-        string scanRoot, string projectFile, CSharpCompilation compilation)
-        => new(scanRoot, projectFile, "available", Array.Empty<string>(), compilation);
+        string scanRoot, string projectFile, CSharpCompilation compilation, int sourceFileCount)
+        => new(scanRoot, projectFile, "available", Array.Empty<string>(), compilation, sourceFileCount);
 
     internal static ProjectSemanticBinding Unavailable(
         string scanRoot,
         string? projectFile,
         string availability,
-        IReadOnlyList<string>? unresolvedReferences = null)
-        => new(scanRoot, projectFile, availability, unresolvedReferences ?? Array.Empty<string>(), null);
+        IReadOnlyList<string>? unresolvedReferences = null,
+        int sourceFileCount = 0)
+        => new(
+            scanRoot,
+            projectFile,
+            availability,
+            unresolvedReferences ?? Array.Empty<string>(),
+            null,
+            sourceFileCount);
 }

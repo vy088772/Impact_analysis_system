@@ -9,7 +9,10 @@ separately by tests/test_wrapper_decompilation.py and tests/test_csharp_analysis
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime
@@ -84,11 +87,11 @@ def test_semantic_binding_reports_unavailable_no_project_file() -> None:
 
 @requires_dotnet
 def test_semantic_binding_reports_unavailable_for_sdk_style_project_with_no_source_files() -> None:
-    """Ticket 02: an SDK-style project (an ASP.NET Core project, in the real catalog) declares
-    no explicit <Compile> items -- its source files come from implicit globbing, which the
-    project reader does not understand yet. An empty explicit item list must never read as an
-    empty-but-successful compilation: it must report unavailable, and name why, so a maintainer
-    can tell this apart from a project that failed to parse."""
+    """Ticket 02: a project that yields no source files at all holds an empty compilation, and
+    an empty compilation must never read as an empty-but-successful one: it reports unavailable,
+    and names why, so a maintainer can tell this apart from a project that failed to parse.
+    Ticket 05 taught the reader to glob an SDK-style project's source, so this project now has
+    to hold no source file for the case to arise at all."""
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
 
@@ -451,3 +454,405 @@ def test_refresh_source_reports_semantic_binding_availability(monkeypatch, tmp_p
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 
     assert result["semantic_binding_availability"] == fake_binding
+
+
+# --- Ticket 05: SDK-style projects compile -------------------------------------------------
+#
+# An SDK-style project declares no explicit <Compile> items: its source files come from
+# implicit globbing, and its references from package references resolved through the
+# project's restore assets. Ticket 02 made such a project report unavailable rather than
+# pretend; this ticket gives it a real semantic model instead.
+
+SDK_TARGET_FRAMEWORK = "net8.0"
+
+
+def _sdk_project(directory: Path, name: str, body: str = "") -> Path:
+    """Writes a minimal SDK-style project file and returns its path."""
+    project_file = directory / f"{name}.csproj"
+    project_file.write_text(
+        f"""<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>{SDK_TARGET_FRAMEWORK}</TargetFramework>
+  </PropertyGroup>
+{body}</Project>
+""",
+        encoding="utf-8",
+    )
+    return project_file
+
+
+@requires_dotnet
+@requires_network
+def test_sdk_style_source_files_come_from_implicit_globbing(tmp_path) -> None:
+    """An SDK-style project declares no <Compile> items at all. Its source files come from
+    implicit globbing over its own directory, so a file in a subdirectory counts too, and
+    the build output directories never do."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    project_dir = tmp_path / "Globbed"
+    project_dir.mkdir()
+    _sdk_project(project_dir, "Globbed")
+    (project_dir / "Root.cs").write_text("public class Root { }", encoding="utf-8")
+    (project_dir / "Controllers").mkdir()
+    (project_dir / "Controllers" / "HomeController.cs").write_text(
+        "public class HomeController { }", encoding="utf-8"
+    )
+    # Build output: MSBuild's own default excludes drop these, and so must this reader --
+    # otherwise a stale copy of a type would be compiled beside the type itself.
+    (project_dir / "obj" / "Debug").mkdir(parents=True)
+    (project_dir / "obj" / "Debug" / "Stale.cs").write_text(
+        "public class Stale { }", encoding="utf-8"
+    )
+    (project_dir / "bin").mkdir()
+    (project_dir / "bin" / "AlsoStale.cs").write_text(
+        "public class AlsoStale { }", encoding="utf-8"
+    )
+
+    result = host.semantic_binding_availability([project_dir])
+
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["availability"] == "available", entry["unresolved_references"]
+    assert entry["source_file_count"] == 2
+
+
+@requires_dotnet
+@requires_network
+def test_sdk_style_removal_item_excludes_the_directory_it_names(tmp_path) -> None:
+    """A <Compile Remove> item names files the implicit glob would otherwise have found.
+    An excluded directory contributes no source at all -- the real IQCS project removes two
+    such directories, and compiling them would fail on source that project never builds."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    project_dir = tmp_path / "Removed"
+    project_dir.mkdir()
+    _sdk_project(
+        project_dir,
+        "Removed",
+        '  <ItemGroup>\n    <Compile Remove="HisFiles\\**" />\n  </ItemGroup>\n',
+    )
+    (project_dir / "Kept.cs").write_text("public class Kept { }", encoding="utf-8")
+    (project_dir / "HisFiles" / "Deep").mkdir(parents=True)
+    (project_dir / "HisFiles" / "Dropped.cs").write_text(
+        "public class Dropped { }", encoding="utf-8"
+    )
+    (project_dir / "HisFiles" / "Deep" / "AlsoDropped.cs").write_text(
+        "public class AlsoDropped { }", encoding="utf-8"
+    )
+
+    result = host.semantic_binding_availability([project_dir])
+
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["availability"] == "available", entry["unresolved_references"]
+    assert entry["source_file_count"] == 1
+
+
+@requires_dotnet
+@requires_network
+def test_sdk_style_package_references_resolve_through_restore_assets(tmp_path) -> None:
+    """A package reference names no file on disk. It resolves through the project's restore
+    assets, which name the exact package folder and the exact compile-time assembly inside
+    it -- so a project declaring one reports available with nothing unresolved."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    project_dir = tmp_path / "HasPackage"
+    project_dir.mkdir()
+    _sdk_project(
+        project_dir,
+        "HasPackage",
+        '  <ItemGroup>\n'
+        '    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />\n'
+        '  </ItemGroup>\n',
+    )
+    (project_dir / "Program.cs").write_text(
+        "public class Program { public static void Main() { } }", encoding="utf-8"
+    )
+
+    result = host.semantic_binding_availability([project_dir])
+
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["availability"] == "available", entry["unresolved_references"]
+    assert entry["unresolved_references"] == []
+
+
+@requires_dotnet
+def test_sdk_style_project_carrying_restore_assets_is_not_restored_again(tmp_path) -> None:
+    """A project that already carries restore assets reports available with no restore run.
+    The proof is behavioural: this project's only package reference names a package that
+    exists on no feed, while its hand-written assets resolve it to a real assembly on disk.
+    A restore would have failed, so reporting available means none was run -- and the assets
+    file is left exactly as it was found."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    package_folder = tmp_path / "packages"
+    package_lib = package_folder / "notarealpackage" / "1.0.0" / "lib" / SDK_TARGET_FRAMEWORK
+    package_lib.mkdir(parents=True)
+    # Content only has to be a loadable assembly; STC's SQLFunc.dll fixture already is one.
+    (package_lib / "NotARealPackage.dll").write_bytes(SQLFUNC_DLL.read_bytes())
+
+    project_dir = tmp_path / "AlreadyRestored"
+    project_dir.mkdir()
+    _sdk_project(
+        project_dir,
+        "AlreadyRestored",
+        '  <ItemGroup>\n'
+        '    <PackageReference Include="NotARealPackage" Version="1.0.0" />\n'
+        '  </ItemGroup>\n',
+    )
+    (project_dir / "Program.cs").write_text("public class Program { }", encoding="utf-8")
+
+    assets_file = project_dir / "obj" / "project.assets.json"
+    assets_file.parent.mkdir()
+    assets_file.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "targets": {
+                    SDK_TARGET_FRAMEWORK: {
+                        "NotARealPackage/1.0.0": {
+                            "type": "package",
+                            "compile": {
+                                f"lib/{SDK_TARGET_FRAMEWORK}/NotARealPackage.dll": {}
+                            },
+                        }
+                    }
+                },
+                "libraries": {
+                    "NotARealPackage/1.0.0": {
+                        "type": "package",
+                        "path": "notarealpackage/1.0.0",
+                    }
+                },
+                "packageFolders": {str(package_folder): {}},
+                # No framework references: this fixture proves only that no restore ran. The
+                # framework-reference path is covered by the restore test and by the real
+                # IQCS smoke test below.
+                "project": {
+                    "frameworks": {
+                        SDK_TARGET_FRAMEWORK: {
+                            "targetAlias": SDK_TARGET_FRAMEWORK,
+                            "frameworkReferences": {},
+                            "downloadDependencies": [],
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assets_before = assets_file.read_bytes()
+
+    result = host.semantic_binding_availability([project_dir])
+
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["availability"] == "available", entry["unresolved_references"]
+    assert assets_file.read_bytes() == assets_before
+
+
+@requires_dotnet
+@requires_network
+def test_sdk_style_project_without_restore_assets_is_restored_once(tmp_path) -> None:
+    """A project with no restore assets is restored once, and only then reports available.
+    A fresh clone never carries an obj directory, so this is the state every measured
+    ASP.NET Core repository starts in."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    project_dir = tmp_path / "NeedsRestore"
+    project_dir.mkdir()
+    _sdk_project(
+        project_dir,
+        "NeedsRestore",
+        '  <ItemGroup>\n'
+        '    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />\n'
+        '  </ItemGroup>\n',
+    )
+    (project_dir / "Program.cs").write_text("public class Program { }", encoding="utf-8")
+    assets_file = project_dir / "obj" / "project.assets.json"
+    assert not assets_file.exists()
+
+    result = host.semantic_binding_availability([project_dir])
+
+    assert len(result) == 1
+    assert result[0]["availability"] == "available", result[0]["unresolved_references"]
+    assert assets_file.exists()
+
+
+@requires_dotnet
+def test_sdk_style_project_names_the_cause_when_no_dotnet_sdk_is_available(tmp_path) -> None:
+    """With no .NET SDK to restore with, the project reports
+    unavailable_reference_resolution_failed and names that as the cause -- never a silent
+    empty compilation. DOTNET_ROOT is the documented way to name a .NET installation, so
+    pointing it at a directory holding none is exactly the "no SDK" condition."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    project_dir = tmp_path / "NoSdk"
+    project_dir.mkdir()
+    _sdk_project(project_dir, "NoSdk")
+    (project_dir / "Program.cs").write_text("public class Program { }", encoding="utf-8")
+    empty_root = tmp_path / "no-dotnet-here"
+    empty_root.mkdir()
+
+    completed = subprocess.run(
+        [
+            "dotnet",
+            str(host.dll_path),
+            "semantic-binding",
+            "--source-root",
+            str(project_dir),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={**os.environ, "DOTNET_ROOT": str(empty_root)},
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+
+    result = payload["semantic_binding_availability"]
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["availability"] == "unavailable_reference_resolution_failed"
+    assert any("no_dotnet_sdk" in reason for reason in entry["unresolved_references"])
+
+
+@requires_dotnet
+@requires_network
+def test_sdk_style_project_names_the_cause_when_restore_fails(tmp_path) -> None:
+    """A restore that fails keeps the project unavailable and names the restore failure, so
+    a maintainer can tell a broken restore apart from a missing SDK."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    project_dir = tmp_path / "RestoreFails"
+    project_dir.mkdir()
+    _sdk_project(
+        project_dir,
+        "RestoreFails",
+        '  <ItemGroup>\n'
+        '    <PackageReference Include="TotallyNotARealNuGetPackage" Version="1.0.0" />\n'
+        '  </ItemGroup>\n',
+    )
+    (project_dir / "Program.cs").write_text("public class Program { }", encoding="utf-8")
+
+    result = host.semantic_binding_availability([project_dir])
+
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["availability"] == "unavailable_reference_resolution_failed"
+    assert any("restore_failed" in reason for reason in entry["unresolved_references"])
+
+
+@requires_dotnet
+@requires_network
+def test_sdk_style_project_reference_stays_unresolved(tmp_path) -> None:
+    """A <ProjectReference> names another project's own output, which this ticket does not
+    build. The referencing project reports unavailable and names it, exactly as an old-style
+    project already does -- an incomplete compilation must never claim available."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    project_dir = tmp_path / "DependsOnOther"
+    project_dir.mkdir()
+    _sdk_project(
+        project_dir,
+        "DependsOnOther",
+        '  <ItemGroup>\n'
+        '    <ProjectReference Include="..\\OtherLib\\OtherLib.csproj" />\n'
+        '  </ItemGroup>\n',
+    )
+    (project_dir / "Program.cs").write_text("public class Program { }", encoding="utf-8")
+
+    result = host.semantic_binding_availability([project_dir])
+
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["availability"] == "unavailable_reference_resolution_failed"
+    assert "OtherLib" in entry["unresolved_references"]
+
+
+IQCS_CSPROJ = PROJECT_ROOT / "data" / "repos" / "System_Dept_1" / "IQCS" / "IQCS.csproj"
+
+requires_iqcs_fixture = pytest.mark.skipif(
+    not IQCS_CSPROJ.exists(),
+    reason="local data/repos/System_Dept_1/IQCS fixture checkout is not present",
+)
+
+
+@requires_dotnet
+@requires_iqcs_fixture
+@requires_network
+def test_semantic_binding_reports_available_for_real_iqcs_project() -> None:
+    """End-to-end smoke test against the real IQCS project, the measured single-project
+    ASP.NET Core repository: 23 package references, two removed directories, and one
+    external assembly reference in its own build output. It reported available while
+    holding an empty compilation before ticket 02, unavailable after it, and now reports
+    available holding real source.
+
+    The second pass is the measured half of "a project that already carries restore assets
+    reports available with no restore run": the first pass leaves the assets behind, and the
+    second must report the same answer without touching them."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    result = host.semantic_binding_availability([IQCS_CSPROJ.parent])
+
+    matching = [entry for entry in result if entry["project_file"] == str(IQCS_CSPROJ)]
+    assert len(matching) == 1
+    assert matching[0]["availability"] == "available", matching[0]["unresolved_references"]
+    assert matching[0]["unresolved_references"] == []
+    assert matching[0]["source_file_count"] > 0
+
+    assets_file = IQCS_CSPROJ.parent / "obj" / "project.assets.json"
+    assert assets_file.exists(), "the first pass must have restored this project"
+    restored_at = assets_file.stat().st_mtime_ns
+
+    again = [
+        entry
+        for entry in host.semantic_binding_availability([IQCS_CSPROJ.parent])
+        if entry["project_file"] == str(IQCS_CSPROJ)
+    ]
+    assert again[0]["availability"] == "available", again[0]["unresolved_references"]
+    assert assets_file.stat().st_mtime_ns == restored_at
+
+
+RTTALENTDB_ROOT = PROJECT_ROOT / "data" / "repos" / "System_Dept_1" / "RTTalentDB"
+RTTALENTDB_CSPROJ = RTTALENTDB_ROOT / "RTTalentDB" / "RTTalentDB.csproj"
+RTTALENTDB_APP_CSPROJ = RTTALENTDB_ROOT / "RTTalentDBMailJobApp" / "RTTalentDBMailJobApp.csproj"
+
+requires_rttalentdb_fixture = pytest.mark.skipif(
+    not RTTALENTDB_CSPROJ.exists(),
+    reason="local data/repos/System_Dept_1/RTTalentDB fixture checkout is not present",
+)
+
+
+@requires_dotnet
+@requires_rttalentdb_fixture
+@requires_network
+def test_semantic_binding_reports_each_project_of_the_real_rttalentdb_repository() -> None:
+    """End-to-end smoke test against the real RTTalentDB repository, the measured
+    multi-project ASP.NET Core shape: three project files, one attempt each. The web project
+    reports available over its own source; the job app depends on a sibling project this
+    ticket does not build, so it reports unavailable and names that sibling. One repository
+    therefore reports two different states, which is the point of reporting per project."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    result = host.semantic_binding_availability([RTTALENTDB_ROOT])
+    by_project = {entry["project_file"]: entry for entry in result}
+
+    web = by_project[str(RTTALENTDB_CSPROJ)]
+    assert web["availability"] == "available", web["unresolved_references"]
+    assert web["source_file_count"] > 0
+
+    job_app = by_project[str(RTTALENTDB_APP_CSPROJ)]
+    assert job_app["availability"] == "unavailable_reference_resolution_failed"
+    assert "RTTalentDBMailJobAPI" in job_app["unresolved_references"]

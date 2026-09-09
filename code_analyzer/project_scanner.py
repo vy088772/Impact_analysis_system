@@ -134,9 +134,12 @@ class ProjectScanResult:
     verified_implementation_snapshots: List[Dict] = field(default_factory=list)
     # Semantic Binding Availability (ticket 05): one entry per project file found under this
     # scan's project_root, each holding "availability" (available /
-    # unavailable_no_project_file / unavailable_reference_resolution_failed) and, when it
-    # failed, "unresolved_references". A degraded analysis must never look like a confident
-    # one, so this is always populated, never inferred silently.
+    # unavailable_no_project_file / unavailable_reference_resolution_failed), when it
+    # failed, "unresolved_references", and "source_file_count" — how many source files the
+    # project reader found for that project. An SDK-style project names none of its source
+    # files, so the count is the only place a maintainer sees what the model actually holds.
+    # A degraded analysis must never look like a confident one, so this is always populated,
+    # never inferred silently.
     semantic_binding_availability: List[Dict] = field(default_factory=list)
     # Framework Label reports; it does not gate (ADR-0021). One entry per scan
     # root that a ProjectScanner ran against — {"scan_root", "framework",

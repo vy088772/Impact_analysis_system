@@ -99,6 +99,7 @@ internal static class Program
                 project_file = attempt.ProjectFile,
                 availability = attempt.Availability,
                 unresolved_references = attempt.UnresolvedReferences,
+                source_file_count = attempt.SourceFileCount,
             }),
         });
         return 0;
