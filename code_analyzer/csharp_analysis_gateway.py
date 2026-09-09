@@ -1178,6 +1178,23 @@ def _wrapper_contract_method_identity(
     return method_name
 
 
+def _unresolved_receiver_reason(receiver_type: str, provenance: str) -> str:
+    """Why no contract was selected for one external wrapper call, by receiver type.
+
+    Three different absences, never one. A Contract is keyed on the type that
+    *declares* the invoked method, so the host reports
+    ``declaring_type_unresolved`` when it did resolve a receiver type but that
+    type inherits the method from a base it cannot see -- naming the subclass
+    there would key the Contract on a guess. ``receiver_type_missing`` stays what
+    it always was: no receiver type resolved at all.
+    """
+    if receiver_type:
+        return "no_contract_matches_receiver_type"
+    if provenance == "declaring_type_unresolved":
+        return "declaring_type_unresolved"
+    return "receiver_type_missing"
+
+
 def _wrapper_contract_receiver_matches(
     contract: Mapping[str, Any],
     receiver_type: str,
@@ -2006,6 +2023,9 @@ class CSharpAnalysisGateway:
         check: a selected contract does not by itself prove a procedure exists.
         """
         receiver_type = str(raw.get("wrapper_receiver_type") or "").strip()
+        receiver_type_provenance = str(
+            raw.get("wrapper_receiver_type_provenance") or ""
+        ).strip()
         wrapper_method = str(raw.get("wrapper_method_name") or "").strip()
         binding = _receiver_binding_facts(raw)
         method_facts = _wrapper_method_facts(raw)
@@ -2345,10 +2365,9 @@ class CSharpAnalysisGateway:
                 wrapper_kind="external_wrapper",
                 status="unresolved_contract",
                 selection_source="unresolved_receiver_type",
-                reason=(
-                    "receiver_type_missing"
-                    if not receiver_type
-                    else "no_contract_matches_receiver_type"
+                reason=_unresolved_receiver_reason(
+                    receiver_type,
+                    receiver_type_provenance,
                 ),
                 review_candidate=True,
                 stored_procedure_mode=attempted_sp_mode,

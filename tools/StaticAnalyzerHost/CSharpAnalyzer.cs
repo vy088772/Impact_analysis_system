@@ -1342,6 +1342,7 @@ internal sealed record DirectSqlInvocation(
     int? CommandTextSourceStartOffset = null,
     int? CommandTextSourceEndOffset = null,
     string? CommandTextProvenance = null,
+    string? WrapperReceiverTypeProvenance = null,
     bool CommandTypeArgumentObserved = false);
 
 /// <summary>One ambiguous/unavailable overload candidate's bound-implementation and signature facts.</summary>
@@ -1444,8 +1445,53 @@ internal static class WrapperAnalyzer
     private static List<WrapperDefinition>? _definitionsCache;
     private static IReadOnlyList<CompilationUnitSyntax>? _usedWrapperMethodIdentitiesRoots;
     private static IReadOnlySet<string>? _usedWrapperMethodIdentitiesCache;
-    private static IReadOnlyList<CompilationUnitSyntax>? _classDeclarationIndexRoots;
-    private static Dictionary<string, List<ClassDeclarationSyntax>>? _classDeclarationIndex;
+    private static readonly DeclarationIndex<ClassDeclarationSyntax> ClassDeclarationsByIdentity =
+        new(CSharpAnalyzer.GetTypeIdentity);
+    private static readonly DeclarationIndex<TypeDeclarationSyntax> TypeDeclarationsByName =
+        new(declaration => declaration.Identifier.Text);
+
+    /// <summary>
+    /// One corpus-wide declaration index, grouped under whichever key its owner chose, and
+    /// rebuilt only when a caller hands over a different set of syntax-tree instances.
+    ///
+    /// Every question this answers is asked once per candidate method or per call site, so
+    /// answering it by walking every syntax tree each time costs O(sites x corpus) -- the shape
+    /// that once left one ten-file TTPUR batch running for three and a half minutes. Memoize on
+    /// the roots' object identity, not their content: the analyzer never mutates a syntax tree,
+    /// so the same tree instances always yield the same index, a caller that parses fresh trees
+    /// gets a miss and a correct rebuild, and a content comparison would cost more than the walk
+    /// it guards. A returned list is the shared index's own, so a caller must read it and never
+    /// mutate it.
+    /// </summary>
+    private sealed class DeclarationIndex<TDeclaration>
+        where TDeclaration : SyntaxNode
+    {
+        private readonly Func<TDeclaration, string> _key;
+        private IReadOnlyList<CompilationUnitSyntax>? _roots;
+        private Dictionary<string, List<TDeclaration>>? _declarations;
+
+        internal DeclarationIndex(Func<TDeclaration, string> key) => _key = key;
+
+        internal IReadOnlyList<TDeclaration> Lookup(
+            IReadOnlyList<CompilationUnitSyntax> roots,
+            string key)
+        {
+            if (!SameRoots(roots, _roots))
+            {
+                // Deduplicated by (file, span start) so a partial declaration spread over
+                // several files contributes each of its parts exactly once.
+                _declarations = roots
+                    .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<TDeclaration>())
+                    .DistinctBy(candidate => (candidate.SyntaxTree?.FilePath ?? "", candidate.SpanStart))
+                    .GroupBy(_key, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+                _roots = roots;
+            }
+            return _declarations!.TryGetValue(key, out var declarations)
+                ? declarations
+                : Array.Empty<TDeclaration>();
+        }
+    }
 
     /// <summary>Whether two root lists hold the very same syntax-tree instances in the same
     /// order. Reference identity is the point: a content comparison would cost more than the
@@ -1468,34 +1514,27 @@ internal static class WrapperAnalyzer
 
     /// <summary>
     /// Every class declaration in the corpus that carries the given type identity, in corpus
-    /// order and deduplicated by (file, span start) so a partial class spread over several files
-    /// contributes each of its parts exactly once.
-    ///
-    /// Command Source resolution asks this question once per candidate method and once per call
-    /// site. Answering it by walking every syntax tree each time made resolution cost
-    /// O(sites x corpus), which still left one ten-file TTPUR batch running for over three and a
-    /// half minutes after the corpus facts above were memoized. Build the whole grouping once per
-    /// corpus instead and answer each question with a dictionary lookup: that same batch then
-    /// took 14.6 seconds, and the whole 541-file project 2.1 minutes.
+    /// order. Command Source resolution asks this once per candidate method and once per call
+    /// site; before the index behind it existed, one ten-file TTPUR batch ran for three and a
+    /// half minutes, and afterwards took 14.6 seconds with the whole 541-file project at 2.1
+    /// minutes.
     /// </summary>
     internal static IReadOnlyList<ClassDeclarationSyntax> GetClassDeclarations(
         IEnumerable<CompilationUnitSyntax> sourceRoots,
         string typeIdentity)
-    {
-        var roots = AsRootList(sourceRoots);
-        if (!SameRoots(roots, _classDeclarationIndexRoots))
-        {
-            _classDeclarationIndex = roots
-                .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<ClassDeclarationSyntax>())
-                .DistinctBy(candidate => (candidate.SyntaxTree?.FilePath ?? "", candidate.SpanStart))
-                .GroupBy(CSharpAnalyzer.GetTypeIdentity, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
-            _classDeclarationIndexRoots = roots;
-        }
-        return _classDeclarationIndex!.TryGetValue(typeIdentity, out var classDeclarations)
-            ? classDeclarations
-            : Array.Empty<ClassDeclarationSyntax>();
-    }
+        => ClassDeclarationsByIdentity.Lookup(AsRootList(sourceRoots), typeIdentity);
+
+    /// <summary>
+    /// Every type declaration in the corpus carrying the given simple name -- the name a
+    /// receiver's declared type is written under at a call site, which is all the syntax-only
+    /// path has to look one up by. Its sibling above keys on the full type identity; nothing
+    /// here can, because a receiver's declared type arrives as bare source text with no
+    /// namespace attached.
+    /// </summary>
+    private static IReadOnlyList<TypeDeclarationSyntax> GetTypeDeclarationsByName(
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots,
+        string typeName)
+        => TypeDeclarationsByName.Lookup(sourceRoots, typeName);
 
     internal static bool IsSourceWrapperInvocation(
         InvocationExpressionSyntax call,
@@ -1688,7 +1727,12 @@ internal static class WrapperAnalyzer
                 {
                     if (AdapterAnalyzer.IsRecognizedAdapterInvocation(call, method))
                         continue;
-                    var unavailable = CreateUnavailableCandidate(call, method, callerClass, compilation);
+                    var unavailable = CreateUnavailableCandidate(
+                        call,
+                        method,
+                        callerClass,
+                        roots,
+                        compilation);
                     if (unavailable is not null)
                         invocations.Add(unavailable);
                     continue;
@@ -1982,6 +2026,7 @@ internal static class WrapperAnalyzer
         InvocationExpressionSyntax call,
         MethodDeclarationSyntax caller,
         string callerClass,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots,
         CSharpCompilation? compilation)
     {
         if (call.Expression is not MemberAccessExpressionSyntax member)
@@ -1995,6 +2040,7 @@ internal static class WrapperAnalyzer
         var literalText = commandText is LiteralExpressionSyntax { Token.Value: string text }
             ? text
             : null;
+        var boundSymbol = TryResolveBoundWrapperSymbol(call, compilation);
 
         return CreateUnavailableInvocation(
             caller,
@@ -2005,7 +2051,100 @@ internal static class WrapperAnalyzer
             mode == "stored_procedure",
             mode,
             call,
-            TryResolveBoundWrapperSymbol(call, compilation));
+            boundSymbol,
+            ResolveWrapperReceiverType(call, caller, boundSymbol, sourceRoots));
+    }
+
+    /// <summary>The receiver type one external wrapper call is keyed on, and where that answer
+    /// came from. A blank <see cref="ReceiverType"/> is not an answer; the
+    /// <see cref="Provenance"/> beside it says which absence it is.</summary>
+    private sealed record ResolvedReceiverType(string? ReceiverType, string Provenance)
+    {
+        /// <summary>The syntax resolved no receiver type at all, so no new rule applied.</summary>
+        internal static readonly ResolvedReceiverType None = new(null, "");
+
+        /// <summary>The compiler named the type that declares the invoked method.</summary>
+        internal static ResolvedReceiverType Declaring(string typeName)
+            => new(typeName, "declaring_type");
+
+        /// <summary>The receiver's own declared type declares the method, so it is the
+        /// declaring type -- the answer this analyzer has always given.</summary>
+        internal static ResolvedReceiverType ReceiverDeclaration(string typeName)
+            => new(typeName, "receiver_declaration");
+
+        /// <summary>A receiver type resolved, but it inherits the invoked method from a base
+        /// this analysis cannot see, so which type declares it is unknown.</summary>
+        internal static readonly ResolvedReceiverType Unresolved =
+            new(null, "declaring_type_unresolved");
+    }
+
+    /// <summary>
+    /// The receiver type one external wrapper call is keyed on.
+    ///
+    /// A Contract is keyed on the type that *declares* the invoked method, not on the type the
+    /// receiver happens to be declared as. Every measured ASP.NET Core repository writes its
+    /// data access as a local database context deriving from a base class in a shared external
+    /// library, with the wrapper method declared on the base: keying on the local subclass
+    /// matches no Contract, and the call is never recognised as a wrapper invocation at all.
+    ///
+    /// The rule only ever walks *from* a receiver type the syntax already resolved. Where none
+    /// resolved -- `Path.Combine`, `File.Exists`, a static call on a type this method never sees
+    /// declared -- nothing is reported, exactly as before. Filling those in would silently
+    /// invalidate every reviewed wrapper exclusion keyed on an empty receiver type, which is a
+    /// triage decision no analyzer change may quietly overturn.
+    /// </summary>
+    private static ResolvedReceiverType ResolveWrapperReceiverType(
+        InvocationExpressionSyntax call,
+        MethodDeclarationSyntax caller,
+        BoundWrapperSymbolFacts? boundSymbol,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots)
+    {
+        var declaredReceiverType = ResolveExternalReceiverType(call, caller);
+        if (string.IsNullOrWhiteSpace(declaredReceiverType))
+            return ResolvedReceiverType.None;
+
+        if (!string.IsNullOrWhiteSpace(boundSymbol?.DeclaringTypeName))
+            return ResolvedReceiverType.Declaring(boundSymbol!.DeclaringTypeName);
+
+        var methodName = call.Expression is MemberAccessExpressionSyntax member
+            ? member.Name.Identifier.Text
+            : "";
+        return InheritsTheInvokedMethod(declaredReceiverType, methodName, sourceRoots)
+            ? ResolvedReceiverType.Unresolved
+            : ResolvedReceiverType.ReceiverDeclaration(declaredReceiverType);
+    }
+
+    /// <summary>
+    /// True when the corpus declares <paramref name="receiverType"/>, that declaration derives
+    /// from something, and no part of it declares <paramref name="methodName"/> -- so the
+    /// invoked method is inherited from a base this analysis cannot see, and the receiver's own
+    /// type is not the type that declares it.
+    ///
+    /// A type the corpus does not declare at all is left alone: it is the external wrapper type
+    /// itself, and reporting it is the answer this analyzer has always given.
+    ///
+    /// The lookup is by simple name, because a receiver's declared type arrives as bare source
+    /// text with no namespace to qualify it. Two same-named types in different namespaces
+    /// therefore share one bucket, and this errs deliberately in the safe direction: an
+    /// unrelated namesake declaring the method makes this return false, which falls back to the
+    /// answer the analyzer gave before this rule existed. A collision can cost the new rule, it
+    /// can never make an answer worse than the old one.
+    /// </summary>
+    private static bool InheritsTheInvokedMethod(
+        string receiverType,
+        string methodName,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots)
+    {
+        if (string.IsNullOrEmpty(methodName))
+            return false;
+        var declarations = GetTypeDeclarationsByName(sourceRoots, receiverType.Trim());
+        if (declarations.Count == 0)
+            return false;
+        if (declarations.Any(declaration => declaration.Members
+            .OfType<MethodDeclarationSyntax>()
+            .Any(method => method.Identifier.Text == methodName)))
+            return false;
+        return declarations.Any(declaration => declaration.BaseList is not null);
     }
 
     // Symbol acceptance rule (ticket 06): accept a bound method symbol only when the compiler
@@ -2034,7 +2173,16 @@ internal static class WrapperAnalyzer
         var methodIdentity = $"{method.ContainingType.Name}.{method.Name}({string.Join(",", parameterTypes)})";
         var assemblyIdentity = ResolveBoundAssemblyIdentity(compilation, method.ContainingAssembly);
 
-        return new BoundWrapperSymbolFacts(methodIdentity, parameterTypes, assemblyIdentity);
+        // The containing type of the resolved symbol is the type that *declares* the method:
+        // for a call on a subclass that does not override it, the compiler resolves the base's
+        // own symbol, which is exactly the type a Contract must be keyed on. Reported by simple
+        // name, the shape the syntactic path has always reported and the shape a Contract's
+        // `receiver_types` records.
+        return new BoundWrapperSymbolFacts(
+            methodIdentity,
+            parameterTypes,
+            assemblyIdentity,
+            method.ContainingType.Name);
     }
 
     private static readonly SymbolDisplayFormat BoundParameterTypeFormat = new(
@@ -2080,7 +2228,8 @@ internal static class WrapperAnalyzer
         bool commandTypeStoredProcedure,
         string mode,
         InvocationExpressionSyntax call,
-        BoundWrapperSymbolFacts? boundSymbol = null)
+        BoundWrapperSymbolFacts? boundSymbol,
+        ResolvedReceiverType receiverType)
         => new(
             callerClass,
             caller.Identifier.Text,
@@ -2097,11 +2246,12 @@ internal static class WrapperAnalyzer
             false,
             mode,
             new[] { caller.Identifier.Text, member.Name.Identifier.Text },
-            WrapperReceiverType: ResolveExternalReceiverType(call, caller),
+            WrapperReceiverType: receiverType.ReceiverType,
             WrapperMethodArity: call.ArgumentList.Arguments.Count,
             WrapperMethodIdentity: boundSymbol?.MethodIdentity,
             WrapperParameterTypes: boundSymbol?.ParameterTypes,
             WrapperAssemblyIdentity: boundSymbol?.AssemblyIdentity,
+            WrapperReceiverTypeProvenance: receiverType.Provenance,
             CommandTypeArgumentObserved: HasModeLiteralArgument(call));
 
     /// <summary>One externally referenced wrapper call's uniquely bound method symbol facts —
@@ -2110,7 +2260,8 @@ internal static class WrapperAnalyzer
     private sealed record BoundWrapperSymbolFacts(
         string MethodIdentity,
         IReadOnlyList<string> ParameterTypes,
-        string? AssemblyIdentity);
+        string? AssemblyIdentity,
+        string DeclaringTypeName);
 
     private static string? ResolveExternalReceiverType(
         InvocationExpressionSyntax call,
