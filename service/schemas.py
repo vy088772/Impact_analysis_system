@@ -285,6 +285,10 @@ class RefreshResponse(BaseModel):
     not_found: List[str] = Field(default_factory=list)
     updated_files: List[str] = Field(default_factory=list)
     removed_files: List[str] = Field(default_factory=list)
+    # Framework Label reports; it does not gate (ADR-0021): one entry per scan
+    # root, each {"scan_root", "framework", "parsers"} — the framework a scan
+    # root detected as, and the parsers that actually mounted for it.
+    framework_reports: List[Dict[str, Any]] = Field(default_factory=list)
     wrapper_summary: WrapperSummary = Field(default_factory=WrapperSummary)
     # Deprecated aliases retained for clients that have not migrated yet.
     sp_relations: int = 0

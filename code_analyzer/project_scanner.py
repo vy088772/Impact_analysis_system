@@ -138,7 +138,12 @@ class ProjectScanResult:
     # failed, "unresolved_references". A degraded analysis must never look like a confident
     # one, so this is always populated, never inferred silently.
     semantic_binding_availability: List[Dict] = field(default_factory=list)
-    
+    # Framework Label reports; it does not gate (ADR-0021). One entry per scan
+    # root that a ProjectScanner ran against — {"scan_root", "framework",
+    # "parsers"} — populated by ProjectScanner._record_framework_report() and
+    # merged across a system's scan roots by _merge_scans (service/analyze_service.py).
+    framework_reports: List[Dict] = field(default_factory=list)
+
     # View 層分析結果（依框架偵測結果選擇性填入；未偵測到對應框架時維持空清單）
     aspx_results: List[FileAnalysisResult] = field(default_factory=list)    # .aspx / .ascx
     razor_results: List[FileAnalysisResult] = field(default_factory=list)  # .cshtml
@@ -158,6 +163,21 @@ class ProjectScanResult:
     unique_sps: Set[str] = field(default_factory=set)
     unique_tables: Set[str] = field(default_factory=set)
 
+    def record_framework_report(self, report: Dict) -> None:
+        """Add/replace one scan root's Framework Label report (ADR-0021).
+
+        Replaces any earlier report for the same `scan_root` instead of piling
+        up duplicates across repeated scans/refreshes of the same root —
+        `framework_reports` owns that invariant itself, rather than each
+        caller re-implementing the dedup-by-scan_root list surgery.
+        """
+        self.framework_reports[:] = [
+            existing
+            for existing in self.framework_reports
+            if existing.get("scan_root") != report.get("scan_root")
+        ]
+        self.framework_reports.append(dict(report))
+
     def __getstate__(self):
         state = self.__dict__.copy()
         state.pop("legacy_sp_relations", None)
@@ -176,6 +196,7 @@ class ProjectScanResult:
         self.semantic_binding_availability = getattr(
             self, "semantic_binding_availability", []
         )
+        self.framework_reports = getattr(self, "framework_reports", [])
 
     @staticmethod
     def _connection_source_database(value: Any) -> Optional[str]:
@@ -380,11 +401,19 @@ class ProjectScanner:
         if not self.project_root or not Path(self.project_root).exists():
             raise ValueError(f"專案路徑不存在: {self.project_root}")
         
-        # 🆕 偵測專案類型
+        # 🆕 偵測專案類型——標籤只回報，不再決定掛載哪些解析器（ADR-0021）。
         detector = ProjectTypeDetector(self.project_root)
         self.framework_type = detector.detect()
-        self.required_parsers = detector.get_required_parsers(self.framework_type)
-        self.scan_extensions = detector.get_file_extensions_to_scan(self.framework_type)
+        if self.framework_type == FrameworkType.UNKNOWN:
+            raise ValueError(
+                f"無法辨識框架類型（Framework Label = Unknown），拒絕退回純 C# 掃描："
+                f"{self.project_root}"
+            )
+        # 解析器改依「掃描根目錄下實際存在的 view 檔案副檔名」聯集掛載，而不是
+        # 依偵測到的框架二選一——一個同時有 WebForms 頁面與 Razor 檢視的掃描根，
+        # 兩邊都會被解析，不會有任何一邊被靜默丟掉。
+        self.required_parsers = detector.required_parsers_by_extension()
+        self.scan_extensions = detector.file_extensions_present()
         
         # 初始化解析器（根據專案類型）
         self.parsers = {}
@@ -416,7 +445,16 @@ class ProjectScanner:
         
         # 掃描結果
         self.scan_result: Optional[ProjectScanResult] = None
-        
+
+        # Framework Label 報告（ADR-0021）：這個掃描根偵測到的框架，以及實際
+        # 掛載的解析器——寫到 scan_result 上，供 /refresh 回應與 refresh_cli
+        # 逐一掃描根印出。
+        self._framework_report: Dict[str, Any] = {
+            "scan_root": str(self.project_root),
+            "framework": self.framework_type.value,
+            "parsers": list(self.required_parsers),
+        }
+
         print(f"✅ 專案掃描器已初始化")
         print(f"   專案: {self.project_name}")
         print(f"   路徑: {self.project_root}")
@@ -663,6 +701,22 @@ class ProjectScanner:
             )
         )
 
+    def _record_framework_report(self) -> None:
+        """Write this scanner's Framework Label report onto `self.scan_result`
+        (ADR-0021). `ProjectScanResult.record_framework_report` owns the
+        dedup-by-scan_root invariant; this just supplies this scanner's report.
+
+        A no-op when `_framework_report` was never set: some tests construct
+        a `ProjectScanner` via `object.__new__` or a subclass that overrides
+        `__init__` without calling it, to stub out the analyzer host. Those
+        scanners never went through framework detection, so there is nothing
+        honest to report.
+        """
+        own_report = getattr(self, "_framework_report", None)
+        if own_report is None:
+            return
+        self.scan_result.record_framework_report(own_report)
+
     # ========================================
     # 主掃描流程
     # ========================================
@@ -691,7 +745,8 @@ class ProjectScanner:
             project_name=self.project_name,
             scan_time=datetime.now()
         )
-        
+        self._record_framework_report()
+
         # 1. 初始化資料庫連線資料庫如果需要）
         if analyze_sp:
             self.initialize_databases(database_aliases)
@@ -790,6 +845,7 @@ class ProjectScanner:
     ) -> ProjectScanResult:
         """Replace selected C# records in an existing scan result."""
         self.scan_result = scan_result
+        self._record_framework_report()
         current_files = self._unique_project_files(csharp_files)
         stale_files = self._unique_project_files(removed_files or [])
         affected_files = self._unique_project_files([*current_files, *stale_files])
@@ -833,6 +889,7 @@ class ProjectScanner:
     ) -> ProjectScanResult:
         """Replace selected ASPX, Razor, and Vue records in an existing scan."""
         self.scan_result = scan_result
+        self._record_framework_report()
         current_files = self._unique_project_files(view_files)
         stale_files = self._unique_project_files(removed_files or [])
         affected_files = self._unique_project_files([*current_files, *stale_files])

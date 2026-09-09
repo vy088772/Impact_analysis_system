@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -748,6 +750,100 @@ def test_refresh_response_wrapper_summary_accepts_real_refresh_shape(
         assert validated_summary[key] == value, key
 
     assert response.wrapper_summary.review_items[0].evidence_status == "unresolved"
+
+
+def test_refresh_response_carries_framework_label_per_scan_root(monkeypatch, tmp_path) -> None:
+    """Ticket 04 (ADR-0021): /refresh's response carries the Framework Label
+    together with the parsers that mounted, one entry per scan root -- even
+    when a system spans several scan roots merged by `_merge_scans`."""
+    ttpur_root = tmp_path / "TTPUR"
+    atv_root = tmp_path / "ATV"
+    ttpur_root.mkdir()
+    atv_root.mkdir()
+    ttpur_scan = ProjectScanResult(
+        project_root=str(ttpur_root),
+        project_name="TTPUR",
+        scan_time=datetime.now(),
+        framework_reports=[
+            {
+                "scan_root": str(ttpur_root),
+                "framework": FrameworkType.WEBFORMS.value,
+                "parsers": ["csharp_parser", "aspx_parser"],
+            }
+        ],
+    )
+    atv_scan = ProjectScanResult(
+        project_root=str(atv_root),
+        project_name="ATV",
+        scan_time=datetime.now(),
+        framework_reports=[
+            {
+                "scan_root": str(atv_root),
+                "framework": FrameworkType.WEBFORMS.value,
+                "parsers": ["csharp_parser", "aspx_parser"],
+            }
+        ],
+    )
+    scans = {str(ttpur_root): ttpur_scan, str(atv_root): atv_scan}
+
+    monkeypatch.setattr(
+        analyze_service,
+        "resolve_scan_roots",
+        lambda source, refresh=False: [ttpur_root, atv_root],
+    )
+    monkeypatch.setattr(
+        analyze_service,
+        "get_or_scan",
+        lambda scan_root, refresh=False: scans[str(scan_root)],
+    )
+
+    result = analyze_service.refresh_source({"project": "p", "repo": "r"})
+
+    assert result["framework_reports"] == [
+        {
+            "scan_root": str(ttpur_root),
+            "framework": "ASP.NET WebForms",
+            "parsers": ["csharp_parser", "aspx_parser"],
+        },
+        {
+            "scan_root": str(atv_root),
+            "framework": "ASP.NET WebForms",
+            "parsers": ["csharp_parser", "aspx_parser"],
+        },
+    ]
+
+    response = RefreshResponse(**result)
+    assert response.framework_reports == result["framework_reports"]
+
+
+def test_refresh_api_reports_unidentifiable_framework_as_a_clear_400(monkeypatch) -> None:
+    """Ticket 04 (ADR-0021): "fails with a clear message" must reach an actual
+    /refresh caller as a structured 400, not an unhandled 500 -- this is what
+    ProjectScanner's ValueError on Framework Label = Unknown turns into at the
+    API boundary."""
+    from fastapi import HTTPException
+    from service import api
+    from service.schemas import RefreshRequest
+
+    def fake_refresh_source(source: dict, program_names: list[str], database: str) -> dict:
+        raise ValueError(
+            "無法辨識框架類型（Framework Label = Unknown），拒絕退回純 C# 掃描："
+            "D:\\repos\\Y-DOCs\\Mystery"
+        )
+
+    monkeypatch.setattr(api.analyze_service, "refresh_source", fake_refresh_source)
+
+    with pytest.raises(HTTPException) as exc_info:
+        api.refresh(
+            RefreshRequest(
+                system="SYS",
+                source={"project": "p", "repo": "r", "path": "Mystery"},
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Unknown" in exc_info.value.detail
+    assert "Mystery" in exc_info.value.detail
 
 
 def test_review_candidates_keep_each_source_snapshot_identity(monkeypatch, tmp_path) -> None:

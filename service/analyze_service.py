@@ -276,6 +276,9 @@ def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
         merged.semantic_binding_availability.extend(
             getattr(s, "semantic_binding_availability", []) or []
         )
+        merged.framework_reports.extend(
+            getattr(s, "framework_reports", []) or []
+        )
         merged.aspx_results.extend(s.aspx_results)
         merged.razor_results.extend(s.razor_results)
         merged.vue_results.extend(s.vue_results)
@@ -3593,6 +3596,7 @@ def refresh_source(
         "removed_files": list(dict.fromkeys(removed_files)),
         "wrapper_summary": wrapper_summary,
         "semantic_binding_availability": getattr(scan, "semantic_binding_availability", []) or [],
+        "framework_reports": getattr(scan, "framework_reports", []) or [],
         "contract_transaction": contract_transaction_summary,
         "analysis_manifest": {
             "contract_revision_reference": _contract_revision_reference(

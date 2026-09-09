@@ -164,7 +164,7 @@ class ProjectTypeDetector:
                 return FrameworkType.DOTNET_5_PLUS
             return FrameworkType.DOTNET_CORE
         
-        # 判斷 5: Web API (只有 C#)
+        # 判斷 5: 只有 C# 檔案，沒有任何 view 檔案
         if csharp_count > 0:
             if has_web_config:
                 print(f"   判斷依據: 只有 C# 檔案 ({csharp_count}) + web.config")
@@ -172,11 +172,19 @@ class ProjectTypeDetector:
             elif has_appsettings:
                 print(f"   判斷依據: 只有 C# 檔案 ({csharp_count}) + appsettings.json")
                 return FrameworkType.DOTNET_CORE
-        
-        # 判斷 6: .NET Framework (有 web.config)
+            else:
+                # 沒有任何網頁標記（web.config／appsettings.json）——這是一個
+                # 純 C# 專案（主控台程式、排程工具、類別庫），不是判斷失敗。
+                # ADR-0021 之後 UNKNOWN 會讓掃描直接中止，所以這裡必須誠實
+                # 標出「這是一般 .NET 專案」，而不是任由它落到 UNKNOWN——
+                # Y-Docs_TTPUR 系統底下的 TaskSchedule（排程工具）就是這個形狀。
+                print(f"   判斷依據: 只有 C# 檔案 ({csharp_count})，無網頁標記，視為一般 .NET 專案")
+                return FrameworkType.DOTNET_FRAMEWORK
+
+        # 判斷 6: .NET Framework (有 web.config，但沒有可辨識的 C#／view 檔案)
         if has_web_config:
             return FrameworkType.DOTNET_FRAMEWORK
-        
+
         print(f"   無法明確判斷，使用預設")
         return FrameworkType.UNKNOWN
     
@@ -201,7 +209,48 @@ class ProjectTypeDetector:
         }
         
         return parser_mapping.get(framework, ['csharp_parser'])
-    
+
+    # One row per (file kind, its extension, the parser that reads it) — the
+    # single source of truth `required_parsers_by_extension()` and
+    # `file_extensions_present()` both walk, so the two stay in lockstep by
+    # construction instead of by two hand-kept if-cascades. ASPX and ASCX are
+    # two extensions sharing one parser, so the same parser name can repeat.
+    _VIEW_KIND_TABLE: Tuple[Tuple[FileType, str, str], ...] = (
+        (FileType.CSHARP, 'cs', 'csharp_parser'),
+        (FileType.ASPX, 'aspx', 'aspx_parser'),
+        (FileType.ASCX, 'ascx', 'aspx_parser'),
+        (FileType.RAZOR, 'cshtml', 'razor_parser'),
+        (FileType.VUE, 'vue', 'vue_parser'),
+    )
+
+    def required_parsers_by_extension(self) -> List[str]:
+        """Parsers mount by the union of view file extensions actually present
+        under the scan root (ADR-0021), not by the exclusive framework mapping
+        `get_required_parsers()` above uses. A scan root holding both WebForms
+        pages and Razor views mounts both parsers, and neither set of view
+        records is lost.
+
+        Must run after `detect()` (or `_scan_files()`) has populated
+        `file_stats` — `detect()` always calls `_scan_files()` first.
+        """
+        parsers: List[str] = []
+        for file_type, _extension, parser in self._VIEW_KIND_TABLE:
+            if self.file_stats.get(file_type, 0) > 0 and parser not in parsers:
+                parsers.append(parser)
+        return parsers
+
+    def file_extensions_present(self) -> List[str]:
+        """The source file extensions (no dot) actually present under the scan
+        root, limited to the kinds a parser exists for. Companion to
+        `required_parsers_by_extension()`; together they replace the
+        framework-exclusive `get_required_parsers()`/`get_file_extensions_to_scan()`
+        pair for mounting decisions (ADR-0021)."""
+        return [
+            extension
+            for file_type, extension, _parser in self._VIEW_KIND_TABLE
+            if self.file_stats.get(file_type, 0) > 0
+        ]
+
     def get_file_extensions_to_scan(self, framework: FrameworkType) -> List[str]:
         """
         根據框架類型取得需要掃描的檔案副檔名

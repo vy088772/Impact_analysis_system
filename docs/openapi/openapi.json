@@ -1184,6 +1184,14 @@
             "title": "Files",
             "type": "integer"
           },
+          "framework_reports": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Framework Reports",
+            "type": "array"
+          },
           "inline_table_facts": {
             "default": 0,
             "title": "Inline Table Facts",
