@@ -165,12 +165,19 @@ maintainer to add an exclusion needs to know which name to write.
 stashing this work, rebuilding the host, and re-running: identical failures, identical assertions.
 None touches wrapper receiver resolution.
 
-### Left undone
+### The glossary, settled separately
 
-`CONTEXT.md` still does not carry this feature's vocabulary, and now also lacks an entry for the
-receiver-type provenance states — a closed set crossing the host/gateway boundary, structurally the
-twin of **Semantic Binding Availability**, which does have one. The reason is the one ticket 05
-recorded and did not fix: `CONTEXT.md` holds an uncommitted block of MVC vocabulary belonging to
-tickets 04 and 05, and git commits whole files, so writing a glossary entry here would sweep two
-other tickets' work into this commit under this ticket's message. The debt is now three tickets
-deep and should land as its own commit rather than as a passenger on a fourth.
+This ticket's commit does not touch `CONTEXT.md`, for the reason ticket 05 recorded: the file held
+an uncommitted block of vocabulary belonging to tickets 04 and 05, and git commits whole files, so
+adding an entry here would have swept two other tickets' work in under this ticket's message.
+
+The debt was three tickets deep, so it was paid immediately afterwards in its own commit rather
+than deferred to a fourth. That commit carries the already-written block (Program Screen, View
+Anchor, Project Connection Scope, Framework Label) together with ADR-0018, ADR-0019 and ADR-0021,
+which were still untracked and which `CONTEXT.md` links to — ticket 04's code was already committed
+while the ADR it cites was not, so those links were dead. It adds ticket 05's **SDK-style Project**,
+**Implicit Globbing** and **Restore Assets**, notes `source_file_count` on **Semantic Binding
+Availability**, and adds this ticket's **Declaring Receiver Type** with its four provenance states.
+
+ADR-0020 stays untracked: it belongs to ticket 07, which has not started, and no glossary entry
+links to it yet.
