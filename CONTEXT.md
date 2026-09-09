@@ -118,5 +118,39 @@ The identity scope within which every method fact in one Implementation Snapshot
 _Avoid_: assembly version, DLL name
 
 **Semantic Binding Availability**:
-The state of the Roslyn semantic model the analyzer built for one scanned project's own declarations: `available`, `unavailable_no_project_file`, or `unavailable_reference_resolution_failed`. Reported for every scanned project so a degraded, syntax-only analysis never looks like a confident one. Building the compilation and reporting this state does not itself change any classification result.
+The state of the Roslyn semantic model the analyzer built for one scanned project's own declarations: `available`, `unavailable_no_project_file`, or `unavailable_reference_resolution_failed`. Reported for every scanned project so a degraded, syntax-only analysis never looks like a confident one. It carries a `source_file_count`, because an SDK-style Project names none of its source files and the count is the only place a maintainer sees what the model actually holds. Building the compilation and reporting this state does not itself change any classification result.
 _Avoid_: compilation success, semantic model status
+
+**SDK-style Project**:
+The project-file form every measured ASP.NET Core project uses, in which source files come from Implicit Globbing and references from package references resolved through Restore Assets. The old-style form names every source file and every reference instead. The project reader branches once on the form rather than asking which it is at every field, and the two never merge: an SDK-style project's own framework references already declare every built-in type, so `mscorlib` must not be added to it the way it still is to an old-style project.
+_Avoid_: new csproj, modern project, netcore project
+
+**Implicit Globbing**:
+The rule by which an SDK-style Project's source files are discovered — every `.cs` file beneath the project directory, minus the ones a removal item names, and never one under `bin`, `obj`, or a dot-directory. The project file itself lists no source. A removal item excludes the files it names, so an excluded directory contributes no source at all.
+_Avoid_: file discovery, source scan, compile items
+
+**Restore Assets**:
+The `obj/project.assets.json` one NuGet restore writes for one SDK-style Project, and the only place consulted for which assembly each package reference compiles against. A project already carrying assets is never restored again; a project carrying none is restored once. Nothing here guesses at a NuGet folder layout or hunts through a .NET installation. When two assemblies of one name arrive, the higher assembly version wins, which is the rule MSBuild's own conflict resolution follows — preferring the targeting pack unconditionally is wrong and produces CS1705.
+_Avoid_: nuget cache, packages folder, project.json
+
+**Declaring Receiver Type**:
+The type one wrapper Contract is keyed on: the type that *declares* the invoked method, which for a local database context deriving from an external base class is that base, not the local subclass. It is reported beside a provenance saying how it was reached — `declaring_type` from the bound method symbol's containing type, `receiver_declaration` when the receiver's own declared type declares the method, `declaring_type_unresolved` when a receiver type resolved but inherits the method from a base this analysis cannot see, and blank when no receiver type resolved at all. The rule only ever walks *from* a receiver type the syntax already resolved; it never invents one where none was reported before.
+_Avoid_: receiver class, wrapper class, declared type
+
+## Web Application Analysis
+
+**Program Screen**:
+One View file together with the set of actions that serve it — the actions whose name equals the view name, plus the actions its View Anchors name. It is what a specification's program code resolves to inside a repository. The controller is a path used to reach those actions, never the unit of scope: one controller can hold several Program Screens, and one Program Screen never spans two controllers. In WebForms the same concept is one `.aspx` page and its code-behind. See [ADR-0019](docs/adr/0019-a-program-is-one-view-plus-the-actions-that-serve-it.md).
+_Avoid_: page, controller, program name, screen
+
+**View Anchor**:
+The declaration inside one View that names an action the screen calls. It comes at two strengths and they are never merged: a markup-layer anchor (`asp-action`, `asp-controller`, `<form action>`, `asp-page`) is determined, and a URL shaped like `/Controller/Action` inside the view's own `<script>` block is a candidate rated `likely`. It is the MVC counterpart of a WebForms control event such as `OnClick="Button1_Click"`.
+_Avoid_: route, form target, event handler
+
+**Project Connection Scope**:
+The directory of one project file, which is the extent over which one connection lookup table is valid. A `.cs` file belongs to the nearest project file above it, and two projects' tables are never merged — one key name is unique only inside the configuration file that declares it, and the same name in two projects can open two different databases. A file with no project file above it has no table, and its connections report unresolved. See [ADR-0018](docs/adr/0018-connection-lookup-tables-are-scoped-to-the-project-file.md).
+_Avoid_: scan root scope, repository connections, appsettings table
+
+**Framework Label**:
+The detected framework of one scan root, reported beside the scan and printed by `refresh_cli`. It states what the root is; it does not decide what the scanner reads, because parsers mount by the union of file extensions actually present. A root that holds both WebForms and MVC files reports both. A root that cannot be identified fails loudly rather than falling back to a C#-only scan. See [ADR-0021](docs/adr/0021-the-framework-label-reports-it-does-not-gate.md).
+_Avoid_: project type, required parsers, framework gate
