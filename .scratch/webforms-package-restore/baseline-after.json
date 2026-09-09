@@ -1,0 +1,73 @@
+{
+  "captured_at": "2026-09-09T15:01:26",
+  "elapsed_seconds": 695.0,
+  "git_pull_skipped": true,
+  "working_tree_note": "ATV/Web.config and Response/Web.config carry uncommitted local edits",
+  "source": {
+    "project": "System Dept 1",
+    "repo": "Y-DOCs",
+    "path": [
+      "TTPUR",
+      "ATV",
+      "Notification",
+      "Response",
+      "TaskSchedule"
+    ],
+    "branch": ""
+  },
+  "sp_relations": 637,
+  "table_relations": 392,
+  "wrapper_totals": {
+    "wrapper_calls": 6402,
+    "semantic_binding_resolved": 947,
+    "observation_groups": 5483,
+    "source_wrappers": 4,
+    "external_wrappers": 5479,
+    "auto_selected": 0,
+    "explicit_selected": 51,
+    "unresolved": 5412,
+    "evidence_proven": 24,
+    "evidence_likely": 0,
+    "evidence_unresolved": 5459,
+    "evidence_not_applicable": 0,
+    "review_candidates": 5428
+  },
+  "semantic_binding_availability": [
+    {
+      "scan_root": "data\\repos\\System_Dept_1\\Y-DOCs\\TTPUR",
+      "project_file": "data\\repos\\System_Dept_1\\Y-DOCs\\TTPUR\\TTPUR.csproj",
+      "availability": "available",
+      "unresolved_references": []
+    },
+    {
+      "scan_root": "data\\repos\\System_Dept_1\\Y-DOCs\\ATV",
+      "project_file": "data\\repos\\System_Dept_1\\Y-DOCs\\ATV\\ATV.csproj",
+      "availability": "unavailable_reference_resolution_failed",
+      "unresolved_references": [
+        "TTPUR"
+      ]
+    },
+    {
+      "scan_root": "data\\repos\\System_Dept_1\\Y-DOCs\\Notification",
+      "project_file": "data\\repos\\System_Dept_1\\Y-DOCs\\Notification\\Notification.csproj",
+      "availability": "unavailable_reference_resolution_failed",
+      "unresolved_references": [
+        "TTPUR"
+      ]
+    },
+    {
+      "scan_root": "data\\repos\\System_Dept_1\\Y-DOCs\\Response",
+      "project_file": "data\\repos\\System_Dept_1\\Y-DOCs\\Response\\Response.csproj",
+      "availability": "unavailable_reference_resolution_failed",
+      "unresolved_references": [
+        "TTPUR"
+      ]
+    },
+    {
+      "scan_root": "data\\repos\\System_Dept_1\\Y-DOCs\\TaskSchedule",
+      "project_file": "data\\repos\\System_Dept_1\\Y-DOCs\\TaskSchedule\\TaskSchedule.csproj",
+      "availability": "available",
+      "unresolved_references": []
+    }
+  ]
+}

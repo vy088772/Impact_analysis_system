@@ -2,6 +2,18 @@ using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
+// Shared by ProjectCompilationResolver and PackageRestorer: both need a project file's own
+// directory, and both resolve a HintPath-style relative path against it.
+internal static class ProjectPaths
+{
+    internal static string Directory(string projectFile)
+        => Path.GetDirectoryName(Path.GetFullPath(projectFile)) ?? "";
+
+    internal static string ResolveRelative(string projectFile, string relativePath)
+        => Path.GetFullPath(Path.Combine(
+            Directory(projectFile), relativePath.Replace('\\', Path.DirectorySeparatorChar)));
+}
+
 // Builds one Roslyn Compilation per MSBuild project file found under a scan root, so a later
 // ticket can bind a wrapper call to an exact method symbol through a real semantic model. This
 // ticket only builds the compilation and reports the result of that attempt — Semantic Binding
@@ -87,25 +99,35 @@ internal static class ProjectCompilationResolver
                 new[] { $"csproj_unreadable: {exception.Message}" });
         }
 
-        var references = new List<MetadataReference>();
+        var (references, unresolvedExternal) = ResolveExternalReferences(projectFile, description.References);
+
+        // An old-style project's declared package assemblies live under a packages directory
+        // that a fresh clone never populated. One restore attempt, then one re-resolution pass —
+        // never a retry loop, and never touched at all when every reference already resolves or
+        // the project declares no packages.config to restore from.
+        if (unresolvedExternal.Count > 0)
+        {
+            var packagesConfigPath = Path.Combine(ProjectPaths.Directory(projectFile), "packages.config");
+            if (File.Exists(packagesConfigPath))
+            {
+                var restoreFailure = PackageRestorer.RestoreDeclaredPackages(
+                    projectFile, packagesConfigPath, description.References);
+                // Re-resolve regardless of outcome: RestoreDeclaredPackages restores whatever it
+                // can before reporting a failure, so a package that landed on disk this run must
+                // stop being named unresolved even when a later package in the same restore failed.
+                (references, unresolvedExternal) = ResolveExternalReferences(projectFile, description.References);
+                if (restoreFailure is not null)
+                    unresolvedExternal.Add(restoreFailure);
+            }
+        }
+
         var unresolved = new List<string>();
         // A <ProjectReference> names another project's own output, which this ticket does not
         // build (that would mean compiling that project's project file too, recursively). Report
         // it as unresolved rather than silently building an incomplete compilation that still
         // claims `available` — a degraded analysis must never look like a confident one.
         unresolved.AddRange(description.ProjectReferences);
-        foreach (var reference in description.References)
-        {
-            var resolvedPath = reference.HintPath is not null
-                ? ResolveExternalReference(projectFile, reference)
-                : ResolveFrameworkReference(reference);
-            if (resolvedPath is null)
-            {
-                unresolved.Add(reference.AssemblyName);
-                continue;
-            }
-            references.Add(MetadataReference.CreateFromFile(resolvedPath));
-        }
+        unresolved.AddRange(unresolvedExternal);
 
         // An old-style (non-SDK) .csproj never lists mscorlib as an explicit <Reference>: csc.exe
         // adds it implicitly to every compilation. Ticket 05 never needed it (it only checked
@@ -134,16 +156,36 @@ internal static class ProjectCompilationResolver
         return ProjectSemanticBinding.Available(scanRoot, projectFile, compilation);
     }
 
+    // Resolves every declared <Reference> against what is on disk right now, without touching
+    // packages.config -- called once before any restore attempt, and once more after (Ticket 01)
+    // if that attempt ran, so both passes share exactly the same resolution rule.
+    private static (List<MetadataReference> References, List<string> Unresolved) ResolveExternalReferences(
+        string projectFile, IReadOnlyList<ProjectReferenceItem> referenceItems)
+    {
+        var references = new List<MetadataReference>();
+        var unresolved = new List<string>();
+        foreach (var reference in referenceItems)
+        {
+            var resolvedPath = reference.HintPath is not null
+                ? ResolveExternalReference(projectFile, reference)
+                : ResolveFrameworkReference(reference);
+            if (resolvedPath is null)
+            {
+                unresolved.Add(reference.AssemblyName);
+                continue;
+            }
+            references.Add(MetadataReference.CreateFromFile(resolvedPath));
+        }
+        return (references, unresolved);
+    }
+
     // The HintPath in an old-style .csproj Reference item conventionally points at the
     // referencing project's own output/bin folder (e.g. "bin\SQLFunc.dll"): resolve it relative
     // to the project file's directory, exactly as AssemblyReferenceResolver already does for the
     // wrapper decompiler's single named receiver type.
     private static string? ResolveExternalReference(string projectFile, ProjectReferenceItem reference)
     {
-        var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectFile)) ?? "";
-        var candidate = Path.GetFullPath(Path.Combine(
-            projectDirectory,
-            reference.HintPath!.Replace('\\', Path.DirectorySeparatorChar)));
+        var candidate = ProjectPaths.ResolveRelative(projectFile, reference.HintPath!);
         return File.Exists(candidate) ? candidate : null;
     }
 
