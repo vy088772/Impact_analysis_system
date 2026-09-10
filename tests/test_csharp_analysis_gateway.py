@@ -6319,6 +6319,14 @@ def test_static_analyzer_host_preserves_external_inline_non_prefix_and_dynamic_f
         assert by_method["NonPrefixData"]["wrapper_mode"] == "unknown"
         assert by_method["DynamicData"]["command_text"] is None
         assert by_method["DynamicData"]["command_text_kind"] == "dynamic"
+        # Ticket 07: a command text that arrives as a method parameter (`DynamicData`'s own
+        # `commandText`) is not one the same-method tracer can ever answer, so the host names
+        # that absence on its own -- distinct from an ordinary computed expression -- rather
+        # than reporting it as the same "dynamic" a genuinely unresolved value gets.
+        assert (
+            by_method["DynamicData"]["command_text_unresolved_reason"]
+            == "command_text_method_parameter"
+        )
         assert {item["wrapper_receiver_type"] for item in raw_invocations} == {"SQLObject"}
 
         gateway = CSharpAnalysisGateway(
@@ -6347,7 +6355,7 @@ def test_static_analyzer_host_preserves_external_inline_non_prefix_and_dynamic_f
         assert by_method["NonPrefixData"].evidence is InvocationEvidence.PROVEN
         assert by_method["NonPrefixData"].raw_command_text == "SaveOrder"
         assert by_method["DynamicData"].evidence is InvocationEvidence.UNRESOLVED
-        assert by_method["DynamicData"].reason == "dynamic_command_text"
+        assert by_method["DynamicData"].reason == "command_text_method_parameter"
 
 
 def test_static_analyzer_host_maps_named_source_wrapper_arguments() -> None:

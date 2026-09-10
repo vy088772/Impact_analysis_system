@@ -1195,6 +1195,18 @@ def _unresolved_receiver_reason(receiver_type: str, provenance: str) -> str:
     return "receiver_type_missing"
 
 
+def _command_text_unresolved_reason(raw: Mapping[str, Any]) -> str:
+    """Why one wrapper call's command text stayed unresolved.
+
+    ``dynamic_command_text`` covers every value the analyzer never traces --
+    a computed expression, a call, string concatenation. A method parameter and
+    two conflicting same-method assignments are narrower than that: the host
+    names each one so a coverage number can be acted on, not just observed
+    (ADR-0020).
+    """
+    return _text_fact(raw.get("command_text_unresolved_reason")) or "dynamic_command_text"
+
+
 def _wrapper_contract_receiver_matches(
     contract: Mapping[str, Any],
     receiver_type: str,
@@ -3431,7 +3443,7 @@ class CSharpAnalysisGateway:
                             None,
                             InvocationEvidence.UNRESOLVED,
                             source,
-                            "dynamic_command_text",
+                            _command_text_unresolved_reason(raw),
                             **metadata,
                             **common,
                         ))
@@ -3462,7 +3474,7 @@ class CSharpAnalysisGateway:
                         None,
                         InvocationEvidence.UNRESOLVED,
                         source,
-                        "dynamic_command_text",
+                        _command_text_unresolved_reason(raw),
                         **metadata,
                         **common,
                     ))

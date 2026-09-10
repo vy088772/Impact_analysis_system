@@ -1,0 +1,105 @@
+{
+  "captured_at": "2026-09-09T10:24:35",
+  "elapsed_seconds": 397.2,
+  "git_pull_skipped": true,
+  "working_tree_note": "ATV/Web.config and Response/Web.config carry uncommitted local edits",
+  "source": {
+    "project": "System Dept 1",
+    "repo": "Y-DOCs",
+    "path": [
+      "TTPUR",
+      "ATV",
+      "Notification",
+      "Response",
+      "TaskSchedule"
+    ],
+    "branch": ""
+  },
+  "sp_relations": 637,
+  "table_relations": 392,
+  "wrapper_totals": {
+    "wrapper_calls": 6402,
+    "semantic_binding_resolved": 14,
+    "observation_groups": 6053,
+    "source_wrappers": 4,
+    "external_wrappers": 6049,
+    "auto_selected": 0,
+    "explicit_selected": 243,
+    "unresolved": 5412,
+    "evidence_proven": 214,
+    "evidence_likely": 0,
+    "evidence_unresolved": 5839,
+    "evidence_not_applicable": 0,
+    "review_candidates": 5806
+  },
+  "semantic_binding_availability": [
+    {
+      "scan_root": "data\\repos\\System_Dept_1\\Y-DOCs\\TTPUR",
+      "project_file": "data\\repos\\System_Dept_1\\Y-DOCs\\TTPUR\\TTPUR.csproj",
+      "availability": "unavailable_reference_resolution_failed",
+      "unresolved_references": [
+        "Microsoft.Bcl.AsyncInterfaces",
+        "Microsoft.Extensions.DependencyInjection",
+        "Microsoft.Extensions.DependencyInjection.Abstractions",
+        "Microsoft.Extensions.Logging",
+        "Microsoft.Extensions.Logging.Abstractions",
+        "Microsoft.Extensions.Options",
+        "Microsoft.Extensions.Primitives",
+        "MigraDoc.DocumentObjectModel",
+        "MigraDoc.Rendering",
+        "MigraDoc.RtfRendering",
+        "PdfSharp",
+        "PdfSharp.BarCodes",
+        "PdfSharp.Charting",
+        "PdfSharp.Cryptography",
+        "PdfSharp.Quality",
+        "PdfSharp.Shared",
+        "PdfSharp.Snippets",
+        "PdfSharp.System",
+        "PdfSharp.WPFonts",
+        "System.Buffers",
+        "System.ComponentModel.Annotations",
+        "System.Diagnostics.DiagnosticSource",
+        "System.Formats.Asn1",
+        "System.Memory",
+        "System.Numerics.Vectors",
+        "System.Runtime.CompilerServices.Unsafe",
+        "System.Security.Cryptography.Algorithms",
+        "System.Security.Cryptography.Cng",
+        "System.Security.Cryptography.Pkcs",
+        "System.Security.Cryptography.Primitives",
+        "System.Threading.Tasks.Extensions"
+      ]
+    },
+    {
+      "scan_root": "data\\repos\\System_Dept_1\\Y-DOCs\\ATV",
+      "project_file": "data\\repos\\System_Dept_1\\Y-DOCs\\ATV\\ATV.csproj",
+      "availability": "unavailable_reference_resolution_failed",
+      "unresolved_references": [
+        "TTPUR"
+      ]
+    },
+    {
+      "scan_root": "data\\repos\\System_Dept_1\\Y-DOCs\\Notification",
+      "project_file": "data\\repos\\System_Dept_1\\Y-DOCs\\Notification\\Notification.csproj",
+      "availability": "unavailable_reference_resolution_failed",
+      "unresolved_references": [
+        "TTPUR"
+      ]
+    },
+    {
+      "scan_root": "data\\repos\\System_Dept_1\\Y-DOCs\\Response",
+      "project_file": "data\\repos\\System_Dept_1\\Y-DOCs\\Response\\Response.csproj",
+      "availability": "unavailable_reference_resolution_failed",
+      "unresolved_references": [
+        "TTPUR"
+      ]
+    },
+    {
+      "scan_root": "data\\repos\\System_Dept_1\\Y-DOCs\\TaskSchedule",
+      "project_file": "data\\repos\\System_Dept_1\\Y-DOCs\\TaskSchedule\\TaskSchedule.csproj",
+      "availability": "available",
+      "unresolved_references": []
+    }
+  ]
+}

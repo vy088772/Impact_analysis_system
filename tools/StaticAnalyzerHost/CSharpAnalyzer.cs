@@ -1343,7 +1343,8 @@ internal sealed record DirectSqlInvocation(
     int? CommandTextSourceEndOffset = null,
     string? CommandTextProvenance = null,
     string? WrapperReceiverTypeProvenance = null,
-    bool CommandTypeArgumentObserved = false);
+    bool CommandTypeArgumentObserved = false,
+    string? CommandTextUnresolvedReason = null);
 
 /// <summary>One ambiguous/unavailable overload candidate's bound-implementation and signature facts.</summary>
 internal sealed record WrapperOverloadCandidateFact(
@@ -2032,27 +2033,76 @@ internal static class WrapperAnalyzer
         if (call.Expression is not MemberAccessExpressionSyntax member)
             return null;
 
-        var commandText = ResolveExternalCommandTextArgument(call);
-        if (!LooksLikeCommandTextExpression(commandText, caller))
+        var commandTextArgument = ResolveExternalCommandTextArgument(call);
+        if (!LooksLikeCommandTextExpression(commandTextArgument, caller))
             return null;
 
         var mode = ResolveExternalSqlObjectMode(call, caller);
-        var literalText = commandText is LiteralExpressionSyntax { Token.Value: string text }
-            ? text
-            : null;
+        var (commandTextKind, literalText, commandTextUnresolvedReason) =
+            ResolveExternalCommandText(commandTextArgument, caller, call);
         var boundSymbol = TryResolveBoundWrapperSymbol(call, compilation);
 
         return CreateUnavailableInvocation(
             caller,
             callerClass,
             member,
-            literalText is null ? "dynamic" : "literal",
+            commandTextKind,
             literalText,
             mode == "stored_procedure",
             mode,
             call,
             boundSymbol,
-            ResolveWrapperReceiverType(call, caller, boundSymbol, sourceRoots));
+            ResolveWrapperReceiverType(call, caller, boundSymbol, sourceRoots),
+            commandTextUnresolvedReason);
+    }
+
+    /// <summary>
+    /// An external wrapper call's command text, resolved the same way the source-based wrapper
+    /// path already resolves its own (<see cref="ReadWrapperCommandTextCandidates"/>): an
+    /// identifier at the call site is walked back to the declarations and assignments that
+    /// precede it inside the same method (ADR-0020). Every measured Core repository writes its
+    /// call this way -- the command text is a local variable or a field assigned a literal a few
+    /// lines above the call, not a literal at the call site itself.
+    ///
+    /// The analyzer does not follow a value across a method boundary. A method parameter carries
+    /// no in-method assignment to trace, so it stays unresolved and names why, rather than
+    /// reading as the same "dynamic" a genuinely computed expression gets. Two assignments that
+    /// both survive shadow removal -- e.g. one on each side of an `if`/`else` reaching the call
+    /// unconditionally -- are a real ambiguity when they disagree, so picking either one silently
+    /// would be a guess; it stays unresolved and names that too.
+    /// </summary>
+    private static (string Kind, string? Literal, string? UnresolvedReason) ResolveExternalCommandText(
+        ExpressionSyntax? commandTextArgument,
+        MethodDeclarationSyntax caller,
+        InvocationExpressionSyntax call)
+    {
+        if (commandTextArgument is null)
+            return ("dynamic", null, null);
+
+        if (commandTextArgument is IdentifierNameSyntax parameterIdentifier
+            && caller.ParameterList.Parameters.Any(parameter =>
+                parameter.Identifier.Text == parameterIdentifier.Identifier.Text))
+            return ("dynamic", null, "command_text_method_parameter");
+
+        var candidates = ReadWrapperCommandTextCandidates(
+            commandTextArgument,
+            caller,
+            call,
+            call.SpanStart,
+            commandTextArgument.ToString());
+
+        var literals = candidates
+            .Select(candidate => candidate.CommandText)
+            .Where(text => text is not null)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (literals.Count > 1)
+            return ("dynamic", null, "command_text_conflicting_assignments");
+
+        return literals.Count == 1
+            ? ("literal", literals[0], null)
+            : ("dynamic", null, null);
     }
 
     /// <summary>The receiver type one external wrapper call is keyed on, and where that answer
@@ -2229,7 +2279,8 @@ internal static class WrapperAnalyzer
         string mode,
         InvocationExpressionSyntax call,
         BoundWrapperSymbolFacts? boundSymbol,
-        ResolvedReceiverType receiverType)
+        ResolvedReceiverType receiverType,
+        string? commandTextUnresolvedReason = null)
         => new(
             callerClass,
             caller.Identifier.Text,
@@ -2252,7 +2303,8 @@ internal static class WrapperAnalyzer
             WrapperParameterTypes: boundSymbol?.ParameterTypes,
             WrapperAssemblyIdentity: boundSymbol?.AssemblyIdentity,
             WrapperReceiverTypeProvenance: receiverType.Provenance,
-            CommandTypeArgumentObserved: HasModeLiteralArgument(call));
+            CommandTypeArgumentObserved: HasModeLiteralArgument(call),
+            CommandTextUnresolvedReason: commandTextUnresolvedReason);
 
     /// <summary>One externally referenced wrapper call's uniquely bound method symbol facts —
     /// only ever built when the compiler resolved the call to exactly one method with no
