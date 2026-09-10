@@ -144,5 +144,5 @@ the connection numbers above are unchanged.
 
 **Field-Held Connection has no ADR.** The decision in point 1 above — the Resolved
 Connection Source attaches to the call-site variable — is a real decision with a real
-alternative, and `CONTEXT.md`'s entry cites no ADR while its neighbours do. Worth one if the
-rule is ever questioned.
+alternative, and `CONTEXT.md`'s entry cites no ADR while its neighbours do. *Ticket 18 now
+carries it.*
