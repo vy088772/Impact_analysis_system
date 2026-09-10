@@ -120,7 +120,10 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # ADO.NET 呼叫的連線變數現在會拿到 {server, database}；讀 Configuration 根命名
 # 空間的 GetValue<string>("Key") 會留下理由；欄位的值追不回查找鍵時也會留下理
 # 由。舊快取裡這些呼叫是空的連線來源，與新解析結果不同，必須重新掃描。
-_CACHE_VERSION = 31
+# v32：六個框架的 *Context 型別（過濾器管線、標籤協助程式、Active Directory 的
+# PrincipalContext）不再被報成「組合根沒有註冊的資料庫內容型別」。舊快取的
+# unresolved_connections 帶著這些誤報，必須重新掃描才會消失。
+_CACHE_VERSION = 32
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

@@ -437,8 +437,16 @@ class DBConnectionTracker:
                     server=server,
                 )
 
-    # ASP.NET 自己的環境物件，名字結尾是 Context 但不是資料庫內容型別。把它們
-    # 一併報成「組合根沒有註冊」只會製造雜訊，讓真正的缺口被淹沒。
+    # 框架自己的環境物件，名字結尾是 Context 但一個資料庫都不開。把它們一併報
+    # 成「組合根沒有註冊」只會製造雜訊，讓真正的缺口被淹沒。
+    #
+    # 下半段的六個名字，是實測五個儲存庫掃出來的：這條規則在它們身上報了二十
+    # 四次，二十四次都是這些框架型別，沒有一次是真的——每一個宣告出來的資料庫
+    # 內容型別，組合根都註冊了。
+    #
+    # 一份名單擋不住下一個儲存庫帶來的第七個框架型別。真正的分辨依據是「這個
+    # 型別有沒有被宣告成資料庫內容型別」，而不是它叫什麼名字；換成那條規則是
+    # 另一張票的事，這裡先讓已知的雜訊消失。
     _AMBIENT_CONTEXT_TYPES = frozenset(
         {
             "DbContext",
@@ -451,6 +459,15 @@ class DBConnectionTracker:
             "SecurityContext",
             "ModelBindingContext",
             "ValidationContext",
+            # ASP.NET Core MVC 的過濾器管線
+            "ActionExecutingContext",
+            "ActionExecutedContext",
+            "AuthorizationFilterContext",
+            # ASP.NET Core MVC 的用戶端驗證與標籤協助程式
+            "ClientModelValidationContext",
+            "TagHelperContext",
+            # System.DirectoryServices.AccountManagement：目錄，不是資料庫
+            "PrincipalContext",
         }
     )
 

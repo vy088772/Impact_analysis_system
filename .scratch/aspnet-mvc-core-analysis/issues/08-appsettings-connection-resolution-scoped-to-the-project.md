@@ -78,6 +78,20 @@ makes that gap visible rather than silent. Ambient `*Context` types ASP.NET decl
 (`HttpContext`, `ControllerContext`, …) are excluded, because reporting them would drown the
 real gaps.
 
+*Amended while working ticket 09.* Once ETR became scannable, the five measured repositories
+could be counted for the first time, and this rule reported twenty-four times — every one of
+them a framework type, none of them true. Six names joined the exclusion list:
+`ActionExecutingContext`, `ActionExecutedContext`, `AuthorizationFilterContext`,
+`ClientModelValidationContext`, `TagHelperContext` (ASP.NET Core MVC) and `PrincipalContext`
+(`System.DirectoryServices.AccountManagement` — a directory, not a database). Measured after:
+zero reports across all five, and every database context type the repositories declare is
+registered, so nothing true was lost.
+
+A name list is the wrong shape for this and will miss the seventh framework type the next
+repository brings. The evidence-based rule — report only a type the source declares as a
+database context — is available (`class X : DbContext`), but it goes silent on a context
+declared in a referenced project, so it is a decision for its own ticket, not a quiet swap.
+
 **2. A root-namespace read is only reported when it names a connection.** Criterion 9 is
 implemented for the reads it is about. Code reads the Configuration Root Namespace mostly for
 log levels and feature flags; recording every `_configuration["LogLevel"]` as an unresolved
@@ -104,7 +118,7 @@ and the reasons is ticket 16's coverage report; this ticket produces the evidenc
 
 ### Verification
 
-New tests: `tests/test_appsettings_connection_resolution.py` (15 tests) — one per acceptance
+New tests: `tests/test_appsettings_connection_resolution.py` (16 tests — the sixteenth arrived with ticket 09's amendment above) — one per acceptance
 criterion, plus the unregistered-context, non-connection-root-read, section-indexer cases, and
 an end-to-end `ProjectScanner` scan that asserts both `connection_sources` and
 `unresolved_connections`.

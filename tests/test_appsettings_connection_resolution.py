@@ -249,6 +249,42 @@ class TestDbContextResolution:
             CONTEXT_TYPE_NOT_REGISTERED
         ]
 
+    def test_a_framework_context_type_is_not_reported_as_unregistered(
+        self, tmp_path: Path
+    ):
+        """名字結尾是 Context 的框架型別不是資料庫內容型別。ASP.NET 的過濾
+        器與標籤協助程式、Active Directory 的目錄內容都以 Context 結尾，而
+        它們一個資料庫都不開。把它們報成「組合根沒有註冊」只會製造雜訊，讓
+        真正的缺口被淹沒——實測的五個儲存庫裡，這條規則報了二十四次，沒有
+        一次是真的。"""
+        project = _write_project(
+            tmp_path / "Portal",
+            connection_strings={"Payroll": "Server=srvA;Database=PayrollDb"},
+            composition_root=_composition_root(("PayrollContext", "Payroll")),
+        )
+        source = _write_source(
+            project / "Filters" / "AuditFilter.cs",
+            "public class AuditFilter : IActionFilter, IClientModelValidator {\n"
+            "    public void OnActionExecuting(ActionExecutingContext context) { }\n"
+            "    public void OnActionExecuted(ActionExecutedContext context) { }\n"
+            "    public void OnAuthorization(AuthorizationFilterContext context) { }\n"
+            "    public void AddValidation(ClientModelValidationContext context) { }\n"
+            "    public override void Process(TagHelperContext context) { }\n"
+            "    public void Lookup() {\n"
+            "        using (PrincipalContext directory = new PrincipalContext(ContextType.Domain)) { }\n"
+            "    }\n"
+            "}\n",
+        )
+
+        tracker = _track(
+            ProjectConnectionScopeIndex(tmp_path),
+            source,
+            source.read_text(encoding="utf-8"),
+        )
+
+        assert tracker.connections == {}
+        assert tracker.unresolved == []
+
 
 # ============================================================
 # Project Connection Scope：一張表涵蓋一個專案檔目錄（ADR-0018）

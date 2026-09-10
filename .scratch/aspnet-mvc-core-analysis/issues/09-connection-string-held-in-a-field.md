@@ -136,8 +136,11 @@ failed to register a database context type, naming `ClientModelValidationContext
 `AuthorizationFilterContext` (6), `PrincipalContext` (2), `ActionExecutingContext` (2),
 `ActionExecutedContext` (1) and `TagHelperContext` (1). Every one is an ASP.NET or
 System.DirectoryServices type, and none opens a database. These are confident false claims
-that ticket 16's coverage report would inherit. The fix is six names in
-`_AMBIENT_CONTEXT_TYPES`, but the rule is ticket 08's, so it is not changed here.
+that ticket 16's coverage report would inherit.
+
+*Done.* The six names joined `_AMBIENT_CONTEXT_TYPES` in a follow-up commit, and ticket 08's
+note records the amendment and the measurement behind it. All twenty-four reports are gone;
+the connection numbers above are unchanged.
 
 **Field-Held Connection has no ADR.** The decision in point 1 above — the Resolved
 Connection Source attaches to the call-site variable — is a real decision with a real
