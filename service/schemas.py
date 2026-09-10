@@ -166,6 +166,11 @@ class ProgramAnalysis(BaseModel):
     execution_paths: List[Dict] = Field(default_factory=list)
     compact_execution_paths: List[Dict] = Field(default_factory=list)
     compact_execution_paths_meta: Dict[str, int] = Field(default_factory=dict)
+    # 這個畫面渲染的共用元件（ViewComponent／partial view）各自貢獻的 SP／資料表，
+    # 跟畫面自己的 stored_procedures/tables 分開列出，方便分辨來源（見 spec.md
+    # story 22-24）。已經合併進 stored_procedures/tables/database_invocations，
+    # 這裡只是額外的、按元件分組的明細。
+    shared_component_contributions: List[Dict] = Field(default_factory=list)
 
 
 class AnalyzeResponse(BaseModel):

@@ -182,3 +182,8 @@ _Avoid_: environment config, override, production connection
 **Framework Label**:
 The detected framework of one scan root, reported beside the scan and printed by `refresh_cli`. It states what the root is; it does not decide what the scanner reads, because parsers mount by the union of file extensions actually present. A root that holds both WebForms and MVC files reports both. A root that cannot be identified fails loudly rather than falling back to a C#-only scan. See [ADR-0021](docs/adr/0021-the-framework-label-reports-it-does-not-gate.md).
 _Avoid_: project type, required parsers, framework gate
+
+**Shared Component Contribution**:
+The stored procedures and tables a screen reaches by rendering a ViewComponent or a partial view — the MVC/Core counterpart of a WebForms user control. A ViewComponent's `Invoke`/`InvokeAsync` method is the only member reported; a partial view holds no server code of its own and only forwards to whatever it renders in turn, so resolution walks the render chain (partial through partial, partial through ViewComponent) and reports every ViewComponent actually reached. Every fact reached this way is labelled as coming from a shared component — merged into the screen's own `stored_procedures`/`tables`/`database_invocations`, but never merged into its `methods`, and broken out again in `shared_component_contributions` — so a menu or selector component rendered on many screens is never mistaken for one screen's own access. A component reaching no database contributes nothing, not an empty entry.
+_Avoid_: partial contribution, component SPs, included control
+

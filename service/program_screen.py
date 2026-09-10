@@ -217,6 +217,17 @@ def razor_page_model_path(view_path: str) -> str:
     return f"{view_path}.cs"
 
 
+def view_identity(view_path: str) -> Optional[Tuple[str, str, str]]:
+    """A view's `(area, folder, name)` — the same identity `resolve_program_screens`
+    matches views by, exposed so `service/shared_component.py` can locate a
+    partial view the way MVC itself looks a view up, without duplicating this
+    parse."""
+    parsed = _view_file(view_path)
+    if parsed is None:
+        return None
+    return parsed.area, parsed.folder, parsed.name
+
+
 def _screens_through_controllers(
     program_code: str,
     code: str,

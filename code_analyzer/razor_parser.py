@@ -80,6 +80,23 @@ class RazorParser:
     STRING_LITERAL_PATTERN = re.compile(r'''(['"])((?:(?!\1).)*)\1''')
     _IDENTIFIER_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
+    # 共用元件（見 CONTEXT.md「Shared Component Contribution」條目）。ViewComponent
+    # 呼叫有兩種寫法：`Component.InvokeAsync("Name")`／`Component.Invoke("Name")`，
+    # 或 Tag Helper `<vc:kebab-case-name>`。partial view 呼叫也有兩種：
+    # `Html.Partial("Name")`／`Html.RenderPartial("Name")`（含 Async 版本），或
+    # Tag Helper `<partial name="Name">`。這裡只記下原始名稱，不解析成檔案——單一
+    # .cshtml 檔案看不到其他掃描到的檔案，解析交給 service/shared_component.py。
+    VIEW_COMPONENT_INVOKE_PATTERN = re.compile(
+        r'Component\.(?:InvokeAsync|Invoke)\(\s*"([^"]+)"', re.IGNORECASE
+    )
+    VIEW_COMPONENT_TAG_PATTERN = re.compile(r'<vc:([A-Za-z0-9\-]+)', re.IGNORECASE)
+    PARTIAL_METHOD_PATTERN = re.compile(
+        r'Html\.(?:Partial|RenderPartial)(?:Async)?\(\s*"([^"]+)"', re.IGNORECASE
+    )
+    PARTIAL_TAG_PATTERN = re.compile(
+        r'<partial\b[^>]*\bname\s*=\s*"([^"]+)"', re.IGNORECASE
+    )
+
     def __init__(self):
         """初始化解析器"""
         self.current_file = None
@@ -151,6 +168,10 @@ class RazorParser:
         # View Anchor：這個畫面宣告會呼叫哪些 action，兩種強度分開存放、永不合併。
         result.view_anchors_determined = self._extract_determined_view_anchors(content)
         result.view_anchors_candidate = self._extract_candidate_view_anchors(content)
+
+        # 共用元件：這個畫面渲染的 ViewComponent／partial view 原始名稱。
+        result.view_component_references = self._extract_view_component_references(content)
+        result.partial_view_references = self._extract_partial_view_references(content)
         
         # 檢查是否有內嵌 SQL（不建議）
         inline_sql = self._check_inline_sql(content)
@@ -370,6 +391,24 @@ class RazorParser:
                     anchors.append({'action': action, 'controller': controller})
 
         return anchors
+
+    def _extract_view_component_references(self, content: str) -> List[str]:
+        """這個畫面渲染的 ViewComponent 原始名稱，依出現順序、允許重複。"""
+        names: List[str] = []
+        for match in self.VIEW_COMPONENT_INVOKE_PATTERN.finditer(content):
+            names.append(match.group(1))
+        for match in self.VIEW_COMPONENT_TAG_PATTERN.finditer(content):
+            names.append(match.group(1))
+        return names
+
+    def _extract_partial_view_references(self, content: str) -> List[str]:
+        """這個畫面渲染的 partial view 原始名稱，依出現順序、允許重複。"""
+        names: List[str] = []
+        for match in self.PARTIAL_METHOD_PATTERN.finditer(content):
+            names.append(match.group(1))
+        for match in self.PARTIAL_TAG_PATTERN.finditer(content):
+            names.append(match.group(1))
+        return names
 
     @staticmethod
     def _path_segments(url: str) -> List[str]:

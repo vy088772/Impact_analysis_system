@@ -506,6 +506,14 @@ class FileAnalysisResult:
     view_anchors_determined: List[Dict] = field(default_factory=list)
     view_anchors_candidate: List[Dict] = field(default_factory=list)
 
+    # 這個畫面渲染的共用元件（razor_parser 選填）：ViewComponent 呼叫
+    # （`Component.InvokeAsync("Name")`／`<vc:name>`）與 partial view 呼叫
+    # （`Html.Partial("Name")`／`<partial name="Name">`）各自的原始名稱清單，
+    # 各自獨立、不解析成檔案——由 service/shared_component.py 事後解析成實際
+    # 檔案，因為單一 .cshtml 檔案看不到其他掃描到的檔案。
+    view_component_references: List[str] = field(default_factory=list)
+    partial_view_references: List[str] = field(default_factory=list)
+
     # Razor Pages 的頁面指示詞（`@page`，razor_parser 選填）。這是這個畫面是否走
     # Razor Pages 頁面模型（page model）配對的唯一依據——一個畫面旁邊即使有同名的
     # code-behind 檔案（`.cshtml.cs`），沒有這個指示詞就當作一般 MVC 畫面，不會

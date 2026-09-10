@@ -134,7 +134,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # action> 是決定式，畫面自己 <script> 區塊裡形如 /Controller/Action 的網址字串
 # 是候選式（評級 likely），兩份清單永不合併。舊快取的 FileAnalysisResult 沒有
 # 這兩個欄位，razor_results 一律看不到任何 View Anchor，必須重新掃描才會補上。
-_CACHE_VERSION = 34
+# v35：RazorParser 新增 view_component_references/partial_view_references
+# （這個畫面渲染的 ViewComponent／partial view 原始名稱，見 CONTEXT.md「Shared
+# Component Contribution」條目）。舊快取的 razor_results 一律看不到任何共用元
+# 件參照，/analyze 因此答不出 ViewComponent／partial view 貢獻的 SP／資料表，
+# 必須重新掃描才會補上。
+_CACHE_VERSION = 35
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

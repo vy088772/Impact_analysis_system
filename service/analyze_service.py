@@ -72,7 +72,9 @@ from .program_screen import (
     resolve_program_screens,
     resolve_razor_page_screens,
     razor_page_model_path,
+    view_identity,
 )
+from .shared_component import VIEW_COMPONENT, resolve_shared_components
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import cache_status, cached_commit, cached_saved_at, get_or_scan, has_cache, save_scan
@@ -274,6 +276,13 @@ def _same_name(left: str, right: str) -> bool:
 
 def _same_path(left: str, right: str) -> bool:
     return bool(left) and bool(right) and Path(left) == Path(right)
+
+
+def _append_once(name: str, *collections: List[str]) -> None:
+    """Append `name` to every collection that does not already hold it."""
+    for collection in collections:
+        if name not in collection:
+            collection.append(name)
 
 
 def _invocation_entry_method(invocation: DbInvocation) -> str:
@@ -2236,6 +2245,26 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         for result in scan.csharp_results
     }
 
+    # 共用元件（ViewComponent／partial view）解析所需的資料，跟 raw_name 無關，
+    # 整個請求只需要組一次。
+    csharp_by_path = {r.file_path: r for r in scan.csharp_results}
+    view_component_refs_by_path = {
+        r.file_path: r.view_component_references for r in scan.razor_results
+    }
+    partial_view_refs_by_path = {
+        r.file_path: r.partial_view_references for r in scan.razor_results
+    }
+    view_identities: Dict[str, Tuple[str, str, str]] = {}
+    for r in scan.razor_results:
+        identity = view_identity(r.file_path)
+        if identity is not None:
+            view_identities[r.file_path] = identity
+    view_component_classes = [
+        (r.file_path, cls.name, cls.base_class or "", [m.name for m in cls.methods])
+        for r in scan.csharp_results
+        for cls in r.classes
+    ]
+
     for raw_name in req.program_names:
         resolutions = _program_resolutions(raw_name, scan)
         reported = False
@@ -2276,9 +2305,8 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 if (
                     invocation.evidence is InvocationEvidence.PROVEN
                     and invocation.procedure_name
-                    and invocation.procedure_name not in sp_names
                 ):
-                    sp_names.append(invocation.procedure_name)
+                    _append_once(invocation.procedure_name, sp_names)
             database_invocations = [
                 _serialize_db_invocation(invocation)
                 for invocation in rated_invocations
@@ -2291,12 +2319,71 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 
             table_names: List[str] = []
             for rel in scan.table_relations:
-                if (
-                    resolution.owns_file(rel.csharp_file)
-                    and resolution.owns_action(rel.csharp_file, rel.method_name)
-                    and rel.table_name not in table_names
+                if resolution.owns_file(rel.csharp_file) and resolution.owns_action(
+                    rel.csharp_file, rel.method_name
                 ):
-                    table_names.append(rel.table_name)
+                    _append_once(rel.table_name, table_names)
+
+            # 共用元件（S.15）：這個畫面渲染的 ViewComponent／partial view，貼上
+            # 「來自共用元件」的標籤跟畫面自己的存取分開，不會混進 methods。
+            shared_component_contributions: List[Dict] = []
+            if resolution.screen is not None:
+                for contribution in resolve_shared_components(
+                    resolution.screen.view_path,
+                    view_component_refs=view_component_refs_by_path,
+                    partial_view_refs=partial_view_refs_by_path,
+                    view_component_classes=view_component_classes,
+                    view_identities=view_identities,
+                ):
+                    component_file = csharp_by_path.get(contribution.file_path)
+                    if component_file is None:
+                        continue
+                    component_invocations, _ = _rated_execution_invocations(
+                        scope, scan, [component_file], root
+                    )
+                    component_invocations = [
+                        invocation
+                        for invocation in component_invocations
+                        if invocation.class_name == contribution.class_name
+                        and _same_name(
+                            _invocation_entry_method(invocation),
+                            contribution.entry_method,
+                        )
+                    ]
+                    component_sp_names: List[str] = []
+                    for invocation in component_invocations:
+                        label = {"kind": VIEW_COMPONENT, "name": contribution.name}
+                        serialized = _serialize_db_invocation(invocation)
+                        serialized["shared_component"] = label
+                        database_invocations.append(serialized)
+                        if invocation.evidence is not InvocationEvidence.PROVEN:
+                            diagnostic = _invocation_diagnostic(invocation)
+                            diagnostic["shared_component"] = label
+                            diagnostics.append(diagnostic)
+                            continue
+                        _append_once(invocation.procedure_name, sp_names, component_sp_names)
+
+                    component_table_names: List[str] = []
+                    for rel in scan.table_relations:
+                        if rel.csharp_file != contribution.file_path or not _same_name(
+                            rel.method_name, contribution.entry_method
+                        ):
+                            continue
+                        _append_once(rel.table_name, table_names, component_table_names)
+
+                    if not component_invocations and not component_table_names:
+                        continue
+                    shared_component_contributions.append(
+                        {
+                            "kind": VIEW_COMPONENT,
+                            "name": contribution.name,
+                            "file": _rel(contribution.file_path, root),
+                            "class": contribution.class_name,
+                            "method": contribution.entry_method,
+                            "stored_procedures": component_sp_names,
+                            "tables": component_table_names,
+                        }
+                    )
 
             if (
                 not resolution.is_program_screen
@@ -2491,6 +2578,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                     execution_paths=execution_paths,
                     compact_execution_paths=compact_execution_paths,
                     compact_execution_paths_meta=compact_execution_paths_meta,
+                    shared_component_contributions=shared_component_contributions,
                 )
             )
             reported = True

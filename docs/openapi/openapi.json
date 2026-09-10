@@ -1071,6 +1071,14 @@
             "title": "Related Tables",
             "type": "array"
           },
+          "shared_component_contributions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Shared Component Contributions",
+            "type": "array"
+          },
           "sp_definitions": {
             "items": {
               "additionalProperties": true,
