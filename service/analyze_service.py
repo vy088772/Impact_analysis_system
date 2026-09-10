@@ -67,7 +67,12 @@ from .execution_path_builder import (
     build_execution_paths,
 )
 from .graph_queries import filter_table_accesses
-from .program_screen import ProgramScreen, resolve_program_screens
+from .program_screen import (
+    ProgramScreen,
+    resolve_program_screens,
+    resolve_razor_page_screens,
+    razor_page_model_path,
+)
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import cache_status, cached_commit, cached_saved_at, get_or_scan, has_cache, save_scan
@@ -284,7 +289,9 @@ def _program_resolutions(raw_name: str, scan: ProjectScanResult) -> List[_Progra
     """Resolve one requested program name to the units the response reports.
 
     A repository holding Razor views resolves through Program Screen
-    resolution, which matches whole names only. A code that resolves to no
+    resolution, which matches whole names only. A view carrying a page
+    directive resolves through its page model first (Razor Pages), ahead of
+    the MVC controller/action resolution below it. A code that resolves to no
     screen there falls back to the legacy base-name match only when it names a
     WebForms page or one C# file outright, because an open substring fallback
     would let a shorter code absorb a longer one again.
@@ -300,6 +307,38 @@ def _program_resolutions(raw_name: str, scan: ProjectScanResult) -> List[_Progra
         return [legacy]
 
     csharp_by_path = {r.file_path: r for r in scan.csharp_results}
+
+    def _resolutions(screens: List[ProgramScreen]) -> List[_ProgramResolution]:
+        views_by_path = {r.file_path: r for r in scan.razor_results}
+        return [
+            _ProgramResolution(
+                program_base=program_base,
+                matched_files=_screen_files(screen, csharp_by_path),
+                screen=screen,
+                view_result=views_by_path.get(screen.view_path),
+            )
+            for screen in screens
+        ]
+
+    page_screens = resolve_razor_page_screens(
+        raw_name,
+        view_paths=[r.file_path for r in scan.razor_results],
+        page_directives={
+            r.file_path: r.has_page_directive for r in scan.razor_results
+        },
+        page_model_handlers={
+            r.file_path: [
+                m.name
+                for cls in csharp_by_path[razor_page_model_path(r.file_path)].classes
+                for m in cls.methods
+            ]
+            for r in scan.razor_results
+            if razor_page_model_path(r.file_path) in csharp_by_path
+        },
+    )
+    if page_screens:
+        return _resolutions(page_screens)
+
     screens = resolve_program_screens(
         raw_name,
         view_paths=[r.file_path for r in scan.razor_results],
@@ -315,16 +354,7 @@ def _program_resolutions(raw_name: str, scan: ProjectScanResult) -> List[_Progra
         },
     )
     if screens:
-        views_by_path = {r.file_path: r for r in scan.razor_results}
-        return [
-            _ProgramResolution(
-                program_base=program_base,
-                matched_files=_screen_files(screen, csharp_by_path),
-                screen=screen,
-                view_result=views_by_path.get(screen.view_path),
-            )
-            for screen in screens
-        ]
+        return _resolutions(screens)
 
     if any(_file_matches(r.file_path, program_base) for r in scan.aspx_results):
         return [legacy]

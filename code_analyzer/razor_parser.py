@@ -120,6 +120,9 @@ class RazorParser:
         
         # 解析 Razor 內容
         directives = self._extract_directives(content)
+        result.has_page_directive = any(
+            directive.directive_type == 'page' for directive in directives
+        )
         code_blocks = self._extract_code_blocks(content)
         helpers = self._extract_html_helpers(content)
         tag_helpers = self._extract_tag_helpers(content)

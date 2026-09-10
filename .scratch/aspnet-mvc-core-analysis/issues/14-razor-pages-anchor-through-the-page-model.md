@@ -11,10 +11,49 @@ on the file pairing alone would create two anchors pointing at nothing.
 
 **Blocked by:** 12.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A view carrying a page directive anchors to the handlers in its page model.
-- [ ] A view carrying a code-behind file but no page directive is treated as MVC and produces no page-model anchor.
-- [ ] An empty page model beside a view with no page directive produces no anchor at all.
-- [ ] The WebForms code-behind pairing is unchanged.
-- [ ] The measured repository carrying two editor-generated page models produces no anchors from them.
+- [x] A view carrying a page directive anchors to the handlers in its page model.
+- [x] A view carrying a code-behind file but no page directive is treated as MVC and produces no page-model anchor.
+- [x] An empty page model beside a view with no page directive produces no anchor at all.
+- [x] The WebForms code-behind pairing is unchanged.
+- [x] The measured repository carrying two editor-generated page models produces no anchors from them.
+
+## Notes
+
+- New `RazorParser`-populated `FileAnalysisResult.has_page_directive` (set from
+  the `@page` directive already tokenized by `_extract_directives`) is the sole
+  gate — a `.cshtml.cs` file beside a view proves nothing on its own, matching
+  CONTEXT.md's new **Page Directive**/**Page Model** glossary entries.
+- New pure `service/program_screen.resolve_razor_page_screens` mirrors
+  `resolve_program_screens`'s shape (`ProgramScreen`/`ScreenAction`, strength
+  `determined`) but resolves independently of it: no Area splitting, no
+  controller/action naming convention, no View Anchors — a Razor Pages screen's
+  actions are simply every handler its paired page model (`{view}.cshtml.cs`,
+  the single pairing rule lives in the new public `razor_page_model_path`)
+  declares. A page model declaring zero methods resolves no screen, matching
+  the empty-editor-stub case either with or without a page directive present
+  (verified both ways — see
+  `test_a_page_directive_with_an_empty_page_model_is_not_found_rather_than_mvc`).
+  `analyze_service._program_resolutions` tries this resolution first (ahead of
+  the pre-existing MVC/legacy attempts) whenever `scan.razor_results` is
+  non-empty; WebForms repositories carry no `razor_results` at all and return
+  through the untouched legacy path before this code ever runs.
+- Code-review (Standards + Spec subagents) found no hard violations against
+  the checklist. Two Standards smells fixed: the `.cshtml`→`.cshtml.cs` pairing
+  rule was duplicated between `program_screen.py` and `analyze_service.py`
+  (now the single public `razor_page_model_path`); the two near-identical
+  `_ProgramResolution` list comprehensions in `_program_resolutions` were
+  duplicated (now one local `_resolutions()` helper shared by both the page
+  and MVC screen paths). Judgement-call findings deliberately left as-is,
+  matching pre-existing house convention rather than introducing new scope:
+  no `PageModel`-base-class check and no `On<Verb>` handler-name filtering —
+  the spec's own wording names the page directive as the sole gate, and the
+  pre-existing MVC `controller_actions` extraction already takes every method
+  with no naming filter either. Area-qualified Razor Pages program codes are a
+  known, deliberately out-of-scope gap (the checklist never tests Areas for
+  this ticket).
+- 6 new tests in `tests/test_program_screen_resolution.py` (31 in file, up
+  from 25). Full suite: 807 passed / 11 failed (same pre-existing baseline as
+  tickets 11-13) / 5 skipped.
+

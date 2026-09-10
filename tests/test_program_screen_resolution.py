@@ -883,3 +883,138 @@ def test_a_program_code_naming_one_csharp_file_outright_still_resolves(
     assert len(response.programs) == 1
     assert response.programs[0].file == "Services/BatchJob.cs"
     assert _actions(response.programs[0]) == ["Run"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Razor Pages anchors through the page model (ticket 14)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_view_carrying_a_page_directive_anchors_to_its_page_model_handlers(
+    monkeypatch, tmp_path: Path
+) -> None:
+    view = "Pages/AgentMtn.cshtml"
+    scan = _scan(
+        tmp_path,
+        views=[view],
+        view_sources={view: "@page\n@model AgentMtnModel\n"},
+        controllers={"Pages/AgentMtn.cshtml.cs": ["OnGet", "OnPost"]},
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["AgentMtn"])
+
+    assert len(response.programs) == 1
+    program = response.programs[0]
+    assert program.file == view
+    assert _actions(program) == ["OnGet", "OnPost"]
+    assert _strengths(program) == {"OnGet": "determined", "OnPost": "determined"}
+
+
+def test_a_view_with_a_code_behind_file_but_no_page_directive_is_treated_as_mvc(
+    monkeypatch, tmp_path: Path
+) -> None:
+    view = "Views/Agent/AgentMtn.cshtml"
+    scan = _scan(
+        tmp_path,
+        views=[view],
+        view_sources={view: "@model AgentMtnModel\n"},
+        controllers={
+            "Controllers/AgentController.cs": ["AgentMtn"],
+            "Views/Agent/AgentMtn.cshtml.cs": ["OnGet"],
+        },
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["AgentMtn"])
+
+    assert len(response.programs) == 1
+    program = response.programs[0]
+    assert program.file == view
+    assert _actions(program) == ["AgentMtn"]
+
+
+def test_an_empty_page_model_beside_a_view_with_no_page_directive_produces_no_anchor(
+    monkeypatch, tmp_path: Path
+) -> None:
+    view = "Pages/Orphan.cshtml"
+    scan = _scan(
+        tmp_path,
+        views=[view],
+        view_sources={view: "@model OrphanModel\n"},
+        controllers={"Pages/Orphan.cshtml.cs": []},
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["Orphan"])
+
+    assert response.programs == []
+    assert response.not_found == ["Orphan"]
+
+
+def test_a_page_directive_with_an_empty_page_model_is_not_found_rather_than_mvc(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A confirmed Razor Page with nothing to anchor to is a clean miss, never
+    a guessed MVC match through the same file pairing."""
+    view = "Pages/Orphan.cshtml"
+    scan = _scan(
+        tmp_path,
+        views=[view],
+        view_sources={view: "@page\n@model OrphanModel\n"},
+        controllers={"Pages/Orphan.cshtml.cs": []},
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["Orphan"])
+
+    assert response.programs == []
+    assert response.not_found == ["Orphan"]
+
+
+def test_webforms_code_behind_pairing_is_unchanged_beside_razor_pages(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Ticket 14 adds a second pairing mechanism; the WebForms one is untouched."""
+    scan = _scan(
+        tmp_path,
+        views=["Pages/AgentMtn.cshtml"],
+        view_sources={"Pages/AgentMtn.cshtml": "@page\n"},
+        controllers={
+            "Pages/AgentMtn.cshtml.cs": ["OnGet"],
+            "Legacy/JobDutyMtn.aspx.cs": ["Page_Load"],
+        },
+        pages=["Legacy/JobDutyMtn.aspx"],
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["JobDutyMtn"])
+
+    assert len(response.programs) == 1
+    assert response.programs[0].file == "Legacy/JobDutyMtn.aspx.cs"
+    assert _actions(response.programs[0]) == ["Page_Load"]
+
+
+def test_two_editor_generated_page_models_beside_mvc_views_produce_no_anchors(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The measured repository's shape: real entry points are controller actions."""
+    scan = _scan(
+        tmp_path,
+        views=["Views/Agent/AgentMtn.cshtml", "Views/Order/OrderQry.cshtml"],
+        view_sources={
+            "Views/Agent/AgentMtn.cshtml": "@model AgentMtnModel\n",
+            "Views/Order/OrderQry.cshtml": "@model OrderQryModel\n",
+        },
+        controllers={
+            "Controllers/AgentController.cs": ["AgentMtn"],
+            "Controllers/OrderController.cs": ["OrderQry"],
+            "Views/Agent/AgentMtn.cshtml.cs": [],
+            "Views/Order/OrderQry.cshtml.cs": [],
+        },
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["AgentMtn", "OrderQry"])
+
+    files = {program.program: program.file for program in response.programs}
+    assert files == {
+        "AgentMtn": "Views/Agent/AgentMtn.cshtml",
+        "OrderQry": "Views/Order/OrderQry.cshtml",
+    }
+    for program in response.programs:
+        assert _actions(program) == [program.program]
+

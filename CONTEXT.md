@@ -140,8 +140,16 @@ _Avoid_: receiver class, wrapper class, declared type
 ## Web Application Analysis
 
 **Program Screen**:
-One View file together with the set of actions that serve it — the actions whose name equals the view name, plus the actions its View Anchors name. It is what a specification's program code resolves to inside a repository. The controller is a path used to reach those actions, never the unit of scope: one controller can hold several Program Screens, and a screen that anchors a shared controller reaches only the actions it anchors there, never that controller's other actions. In WebForms the same concept is one `.aspx` page and its code-behind. See [ADR-0019](docs/adr/0019-a-program-is-one-view-plus-the-actions-that-serve-it.md).
+One View file together with the set of actions that serve it — the actions whose name equals the view name, plus the actions its View Anchors name. It is what a specification's program code resolves to inside a repository. The controller is a path used to reach those actions, never the unit of scope: one controller can hold several Program Screens, and a screen that anchors a shared controller reaches only the actions it anchors there, never that controller's other actions. In WebForms the same concept is one `.aspx` page and its code-behind; in Razor Pages it is one view carrying a Page Directive and its Page Model. See [ADR-0019](docs/adr/0019-a-program-is-one-view-plus-the-actions-that-serve-it.md).
 _Avoid_: page, controller, program name, screen
+
+**Page Directive**:
+A view's own `@page` declaration, which is the sole gate deciding whether the view is Razor Pages rather than MVC. A code-behind file sharing the view's whole name plus `.cs` sits beside many an ordinary MVC view too — an editor generates one on scaffolding regardless of framework — so its mere presence proves nothing; only the directive does. A view naming no Page Directive is MVC, however many such files sit beside it.
+_Avoid_: page attribute, razor pages marker
+
+**Page Model**:
+The code-behind file beside a Page-Directive-carrying view, sharing the view's whole file name plus `.cs` (`Foo.cshtml` pairs with `Foo.cshtml.cs`) — the Razor Pages counterpart of a WebForms code-behind file. Its handlers become the Program Screen's actions. A Page Model declaring no handler resolves no Program Screen, exactly as a Page Directive's absence does, so an empty editor-generated stub anchors nothing either way.
+_Avoid_: code-behind, page code-behind, handler class
 
 **View Anchor**:
 The declaration inside one View that names an action the screen calls. It comes at two strengths and they are never merged: a markup-layer anchor (`asp-action`, `asp-controller`, `<form action>`, `asp-page`) is determined, and a URL shaped like `/Controller/Action` inside the view's own `<script>` block is a candidate rated `likely`. It is the MVC counterpart of a WebForms control event such as `OnClick="Button1_Click"`.

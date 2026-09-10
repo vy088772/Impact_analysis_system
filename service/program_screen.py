@@ -22,6 +22,11 @@ actions whose name equals the view name plus the actions its View Anchors name,
 and an action reached only through a candidate anchor keeps that anchor's
 `likely` strength. WebForms program resolution does not come through here; it
 keeps its existing base-name path in `analyze_service`.
+
+A Razor Pages screen resolves separately, through `resolve_razor_page_screens`:
+one view carrying a page directive, paired with the code-behind file beside
+it, exactly as a WebForms page pairs with its own code-behind. Its actions are
+the handlers the page model declares, not a controller's actions.
 """
 
 from __future__ import annotations
@@ -148,6 +153,68 @@ def resolve_program_screens(
     return _screens_through_controllers(
         program_code, code, views, controllers, anchors
     )
+
+
+def resolve_razor_page_screens(
+    program_code: str,
+    *,
+    view_paths: Iterable[str],
+    page_directives: Mapping[str, bool],
+    page_model_handlers: Mapping[str, Sequence[str]],
+) -> List[ProgramScreen]:
+    """Resolve a program code to the Razor Pages screens it names.
+
+    A Razor Pages screen anchors through its page model exactly the way a
+    WebForms page anchors through its code-behind: a view and a code-behind
+    file beside it, sharing a name. The page directive is the gate — a view
+    naming no `@page` directive is MVC, however many editor-generated files
+    sit beside it, and resolves no screen here. `page_model_handlers` is keyed
+    by the view's own path; a page model declaring no handler resolves no
+    screen either, so an empty editor-generated stub anchors nothing.
+    """
+    code = (program_code or "").strip()
+    if not code:
+        return []
+    screens: List[ProgramScreen] = []
+    for view_path in view_paths:
+        if not page_directives.get(view_path):
+            continue
+        name = _razor_view_name(view_path)
+        if name is None or not _same(name, code):
+            continue
+        handlers = page_model_handlers.get(view_path) or ()
+        if not handlers:
+            continue
+        model_path = razor_page_model_path(view_path)
+        screens.append(
+            ProgramScreen(
+                program_code=program_code,
+                view_path=view_path,
+                view_name=name,
+                area="",
+                controller_path=model_path,
+                actions=tuple(
+                    ScreenAction(handler, model_path, DETERMINED)
+                    for handler in handlers
+                ),
+            )
+        )
+    return screens
+
+
+def _razor_view_name(path: str) -> Optional[str]:
+    parts = _parts(path)
+    if not parts or not parts[-1].lower().endswith(_VIEW_EXTENSION):
+        return None
+    return parts[-1][: -len(_VIEW_EXTENSION)]
+
+
+def razor_page_model_path(view_path: str) -> str:
+    """A Razor Pages page model sits beside its view, sharing its whole file
+    name plus `.cs` — `Foo.cshtml` pairs with `Foo.cshtml.cs`. The single place
+    that states the pairing rule, so a caller building `page_model_handlers`
+    and this resolution never drift apart on how the pair is named."""
+    return f"{view_path}.cs"
 
 
 def _screens_through_controllers(

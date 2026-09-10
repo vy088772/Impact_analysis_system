@@ -506,6 +506,13 @@ class FileAnalysisResult:
     view_anchors_determined: List[Dict] = field(default_factory=list)
     view_anchors_candidate: List[Dict] = field(default_factory=list)
 
+    # Razor Pages 的頁面指示詞（`@page`，razor_parser 選填）。這是這個畫面是否走
+    # Razor Pages 頁面模型（page model）配對的唯一依據——一個畫面旁邊即使有同名的
+    # code-behind 檔案（`.cshtml.cs`），沒有這個指示詞就當作一般 MVC 畫面，不會
+    # 從那個檔案產生任何錨點（見 service/program_screen.py 的
+    # resolve_razor_page_screens）。
+    has_page_directive: bool = False
+
     # 統計資訊
     line_count: int = 0
     code_line_count: int = 0
