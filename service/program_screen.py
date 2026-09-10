@@ -17,11 +17,11 @@ The code resolves through three entry points, tried in order:
    then under `Views/Shared`, inside the controller's own Area.
 
 Every comparison is a whole-name comparison, so a shorter program code never
-absorbs a longer name that merely contains it. A screen's actions are the ones
-whose name equals the view name; the actions its View Anchors name join them in
-ticket 13, which is where View Anchor extraction lands. WebForms program
-resolution does not come through here; it keeps its existing base-name path in
-`analyze_service`.
+absorbs a longer name that merely contains it. A screen's action set is the
+actions whose name equals the view name plus the actions its View Anchors name,
+and an action reached only through a candidate anchor keeps that anchor's
+`likely` strength. WebForms program resolution does not come through here; it
+keeps its existing base-name path in `analyze_service`.
 """
 
 from __future__ import annotations
@@ -37,6 +37,22 @@ _VIEWS_SEGMENT = "views"
 _AREAS_SEGMENT = "areas"
 _SHARED_FOLDER = "shared"
 
+DETERMINED = "determined"
+LIKELY = "likely"
+
+
+@dataclass(frozen=True)
+class ScreenAction:
+    """One action a Program Screen holds, on the controller that declares it.
+
+    `strength` is `determined` when the view's own name or a markup-layer View
+    Anchor named the action, and `likely` when only a candidate anchor did.
+    """
+
+    name: str
+    controller_path: str
+    strength: str
+
 
 @dataclass(frozen=True)
 class ProgramScreen:
@@ -47,7 +63,7 @@ class ProgramScreen:
     view_name: str
     area: str
     controller_path: str
-    action_names: Tuple[str, ...]
+    actions: Tuple[ScreenAction, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -66,16 +82,31 @@ class _ControllerFile:
     actions: Tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _Anchors:
+    """One view's View Anchors, held at their two strengths and never merged."""
+
+    determined: Tuple[Mapping[str, str], ...] = ()
+    candidate: Tuple[Mapping[str, str], ...] = ()
+
+
 def resolve_program_screens(
     program_code: str,
     *,
     view_paths: Iterable[str],
     controller_actions: Mapping[str, Sequence[str]],
+    determined_anchors: Optional[Mapping[str, Sequence[Mapping[str, str]]]] = None,
+    candidate_anchors: Optional[Mapping[str, Sequence[Mapping[str, str]]]] = None,
 ) -> List[ProgramScreen]:
     """Resolve one program code to the Program Screens it names.
 
     `controller_actions` maps each scanned C# file to the method names it
     declares; the files that are not controllers are ignored here.
+
+    The two anchor maps carry each view's View Anchors at their own strength,
+    keyed by view path. They arrive as two arguments because the two strengths
+    are never merged: a markup-layer anchor states the call, a script-block URL
+    only looks like one.
     """
     area, code = _split_area(program_code)
     if not code:
@@ -91,19 +122,32 @@ def resolve_program_screens(
         if parsed is not None
     ]
     if area:
+        # Only the views narrow to the Area. Every controller stays in reach,
+        # because a View Anchor can name one that sits outside every Area, and
+        # both entry points below compare a controller's Area to its view's
+        # anyway.
         views = [view for view in views if _same(view.area, area)]
-        controllers = [item for item in controllers if _same(item.area, area)]
+
+    anchors = _anchors_by_view(determined_anchors, candidate_anchors)
 
     matched = [view for view in views if _same(view.folder, code)]
     if not matched:
         matched = [view for view in views if _names_view_file(code, view.name)]
     if matched:
         return [
-            _screen(program_code, view, _controller_of(view, controllers))
+            _screen(
+                program_code,
+                view,
+                _controller_of(view, controllers),
+                controllers,
+                anchors.get(view.path, _Anchors()),
+            )
             for view in matched
         ]
 
-    return _screens_through_controllers(program_code, code, views, controllers)
+    return _screens_through_controllers(
+        program_code, code, views, controllers, anchors
+    )
 
 
 def _screens_through_controllers(
@@ -111,6 +155,7 @@ def _screens_through_controllers(
     code: str,
     views: Sequence[_ViewFile],
     controllers: Sequence[_ControllerFile],
+    anchors: Mapping[str, _Anchors],
 ) -> List[ProgramScreen]:
     screens: List[ProgramScreen] = []
     seen: set[str] = set()
@@ -120,7 +165,15 @@ def _screens_through_controllers(
         for view in views:
             if view.path in seen or not _looks_up(controller, view):
                 continue
-            screens.append(_screen(program_code, view, controller))
+            screens.append(
+                _screen(
+                    program_code,
+                    view,
+                    controller,
+                    controllers,
+                    anchors.get(view.path, _Anchors()),
+                )
+            )
             seen.add(view.path)
     return screens
 
@@ -144,20 +197,118 @@ def _screen(
     program_code: str,
     view: _ViewFile,
     controller: Optional[_ControllerFile],
+    controllers: Sequence[_ControllerFile],
+    anchors: _Anchors,
 ) -> ProgramScreen:
-    actions: Tuple[str, ...] = ()
+    named: List[ScreenAction] = []
     if controller is not None:
-        actions = tuple(
-            action for action in controller.actions if _same(action, view.name)
-        )
+        named = [
+            ScreenAction(action, controller.path, DETERMINED)
+            for action in controller.actions
+            if _same(action, view.name)
+        ]
+    actions = _without_repeats(
+        named
+        + _anchored(view, controller, controllers, anchors.determined, DETERMINED)
+        + _anchored(view, controller, controllers, anchors.candidate, LIKELY)
+    )
     return ProgramScreen(
         program_code=program_code,
         view_path=view.path,
         view_name=view.name,
         area=view.area,
         controller_path=controller.path if controller is not None else "",
-        action_names=actions,
+        actions=actions,
     )
+
+
+def _anchored(
+    view: _ViewFile,
+    controller: Optional[_ControllerFile],
+    controllers: Sequence[_ControllerFile],
+    anchors: Sequence[Mapping[str, str]],
+    strength: str,
+) -> List[ScreenAction]:
+    """The actions one view's anchors name, at the strength those anchors carry.
+
+    An anchor that names no controller action — a page anchor — contributes
+    none, and so does one whose named action no controller declares: this
+    resolution reports an action it can reach, never a name it cannot.
+    """
+    actions: List[ScreenAction] = []
+    for anchor in anchors:
+        name = str(anchor.get("action") or "").strip()
+        if not name:
+            continue
+        target = _anchor_controller(
+            view, controller, controllers, str(anchor.get("controller") or ""), name
+        )
+        if target is None:
+            continue
+        declared = next(
+            (action for action in target.actions if _same(action, name)), ""
+        )
+        if declared:
+            actions.append(ScreenAction(declared, target.path, strength))
+    return actions
+
+
+def _anchor_controller(
+    view: _ViewFile,
+    controller: Optional[_ControllerFile],
+    controllers: Sequence[_ControllerFile],
+    named: str,
+    action: str,
+) -> Optional[_ControllerFile]:
+    """The controller one anchor reaches, by whole name.
+
+    An anchor naming no controller reaches the screen's own, exactly as MVC
+    routes a controller-less anchor. An anchor naming one reaches that
+    controller inside the view's own Area, and reaches a controller outside
+    every Area when the Area holds none of that name — which is the route a
+    shared AJAX controller with no view folder of its own is reached by
+    (ADR-0019). Two controllers of one name that both declare the action reach
+    neither, because the screen reports no action rather than guessing at one.
+    """
+    if not named.strip():
+        return controller
+    reachable = [
+        item
+        for item in controllers
+        if _same(item.name, named.strip())
+        and any(_same(declared, action) for declared in item.actions)
+    ]
+    inside = [item for item in reachable if _same_area(item.area, view.area)]
+    outside = [item for item in reachable if not item.area]
+    found = inside or outside
+    return found[0] if len(found) == 1 else None
+
+
+def _without_repeats(actions: Sequence[ScreenAction]) -> Tuple[ScreenAction, ...]:
+    """One action per controller, keeping the first — and so strongest — reach."""
+    kept: List[ScreenAction] = []
+    seen: set[Tuple[str, str]] = set()
+    for action in actions:
+        key = (action.controller_path.lower(), action.name.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(action)
+    return tuple(kept)
+
+
+def _anchors_by_view(
+    determined: Optional[Mapping[str, Sequence[Mapping[str, str]]]],
+    candidate: Optional[Mapping[str, Sequence[Mapping[str, str]]]],
+) -> Mapping[str, _Anchors]:
+    paths = set(determined or {}) | set(candidate or {})
+    return {
+        path: _Anchors(
+            determined=tuple((determined or {}).get(path) or ()),
+            candidate=tuple((candidate or {}).get(path) or ()),
+        )
+        for path in paths
+    }
 
 
 def _controller_of(

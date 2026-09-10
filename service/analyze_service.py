@@ -189,7 +189,7 @@ class _ProgramResolution:
     """One unit of analysis for one requested program name.
 
     A Program Screen resolution names the view the code resolved to, the
-    controller that holds its actions, and those actions (ADR-0019). The
+    controllers that hold its actions, and those actions (ADR-0019). The
     legacy resolution keeps the base-name file match the WebForms path has
     always used, and filters no method.
     """
@@ -208,16 +208,63 @@ class _ProgramResolution:
         """The actions this unit reports, or None when it filters no method."""
         if self.screen is None:
             return None
-        return {action.lower() for action in self.screen.action_names}
+        return {action.name.lower() for action in self.screen.actions}
 
     def owns_file(self, file_path: str) -> bool:
         if self.screen is None:
             return _file_matches(file_path, self.program_base)
-        return _same_path(file_path, self.screen.controller_path)
+        return any(
+            _same_path(file_path, action.controller_path)
+            for action in self.screen.actions
+        ) or _same_path(file_path, self.screen.controller_path)
 
     def owns_method(self, method_name: str) -> bool:
+        """Whether one method name is an action of this unit, on any controller."""
         actions = self.action_names
         return actions is None or (method_name or "").lower() in actions
+
+    def owns_action(self, file_path: str, method_name: str) -> bool:
+        """Whether one controller file declares this unit's action of that name.
+
+        A screen reaches its actions through several controllers, so the name
+        alone does not say a method belongs to it: one controller can hold an
+        action of this screen beside an action of another screen's. A screen
+        that names no action on a file owns no method there. A file that could
+        not be identified at all is judged by the name, which is all a caller
+        holding no file has to go on.
+        """
+        if self.screen is None:
+            return True
+        if not file_path:
+            return self.owns_method(method_name)
+        return any(
+            _same_path(file_path, action.controller_path)
+            and _same_name(action.name, method_name)
+            for action in self.screen.actions
+        )
+
+    def action_strength(self, file_path: str, method_name: str) -> str:
+        """The strength this unit reaches one action at, or blank when none."""
+        for action in self.screen.actions if self.screen is not None else ():
+            if _same_path(file_path, action.controller_path) and _same_name(
+                action.name, method_name
+            ):
+                return action.strength
+        return ""
+
+    def action_names_on(self, file_path: str) -> Optional[Set[str]]:
+        """The actions this unit reports on one file, or None when it filters none."""
+        if self.screen is None:
+            return None
+        return {
+            action.name
+            for action in self.screen.actions
+            if _same_path(file_path, action.controller_path)
+        }
+
+
+def _same_name(left: str, right: str) -> bool:
+    return (left or "").lower() == (right or "").lower()
 
 
 def _same_path(left: str, right: str) -> bool:
@@ -260,15 +307,19 @@ def _program_resolutions(raw_name: str, scan: ProjectScanResult) -> List[_Progra
             path: [m.name for cls in result.classes for m in cls.methods]
             for path, result in csharp_by_path.items()
         },
+        determined_anchors={
+            r.file_path: r.view_anchors_determined for r in scan.razor_results
+        },
+        candidate_anchors={
+            r.file_path: r.view_anchors_candidate for r in scan.razor_results
+        },
     )
     if screens:
         views_by_path = {r.file_path: r for r in scan.razor_results}
         return [
             _ProgramResolution(
                 program_base=program_base,
-                matched_files=[csharp_by_path[screen.controller_path]]
-                if screen.controller_path in csharp_by_path
-                else [],
+                matched_files=_screen_files(screen, csharp_by_path),
                 screen=screen,
                 view_result=views_by_path.get(screen.view_path),
             )
@@ -285,6 +336,26 @@ def _program_resolutions(raw_name: str, scan: ProjectScanResult) -> List[_Progra
 def _names_file_outright(file_path: str, program_base: str) -> bool:
     """Whether a program name is one file's whole base name, never a part of it."""
     return bool(program_base) and _normalize_program(Path(file_path).name) == program_base
+
+
+def _screen_files(screen: ProgramScreen, csharp_by_path: Dict[str, Any]) -> List[Any]:
+    """The scanned C# files one screen reaches, its own controller first.
+
+    A View Anchor can name an action on a controller the screen's own view
+    folder never names, so the file set is the union of every controller the
+    screen's actions sit on.
+    """
+    paths = [screen.controller_path] + [
+        action.controller_path for action in screen.actions
+    ]
+    files: List[Any] = []
+    seen: Set[str] = set()
+    for path in paths:
+        if path in seen or path not in csharp_by_path:
+            continue
+        seen.add(path)
+        files.append(csharp_by_path[path])
+    return files
 
 
 def _view_layer_summary(fr, root: Path) -> Dict:
@@ -1663,7 +1734,7 @@ def _build_program_execution_paths(
     root: Path,
     *,
     scope: Optional[DerivedExecutionEvidenceScope] = None,
-    entry_methods: Optional[Set[str]] = None,
+    entry_filter: Optional[Callable[[DbInvocation], bool]] = None,
 ) -> Tuple[List[Dict], Dict[str, object]]:
     """Join one program's raw C# facts to the selected SQL execution graph.
 
@@ -1674,21 +1745,20 @@ def _build_program_execution_paths(
     A caller with no such scope (including the direct unit tests exercising
     this function below the request layer) gets one built from `root` alone.
 
-    `entry_methods` narrows the invocations to the ones a Program Screen's own
-    actions reach, in lower case. It is applied before the paths are built, so
-    the compact payload's counts describe the paths this program actually
-    reports.
+    `entry_filter` narrows the invocations to the ones a Program Screen's own
+    actions reach. It is applied before the paths are built, so the compact
+    payload's counts describe the paths this program actually reports.
     """
     if req.database:
         _require_sql_execution_graph(req.database, req.db_server)
     if scope is None:
         scope = DerivedExecutionEvidenceScope.of(req, [root])
     rated_invocations, graph = _rated_execution_invocations(scope, scan, matched_files, root)
-    if entry_methods is not None:
+    if entry_filter is not None:
         rated_invocations = [
             invocation
             for invocation in rated_invocations
-            if _invocation_entry_method(invocation).lower() in entry_methods
+            if entry_filter(invocation)
         ]
 
     paths = build_execution_paths(rated_invocations, graph)
@@ -2131,6 +2201,10 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 
     programs: List[ProgramAnalysis] = []
     not_found: List[str] = []
+    files_by_relative = {
+        _rel(result.file_path, root).casefold(): result.file_path
+        for result in scan.csharp_results
+    }
 
     for raw_name in req.program_names:
         resolutions = _program_resolutions(raw_name, scan)
@@ -2138,6 +2212,19 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 
         for resolution in resolutions:
             matched_files = resolution.matched_files
+
+            def owns_invocation(
+                invocation: DbInvocation, resolution=resolution
+            ) -> bool:
+                return resolution.owns_action(
+                    files_by_relative.get(
+                        str(invocation.source.relative_path)
+                        .replace("\\", "/")
+                        .casefold(),
+                        "",
+                    ),
+                    _invocation_entry_method(invocation),
+                )
 
             # 2) Join C# database facts through the Gateway; legacy relations are not
             # part of the formal response path.
@@ -2152,7 +2239,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             rated_invocations = [
                 invocation
                 for invocation in rated_invocations
-                if resolution.owns_method(_invocation_entry_method(invocation))
+                if owns_invocation(invocation)
             ]
             sp_names: List[str] = []
             for invocation in rated_invocations:
@@ -2176,7 +2263,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             for rel in scan.table_relations:
                 if (
                     resolution.owns_file(rel.csharp_file)
-                    and resolution.owns_method(rel.method_name)
+                    and resolution.owns_action(rel.csharp_file, rel.method_name)
                     and rel.table_name not in table_names
                 ):
                     table_names.append(rel.table_name)
@@ -2206,20 +2293,24 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 for fr in matched_files:
                     for cls in fr.classes:
                         for m in cls.methods:
-                            if resolution.owns_method(m.name):
-                                methods.append({"name": m.name, "class": cls.name})
+                            if not resolution.owns_action(fr.file_path, m.name):
+                                continue
+                            method: Dict = {"name": m.name, "class": cls.name}
+                            strength = resolution.action_strength(fr.file_path, m.name)
+                            if strength:
+                                method["strength"] = strength
+                            methods.append(method)
 
             # 程式碼片段（S2b）：依方法位置擷取，可由 include_snippets 關閉
             code_snippets = []
             if req.include_snippets and matched_files:
-                method_filter = (
-                    set(resolution.screen.action_names)
-                    if resolution.screen is not None
-                    else None
-                )
                 for fr in matched_files:
                     code_snippets.extend(
-                        extract_snippets(fr, root, method_filter=method_filter)
+                        extract_snippets(
+                            fr,
+                            root,
+                            method_filter=resolution.action_names_on(fr.file_path),
+                        )
                     )
 
             # 呼叫鏈（S3）：程式內部方法呼叫路徑
@@ -2339,7 +2430,9 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                     matched_files,
                     root,
                     scope=scope,
-                    entry_methods=resolution.action_names,
+                    entry_filter=owns_invocation
+                    if resolution.is_program_screen
+                    else None,
                 )
                 compact_execution_paths = compact_payload["paths"]
                 compact_execution_paths_meta = {

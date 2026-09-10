@@ -29,4 +29,4 @@ The program code resolves to that view through three entry points, tried in orde
 
 - View Anchor extraction moves from a nice-to-have to a precondition. Without it a program has only its same-name actions, and every AJAX endpoint the screen calls disappears. The UI layer therefore cannot be deferred past the impact-chain layer.
 - A shared AJAX controller with no view folder — `EnterpriseApp.AjaxController` is one — reaches a program only as a candidate anchor, at `likely`. Treating it as shared by every program would push its stored procedures into all twenty-two screens, which is noise, not an answer.
-- One controller can appear in several Program Screens, and one Program Screen never spans two controllers. Both are consequences of scoping by view rather than by class.
+- One controller can appear in several Program Screens, and a screen holds only the actions it names on each controller it reaches. Both are consequences of scoping by view rather than by class. A screen therefore reaches its own controller and every controller its View Anchors name, and reports none of those controllers' other actions.

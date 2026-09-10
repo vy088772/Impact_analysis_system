@@ -19,6 +19,7 @@ from code_analyzer.models import (
     MethodInfo,
 )
 from code_analyzer.project_scanner import ProjectScanResult
+from code_analyzer.razor_parser import RazorParser
 from service import analyze_service
 from service.schemas import AnalyzeRequest
 
@@ -30,12 +31,27 @@ def _write(root: Path, relative: str, text: str) -> Path:
     return path
 
 
-def _view_result(root: Path, relative: str) -> FileAnalysisResult:
-    path = _write(root, relative, "@{ /* view */ }")
+def _view_result(
+    root: Path,
+    relative: str,
+    *,
+    source: str = "",
+    determined: Sequence[Dict] = (),
+    candidate: Sequence[Dict] = (),
+) -> FileAnalysisResult:
+    """One scanned view. A view given a `source` is parsed the way a scan parses it."""
+    assert not (source and (determined or candidate)), (
+        "a parsed view takes its anchors from its own source"
+    )
+    path = _write(root, relative, source or "@{ /* view */ }")
+    if source:
+        return RazorParser().parse_file(str(path))
     return FileAnalysisResult(
         file_path=str(path),
         file_type=FileType.RAZOR,
         framework=FrameworkType.MVC,
+        view_anchors_determined=list(determined),
+        view_anchors_candidate=list(candidate),
     )
 
 
@@ -82,6 +98,9 @@ def _scan(
     controllers: Mapping[str, Sequence[str]] = {},
     pages: Sequence[str] = (),
     invocations: Mapping[str, List[Dict]] = {},
+    view_sources: Mapping[str, str] = {},
+    determined_anchors: Mapping[str, Sequence[Dict]] = {},
+    candidate_anchors: Mapping[str, Sequence[Dict]] = {},
 ) -> ProjectScanResult:
     """One scan result holding the named views, controllers and WebForms pages."""
     controller_results = [
@@ -99,7 +118,16 @@ def _scan(
         project_name="screens",
         scan_time=datetime.now(),
         csharp_results=controller_results,
-        razor_results=[_view_result(root, relative) for relative in views],
+        razor_results=[
+            _view_result(
+                root,
+                relative,
+                source=view_sources.get(relative, ""),
+                determined=determined_anchors.get(relative, ()),
+                candidate=candidate_anchors.get(relative, ()),
+            )
+            for relative in views
+        ],
         aspx_results=[_aspx_result(root, relative) for relative in pages],
         db_invocations=db_invocations,
         connection_sources=connection_sources,
@@ -173,6 +201,10 @@ def _analyze(
 
 def _actions(program) -> List[str]:
     return [entry["name"] for entry in program.methods]
+
+
+def _strengths(program) -> Dict[str, str]:
+    return {entry["name"]: entry.get("strength", "") for entry in program.methods}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -497,6 +529,271 @@ def test_a_resolved_program_screen_reports_its_own_view_in_the_view_layer(
     assert [entry["file"] for entry in response.programs[0].view_layer] == [
         "Views/Import/ImDecl.cshtml"
     ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A screen gains the actions its View Anchors name
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_program_screen_holds_the_actions_its_determined_anchors_name(
+    monkeypatch, tmp_path: Path
+) -> None:
+    view = "Views/Order/OrderQry.cshtml"
+    scan = _scan(
+        tmp_path,
+        views=[view],
+        controllers={
+            "Controllers/OrderController.cs": ["OrderQry", "Export", "Unrelated"]
+        },
+        determined_anchors={view: [{"action": "Export"}]},
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["OrderQry"])
+
+    program = response.programs[0]
+    assert _actions(program) == ["OrderQry", "Export"]
+    assert _strengths(program) == {
+        "OrderQry": "determined",
+        "Export": "determined",
+    }
+
+
+def test_an_action_reached_only_through_a_candidate_anchor_is_carried_at_likely(
+    monkeypatch, tmp_path: Path
+) -> None:
+    view = "Views/Order/OrderQry.cshtml"
+    scan = _scan(
+        tmp_path,
+        views=[view],
+        controllers={
+            "Controllers/OrderController.cs": ["OrderQry", "Export", "Detail"]
+        },
+        determined_anchors={view: [{"action": "Export"}]},
+        candidate_anchors={
+            view: [
+                {"action": "Export", "controller": "Order"},
+                {"action": "Detail", "controller": "Order"},
+            ]
+        },
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["OrderQry"])
+
+    assert _strengths(response.programs[0]) == {
+        "OrderQry": "determined",
+        "Export": "determined",
+        "Detail": "likely",
+    }
+
+
+def test_an_action_on_a_shared_controller_reaches_only_the_screen_that_anchors_it(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The shape ADR-0019 names: a shared AJAX controller with no view folder."""
+    shared = "Controllers/SharedApiController.cs"
+    scan = _scan(
+        tmp_path,
+        views=["Views/Order/Index.cshtml", "Views/Report/Index.cshtml"],
+        controllers={
+            "Controllers/OrderController.cs": ["Index"],
+            "Controllers/ReportController.cs": ["Index"],
+            shared: ["Lookup"],
+        },
+        candidate_anchors={
+            "Views/Order/Index.cshtml": [
+                {"action": "Lookup", "controller": "SharedApi"}
+            ]
+        },
+        invocations={
+            "Controllers/OrderController.cs": [
+                _invocation("OrderController", "Index", "usp_OrderIndex")
+            ],
+            "Controllers/ReportController.cs": [
+                _invocation("ReportController", "Index", "usp_ReportIndex")
+            ],
+            shared: [_invocation("SharedApiController", "Lookup", "usp_Lookup")],
+        },
+    )
+
+    response = _analyze(
+        monkeypatch,
+        tmp_path,
+        scan,
+        ["Index"],
+        database="OrdersDb",
+        procedures=("usp_OrderIndex", "usp_ReportIndex", "usp_Lookup"),
+    )
+
+    reached = {
+        program.file: sorted(program.stored_procedures)
+        for program in response.programs
+    }
+    assert reached == {
+        "Views/Order/Index.cshtml": ["usp_lookup", "usp_orderindex"],
+        "Views/Report/Index.cshtml": ["usp_reportindex"],
+    }
+    anchoring = next(
+        program
+        for program in response.programs
+        if program.file == "Views/Order/Index.cshtml"
+    )
+    assert _strengths(anchoring) == {"Index": "determined", "Lookup": "likely"}
+
+
+def test_an_area_view_anchors_the_shared_controller_that_sits_outside_every_area(
+    monkeypatch, tmp_path: Path
+) -> None:
+    view = "Areas/Admin/Views/Report/Summary.cshtml"
+    shared = "Controllers/SharedApiController.cs"
+    scan = _scan(
+        tmp_path,
+        views=[view],
+        controllers={
+            "Areas/Admin/Controllers/ReportController.cs": ["Summary"],
+            shared: ["Lookup"],
+        },
+        candidate_anchors={view: [{"action": "Lookup", "controller": "SharedApi"}]},
+        invocations={
+            shared: [_invocation("SharedApiController", "Lookup", "usp_Lookup")]
+        },
+    )
+
+    response = _analyze(
+        monkeypatch,
+        tmp_path,
+        scan,
+        ["Admin/Summary"],
+        database="OrdersDb",
+        procedures=("usp_Lookup",),
+    )
+
+    program = response.programs[0]
+    assert program.file == view
+    assert program.stored_procedures == ["usp_lookup"]
+    assert _strengths(program) == {"Summary": "determined", "Lookup": "likely"}
+
+
+def test_a_controller_in_two_screens_contributes_only_the_actions_each_anchors(
+    monkeypatch, tmp_path: Path
+) -> None:
+    shared = "Controllers/SharedApiController.cs"
+    scan = _scan(
+        tmp_path,
+        views=["Views/Order/Index.cshtml", "Views/Report/Index.cshtml"],
+        controllers={
+            "Controllers/OrderController.cs": ["Index"],
+            "Controllers/ReportController.cs": ["Index"],
+            shared: ["Lookup", "Export"],
+        },
+        determined_anchors={
+            "Views/Order/Index.cshtml": [
+                {"action": "Lookup", "controller": "SharedApi"}
+            ],
+            "Views/Report/Index.cshtml": [
+                {"action": "Export", "controller": "SharedApi"}
+            ],
+        },
+        invocations={
+            shared: [
+                _invocation("SharedApiController", "Lookup", "usp_Lookup"),
+                _invocation("SharedApiController", "Export", "usp_Export"),
+            ]
+        },
+    )
+
+    response = _analyze(
+        monkeypatch,
+        tmp_path,
+        scan,
+        ["Index"],
+        database="OrdersDb",
+        procedures=("usp_Lookup", "usp_Export"),
+    )
+
+    reached = {
+        program.file: program.stored_procedures for program in response.programs
+    }
+    assert reached == {
+        "Views/Order/Index.cshtml": ["usp_lookup"],
+        "Views/Report/Index.cshtml": ["usp_export"],
+    }
+
+
+def test_the_anchored_name_never_admits_the_same_name_on_the_screens_own_controller(
+    monkeypatch, tmp_path: Path
+) -> None:
+    view = "Views/Order/Report.cshtml"
+    own = "Controllers/OrderController.cs"
+    shared = "Controllers/SharedApiController.cs"
+    scan = _scan(
+        tmp_path,
+        views=[view],
+        controllers={own: ["Detail"], shared: ["Detail"]},
+        determined_anchors={view: [{"action": "Detail", "controller": "SharedApi"}]},
+        invocations={
+            own: [_invocation("OrderController", "Detail", "usp_OrderDetail")],
+            shared: [_invocation("SharedApiController", "Detail", "usp_SharedDetail")],
+        },
+    )
+
+    response = _analyze(
+        monkeypatch,
+        tmp_path,
+        scan,
+        ["Report"],
+        database="OrdersDb",
+        procedures=("usp_OrderDetail", "usp_SharedDetail"),
+    )
+
+    program = response.programs[0]
+    assert program.stored_procedures == ["usp_shareddetail"]
+    assert program.methods == [
+        {"name": "Detail", "class": "SharedApiController", "strength": "determined"}
+    ]
+
+
+def test_the_ajax_detail_query_appears_in_its_screens_impact_chain(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The measured repository's shape: the detail query is reached only by URL."""
+    view = "Views/Order/OrderQry.cshtml"
+    controller = "Controllers/OrderController.cs"
+    scan = _scan(
+        tmp_path,
+        views=[view],
+        view_sources={
+            view: (
+                "@model OrderModel\n"
+                "<table><tr><th>Order</th></tr></table>\n"
+                "<script>\n"
+                "  $.get('/Order/Detail', function (data) { render(data); });\n"
+                "</script>\n"
+            )
+        },
+        controllers={controller: ["OrderQry", "Detail"]},
+        invocations={
+            controller: [
+                _invocation("OrderController", "OrderQry", "usp_QueryOrders"),
+                _invocation("OrderController", "Detail", "usp_ReadOrderDetail"),
+            ]
+        },
+    )
+
+    response = _analyze(
+        monkeypatch,
+        tmp_path,
+        scan,
+        ["OrderQry"],
+        database="OrdersDb",
+        procedures=("usp_QueryOrders", "usp_ReadOrderDetail"),
+    )
+
+    program = response.programs[0]
+    assert sorted(program.stored_procedures) == [
+        "usp_queryorders",
+        "usp_readorderdetail",
+    ]
+    assert _strengths(program)["Detail"] == "likely"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

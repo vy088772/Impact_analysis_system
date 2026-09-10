@@ -140,7 +140,7 @@ _Avoid_: receiver class, wrapper class, declared type
 ## Web Application Analysis
 
 **Program Screen**:
-One View file together with the set of actions that serve it — the actions whose name equals the view name, plus the actions its View Anchors name. It is what a specification's program code resolves to inside a repository. The controller is a path used to reach those actions, never the unit of scope: one controller can hold several Program Screens, and one Program Screen never spans two controllers. In WebForms the same concept is one `.aspx` page and its code-behind. See [ADR-0019](docs/adr/0019-a-program-is-one-view-plus-the-actions-that-serve-it.md).
+One View file together with the set of actions that serve it — the actions whose name equals the view name, plus the actions its View Anchors name. It is what a specification's program code resolves to inside a repository. The controller is a path used to reach those actions, never the unit of scope: one controller can hold several Program Screens, and a screen that anchors a shared controller reaches only the actions it anchors there, never that controller's other actions. In WebForms the same concept is one `.aspx` page and its code-behind. See [ADR-0019](docs/adr/0019-a-program-is-one-view-plus-the-actions-that-serve-it.md).
 _Avoid_: page, controller, program name, screen
 
 **View Anchor**:
