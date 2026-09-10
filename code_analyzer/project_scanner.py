@@ -26,6 +26,7 @@ from .static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 from .smart_file_finder import SmartFileFinder, FileSearchResult
 from .config_parser import WebConfigParser
 from .project_connection_scope import ProjectConnectionScopeIndex
+from .source_text import decode_source_bytes
 from .webconfig_connection_resolver import parse_web_config_connections, WebConfigConnections
 from config.settings import settings, DatabaseConfig
 
@@ -333,7 +334,7 @@ class ProjectScanResult:
         """Store one complete, project-relative C# file snapshot for this scan."""
         path = Path(file_path)
         source_bytes = path.read_bytes()
-        content = self._decode_source_bytes(source_bytes)
+        content = decode_source_bytes(source_bytes)
         relative_path = str(path.resolve().relative_to(Path(self.project_root).resolve())).replace("\\", "/")
         content_hash = hashlib.sha256(source_bytes).hexdigest()
         if host_result.get("source_id") != content_hash:
@@ -354,14 +355,6 @@ class ProjectScanResult:
             method_spans=method_spans,
         )
 
-    @staticmethod
-    def _decode_source_bytes(source_bytes: bytes) -> str:
-        """Match .NET's BOM-aware source decoding for Roslyn span alignment."""
-        if source_bytes.startswith(b"\xff\xfe\x00\x00") or source_bytes.startswith(b"\x00\x00\xfe\xff"):
-            return source_bytes.decode("utf-32")
-        if source_bytes.startswith(b"\xff\xfe") or source_bytes.startswith(b"\xfe\xff"):
-            return source_bytes.decode("utf-16")
-        return source_bytes.decode("utf-8-sig", errors="replace")
     
     def to_dict(self) -> Dict:
         self.calculate_statistics()

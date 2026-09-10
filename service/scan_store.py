@@ -116,7 +116,11 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # Connection Scope 解析（ADR-0018）。舊快取裡 Core 專案的連線來源是「把 DbContext
 # 型別名稱去掉 Context」或「把連線查找鍵當資料庫名稱」猜出來的值，與新解析結果
 # 不同，必須重新掃描。
-_CACHE_VERSION = 30
+# v31：連線字串放在欄位裡的形狀改為解析得出（ADR-0018 的同一張查找表）。原始
+# ADO.NET 呼叫的連線變數現在會拿到 {server, database}；讀 Configuration 根命名
+# 空間的 GetValue<string>("Key") 會留下理由；欄位的值追不回查找鍵時也會留下理
+# 由。舊快取裡這些呼叫是空的連線來源，與新解析結果不同，必須重新掃描。
+_CACHE_VERSION = 31
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

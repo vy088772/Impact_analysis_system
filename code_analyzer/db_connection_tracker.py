@@ -6,11 +6,12 @@
 
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .project_connection_scope import (
     CONNECTION_KEY_NOT_IN_PROJECT_SCOPE,
     CONTEXT_TYPE_NOT_REGISTERED,
+    FIELD_HELD_CONNECTION_NOT_TRACED,
     ProjectConnectionScope,
     ROOT_CONFIGURATION_NAMESPACE,
 )
@@ -87,10 +88,14 @@ class DBConnectionTracker:
 
     APP_SETTINGS = "app_settings"
     CONNECTION_STRINGS = "connection_strings"
-    # Configuration 根命名空間（IConfiguration["Key"] 讀到的那一層）。它不是連線
-    # 查找表，所以這個 kind 永遠不查任何一張表——兩個命名空間不合併。
+    # Configuration 根命名空間（IConfiguration["Key"] 與
+    # IConfiguration.GetValue<string>("Key") 讀到的那一層）。它不是連線查找表，
+    # 所以這個 kind 永遠不查任何一張表——兩個命名空間不合併。
     ROOT_CONFIGURATION = "root_configuration"
     DB_CONTEXT_TYPE = "db_context_type"
+    # 一個 Field-Held Connection：連線來自呼叫端類別的一個欄位，而不是來自任何
+    # 一張查找表。這個 kind 記的是「那個欄位追不回一個查找鍵」，所以它也不查表。
+    FIELD_HELD_CONNECTION = "field_held_connection"
 
     def __init__(self, connection_resolver: Optional[ConnectionLookupTables] = None):
         self.connections: Dict[str, ConnectionInfo] = {}
@@ -469,9 +474,18 @@ class DBConnectionTracker:
             line_num = content[:match.start()].count('\n') + 1
             self._resolve_context_type(context_type, var_name, line_num)
 
-    # _config["Key"] / Configuration["Key"] / builder.Configuration["Key"]
-    _ROOT_CONFIGURATION_READ = (
-        r'(\w+)\s*=\s*(?:\w+\.)*\w*[Cc]onfig\w*\s*\[\s*["\']([^"\']+)["\']\s*\]'
+    # 讀 Configuration 根命名空間的兩種寫法。兩種都是「從根往下找一個鍵」，
+    # 不是讀 ConnectionStrings 區段，所以走同一條規則。
+    # 1. 索引子：_config["Key"] / Configuration["Key"] / builder.Configuration["Key"]
+    # 2. GetValue：config.GetValue<string>("Key")——實測的 ETR 儲存庫的五個
+    #    控制器都這樣讀連線字串，而它的連線字串只存在於 ConnectionStrings 區
+    #    段，所以那五個讀取在執行期拿到的是 null。
+    # 兩種寫法共用同一個接收者前綴，寫一次以免兩邊漂開。
+    _CONFIGURATION_RECEIVER = r'(\w+)\s*=\s*(?:\w+\.)*\w*[Cc]onfig\w*\s*'
+    _ROOT_CONFIGURATION_READS = (
+        _CONFIGURATION_RECEIVER + r'\[\s*["\']([^"\']+)["\']\s*\]',
+        _CONFIGURATION_RECEIVER
+        + r'\.\s*GetValue\s*<[^>]*>\s*\(\s*["\']([^"\']+)["\']\s*\)',
     )
 
     def _names_a_connection(self, key: str) -> bool:
@@ -493,41 +507,43 @@ class DBConnectionTracker:
     def _extract_root_configuration_reads(self, content: str):
         """處理從 Configuration 根命名空間讀出來的連線鍵。
 
-        `Configuration["Key"]` 讀的是根命名空間，`GetConnectionString("Key")`
-        讀的是 ConnectionStrings 區段——兩個命名空間不合併（ADR-0008），所以
-        根命名空間的讀取永遠解析不到連線，並說出這就是理由。
+        `Configuration["Key"]` 與 `Configuration.GetValue<string>("Key")` 讀的
+        都是根命名空間，`GetConnectionString("Key")` 讀的是 ConnectionStrings
+        區段——兩個命名空間不合併（ADR-0008），所以根命名空間的讀取永遠解析
+        不到連線，並說出這就是理由。
         `Configuration["ConnectionStrings:Key"]` 帶著區段前綴，是同一張連線查
         找表的另一種寫法，照常解析。
         """
         if self._project_scope() is None:
             return
 
-        for match in re.finditer(self._ROOT_CONFIGURATION_READ, content):
-            var_name = match.group(1)
-            raw_key = match.group(2)
-            line_num = content[:match.start()].count('\n') + 1
-            if var_name in self.connections:
-                continue
+        for pattern in self._ROOT_CONFIGURATION_READS:
+            for match in re.finditer(pattern, content):
+                var_name = match.group(1)
+                raw_key = match.group(2)
+                line_num = content[:match.start()].count('\n') + 1
+                if var_name in self.connections:
+                    continue
 
-            section, separator, key = raw_key.partition(":")
-            if separator and section.casefold() == "connectionstrings":
-                database_name, server = self._resolve(
-                    key, self.CONNECTION_STRINGS, var_name, line_num
-                )
-                if database_name:
-                    self.connections[var_name] = ConnectionInfo(
-                        variable_name=var_name,
-                        database_name=database_name,
-                        connection_string_key=key,
-                        line_number=line_num,
-                        scope="class",
-                        server=server,
+                section, separator, key = raw_key.partition(":")
+                if separator and section.casefold() == "connectionstrings":
+                    database_name, server = self._resolve(
+                        key, self.CONNECTION_STRINGS, var_name, line_num
                     )
-                continue
+                    if database_name:
+                        self.connections[var_name] = ConnectionInfo(
+                            variable_name=var_name,
+                            database_name=database_name,
+                            connection_string_key=key,
+                            line_number=line_num,
+                            scope="class",
+                            server=server,
+                        )
+                    continue
 
-            if not self._names_a_connection(raw_key):
-                continue
-            self._resolve(raw_key, self.ROOT_CONFIGURATION, var_name, line_num)
+                if not self._names_a_connection(raw_key):
+                    continue
+                self._resolve(raw_key, self.ROOT_CONFIGURATION, var_name, line_num)
 
     def _extract_sqlconnection_declarations(self, content: str):
         """
@@ -578,18 +594,20 @@ class DBConnectionTracker:
                     server=server,
                 )
 
-        # 找出所有 SqlConnection(source_var) 宣告，source_var 是先前已追蹤過的變數
+        # 找出所有 SqlConnection(source_var) 宣告。source_var 是持有連線字串的
+        # 欄位或區域變數——實測的 ETR 儲存庫三十五處原始 ADO.NET 呼叫全部是這
+        # 個形狀。呼叫端記錄的連線變數是 connection_var，不是那個欄位，所以解
+        # 析結果與解析不出來的理由都必須掛在 connection_var 上。
         pattern = r'SqlConnection\s+(\w+)\s*=\s*new\s+SqlConnection\s*\(\s*(\w+)\s*\)'
         matches = re.finditer(pattern, content, re.IGNORECASE)
 
         for match in matches:
             connection_var = match.group(1)  # cn
             source_var = match.group(2)      # _connetStrRead
+            line_num = content[:match.start()].count('\n') + 1
 
             # 如果 source_var 已經在追蹤清單中，建立對應
             if source_var in self.connections:
-                line_num = content[:match.start()].count('\n') + 1
-
                 # 複製來源連線資訊
                 source_info = self.connections[source_var]
                 self.connections[connection_var] = ConnectionInfo(
@@ -600,6 +618,69 @@ class DBConnectionTracker:
                     scope="local",
                     server=source_info.server,
                 )
+                continue
+
+            # 不因為同名的連線變數已經在別處解析出來就跳過。同一個檔案的兩個
+            # 方法可以各有一個 `con`，一個解析得出、一個解析不出來；跳過會讓
+            # 後者變成沉默的空結果，而它正是一個必須說出理由的呼叫。
+            self._record_unresolved_field_held_connection(
+                connection_var, source_var, line_num
+            )
+
+    def _record_unresolved_field_held_connection(
+        self, connection_var: str, source_var: str, line_number: int
+    ) -> None:
+        """為一個解析不出來的 Field-Held Connection 留下理由。
+
+        沒有這一步，這個呼叫就只是安靜地不出現在結果裡——正是這份程式碼要防
+        止的沉默空結果。理由分兩種：持有連線字串的那個欄位自己已經說過為什麼
+        解析不出來（例如它讀的是 Configuration 根命名空間），就原樣沿用它的
+        理由，讓讀的人一眼看到根因；那個欄位的值根本追不回任何查找鍵（例如它
+        來自一次方法呼叫），就記 FIELD_HELD_CONNECTION_NOT_TRACED，並把欄位名
+        放進 lookup_key——那一欄的意義本來就由 namespace 決定，資料庫內容型別
+        的形狀放的也是型別名而不是查找鍵。
+
+        只在有 Project Connection Scope 時記錄。Web.config 的解析路徑從來不
+        產生理由，在那裡開始產生會改變既有系統的輸出，而這張票談的是 Core
+        系統（ADR-0018）。
+        """
+        if self._project_scope() is None:
+            return
+
+        source_reason = self._nearest_unresolved(source_var, line_number)
+        if source_reason is not None:
+            self.unresolved.append(
+                replace(
+                    source_reason,
+                    variable_name=connection_var,
+                    line_number=line_number,
+                )
+            )
+            return
+
+        self._record_unresolved(
+            connection_var,
+            source_var,
+            self.FIELD_HELD_CONNECTION,
+            FIELD_HELD_CONNECTION_NOT_TRACED,
+            line_number,
+        )
+
+    def _nearest_unresolved(
+        self, variable_name: str, line_number: int
+    ) -> Optional[UnresolvedConnection]:
+        """離某一行最近的那個同名 unresolved 紀錄，沒有就回傳 None。
+
+        一個檔案可以放兩個類別，兩個類別可以各有一個同名的連線欄位而值不同。
+        取「檔案裡第一個同名紀錄」會讓第二個類別繼承第一個類別的理由；取最近
+        的那一個，答案至少來自同一段程式碼。
+        """
+        candidates = [
+            entry for entry in self.unresolved if entry.variable_name == variable_name
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda entry: abs(entry.line_number - line_number))
 
     def get_database_source(self, variable_name: str) -> Optional[str]:
         """

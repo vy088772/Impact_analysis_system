@@ -28,6 +28,7 @@ from .appsettings_connection_resolver import (
 )
 from .composition_root_reader import parse_composition_root_contexts
 from .connection_string_value import ResolvedConnection
+from .source_text import decode_source_bytes
 
 BASE_SETTINGS_FILE_NAME = "appsettings.json"
 # 專案檔的副檔名。ADR-0018 的規則是「上方最近的專案檔」，所以巢狀在 C# 專案裡
@@ -52,6 +53,9 @@ NO_PROJECT_CONNECTION_SCOPE = "no_project_connection_scope"
 CONNECTION_KEY_NOT_IN_PROJECT_SCOPE = "connection_key_not_in_project_scope"
 ROOT_CONFIGURATION_NAMESPACE = "root_configuration_namespace_not_connection_strings"
 CONTEXT_TYPE_NOT_REGISTERED = "context_type_not_registered"
+# 一個 Field-Held Connection，它持有的值追不回任何一個連線查找鍵。追不到就維
+# 持 unresolved：unresolved 看得見，錯的 {server, database} 不是。
+FIELD_HELD_CONNECTION_NOT_TRACED = "field_held_connection_not_traced"
 
 
 @dataclass(frozen=True)
@@ -183,9 +187,13 @@ def build_project_connection_scope(project_file: Union[str, Path]) -> Optional[P
     context_connection_keys: Dict[str, str] = {}
     for composition_root in _find_composition_root_files(directory):
         try:
-            content = composition_root.read_text(encoding="utf-8-sig")
+            source_bytes = composition_root.read_bytes()
         except OSError:
             continue
+        # 組合根與其他 C# 原始檔用同一套解碼規則。實測的 ETR 儲存庫的
+        # Program.cs 註解是 Big5，嚴格解碼會在這裡丟例外，而整個掃描根的連線
+        # 解析會隨之安靜消失。
+        content = decode_source_bytes(source_bytes)
         for context_type, lookup_key in parse_composition_root_contexts(content).items():
             context_connection_keys.setdefault(context_type, lookup_key)
 

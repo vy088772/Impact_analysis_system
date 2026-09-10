@@ -156,12 +156,16 @@ The `appsettings.json` beside one project file, and the only file that supplies 
 _Avoid_: config file, settings, connection strings file
 
 **Configuration Root Namespace**:
-The outer keys of an Application Settings File other than `ConnectionStrings` — the layer `IConfiguration["Key"]` reads. It is not a connection lookup table: a key read from it resolves to no `{server, database}` and names that as the reason, because the two namespaces are not merged even when the same key name appears in both. `Configuration["ConnectionStrings:Key"]` carries the section prefix and therefore reads the lookup table, not this namespace.
+The outer keys of an Application Settings File other than `ConnectionStrings` — the layer `IConfiguration["Key"]` and `IConfiguration.GetValue<string>("Key")` read. It is not a connection lookup table: a key read from it resolves to no `{server, database}` and names that as the reason, because the two namespaces are not merged even when the same key name appears in both. A `ConnectionStrings:Key` argument to either form carries the section prefix and therefore reads the lookup table, not this namespace.
 _Avoid_: app settings, root keys, configuration section
 
 **Context Connection Registration**:
 The composition root's binding of one database context type to one named connection string, written as `AddDbContext<T>(... GetConnectionString("Key") ...)` in `Program.cs` or `Startup.cs`. It is the only thing that says which database a context type opens — the type name is not the database name, exactly as a connection lookup key is not a database name (ADR-0008). A call resolves through the *declared type of its receiver*, so one class holding two context types resolves each call to its own database, and a context type the composition root never registered resolves to nothing with a stated reason.
 _Avoid_: context name, DbContext database, type-name inference
+
+**Field-Held Connection**:
+A connection string a class reads into one of its own fields, which its raw ADO.NET calls then open a connection from. It is the second lookup shape beside Context Connection Registration, and it resolves through the same Project Connection Scope. The Resolved Connection Source belongs to the connection variable at the call site, not to the field, because that is the variable the invocation records — so one call site resolving does not settle another that shares its variable name. A field read from the Configuration Root Namespace resolves to nothing and names that namespace as the reason; a field whose assigned value traces back to no lookup key resolves to nothing and names that instead. The measured ETR repository is written entirely this way.
+_Avoid_: connection field, injected connection string, controller connection
 
 **Environment Settings Override**:
 A connection an `appsettings.<environment>.json` states differently from the Application Settings File beside it. It is reported as an observation and never applied. Which environment runs is a deployment-time fact a static scan cannot know, so applying one would be a guess, and omitting it would lose a real per-environment database difference.
