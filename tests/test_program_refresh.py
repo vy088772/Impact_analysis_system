@@ -16,7 +16,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from code_analyzer.models import FileAnalysisResult, FileType, FrameworkType, SourceSnapshot
+from code_analyzer.project_connection_scope import ProjectConnectionScopeIndex
 from code_analyzer.project_scanner import ProjectScanResult
+from code_analyzer.webconfig_connection_resolver import WebConfigConnections
 from service import analyze_service
 from service import scan_store
 from service.schemas import RefreshResponse
@@ -352,7 +354,8 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
 
     class FakeParser:
         db_tracker = SimpleNamespace(
-            connections={"conn": SimpleNamespace(database_name="NewDb", server=None)}
+            connections={"conn": SimpleNamespace(database_name="NewDb", server=None)},
+            unresolved=[],
         )
 
         def parse_file(self, file_path: str) -> FileAnalysisResult:
@@ -367,6 +370,8 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
     scanner.scan_result = None
     scanner.csharp_parser = FakeParser()
     scanner.static_analyzer_host = FakeHost()
+    scanner.connection_resolver = WebConfigConnections()
+    scanner.connection_scopes = ProjectConnectionScopeIndex(root)
 
     scanner.refresh_csharp_files(scan, [str(selected_file)])
 
@@ -426,7 +431,7 @@ def test_project_scanner_refresh_reports_batch_progress(tmp_path, capsys) -> Non
             ]
 
     class FakeParser:
-        db_tracker = SimpleNamespace(connections={})
+        db_tracker = SimpleNamespace(connections={}, unresolved=[])
 
         def parse_file(self, file_path: str) -> FileAnalysisResult:
             return FileAnalysisResult(
@@ -440,6 +445,8 @@ def test_project_scanner_refresh_reports_batch_progress(tmp_path, capsys) -> Non
     scanner.scan_result = None
     scanner.csharp_parser = FakeParser()
     scanner.static_analyzer_host = FakeHost()
+    scanner.connection_resolver = WebConfigConnections()
+    scanner.connection_scopes = ProjectConnectionScopeIndex(root)
 
     scanner.refresh_csharp_files(scan, [str(selected_file)])
 
@@ -1084,7 +1091,7 @@ def test_partial_refresh_keeps_wrapper_source_lookup_inside_each_root(monkeypatc
     analyzer_calls: list[tuple[Path, list[Path]]] = []
 
     class FakeParser:
-        db_tracker = SimpleNamespace(connections={})
+        db_tracker = SimpleNamespace(connections={}, unresolved=[])
 
         def parse_file(self, file_path: str) -> FileAnalysisResult:
             return FileAnalysisResult(
@@ -1166,6 +1173,8 @@ def test_partial_refresh_keeps_wrapper_source_lookup_inside_each_root(monkeypatc
         scanner.csharp_parser = FakeParser()
         scanner.static_analyzer_host = FakeHost()
         scanner.parsers = {}
+        scanner.connection_resolver = WebConfigConnections()
+        scanner.connection_scopes = ProjectConnectionScopeIndex(root)
         scanners[root] = scanner
 
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: roots)

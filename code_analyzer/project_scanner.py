@@ -25,6 +25,7 @@ from .models import FileAnalysisResult, StoredProcedureCall, SQLQuery, Framework
 from .static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 from .smart_file_finder import SmartFileFinder, FileSearchResult
 from .config_parser import WebConfigParser
+from .project_connection_scope import ProjectConnectionScopeIndex
 from .webconfig_connection_resolver import parse_web_config_connections, WebConfigConnections
 from config.settings import settings, DatabaseConfig
 
@@ -146,6 +147,17 @@ class ProjectScanResult:
     # "parsers"} — populated by ProjectScanner._record_framework_report() and
     # merged across a system's scan roots by _merge_scans (service/analyze_service.py).
     framework_reports: List[Dict] = field(default_factory=list)
+    # Connections that resolved to nothing, per source file, each naming why
+    # (Project Connection Scope, ADR-0018). A ratio alone cannot tell a
+    # resolution that improved from one that merely became confident, so every
+    # connection below the line names its reason.
+    unresolved_connections: Dict[str, List[Dict]] = field(default_factory=dict)
+    # Observations about connection resolution that are reported and never
+    # applied — today, an environment-specific settings file that overrides a
+    # connection. Which environment runs is a deployment-time fact this scan
+    # cannot know, so applying one would be a guess and hiding it would lose a
+    # real per-environment database difference.
+    connection_observations: List[Dict] = field(default_factory=list)
 
     # View 層分析結果（依框架偵測結果選擇性填入；未偵測到對應框架時維持空清單）
     aspx_results: List[FileAnalysisResult] = field(default_factory=list)    # .aspx / .ascx
@@ -200,6 +212,8 @@ class ProjectScanResult:
             self, "semantic_binding_availability", []
         )
         self.framework_reports = getattr(self, "framework_reports", [])
+        self.unresolved_connections = getattr(self, "unresolved_connections", {})
+        self.connection_observations = getattr(self, "connection_observations", [])
 
     @staticmethod
     def _connection_source_database(value: Any) -> Optional[str]:
@@ -439,6 +453,11 @@ class ProjectScanner:
         self.connection_resolver: WebConfigConnections = self._load_connection_resolver()
         if self.csharp_parser is not None:
             self.csharp_parser.db_tracker.connection_resolver = self.connection_resolver
+
+        # ASP.NET Core 的 appsettings.json 查找表，依專案檔目錄分範圍
+        # （ADR-0018）。掃描根底下沒有任何 appsettings.json 時它不作用，
+        # Web.config 解析路徑因此完全不變。
+        self.connection_scopes = ProjectConnectionScopeIndex(self.project_root)
         
         # 初始化 SQL 分析器（多資料庫）
         self.sql_analyzers: Dict[str, SQLAnalyzer] = {}
@@ -483,6 +502,52 @@ class ProjectScanner:
             print(f"⚠️ 讀取 web.config 失敗: {error}")
             return WebConfigConnections()
         return parse_web_config_connections(content)
+
+    def _parse_csharp_file(self, file_path: str, file_key: str) -> FileAnalysisResult:
+        """解析一個 C# 檔，並記下它解析出來的連線來源與解不出來的理由。
+
+        連線查找表一律來自這個檔案所屬的 Project Connection Scope；
+        這個掃描根沒有 appsettings.json 時，改用掃描根的 Web.config
+        查找表（ADR-0018）。一個檔案的連線永遠不能借用另一個專案的表，
+        因為同一個鍵名在兩個專案裡可以開兩個不同的資料庫。
+        """
+        tracker = self.csharp_parser.db_tracker
+        scope = self.connection_scopes.scope_for(file_path)
+        tracker.connection_resolver = (
+            scope if scope is not None else self.connection_resolver
+        )
+
+        result = self.csharp_parser.parse_file(file_path)
+
+        self.scan_result.connection_sources[file_key] = {
+            name: {"database": info.database_name, "server": info.server}
+            for name, info in tracker.connections.items()
+            if info.database_name
+        }
+        unresolved = [entry.to_dict() for entry in tracker.unresolved]
+        if unresolved:
+            self.scan_result.unresolved_connections[file_key] = unresolved
+        else:
+            self.scan_result.unresolved_connections.pop(file_key, None)
+        self._record_connection_observations()
+        return result
+
+    def _record_connection_observations(self) -> None:
+        """把目前已建立的每一個 scope 觀察到的環境改寫併進掃描結果。
+
+        併入而不是取代：一次只重掃一個檔案的 refresh 只建立得出那個檔案所屬
+        的 scope，取代會讓完整掃描記下的其他觀察憑空消失。以
+        (設定檔, 查找鍵) 去重，所以重複掃描同一個專案不會累積重複項。
+        """
+        observations = {
+            (entry.get("settings_file"), entry.get("lookup_key")): entry
+            for entry in self.scan_result.connection_observations
+        }
+        for entry in self.connection_scopes.environment_overrides():
+            observations[(entry.get("settings_file"), entry.get("lookup_key"))] = entry
+        self.scan_result.connection_observations[:] = [
+            observations[key] for key in sorted(observations)
+        ]
 
     # ========================================
     # 自動偵測資料庫
@@ -779,12 +844,7 @@ class ProjectScanner:
                         dict(invocation)
                         for invocation in host_result.get("db_invocations", []) or []
                     ]
-                    result = self.csharp_parser.parse_file(file_path)
-                    self.scan_result.connection_sources[file_key] = {
-                        name: {"database": info.database_name, "server": info.server}
-                        for name, info in self.csharp_parser.db_tracker.connections.items()
-                        if info.database_name
-                    }
+                    result = self._parse_csharp_file(file_path, file_key)
                     self.scan_result.csharp_results.append(result)
                     self.scan_result.scanned_files += 1
                 except Exception as e:
@@ -867,12 +927,7 @@ class ProjectScanner:
                     dict(invocation)
                     for invocation in host_result.get("db_invocations", []) or []
                 ]
-                result = self.csharp_parser.parse_file(file_path)
-                self.scan_result.connection_sources[file_key] = {
-                    name: {"database": info.database_name, "server": info.server}
-                    for name, info in self.csharp_parser.db_tracker.connections.items()
-                    if info.database_name
-                }
+                result = self._parse_csharp_file(file_path, file_key)
                 self.scan_result.csharp_results.append(result)
                 refreshed_results.append(result)
 
@@ -931,6 +986,7 @@ class ProjectScanner:
         for records in (
             self.scan_result.db_invocations,
             self.scan_result.connection_sources,
+            self.scan_result.unresolved_connections,
         ):
             for key in list(records):
                 if self._same_project_file(key, file_path):

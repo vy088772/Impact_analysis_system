@@ -5,9 +5,15 @@
 """
 
 import re
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass, field
 
+from .project_connection_scope import (
+    CONNECTION_KEY_NOT_IN_PROJECT_SCOPE,
+    CONTEXT_TYPE_NOT_REGISTERED,
+    ProjectConnectionScope,
+    ROOT_CONFIGURATION_NAMESPACE,
+)
 from .webconfig_connection_resolver import WebConfigConnections, ResolvedConnection
 
 
@@ -20,6 +26,36 @@ class ConnectionInfo:
     line_number: int            # 宣告行號
     scope: str = "class"        # 作用域 (class, method, local)
     server: Optional[str] = None  # 伺服器位址 (例如: "vmsystest07")；未知時為 None
+
+
+@dataclass(frozen=True)
+class UnresolvedConnection:
+    """一個解析不出 {server, database} 的連線，以及它為什麼解析不出來。
+
+    一個比例數字本身分不出「解析變好了」與「只是變得有自信」，所以每一個解
+    不出來的連線都必須指名理由。沉默的空結果正是這份程式碼存在的目的所要防
+    止的失敗模式。
+    """
+
+    variable_name: str
+    lookup_key: str
+    namespace: str
+    reason: str
+    line_number: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "variable_name": self.variable_name,
+            "lookup_key": self.lookup_key,
+            "namespace": self.namespace,
+            "reason": self.reason,
+            "line_number": self.line_number,
+        }
+
+
+# 一份設定檔解析出來的連線查找表：Web.config 的，或 appsettings.json 的。
+# 兩者有相同的 app_settings/connection_strings 兩張表，所以查找的程式碼只有一份。
+ConnectionLookupTables = Union[WebConfigConnections, ProjectConnectionScope]
 
 
 class DBConnectionTracker:
@@ -41,26 +77,53 @@ class DBConnectionTracker:
     得到可用（雖然較不精確）的結果；一旦提供了 connection_resolver，任何查找不到
     的鍵就一律視為無法解析（不再退回猜測），因為此時「這個鍵不在 Web.config 裡」
     本身就是一個明確的事實。
+
+    connection_resolver 也可以是一個 ProjectConnectionScope（ASP.NET Core 的
+    appsettings.json 查找表，ADR-0018）。它與 WebConfigConnections 有相同的
+    app_settings/connection_strings 兩張表，所以查找的程式碼只有一份；它另外帶著
+    組合根裡的 DbContext 註冊與 Configuration 根命名空間的鍵名，讓解析不出來的
+    連線說得出理由。Web.config 的解析路徑不因此改變任何一步。
     """
 
     APP_SETTINGS = "app_settings"
     CONNECTION_STRINGS = "connection_strings"
+    # Configuration 根命名空間（IConfiguration["Key"] 讀到的那一層）。它不是連線
+    # 查找表，所以這個 kind 永遠不查任何一張表——兩個命名空間不合併。
+    ROOT_CONFIGURATION = "root_configuration"
+    DB_CONTEXT_TYPE = "db_context_type"
 
-    def __init__(self, connection_resolver: Optional[WebConfigConnections] = None):
+    def __init__(self, connection_resolver: Optional[ConnectionLookupTables] = None):
         self.connections: Dict[str, ConnectionInfo] = {}
-        self.connection_resolver: Optional[WebConfigConnections] = connection_resolver
+        self.connection_resolver: Optional[ConnectionLookupTables] = connection_resolver
+        self.unresolved: List[UnresolvedConnection] = []
 
-    def _resolve(self, key: str, kind: str) -> Tuple[Optional[str], Optional[str]]:
-        """把一個 Web.config 連線查找鍵解析成 (database, server)。
+    def _project_scope(self) -> Optional[ProjectConnectionScope]:
+        """回傳目前的 ProjectConnectionScope，若解析器是 Web.config 的則回傳 None。
 
-        kind 是 DBConnectionTracker.APP_SETTINGS 或 DBConnectionTracker.CONNECTION_STRINGS，
-        決定去哪一張表查找——絕不讓 AppSettings 的 key 誤解析到 ConnectionStrings
-        的同名 name，反之亦然。
+        以型別分辨，不以「有沒有某個屬性」分辨：屬性改名會讓每一個 Core 專案
+        無聲地退回 Web.config 路徑，也就是退回這張票要消滅的猜測。
         """
-        if not self.connection_resolver:
-            return key, None
+        resolver = self.connection_resolver
+        return resolver if isinstance(resolver, ProjectConnectionScope) else None
 
-        table: Dict[str, ResolvedConnection] = getattr(self.connection_resolver, kind)
+    def _record_unresolved(
+        self, variable_name: str, key: str, namespace: str, reason: str, line_number: int
+    ) -> None:
+        self.unresolved.append(
+            UnresolvedConnection(
+                variable_name=variable_name,
+                lookup_key=key,
+                namespace=namespace,
+                reason=reason,
+                line_number=line_number,
+            )
+        )
+
+    @staticmethod
+    def _lookup(
+        table: Dict[str, ResolvedConnection], key: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """在一張連線查找表裡找一個鍵，大小寫不敏感。"""
         resolved = table.get(key)
         if resolved is None:
             folded = key.casefold()
@@ -76,6 +139,97 @@ class DBConnectionTracker:
             return resolved.database, resolved.server
         return None, None
 
+    def _resolve(
+        self,
+        key: str,
+        kind: str,
+        variable_name: str = "",
+        line_number: int = 0,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """把一個連線查找鍵解析成 (database, server)。
+
+        kind 是 DBConnectionTracker.APP_SETTINGS 或 DBConnectionTracker.CONNECTION_STRINGS，
+        決定去哪一張表查找——絕不讓 AppSettings 的 key 誤解析到 ConnectionStrings
+        的同名 name，反之亦然。kind 是 ROOT_CONFIGURATION 時不查任何一張表。
+        """
+        scope = self._project_scope()
+        if scope is not None:
+            return self._resolve_in_scope(scope, key, kind, variable_name, line_number)
+
+        if not self.connection_resolver:
+            return key, None
+        return self._lookup(getattr(self.connection_resolver, kind), key)
+
+    def _resolve_in_scope(
+        self,
+        scope: ProjectConnectionScope,
+        key: str,
+        kind: str,
+        variable_name: str,
+        line_number: int,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """在一個 Project Connection Scope 裡解析，解不出來時說出理由。"""
+        if scope.unresolved_reason:
+            self._record_unresolved(
+                variable_name, key, kind, scope.unresolved_reason, line_number
+            )
+            return None, None
+
+        if kind == self.ROOT_CONFIGURATION:
+            self._record_unresolved(
+                variable_name, key, kind, ROOT_CONFIGURATION_NAMESPACE, line_number
+            )
+            return None, None
+
+        database, server = self._lookup(getattr(scope, kind), key)
+        if database:
+            return database, server
+
+        reason = (
+            ROOT_CONFIGURATION_NAMESPACE
+            if key in scope.root_configuration_keys
+            else CONNECTION_KEY_NOT_IN_PROJECT_SCOPE
+        )
+        self._record_unresolved(variable_name, key, kind, reason, line_number)
+        return None, None
+
+    def _resolve_context_type(
+        self, context_type: str, variable_name: str, line_number: int
+    ) -> Tuple[Optional[str], Optional[str], str]:
+        """把一個資料庫內容型別解析成 (database, server, 連線查找鍵)。
+
+        型別名稱本身不是資料庫名稱，就像連線查找鍵不是資料庫名稱一樣
+        （ADR-0008）。答案只來自組合根裡的註冊。
+        """
+        scope = self._project_scope()
+        if scope is None:
+            return None, None, ""
+        if scope.unresolved_reason:
+            self._record_unresolved(
+                variable_name,
+                context_type,
+                self.DB_CONTEXT_TYPE,
+                scope.unresolved_reason,
+                line_number,
+            )
+            return None, None, ""
+
+        key = scope.context_connection_keys.get(context_type)
+        if not key:
+            self._record_unresolved(
+                variable_name,
+                context_type,
+                self.DB_CONTEXT_TYPE,
+                CONTEXT_TYPE_NOT_REGISTERED,
+                line_number,
+            )
+            return None, None, ""
+
+        database, server = self._resolve(
+            key, self.CONNECTION_STRINGS, variable_name, line_number
+        )
+        return database, server, key
+
     def analyze_connections(self, content: str) -> Dict[str, ConnectionInfo]:
         """
         分析程式碼中的資料庫連線
@@ -84,6 +238,7 @@ class DBConnectionTracker:
             Dict[變數名稱, ConnectionInfo]
         """
         self.connections.clear()
+        self.unresolved.clear()
 
         # 模式 1: WebForms/舊版模式
         # SQLFunc obj = new SQLFunc(ConfigurationManager.AppSettings["STC"]);
@@ -114,7 +269,7 @@ class DBConnectionTracker:
             var_name = match.group(1)
             key = match.group(2)
             line_num = content[:match.start()].count('\n') + 1
-            database_name, server = self._resolve(key, self.APP_SETTINGS)
+            database_name, server = self._resolve(key, self.APP_SETTINGS, var_name, line_num)
             if not database_name:
                 continue
 
@@ -158,7 +313,7 @@ class DBConnectionTracker:
             class_name = match.group(3)   # 建構子類別名稱
             key = match.group(4)          # 連線字串名稱（例如：PUR）
             line_num = content[:match.start()].count('\n') + 1
-            database_name, server = self._resolve(key, self.CONNECTION_STRINGS)
+            database_name, server = self._resolve(key, self.CONNECTION_STRINGS, var_name, line_num)
 
             if var_name not in self.connections and database_name:
                 self.connections[var_name] = ConnectionInfo(
@@ -176,21 +331,39 @@ class DBConnectionTracker:
         格式: _connetStrRead = _config.GetConnectionString("QDmsDB");
         """
         # 模式 1: GetConnectionString
+        # 有 Project Connection Scope 時，鍵一律透過 appsettings.json 的
+        # ConnectionStrings 區段解析成真正的 {server, database}；沒有 scope 時
+        # 維持既有行為（把鍵當資料庫名稱），Web.config 路徑一步都不變。
         pattern1 = r'(\w+)\s*=\s*\w+\.GetConnectionString\s*\(\s*["\']([^"\']+)["\']\s*\)'
         matches1 = re.finditer(pattern1, content, re.IGNORECASE)
 
         for match in matches1:
             var_name = match.group(1)
-            db_name = match.group(2)
+            key = match.group(2)
             line_num = content[:match.start()].count('\n') + 1
 
-            self.connections[var_name] = ConnectionInfo(
-                variable_name=var_name,
-                database_name=db_name,
-                connection_string_key=db_name,
-                line_number=line_num,
-                scope="class"
+            if self._project_scope() is None:
+                self.connections[var_name] = ConnectionInfo(
+                    variable_name=var_name,
+                    database_name=key,
+                    connection_string_key=key,
+                    line_number=line_num,
+                    scope="class"
+                )
+                continue
+
+            database_name, server = self._resolve(
+                key, self.CONNECTION_STRINGS, var_name, line_num
             )
+            if database_name:
+                self.connections[var_name] = ConnectionInfo(
+                    variable_name=var_name,
+                    database_name=database_name,
+                    connection_string_key=key,
+                    line_number=line_num,
+                    scope="class",
+                    server=server,
+                )
 
         # 模式 2: ConfigurationManager.ConnectionStrings
         pattern2 = r'(\w+)\s*=\s*ConfigurationManager\.ConnectionStrings\s*\[\s*["\']([^"\']+)["\']\s*\]\.ConnectionString'
@@ -200,7 +373,7 @@ class DBConnectionTracker:
             var_name = match.group(1)
             key = match.group(2)
             line_num = content[:match.start()].count('\n') + 1
-            database_name, server = self._resolve(key, self.CONNECTION_STRINGS)
+            database_name, server = self._resolve(key, self.CONNECTION_STRINGS, var_name, line_num)
 
             if var_name not in self.connections and database_name:
                 self.connections[var_name] = ConnectionInfo(
@@ -213,30 +386,148 @@ class DBConnectionTracker:
                 )
 
         # 模式 3: DbContext 注入（ASP.NET Core MVC）
-        # private readonly TOPCSCYContext _TOPCSCY_db;
-        # 從類別名稱推斷資料庫名稱
-        pattern3 = r'(?:private\s+)?(?:readonly\s+)?(\w+Context)\s+(\w+)\s*;'
-        matches3 = re.finditer(pattern3, content, re.IGNORECASE)
+        self._extract_db_context_connections(content)
 
-        for match in matches3:
-            context_type = match.group(1)  # 例如: TOPCSCYContext
-            var_name = match.group(2)      # 例如: _TOPCSCY_db
+        # 模式 4: Configuration 根命名空間讀取
+        self._extract_root_configuration_reads(content)
 
-            # 從 Context 類型推斷資料庫名稱
-            # TOPCSCYContext -> TOPCSCY
-            # ApplicationDbContext -> ApplicationDb
-            db_name = context_type.replace('Context', '').replace('Db', '')
+    # 一個內容型別的宣告：欄位、建構子參數、主要建構子參數都算。接收者的
+    # *宣告型別*決定這次呼叫開哪個資料庫，所以同一個類別可以持有兩個不同的
+    # 內容型別，各自解析到各自的資料庫。
+    _CONTEXT_DECLARATION = r'\b{context_type}\s+(@?\w+)\s*(?=[;,)={{])'
 
-            line_num = content[:match.start()].count('\n') + 1
+    def _extract_db_context_connections(self, content: str):
+        """把資料庫內容型別的接收者，解析成它在組合根裡註冊的那個連線。
 
-            if var_name not in self.connections:
+        答案只來自組合根的註冊。從型別名稱推斷資料庫（`PayrollContext` ->
+        `Payroll`）是 ADR-0008 指名要換掉、不是延伸的捷徑，所以沒有
+        Project Connection Scope 時不猜，什麼都不做。
+        """
+        scope = self._project_scope()
+        if scope is None:
+            return
+
+        self._report_unregistered_context_types(content, scope)
+
+        for context_type in sorted(scope.context_connection_keys):
+            pattern = self._CONTEXT_DECLARATION.format(
+                context_type=re.escape(context_type)
+            )
+            for match in re.finditer(pattern, content):
+                var_name = match.group(1)
+                line_num = content[:match.start()].count('\n') + 1
+                if var_name in self.connections:
+                    continue
+                database_name, server, key = self._resolve_context_type(
+                    context_type, var_name, line_num
+                )
+                if not database_name:
+                    continue
                 self.connections[var_name] = ConnectionInfo(
                     variable_name=var_name,
-                    database_name=db_name,
-                    connection_string_key=db_name,
+                    database_name=database_name,
+                    connection_string_key=key,
                     line_number=line_num,
-                    scope="class"
+                    scope="class",
+                    server=server,
                 )
+
+    # ASP.NET 自己的環境物件，名字結尾是 Context 但不是資料庫內容型別。把它們
+    # 一併報成「組合根沒有註冊」只會製造雜訊，讓真正的缺口被淹沒。
+    _AMBIENT_CONTEXT_TYPES = frozenset(
+        {
+            "DbContext",
+            "HttpContext",
+            "ActionContext",
+            "ControllerContext",
+            "ViewContext",
+            "PageContext",
+            "SynchronizationContext",
+            "SecurityContext",
+            "ModelBindingContext",
+            "ValidationContext",
+        }
+    )
+
+    _ANY_CONTEXT_DECLARATION = r'\b(\w+Context)\s+(@?\w+)\s*(?=[;,)={])'
+
+    def _report_unregistered_context_types(
+        self, content: str, scope: ProjectConnectionScope
+    ) -> None:
+        """為組合根沒有註冊的資料庫內容型別留下理由。
+
+        沒有這一步，一個沒被註冊的內容型別就只是安靜地不出現在結果裡——正是
+        這份程式碼要防止的沉默空結果。
+        """
+        for match in re.finditer(self._ANY_CONTEXT_DECLARATION, content):
+            context_type = match.group(1)
+            var_name = match.group(2)
+            if context_type in self._AMBIENT_CONTEXT_TYPES:
+                continue
+            if context_type in scope.context_connection_keys:
+                continue
+            line_num = content[:match.start()].count('\n') + 1
+            self._resolve_context_type(context_type, var_name, line_num)
+
+    # _config["Key"] / Configuration["Key"] / builder.Configuration["Key"]
+    _ROOT_CONFIGURATION_READ = (
+        r'(\w+)\s*=\s*(?:\w+\.)*\w*[Cc]onfig\w*\s*\[\s*["\']([^"\']+)["\']\s*\]'
+    )
+
+    def _names_a_connection(self, key: str) -> bool:
+        """這個根命名空間的鍵，讀起來是不是在讀一條連線字串。
+
+        讀根命名空間的程式碼絕大多數在讀日誌層級、功能開關這類與資料庫無關的
+        設定。把它們全部記成「解析不出來的連線」只會淹沒真正的缺口，所以只有
+        鍵名在連線字串區段裡、或它自己的值就是一條連線字串時才回報。
+        """
+        scope = self._project_scope()
+        if scope is None:
+            return False
+        folded = key.casefold()
+        return any(
+            name.casefold() == folded
+            for name in (*scope.root_connection_keys, *scope.connection_strings)
+        )
+
+    def _extract_root_configuration_reads(self, content: str):
+        """處理從 Configuration 根命名空間讀出來的連線鍵。
+
+        `Configuration["Key"]` 讀的是根命名空間，`GetConnectionString("Key")`
+        讀的是 ConnectionStrings 區段——兩個命名空間不合併（ADR-0008），所以
+        根命名空間的讀取永遠解析不到連線，並說出這就是理由。
+        `Configuration["ConnectionStrings:Key"]` 帶著區段前綴，是同一張連線查
+        找表的另一種寫法，照常解析。
+        """
+        if self._project_scope() is None:
+            return
+
+        for match in re.finditer(self._ROOT_CONFIGURATION_READ, content):
+            var_name = match.group(1)
+            raw_key = match.group(2)
+            line_num = content[:match.start()].count('\n') + 1
+            if var_name in self.connections:
+                continue
+
+            section, separator, key = raw_key.partition(":")
+            if separator and section.casefold() == "connectionstrings":
+                database_name, server = self._resolve(
+                    key, self.CONNECTION_STRINGS, var_name, line_num
+                )
+                if database_name:
+                    self.connections[var_name] = ConnectionInfo(
+                        variable_name=var_name,
+                        database_name=database_name,
+                        connection_string_key=key,
+                        line_number=line_num,
+                        scope="class",
+                        server=server,
+                    )
+                continue
+
+            if not self._names_a_connection(raw_key):
+                continue
+            self._resolve(raw_key, self.ROOT_CONFIGURATION, var_name, line_num)
 
     def _extract_sqlconnection_declarations(self, content: str):
         """
@@ -256,7 +547,7 @@ class DBConnectionTracker:
             var_name = match.group(1)
             key = match.group(2)
             line_num = content[:match.start()].count('\n') + 1
-            database_name, server = self._resolve(key, self.APP_SETTINGS)
+            database_name, server = self._resolve(key, self.APP_SETTINGS, var_name, line_num)
             if database_name:
                 self.connections[var_name] = ConnectionInfo(
                     variable_name=var_name,
@@ -276,7 +567,7 @@ class DBConnectionTracker:
             var_name = match.group(1)
             key = match.group(2)
             line_num = content[:match.start()].count('\n') + 1
-            database_name, server = self._resolve(key, self.CONNECTION_STRINGS)
+            database_name, server = self._resolve(key, self.CONNECTION_STRINGS, var_name, line_num)
             if database_name:
                 self.connections[var_name] = ConnectionInfo(
                     variable_name=var_name,

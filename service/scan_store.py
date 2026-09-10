@@ -111,7 +111,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # command type 引數）。wrapper_mode 答不了這件事——它也會單憑方法名稱決定，且在找不到
 # mode 引數時退回 inline_sql，所以讀 wrapper_mode 分不出「觀察到」與「假設的」。overload
 # 選擇的 Mode Argument Carriage 只在真的觀察到時才收斂，舊快取沒有這份紀錄，須重新掃描。
-_CACHE_VERSION = 29
+# v30：ProjectScanResult 新增 unresolved_connections 與 connection_observations，
+# 且 ASP.NET Core 專案的 connection_sources 改由 appsettings.json 的 Project
+# Connection Scope 解析（ADR-0018）。舊快取裡 Core 專案的連線來源是「把 DbContext
+# 型別名稱去掉 Context」或「把連線查找鍵當資料庫名稱」猜出來的值，與新解析結果
+# 不同，必須重新掃描。
+_CACHE_VERSION = 30
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

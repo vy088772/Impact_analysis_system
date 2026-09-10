@@ -279,6 +279,12 @@ def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
         merged.framework_reports.extend(
             getattr(s, "framework_reports", []) or []
         )
+        merged.unresolved_connections.update(
+            getattr(s, "unresolved_connections", {}) or {}
+        )
+        merged.connection_observations.extend(
+            getattr(s, "connection_observations", []) or []
+        )
         merged.aspx_results.extend(s.aspx_results)
         merged.razor_results.extend(s.razor_results)
         merged.vue_results.extend(s.vue_results)

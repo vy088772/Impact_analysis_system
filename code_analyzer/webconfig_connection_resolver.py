@@ -26,15 +26,22 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Union
 
+from .connection_string_value import (
+    ResolvedConnection,
+    resolve_connection_string_value,
+)
 
-@dataclass(frozen=True)
-class ResolvedConnection:
-    """一個連線查找鍵解析後的真實目標。"""
-
-    server: Optional[str] = None
-    database: Optional[str] = None
+# ResolvedConnection 過去宣告在這個模組裡，現在住在 connection_string_value，
+# 因為 appsettings.json 解析器用的是同一個值語法。這裡重新匯出，讓既有的
+# `from .webconfig_connection_resolver import ResolvedConnection` 呼叫端不動。
+__all__ = [
+    "ResolvedConnection",
+    "WebConfigConnections",
+    "parse_web_config_connections",
+    "parse_web_config_file",
+]
 
 
 @dataclass(frozen=True)
@@ -51,44 +58,6 @@ class WebConfigConnections:
 
     def __bool__(self) -> bool:
         return bool(self.app_settings or self.connection_strings)
-
-
-# 連線字串欄位同義字表：
-# server / Data Source / Address / Addr -> server
-# database / Initial Catalog -> database
-#
-# 刻意不解析 uid/pwd：ADR-0010 的掃描工具憑證永遠只能來自 SQLServerData.json
-# 的 per-server credential override 或全域 DB_AUTH_MODE，絕不能讀取或衍生自
-# 被掃描應用程式自己的 Web.config。這裡連解析都不做，讓「掃描身分與應用程式
-# 憑證無關」這件事在程式碼層級就不可能被繞過，而不是解析出來又靠呼叫方自律
-# 不去讀它。
-_FIELD_SYNONYMS: Dict[str, str] = {
-    "server": "server",
-    "data source": "server",
-    "address": "server",
-    "addr": "server",
-    "database": "database",
-    "initial catalog": "database",
-}
-
-
-def _parse_fields(value: str) -> Dict[str, str]:
-    """把 `key1=val1;key2=val2` 形式的連線字串值，解析成同義字表歸一化後的欄位。"""
-    fields: Dict[str, str] = {}
-    for part in (value or "").split(";"):
-        part = part.strip()
-        if not part or "=" not in part:
-            continue
-        raw_key, _, raw_value = part.partition("=")
-        canonical = _FIELD_SYNONYMS.get(raw_key.strip().casefold())
-        if canonical and canonical not in fields:
-            fields[canonical] = raw_value.strip()
-    return fields
-
-
-def _resolve_value(value: str) -> ResolvedConnection:
-    fields = _parse_fields(value)
-    return ResolvedConnection(server=fields.get("server"), database=fields.get("database"))
 
 
 def parse_web_config_connections(content: str) -> WebConfigConnections:
@@ -109,7 +78,7 @@ def parse_web_config_connections(content: str) -> WebConfigConnections:
         value = add.get("value")
         if not key or not value:
             continue
-        candidate = _resolve_value(value)
+        candidate = resolve_connection_string_value(value)
         if candidate.database:
             app_settings[key] = candidate
 
@@ -119,7 +88,7 @@ def parse_web_config_connections(content: str) -> WebConfigConnections:
         conn_str = add.get("connectionString")
         if not name or not conn_str:
             continue
-        candidate = _resolve_value(conn_str)
+        candidate = resolve_connection_string_value(conn_str)
         if candidate.database:
             connection_strings[name] = candidate
 

@@ -151,6 +151,22 @@ _Avoid_: route, form target, event handler
 The directory of one project file, which is the extent over which one connection lookup table is valid. A `.cs` file belongs to the nearest project file above it, and two projects' tables are never merged — one key name is unique only inside the configuration file that declares it, and the same name in two projects can open two different databases. A file with no project file above it has no table, and its connections report unresolved. See [ADR-0018](docs/adr/0018-connection-lookup-tables-are-scoped-to-the-project-file.md).
 _Avoid_: scan root scope, repository connections, appsettings table
 
+**Application Settings File**:
+The `appsettings.json` beside one project file, and the only file that supplies that Project Connection Scope's connections. Its `ConnectionStrings` section is a connection lookup table; every other outer key belongs to the Configuration Root Namespace, and the two are never merged (ADR-0008). It is read tolerantly, because a byte-order mark, `//` and `/* */` comments, and a trailing comma all occur in real files and .NET's own configuration reader accepts them all. An `appsettings.<environment>.json` beside it is not this file; see Environment Settings Override.
+_Avoid_: config file, settings, connection strings file
+
+**Configuration Root Namespace**:
+The outer keys of an Application Settings File other than `ConnectionStrings` — the layer `IConfiguration["Key"]` reads. It is not a connection lookup table: a key read from it resolves to no `{server, database}` and names that as the reason, because the two namespaces are not merged even when the same key name appears in both. `Configuration["ConnectionStrings:Key"]` carries the section prefix and therefore reads the lookup table, not this namespace.
+_Avoid_: app settings, root keys, configuration section
+
+**Context Connection Registration**:
+The composition root's binding of one database context type to one named connection string, written as `AddDbContext<T>(... GetConnectionString("Key") ...)` in `Program.cs` or `Startup.cs`. It is the only thing that says which database a context type opens — the type name is not the database name, exactly as a connection lookup key is not a database name (ADR-0008). A call resolves through the *declared type of its receiver*, so one class holding two context types resolves each call to its own database, and a context type the composition root never registered resolves to nothing with a stated reason.
+_Avoid_: context name, DbContext database, type-name inference
+
+**Environment Settings Override**:
+A connection an `appsettings.<environment>.json` states differently from the Application Settings File beside it. It is reported as an observation and never applied. Which environment runs is a deployment-time fact a static scan cannot know, so applying one would be a guess, and omitting it would lose a real per-environment database difference.
+_Avoid_: environment config, override, production connection
+
 **Framework Label**:
 The detected framework of one scan root, reported beside the scan and printed by `refresh_cli`. It states what the root is; it does not decide what the scanner reads, because parsers mount by the union of file extensions actually present. A root that holds both WebForms and MVC files reports both. A root that cannot be identified fails loudly rather than falling back to a C#-only scan. See [ADR-0021](docs/adr/0021-the-framework-label-reports-it-does-not-gate.md).
 _Avoid_: project type, required parsers, framework gate
