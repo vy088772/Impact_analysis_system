@@ -5,7 +5,7 @@ Razor 解析器
 """
 
 import re
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Tuple
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -66,6 +66,19 @@ class RazorParser:
     # 貢獻它命名的模型屬性，交由 razor_display_field_resolver 事後解析。
     LABEL_PATTERN = re.compile(r'<label\b([^>]*)>(.*?)</label>', re.IGNORECASE | re.DOTALL)
     ASP_FOR_PATTERN = re.compile(r'asp-for\s*=\s*"([^"]+)"', re.IGNORECASE)
+
+    # View Anchor（見 CONTEXT.md「View Anchor」條目）。決定式：markup 層的
+    # asp-action/asp-controller/asp-page 屬性，或純 HTML <form action="...">。
+    ANCHOR_TAG_ATTRS_PATTERN = re.compile(r'<\w+\b([^>]*)>', re.IGNORECASE)
+    ASP_ACTION_ATTR_PATTERN = re.compile(r'asp-action\s*=\s*"([^"]+)"', re.IGNORECASE)
+    ASP_CONTROLLER_ATTR_PATTERN = re.compile(r'asp-controller\s*=\s*"([^"]+)"', re.IGNORECASE)
+    ASP_PAGE_ATTR_PATTERN = re.compile(r'asp-page\s*=\s*"([^"]+)"', re.IGNORECASE)
+    FORM_ACTION_PATTERN = re.compile(r'<form\b[^>]*\baction\s*=\s*"([^"]+)"', re.IGNORECASE)
+
+    # 候選式：畫面自己 <script> 區塊裡的字串常值，形狀像 /Controller/Action。
+    SCRIPT_BLOCK_PATTERN = re.compile(r'<script\b[^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
+    STRING_LITERAL_PATTERN = re.compile(r'''(['"])((?:(?!\1).)*)\1''')
+    _IDENTIFIER_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
     def __init__(self):
         """初始化解析器"""
@@ -131,6 +144,10 @@ class RazorParser:
         # 讓 view-layer 摘要（service/analyze_service._view_layer_summary）不必
         # 為框架分支處理。
         result.ui_fields = self._extract_ui_fields(content)
+
+        # View Anchor：這個畫面宣告會呼叫哪些 action，兩種強度分開存放、永不合併。
+        result.view_anchors_determined = self._extract_determined_view_anchors(content)
+        result.view_anchors_candidate = self._extract_candidate_view_anchors(content)
         
         # 檢查是否有內嵌 SQL（不建議）
         inline_sql = self._check_inline_sql(content)
@@ -300,6 +317,84 @@ class RazorParser:
                 fields.append(entry)
 
         return fields
+
+    def _extract_determined_view_anchors(self, content: str) -> List[Dict]:
+        """決定式 View Anchor：markup 層已經寫死的呼叫關係。
+
+        1. 帶 `asp-action` 屬性的任何標籤（連結、按鈕、表單皆可）。
+           同一個標籤若也有 `asp-controller`，一併記下命名的 controller。
+        2. 帶 `asp-page` 屬性的任何標籤——Razor Pages 路由，目的地是頁面而不是
+           controller/action，因此獨立記成 `page` 欄位。
+        3. 純 HTML `<form action="/Controller/Action">`——這個網址本身就是
+           已經寫死的目的地，不是猜的，容許帶路由參數等後續分段（例如
+           `/Order/Edit/5`），因為表單目的地不是用「形狀像不像」判斷猜測。
+        """
+        anchors: List[Dict] = []
+
+        for tag_match in self.ANCHOR_TAG_ATTRS_PATTERN.finditer(content):
+            tag_attrs = tag_match.group(1)
+            action_match = self.ASP_ACTION_ATTR_PATTERN.search(tag_attrs)
+            if action_match:
+                anchor: Dict[str, str] = {'action': action_match.group(1)}
+                controller_match = self.ASP_CONTROLLER_ATTR_PATTERN.search(tag_attrs)
+                if controller_match:
+                    anchor['controller'] = controller_match.group(1)
+                anchors.append(anchor)
+
+            page_match = self.ASP_PAGE_ATTR_PATTERN.search(tag_attrs)
+            if page_match:
+                anchors.append({'page': page_match.group(1)})
+
+        for form_match in self.FORM_ACTION_PATTERN.finditer(content):
+            parsed = self._leading_controller_action(form_match.group(1))
+            if parsed:
+                controller, action = parsed
+                anchors.append({'action': action, 'controller': controller})
+
+        return anchors
+
+    def _extract_candidate_view_anchors(self, content: str) -> List[Dict]:
+        """候選式 View Anchor：畫面自己 <script> 區塊裡形如 /Controller/Action
+        的網址字串——只是「像」呼叫目的地，不是宣告，評級固定是 likely。"""
+        anchors: List[Dict] = []
+
+        for script_match in self.SCRIPT_BLOCK_PATTERN.finditer(content):
+            script_content = script_match.group(1)
+            for literal_match in self.STRING_LITERAL_PATTERN.finditer(script_content):
+                parsed = self._exact_controller_action(literal_match.group(2))
+                if parsed:
+                    controller, action = parsed
+                    anchors.append({'action': action, 'controller': controller})
+
+        return anchors
+
+    @staticmethod
+    def _path_segments(url: str) -> List[str]:
+        path = url.split('?', 1)[0].strip()
+        return [segment for segment in path.split('/') if segment]
+
+    def _leading_controller_action(self, url: str) -> Optional[Tuple[str, str]]:
+        """表單目的地本來就是明確寫死的，容許尾端還有更多分段（路由參數如
+        id），只要前兩段本身是合法識別字就當作 controller/action。"""
+        segments = self._path_segments(url)
+        if len(segments) < 2:
+            return None
+        controller, action = segments[0], segments[1]
+        if not self._IDENTIFIER_PATTERN.match(controller) or not self._IDENTIFIER_PATTERN.match(action):
+            return None
+        return controller, action
+
+    def _exact_controller_action(self, url: str) -> Optional[Tuple[str, str]]:
+        """script 區塊裡的字串只是「像」，形狀必須剛好是兩段合法識別字——分段
+        數不對，或任一分段不是合法識別字（例如帶副檔名的靜態檔案路徑），都不
+        算，不硬湊一個候選出來。"""
+        segments = self._path_segments(url)
+        if len(segments) != 2:
+            return None
+        controller, action = segments
+        if not self._IDENTIFIER_PATTERN.match(controller) or not self._IDENTIFIER_PATTERN.match(action):
+            return None
+        return controller, action
 
     def _check_inline_sql(self, content: str) -> List[str]:
         """檢查內嵌 SQL（不建議做法）"""

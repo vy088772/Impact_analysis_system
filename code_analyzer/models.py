@@ -493,7 +493,19 @@ class FileAnalysisResult:
     # 不屬於任何 Grid 的獨立控制項（如頁面上的 Label）則是單一欄位項：
     #   {"control": "asp:Label", "id": "...", "kind": "label", "text": "..."}
     ui_fields: List[Dict] = field(default_factory=list)
-    
+
+    # View Anchor：畫面宣告「這個畫面會呼叫哪個 action」的地方（razor_parser 選填），
+    # 是 MVC/Core 版本的 WebForms 控制項事件（如 OnClick="Button1_Click"）。分兩種
+    # 強度，兩份清單各自獨立、永遠不合併：
+    #   view_anchors_determined：markup 層宣告——asp-action/asp-controller/asp-page
+    #     屬性、純 HTML <form action="...">——已證實的呼叫關係。
+    #   view_anchors_candidate：畫面自己的 <script> 區塊裡形如 /Controller/Action
+    #     的網址字串——只是「像」，評級一律是 likely，不能拿來當作已證實。
+    # 每筆是 {"action": "..."}、{"action": "...", "controller": "..."}，或
+    # （asp-page 命名一個 Razor Page 而非 controller/action 時）{"page": "..."}。
+    view_anchors_determined: List[Dict] = field(default_factory=list)
+    view_anchors_candidate: List[Dict] = field(default_factory=list)
+
     # 統計資訊
     line_count: int = 0
     code_line_count: int = 0

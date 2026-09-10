@@ -129,7 +129,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # razor_display_field_resolver 事後把模型屬性解析成實際顯示文字。舊快取的
 # FileAnalysisResult/PropertyInfo 沒有這些欄位，且 razor_results 的 ui_fields
 # 一律是空清單，故遞增版本號使舊快取失效、強制重新掃描以補上。
-_CACHE_VERSION = 33
+# v34：RazorParser 新增 view_anchors_determined/view_anchors_candidate（View
+# Anchor，見 CONTEXT.md 條目）：markup 層的 asp-action/asp-controller/<form
+# action> 是決定式，畫面自己 <script> 區塊裡形如 /Controller/Action 的網址字串
+# 是候選式（評級 likely），兩份清單永不合併。舊快取的 FileAnalysisResult 沒有
+# 這兩個欄位，razor_results 一律看不到任何 View Anchor，必須重新掃描才會補上。
+_CACHE_VERSION = 34
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
