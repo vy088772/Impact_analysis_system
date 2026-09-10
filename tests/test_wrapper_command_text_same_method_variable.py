@@ -143,6 +143,30 @@ def test_conflicting_literal_assignments_stay_unresolved_rather_than_picking_one
 
 
 @requires_dotnet
+def test_call_inside_one_branch_resolves_that_branchs_assignment_not_a_conflict() -> None:
+    """A call written inside one arm of an `if`/`else` can only ever read that arm's own
+    assignment -- the other arm's assignment cannot reach it, so this is not the same
+    ambiguity as two assignments that both precede an unconditional call."""
+    call = _analyze_one(
+        "public class OrderService {\n"
+        "    private readonly ExternalDbContext _db;\n"
+        "    public void Save(bool flag) {\n"
+        "        string usp;\n"
+        "        if (flag) {\n"
+        "            usp = \"[dbo].[usp_A]\";\n"
+        "        } else {\n"
+        "            usp = \"[dbo].[usp_B]\";\n"
+        "            _db.RunProc(usp, 1);\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    assert call["command_text_kind"] == "literal"
+    assert call["command_text"] == "[dbo].[usp_B]"
+    assert not call.get("command_text_unresolved_reason")
+
+
+@requires_dotnet
 def test_traced_literal_reaches_the_executed_procedure_name_through_the_gateway() -> None:
     """The gateway seam: once a Contract exists for the receiver, a traced local-variable
     literal resolves an Executed Procedure Name the same way a call-site literal does."""

@@ -2084,12 +2084,24 @@ internal static class WrapperAnalyzer
                 parameter.Identifier.Text == parameterIdentifier.Identifier.Text))
             return ("dynamic", null, "command_text_method_parameter");
 
+        // A candidate assignment whose branch is mutually exclusive with the call's own branch
+        // (e.g. the call sits inside the `else` of the same `if` that a candidate's assignment
+        // sits inside the `if` of) can never be the value the call actually reads, so it is not
+        // a real conflict -- it is filtered out before two candidates are compared. Two branch
+        // contexts stay in play together exactly when neither contradicts the other: one is a
+        // prefix of the other, checked in both directions since `IsCompatible` only special-cases
+        // an empty *second* argument.
+        var callBranchContext = SyntaxBranchAnalyzer.GetBranchContext(call);
         var candidates = ReadWrapperCommandTextCandidates(
-            commandTextArgument,
-            caller,
-            call,
-            call.SpanStart,
-            commandTextArgument.ToString());
+                commandTextArgument,
+                caller,
+                call,
+                call.SpanStart,
+                commandTextArgument.ToString())
+            .Where(candidate =>
+                SyntaxBranchAnalyzer.IsCompatible(callBranchContext, candidate.BranchContext)
+                || SyntaxBranchAnalyzer.IsCompatible(candidate.BranchContext, callBranchContext))
+            .ToList();
 
         var literals = candidates
             .Select(candidate => candidate.CommandText)

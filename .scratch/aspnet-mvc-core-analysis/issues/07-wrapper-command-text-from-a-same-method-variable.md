@@ -65,12 +65,19 @@ traced literal reaches the Executed Procedure Name exactly the way a call-site l
 to trace by construction (ADR-0020); tracing further would be interprocedural constant
 propagation, out of scope for this ticket and the rest of the epic.
 
-**Two conflicting assignments are a real ambiguity, not a branch split.** The direct-ADO.NET path's
-own tracer already treats an `if`/`else` pair of assignments as two legitimately different
-*branch-scoped* answers when the call itself sits inside one of those branches. Here, both survive
-shadow-removal only when the call is reachable from either branch without distinguishing them —
-genuine ambiguity, not two provably-distinct call sites. `CreateUnavailableCandidate` returns one
-`DirectSqlInvocation` per call, so this collapses to one unresolved row rather than guessing.
+**Two conflicting assignments are a real ambiguity, not a branch split.** `CreateUnavailableCandidate`
+returns one `DirectSqlInvocation` per call, so a genuine ambiguity collapses to one unresolved row
+rather than guessing between two literals. But surviving shadow-removal is not by itself proof of
+ambiguity: a call written *inside* one arm of an `if`/`else` can only ever read that arm's own
+assignment, never the other arm's, even though both assignments survive `RemoveShadowedAssignments`
+(neither's branch is a prefix of the other, so neither always-overrides the other). The first cut of
+this ticket missed that distinction — it reported `command_text_conflicting_assignments` for that
+case too, a false positive caught by `/code-review`'s Spec pass and fixed before this note was
+written. `ResolveExternalCommandText` now filters traced candidates to those whose branch is not
+mutually exclusive with the call's own branch (`SyntaxBranchAnalyzer.IsCompatible` checked in both
+directions, since it only special-cases an empty *second* argument), before checking for more than
+one surviving literal. `test_call_inside_one_branch_resolves_that_branchs_assignment_not_a_conflict`
+is the regression test.
 
 ### Measured
 
@@ -118,12 +125,22 @@ Contract registry; this rerun used an empty one for speed) — only `sp_relation
 
 ### Tests
 
-`tests/test_wrapper_command_text_same_method_variable.py`, seven tests against a minimal synthetic
+`tests/test_wrapper_command_text_same_method_variable.py`, eight tests against a minimal synthetic
 external-wrapper fixture (no real project file needed — `CreateUnavailableCandidate` works
 syntax-only): local variable, field, call-site literal unchanged, method parameter, conflicting
-assignments, and two gateway-seam tests confirming a traced literal reaches
+assignments, a call written inside one branch of the assignment that produced it (the `/code-review`
+finding below), and two gateway-seam tests confirming a traced literal reaches
 `executed_procedure_name` and that `command_text_method_parameter` survives into the rated
 `DbInvocation.reason`.
+
+### `/code-review` (Standards + Spec, `HEAD~1...HEAD`)
+
+Run after the first cut of this ticket, before this note's final revision. Standards axis: no
+repo-documented standard was violated (none exists); judgement-call smells noted were primitive
+obsession on the new reason-code strings and a data clump on `ResolveExternalCommandText`'s
+three-value return, both minor and left as-is. Spec axis found one real defect — the branch-exclusive
+false positive described above under "The two limits" — verified by reproducing it, then fixed in
+the same slice this note describes, with its own regression test.
 
 One pre-existing test needed updating, not reverting:
 `test_static_analyzer_host_preserves_external_inline_non_prefix_and_dynamic_facts` had a
