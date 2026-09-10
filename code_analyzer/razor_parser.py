@@ -57,7 +57,16 @@ class RazorParser:
     
     # Razor 註解
     RAZOR_COMMENT_PATTERN = r'@\*.*?\*@'
-    
+
+    # 查詢/清單畫面的欄位標題（純 HTML，比照 ASPXParser 的 TH_PATTERN）
+    TH_PATTERN = r'<th\b[^>]*>(.*?)</th>'
+    # 欄位標籤。Core 慣例常見 <label asp-for="Prop">...</label>；asp-for 屬性存在時，
+    # 即使標籤內沒有可讀文字（Core 的 LabelTagHelper 會在執行期依模型屬性的
+    # [Display] attribute 自動產生文字，markup 裡因此完全看不到字面文字），仍要
+    # 貢獻它命名的模型屬性，交由 razor_display_field_resolver 事後解析。
+    LABEL_PATTERN = re.compile(r'<label\b([^>]*)>(.*?)</label>', re.IGNORECASE | re.DOTALL)
+    ASP_FOR_PATTERN = re.compile(r'asp-for\s*=\s*"([^"]+)"', re.IGNORECASE)
+
     def __init__(self):
         """初始化解析器"""
         self.current_file = None
@@ -117,6 +126,11 @@ class RazorParser:
         result.dependencies.add(f"CodeBlocks: {len(code_blocks)}")
         result.dependencies.add(f"HtmlHelpers: {len(helpers)}")
         result.dependencies.add(f"TagHelpers: {len(tag_helpers)}")
+
+        # 畫面上實際顯示給使用者看的欄位文字，形狀比照 ASPXParser 的 ui_fields，
+        # 讓 view-layer 摘要（service/analyze_service._view_layer_summary）不必
+        # 為框架分支處理。
+        result.ui_fields = self._extract_ui_fields(content)
         
         # 檢查是否有內嵌 SQL（不建議）
         inline_sql = self._check_inline_sql(content)
@@ -246,7 +260,47 @@ class RazorParser:
             if directive.directive_type == 'model':
                 return directive.value
         return None
-    
+
+    @staticmethod
+    def _strip_html_tags(text: str) -> str:
+        """去除 HTML 標籤，只留下純文字內容。"""
+        return re.sub(r'<[^>]+>', '', text).strip()
+
+    def _extract_ui_fields(self, content: str) -> List[Dict]:
+        """
+        擷取畫面上實際顯示給使用者看的欄位文字，來源有二：
+
+        1. 純 HTML 標記文字——`<th>` 欄位標題、`<label>` 內的文字。
+        2. 模型繫結屬性（`asp-for="Prop"`）命名的模型屬性——當 `<label>` 完全沒有
+           可讀文字時（Core 的 LabelTagHelper 會在執行期依模型屬性的 [Display]
+           attribute 自動產生文字），仍貢獻它命名的屬性，讓「畫面上有這個欄位」
+           這件事不會因為 markup 裡沒有字面文字就答不出來。這個屬性名稱是否能
+           進一步解析出實際顯示文字，由 `razor_display_field_resolver`（讀取
+           模型類別與 .resx 資源檔）在掃描完 C# 檔案後接手，這個解析器只看得到
+           單一 .cshtml 檔案，看不到模型類別。
+        """
+        fields: List[Dict] = []
+
+        for match in re.finditer(self.TH_PATTERN, content, re.IGNORECASE | re.DOTALL):
+            text = self._strip_html_tags(match.group(1))
+            if text:
+                fields.append({'kind': 'header', 'text': text})
+
+        for match in self.LABEL_PATTERN.finditer(content):
+            attrs_str, inner = match.group(1), match.group(2)
+            text = self._strip_html_tags(inner)
+            asp_for = self.ASP_FOR_PATTERN.search(attrs_str)
+
+            entry: Dict[str, str] = {'kind': 'label'}
+            if text:
+                entry['text'] = text
+            if asp_for:
+                entry['data_field'] = asp_for.group(1)
+            if text or asp_for:
+                fields.append(entry)
+
+        return fields
+
     def _check_inline_sql(self, content: str) -> List[str]:
         """檢查內嵌 SQL（不建議做法）"""
         sql_keywords = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'EXEC', 'EXECUTE']

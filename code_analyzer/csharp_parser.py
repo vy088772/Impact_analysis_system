@@ -4,7 +4,7 @@ C# 程式碼解析器
 """
 
 import re
-from typing import List, Optional, Set, Tuple, Dict
+from typing import List, NamedTuple, Optional, Set, Tuple, Dict
 from pathlib import Path
 from datetime import datetime
 from config.sp_detector_config import SPDetectionConfig
@@ -14,6 +14,14 @@ from .models import (
     SQLQuery, APIEndpoint, StoredProcedureCall, CodeLocation,
     FileType, FrameworkType, SQLQueryType, HTTPMethod
 )
+
+
+class _DisplayAttribute(NamedTuple):
+    """A property's [Display(...)] attribute, decoded into the two shapes it comes in."""
+
+    literal_label: Optional[str]
+    resource_type: Optional[str]
+    resource_key: Optional[str]
 
 
 class CSharpParser:
@@ -457,6 +465,45 @@ class CSharpParser:
         
         return content[brace_start + 1:pos - 1]
     
+    # 緊接在屬性宣告之前的 [Display(...)] attribute：Name 帶字面標籤文字時直接可用；
+    # 帶 ResourceType 時 Name 其實是資源檔的鍵名，實際文字要另外查資源檔（見
+    # `code_analyzer/resource_file_resolver.py`）。允許中間夾著其他 attribute
+    # （如 [Required]、[StringLength(50)]），但一遇到非 attribute/空白的內容
+    # （上一個成員的程式碼）就代表不是屬於這個屬性的宣告，停止比對。
+    # 屬性值本身可能含一層括號（typeof(X)），故參數群組允許最多一層巢狀括號。
+    _DISPLAY_ATTRIBUTE_LOOKBACK = re.compile(
+        r'\[\s*Display\s*\(((?:[^()]|\([^()]*\))*)\)\s*\]\s*(?:\[[^\]]*\]\s*)*\Z',
+        re.DOTALL,
+    )
+    _DISPLAY_NAME_PATTERN = re.compile(r'Name\s*=\s*"([^"]*)"')
+    _DISPLAY_RESOURCE_TYPE_PATTERN = re.compile(r'ResourceType\s*=\s*typeof\(\s*([\w\.]+)\s*\)')
+    # 只回頭看屬性宣告前面這個範圍內的內容，避免在很大的類別裡整段回溯掃描。
+    _DISPLAY_ATTRIBUTE_LOOKBACK_WINDOW = 500
+
+    def _extract_display_attribute(
+        self, class_content: str, match_start: int
+    ) -> "_DisplayAttribute":
+        """傳回屬性宣告前緊接的 [Display(...)] attribute（若有）。
+
+        沒有 [Display(...)] attribute，或有但兩者都解不出來時，三個欄位皆為 None。
+        """
+        window_start = max(0, match_start - self._DISPLAY_ATTRIBUTE_LOOKBACK_WINDOW)
+        preceding = class_content[window_start:match_start]
+        lookback = self._DISPLAY_ATTRIBUTE_LOOKBACK.search(preceding)
+        if not lookback:
+            return _DisplayAttribute(None, None, None)
+
+        args = lookback.group(1)
+        name_match = self._DISPLAY_NAME_PATTERN.search(args)
+        name_value = name_match.group(1) if name_match else None
+        resource_match = self._DISPLAY_RESOURCE_TYPE_PATTERN.search(args)
+
+        if not resource_match:
+            return _DisplayAttribute(name_value, None, None)
+
+        resource_type = resource_match.group(1).rsplit('.', 1)[-1]
+        return _DisplayAttribute(None, resource_type, name_value)
+
     def _extract_properties(
         self,
         class_content: str,
@@ -482,7 +529,9 @@ class CSharpParser:
             has_getter = 'get' in prop_text
             has_setter = 'set' in prop_text
             is_auto = '=>' not in prop_text and '{' in prop_text and '}' in prop_text
-            
+
+            display_attribute = self._extract_display_attribute(class_content, match.start())
+
             properties.append(PropertyInfo(
                 name=prop_name,
                 type=prop_type,
@@ -490,7 +539,10 @@ class CSharpParser:
                 has_getter=has_getter,
                 has_setter=has_setter,
                 is_auto_property=is_auto,
-                location=CodeLocation(self.current_file, line_num)
+                location=CodeLocation(self.current_file, line_num),
+                display_literal_label=display_attribute.literal_label,
+                display_resource_type=display_attribute.resource_type,
+                display_resource_key=display_attribute.resource_key,
             ))
         
         return properties

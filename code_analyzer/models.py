@@ -162,7 +162,15 @@ class PropertyInfo:
     has_setter: bool = True
     is_auto_property: bool = True
     location: Optional[CodeLocation] = None
-    
+
+    # [Display(Name = "...")]，沒有 ResourceType：字面標籤文字，直接可用，不查資源檔。
+    display_literal_label: Optional[str] = None
+    # [Display(Name = "Key", ResourceType = typeof(SharedResource))]：Name 其實是資源檔
+    # 裡的鍵名，實際顯示文字要另外查資源檔（display_resource_type 只留型別名稱本身，
+    # 不含命名空間，供比對 .resx 檔名）。
+    display_resource_type: Optional[str] = None
+    display_resource_key: Optional[str] = None
+
     def __str__(self):
         access = "{ "
         if self.has_getter:

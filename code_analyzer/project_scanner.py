@@ -28,6 +28,7 @@ from .config_parser import WebConfigParser
 from .project_connection_scope import ProjectConnectionScopeIndex
 from .source_text import decode_source_bytes
 from .webconfig_connection_resolver import parse_web_config_connections, WebConfigConnections
+from .razor_display_field_resolver import resolve_razor_display_fields
 from config.settings import settings, DatabaseConfig
 
 
@@ -879,6 +880,13 @@ class ProjectScanner:
                 except Exception as e:
                     print(f"\n   ⚠️  Vue 解析失敗 ({Path(file_path).name}): {e}")
         
+        # 3.6 把 Razor 畫面的 ui_fields 缺文字的模型繫結欄位，接上模型類別的
+        # [Display] attribute（含資源檔查找）——這一步要等 C# 與 Razor 兩邊都解析完，
+        # 因為 RazorParser 一次只看得到一個 .cshtml 檔案，看不到模型類別的 attribute。
+        resolve_razor_display_fields(
+            self.scan_result.razor_results, self.scan_result.csharp_results, Path(self.project_root)
+        )
+
         # 4. 建立關聯
         print(f"\n🔗 建立關聯...")
         self._build_relations(analyze_sp)
@@ -929,6 +937,9 @@ class ProjectScanner:
         )
         for result in refreshed_results:
             self._build_table_relations(result.sql_queries)
+        resolve_razor_display_fields(
+            self.scan_result.razor_results, self.scan_result.csharp_results, Path(self.project_root)
+        )
         self.scan_result.calculate_statistics()
         return self.scan_result
 
@@ -968,6 +979,9 @@ class ProjectScanner:
             getattr(self.scan_result, result_attribute).sort(
                 key=lambda result: str(Path(result.file_path).resolve())
             )
+        resolve_razor_display_fields(
+            self.scan_result.razor_results, self.scan_result.csharp_results, Path(self.project_root)
+        )
         return self.scan_result
 
     def _remove_csharp_records(self, file_path: str) -> None:

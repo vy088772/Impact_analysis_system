@@ -123,7 +123,13 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # v32：六個框架的 *Context 型別（過濾器管線、標籤協助程式、Active Directory 的
 # PrincipalContext）不再被報成「組合根沒有註冊的資料庫內容型別」。舊快取的
 # unresolved_connections 帶著這些誤報，必須重新掃描才會消失。
-_CACHE_VERSION = 32
+# v33：RazorParser 新增 ui_fields（<th>/<label> 標記文字、asp-for 命名的模型屬性），
+# 形狀比照 ASPXParser 的 ui_fields；PropertyInfo 新增 display_literal_label/
+# display_resource_type/display_resource_key（[Display] attribute），供
+# razor_display_field_resolver 事後把模型屬性解析成實際顯示文字。舊快取的
+# FileAnalysisResult/PropertyInfo 沒有這些欄位，且 razor_results 的 ui_fields
+# 一律是空清單，故遞增版本號使舊快取失效、強制重新掃描以補上。
+_CACHE_VERSION = 33
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
