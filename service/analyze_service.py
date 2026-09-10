@@ -67,6 +67,7 @@ from .execution_path_builder import (
     build_execution_paths,
 )
 from .graph_queries import filter_table_accesses
+from .program_screen import ProgramScreen, resolve_program_screens
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import cache_status, cached_commit, cached_saved_at, get_or_scan, has_cache, save_scan
@@ -181,6 +182,109 @@ def _file_matches(file_path: str, program_base: str) -> bool:
     if not program_base:
         return False
     return file_base == program_base or program_base in fname
+
+
+@dataclass(frozen=True)
+class _ProgramResolution:
+    """One unit of analysis for one requested program name.
+
+    A Program Screen resolution names the view the code resolved to, the
+    controller that holds its actions, and those actions (ADR-0019). The
+    legacy resolution keeps the base-name file match the WebForms path has
+    always used, and filters no method.
+    """
+
+    program_base: str
+    matched_files: List[Any] = field(default_factory=list)
+    screen: Optional[ProgramScreen] = None
+    view_result: Optional[Any] = None
+
+    @property
+    def is_program_screen(self) -> bool:
+        return self.screen is not None
+
+    @property
+    def action_names(self) -> Optional[Set[str]]:
+        """The actions this unit reports, or None when it filters no method."""
+        if self.screen is None:
+            return None
+        return {action.lower() for action in self.screen.action_names}
+
+    def owns_file(self, file_path: str) -> bool:
+        if self.screen is None:
+            return _file_matches(file_path, self.program_base)
+        return _same_path(file_path, self.screen.controller_path)
+
+    def owns_method(self, method_name: str) -> bool:
+        actions = self.action_names
+        return actions is None or (method_name or "").lower() in actions
+
+
+def _same_path(left: str, right: str) -> bool:
+    return bool(left) and bool(right) and Path(left) == Path(right)
+
+
+def _invocation_entry_method(invocation: DbInvocation) -> str:
+    """The method a Database Invocation is reached from, outermost first."""
+    return invocation.method_chain[0] if invocation.method_chain else invocation.method_name
+
+
+def _framework_name(result: Any) -> str:
+    return getattr(result.framework, "value", str(result.framework))
+
+
+def _program_resolutions(raw_name: str, scan: ProjectScanResult) -> List[_ProgramResolution]:
+    """Resolve one requested program name to the units the response reports.
+
+    A repository holding Razor views resolves through Program Screen
+    resolution, which matches whole names only. A code that resolves to no
+    screen there falls back to the legacy base-name match only when it names a
+    WebForms page or one C# file outright, because an open substring fallback
+    would let a shorter code absorb a longer one again.
+    """
+    program_base = _normalize_program(raw_name)
+    legacy = _ProgramResolution(
+        program_base=program_base,
+        matched_files=[
+            r for r in scan.csharp_results if _file_matches(r.file_path, program_base)
+        ],
+    )
+    if not scan.razor_results:
+        return [legacy]
+
+    csharp_by_path = {r.file_path: r for r in scan.csharp_results}
+    screens = resolve_program_screens(
+        raw_name,
+        view_paths=[r.file_path for r in scan.razor_results],
+        controller_actions={
+            path: [m.name for cls in result.classes for m in cls.methods]
+            for path, result in csharp_by_path.items()
+        },
+    )
+    if screens:
+        views_by_path = {r.file_path: r for r in scan.razor_results}
+        return [
+            _ProgramResolution(
+                program_base=program_base,
+                matched_files=[csharp_by_path[screen.controller_path]]
+                if screen.controller_path in csharp_by_path
+                else [],
+                screen=screen,
+                view_result=views_by_path.get(screen.view_path),
+            )
+            for screen in screens
+        ]
+
+    if any(_file_matches(r.file_path, program_base) for r in scan.aspx_results):
+        return [legacy]
+    if any(_names_file_outright(r.file_path, program_base) for r in scan.csharp_results):
+        return [legacy]
+    return []
+
+
+def _names_file_outright(file_path: str, program_base: str) -> bool:
+    """Whether a program name is one file's whole base name, never a part of it."""
+    return bool(program_base) and _normalize_program(Path(file_path).name) == program_base
 
 
 def _view_layer_summary(fr, root: Path) -> Dict:
@@ -1559,6 +1663,7 @@ def _build_program_execution_paths(
     root: Path,
     *,
     scope: Optional[DerivedExecutionEvidenceScope] = None,
+    entry_methods: Optional[Set[str]] = None,
 ) -> Tuple[List[Dict], Dict[str, object]]:
     """Join one program's raw C# facts to the selected SQL execution graph.
 
@@ -1568,12 +1673,23 @@ def _build_program_execution_paths(
     through so every derivation in one request shares one scope identity.
     A caller with no such scope (including the direct unit tests exercising
     this function below the request layer) gets one built from `root` alone.
+
+    `entry_methods` narrows the invocations to the ones a Program Screen's own
+    actions reach, in lower case. It is applied before the paths are built, so
+    the compact payload's counts describe the paths this program actually
+    reports.
     """
     if req.database:
         _require_sql_execution_graph(req.database, req.db_server)
     if scope is None:
         scope = DerivedExecutionEvidenceScope.of(req, [root])
     rated_invocations, graph = _rated_execution_invocations(scope, scan, matched_files, root)
+    if entry_methods is not None:
+        rated_invocations = [
+            invocation
+            for invocation in rated_invocations
+            if _invocation_entry_method(invocation).lower() in entry_methods
+        ]
 
     paths = build_execution_paths(rated_invocations, graph)
     if not graph and not req.database:
@@ -2017,205 +2133,247 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     not_found: List[str] = []
 
     for raw_name in req.program_names:
-        program_base = _normalize_program(raw_name)
+        resolutions = _program_resolutions(raw_name, scan)
+        reported = False
 
-        # 1) 比對 C# 解析結果（取得檔案、框架、方法）
-        matched_files = [
-            r for r in scan.csharp_results if _file_matches(r.file_path, program_base)
-        ]
+        for resolution in resolutions:
+            matched_files = resolution.matched_files
 
-        # 2) Join C# database facts through the Gateway; legacy relations are not
-        # part of the formal response path.
-        rated_invocations: List[DbInvocation] = []
-        if matched_files:
-            rated_invocations, _ = _rated_execution_invocations(
-                scope,
-                scan,
-                matched_files,
-                root,
-            )
-        sp_names: List[str] = []
-        for invocation in rated_invocations:
-            if (
-                invocation.evidence is InvocationEvidence.PROVEN
-                and invocation.procedure_name
-                and invocation.procedure_name not in sp_names
-            ):
-                sp_names.append(invocation.procedure_name)
-        database_invocations = [
-            _serialize_db_invocation(invocation)
-            for invocation in rated_invocations
-        ]
-        diagnostics = [
-            _invocation_diagnostic(invocation)
-            for invocation in rated_invocations
-            if invocation.evidence is not InvocationEvidence.PROVEN
-        ]
-
-        table_names: List[str] = []
-        for rel in scan.table_relations:
-            if _file_matches(rel.csharp_file, program_base) and rel.table_name not in table_names:
-                table_names.append(rel.table_name)
-
-        if not matched_files and not sp_names and not table_names:
-            not_found.append(raw_name)
-            continue
-
-        # 取第一個對應檔案作為主要檔案資訊
-        file_path = ""
-        framework = ""
-        methods: List[Dict] = []
-        if matched_files:
-            primary = matched_files[0]
-            file_path = _rel(primary.file_path, root)
-            framework = getattr(primary.framework, "value", str(primary.framework))
-            for fr in matched_files:
-                for cls in fr.classes:
-                    for m in cls.methods:
-                        methods.append({"name": m.name, "class": cls.name})
-
-        # 程式碼片段（S2b）：依方法位置擷取，可由 include_snippets 關閉
-        code_snippets = []
-        if req.include_snippets and matched_files:
-            for fr in matched_files:
-                code_snippets.extend(extract_snippets(fr, root))
-
-        # 呼叫鏈（S3）：程式內部方法呼叫路徑
-        call_chains = build_call_chains(matched_files) if matched_files else []
-
-        # FK 連動資料表（S3，盡力而為：無資料庫則為空）
-        related_tables: List[str] = []
-        if req.fk_depth > 0 and table_names:
-            related_tables = resolve_fk_related(
-                table_names,
-                database_alias=req.database or None,
-                depth=req.fk_depth,
-                db_server=req.db_server or None,
-                db_name=req.db_name or None,
-            )
-
-        # SP 完整定義（選用，需 DB 連線；讓 AI 看得到 SP 實際邏輯）
-        sp_definitions: List[Dict] = []
-        if req.include_sp_defs and sp_names:
-            sp_definitions = fetch_sp_definitions(
-                sp_names,
-                database_alias=req.database or None,
-                db_server=req.db_server or None,
-                db_name=req.db_name or None,
-            )
-
-        # SQL View 完整定義（選用）：table_names 裡如果其實是 View（而非一般資料表），
-        # 從本機 SQL 快取（sql_cache_store，由 /refresh_sql 落地）取得其完整定義，
-        # 讓 AI 看得到 View 實際查詢邏輯，而不只是一個表名。只讀本機快取，不即時連線
-        # （見 view_fetcher.py 說明），避免每個表名都額外連線判斷是否為 View。
-        view_definitions: List[Dict] = []
-        if req.include_sp_defs and table_names:
-            view_definitions = fetch_view_definitions(
-                table_names,
-                database_alias=req.database or None,
-                db_server=req.db_server or None,
-            )
-
-        # 使用者定義函數（UDF）完整定義（選用）：靜態解析沒有專門的「UDF 呼叫」
-        # 關聯（沒有專門的 database invocation fact），改用「比對」取代「解析」——把該程式自己
-        # 內嵌的 SQL 查詢文字（matched_files 的 sql_queries）跟本機 SQL 快取的整庫
-        # UDF 名單比對，只有真的以函數呼叫形式出現在這支程式 SQL 裡的 UDF 才會附上
-        # 完整定義，做到「依程式篩選相關 UDF」而不是整庫塞給 AI（見 udf_fetcher.py）。
-        udf_definitions: List[Dict] = []
-        if req.include_sp_defs and matched_files:
-            sql_texts = [
-                q.query_text
-                for fr in matched_files
-                for q in fr.sql_queries
-                if getattr(q, "query_text", "")
+            # 2) Join C# database facts through the Gateway; legacy relations are not
+            # part of the formal response path.
+            rated_invocations: List[DbInvocation] = []
+            if matched_files:
+                rated_invocations, _ = _rated_execution_invocations(
+                    scope,
+                    scan,
+                    matched_files,
+                    root,
+                )
+            rated_invocations = [
+                invocation
+                for invocation in rated_invocations
+                if resolution.owns_method(_invocation_entry_method(invocation))
             ]
-            if sql_texts:
-                udf_definitions = fetch_udf_definitions(
-                    sql_texts,
+            sp_names: List[str] = []
+            for invocation in rated_invocations:
+                if (
+                    invocation.evidence is InvocationEvidence.PROVEN
+                    and invocation.procedure_name
+                    and invocation.procedure_name not in sp_names
+                ):
+                    sp_names.append(invocation.procedure_name)
+            database_invocations = [
+                _serialize_db_invocation(invocation)
+                for invocation in rated_invocations
+            ]
+            diagnostics = [
+                _invocation_diagnostic(invocation)
+                for invocation in rated_invocations
+                if invocation.evidence is not InvocationEvidence.PROVEN
+            ]
+
+            table_names: List[str] = []
+            for rel in scan.table_relations:
+                if (
+                    resolution.owns_file(rel.csharp_file)
+                    and resolution.owns_method(rel.method_name)
+                    and rel.table_name not in table_names
+                ):
+                    table_names.append(rel.table_name)
+
+            if (
+                not resolution.is_program_screen
+                and not matched_files
+                and not sp_names
+                and not table_names
+            ):
+                continue
+
+            # 取第一個對應檔案作為主要檔案資訊；Program Screen 以它自己的 View 為主。
+            file_path = ""
+            framework = ""
+            methods: List[Dict] = []
+            if resolution.screen is not None:
+                file_path = _rel(resolution.screen.view_path, root)
+            if resolution.view_result is not None:
+                framework = _framework_name(resolution.view_result)
+            if matched_files:
+                primary = matched_files[0]
+                if not file_path:
+                    file_path = _rel(primary.file_path, root)
+                if not framework:
+                    framework = _framework_name(primary)
+                for fr in matched_files:
+                    for cls in fr.classes:
+                        for m in cls.methods:
+                            if resolution.owns_method(m.name):
+                                methods.append({"name": m.name, "class": cls.name})
+
+            # 程式碼片段（S2b）：依方法位置擷取，可由 include_snippets 關閉
+            code_snippets = []
+            if req.include_snippets and matched_files:
+                method_filter = (
+                    set(resolution.screen.action_names)
+                    if resolution.screen is not None
+                    else None
+                )
+                for fr in matched_files:
+                    code_snippets.extend(
+                        extract_snippets(fr, root, method_filter=method_filter)
+                    )
+
+            # 呼叫鏈（S3）：程式內部方法呼叫路徑
+            call_chains = build_call_chains(matched_files) if matched_files else []
+            call_chains = [
+                chain for chain in call_chains if resolution.owns_method(chain[0])
+            ]
+
+            # FK 連動資料表（S3，盡力而為：無資料庫則為空）
+            related_tables: List[str] = []
+            if req.fk_depth > 0 and table_names:
+                related_tables = resolve_fk_related(
+                    table_names,
+                    database_alias=req.database or None,
+                    depth=req.fk_depth,
+                    db_server=req.db_server or None,
+                    db_name=req.db_name or None,
+                )
+
+            # SP 完整定義（選用，需 DB 連線；讓 AI 看得到 SP 實際邏輯）
+            sp_definitions: List[Dict] = []
+            if req.include_sp_defs and sp_names:
+                sp_definitions = fetch_sp_definitions(
+                    sp_names,
+                    database_alias=req.database or None,
+                    db_server=req.db_server or None,
+                    db_name=req.db_name or None,
+                )
+
+            # SQL View 完整定義（選用）：table_names 裡如果其實是 View（而非一般資料表），
+            # 從本機 SQL 快取（sql_cache_store，由 /refresh_sql 落地）取得其完整定義，
+            # 讓 AI 看得到 View 實際查詢邏輯，而不只是一個表名。只讀本機快取，不即時連線
+            # （見 view_fetcher.py 說明），避免每個表名都額外連線判斷是否為 View。
+            view_definitions: List[Dict] = []
+            if req.include_sp_defs and table_names:
+                view_definitions = fetch_view_definitions(
+                    table_names,
                     database_alias=req.database or None,
                     db_server=req.db_server or None,
                 )
 
-        # 跨程式呼叫參照展開（類似 Copilot 跟隨參照）：
-        # 找出這支程式呼叫了、但定義在「其他檔案」的方法，帶入相關程式碼片段。
-        related_programs: List[Dict] = []
-        if req.expand_depth > 0 and matched_files:
-            related = expand_related_programs(
-                scan.csharp_results,
-                matched_files,
-                depth=req.expand_depth,
-                max_programs=req.expand_max_programs,
-            )
-            for rel in related:
-                entry: Dict = {
-                    "file": _rel(rel["file"], root),
-                    "class": rel["class"],
-                    "method": rel["method"],
-                    "called_by": rel["called_by"],
-                    "depth": rel["depth"],
-                }
-                if req.include_snippets:
-                    target_fr = next(
-                        (r for r in scan.csharp_results if r.file_path == rel["file"]), None
+            # 使用者定義函數（UDF）完整定義（選用）：靜態解析沒有專門的「UDF 呼叫」
+            # 關聯（沒有專門的 database invocation fact），改用「比對」取代「解析」——把該程式自己
+            # 內嵌的 SQL 查詢文字（matched_files 的 sql_queries）跟本機 SQL 快取的整庫
+            # UDF 名單比對，只有真的以函數呼叫形式出現在這支程式 SQL 裡的 UDF 才會附上
+            # 完整定義，做到「依程式篩選相關 UDF」而不是整庫塞給 AI（見 udf_fetcher.py）。
+            udf_definitions: List[Dict] = []
+            if req.include_sp_defs and matched_files:
+                sql_texts = [
+                    q.query_text
+                    for fr in matched_files
+                    for q in fr.sql_queries
+                    if getattr(q, "query_text", "")
+                ]
+                if sql_texts:
+                    udf_definitions = fetch_udf_definitions(
+                        sql_texts,
+                        database_alias=req.database or None,
+                        db_server=req.db_server or None,
                     )
-                    if target_fr:
-                        snips = extract_snippets(
-                            target_fr, root, method_filter={rel["method"]}
+
+            # 跨程式呼叫參照展開（類似 Copilot 跟隨參照）：
+            # 找出這支程式呼叫了、但定義在「其他檔案」的方法，帶入相關程式碼片段。
+            related_programs: List[Dict] = []
+            if req.expand_depth > 0 and matched_files:
+                related = expand_related_programs(
+                    scan.csharp_results,
+                    matched_files,
+                    depth=req.expand_depth,
+                    max_programs=req.expand_max_programs,
+                )
+                for rel in related:
+                    if not resolution.owns_method(rel["called_by"]):
+                        continue
+                    entry: Dict = {
+                        "file": _rel(rel["file"], root),
+                        "class": rel["class"],
+                        "method": rel["method"],
+                        "called_by": rel["called_by"],
+                        "depth": rel["depth"],
+                    }
+                    if req.include_snippets:
+                        target_fr = next(
+                            (r for r in scan.csharp_results if r.file_path == rel["file"]), None
                         )
-                        if snips:
-                            entry["lines"] = snips[0].lines
-                            entry["snippet"] = snips[0].text
-                related_programs.append(entry)
+                        if target_fr:
+                            snips = extract_snippets(
+                                target_fr, root, method_filter={rel["method"]}
+                            )
+                            if snips:
+                                entry["lines"] = snips[0].lines
+                                entry["snippet"] = snips[0].text
+                    related_programs.append(entry)
 
-        # View 層資訊（選用）：ASPXParser/RazorParser/VueParser 解析出的控制項/指示詞/
-        # Tag Helpers/元件等摘要。預設關閉（include_view_layer=False）以維持既有行為與
-        # prompt 長度，只有明確要求時才附上。
-        view_layer: List[Dict] = []
-        if req.include_view_layer:
-            for fr in scan.aspx_results + scan.razor_results + scan.vue_results:
-                if _file_matches(fr.file_path, program_base):
-                    view_layer.append(_view_layer_summary(fr, root))
+            # View 層資訊（選用）：ASPXParser/RazorParser/VueParser 解析出的控制項/指示詞/
+            # Tag Helpers/元件等摘要。預設關閉（include_view_layer=False）以維持既有行為與
+            # prompt 長度，只有明確要求時才附上。
+            view_layer: List[Dict] = []
+            if req.include_view_layer:
+                if resolution.is_program_screen:
+                    if resolution.view_result is not None:
+                        view_layer.append(
+                            _view_layer_summary(resolution.view_result, root)
+                        )
+                else:
+                    for fr in scan.aspx_results + scan.razor_results + scan.vue_results:
+                        if _file_matches(fr.file_path, resolution.program_base):
+                            view_layer.append(_view_layer_summary(fr, root))
 
-        execution_paths: List[Dict] = []
-        compact_execution_paths: List[Dict] = []
-        compact_execution_paths_meta: Dict[str, int] = {}
-        if req.include_execution_paths and matched_files:
-            execution_paths, compact_payload = _build_program_execution_paths(
-                req,
-                scan,
-                matched_files,
-                root,
-                scope=scope,
+            execution_paths: List[Dict] = []
+            compact_execution_paths: List[Dict] = []
+            compact_execution_paths_meta: Dict[str, int] = {}
+            if req.include_execution_paths and matched_files:
+                execution_paths, compact_payload = _build_program_execution_paths(
+                    req,
+                    scan,
+                    matched_files,
+                    root,
+                    scope=scope,
+                    entry_methods=resolution.action_names,
+                )
+                compact_execution_paths = compact_payload["paths"]
+                compact_execution_paths_meta = {
+                    key: int(compact_payload[key])
+                    for key in ("total_paths", "returned_paths", "omitted_paths")
+                }
+
+            programs.append(
+                ProgramAnalysis(
+                    program=raw_name,
+                    file=file_path,
+                    framework=framework,
+                    methods=methods,
+                    stored_procedures=sp_names,
+                    tables=table_names,
+                    related_tables=related_tables,
+                    call_chains=call_chains,
+                    code_snippets=code_snippets,
+                    sp_definitions=sp_definitions,
+                    view_definitions=view_definitions,
+                    udf_definitions=udf_definitions,
+                    database_invocations=database_invocations,
+                    diagnostics=diagnostics,
+                    related_programs=related_programs,
+                    view_layer=view_layer,
+                    execution_paths=execution_paths,
+                    compact_execution_paths=compact_execution_paths,
+                    compact_execution_paths_meta=compact_execution_paths_meta,
+                )
             )
-            compact_execution_paths = compact_payload["paths"]
-            compact_execution_paths_meta = {
-                key: int(compact_payload[key])
-                for key in ("total_paths", "returned_paths", "omitted_paths")
-            }
+            reported = True
 
-        programs.append(
-            ProgramAnalysis(
-                program=raw_name,
-                file=file_path,
-                framework=framework,
-                methods=methods,
-                stored_procedures=sp_names,
-                tables=table_names,
-                related_tables=related_tables,
-                call_chains=call_chains,
-                code_snippets=code_snippets,
-                sp_definitions=sp_definitions,
-                view_definitions=view_definitions,
-                udf_definitions=udf_definitions,
-                database_invocations=database_invocations,
-                diagnostics=diagnostics,
-                related_programs=related_programs,
-                view_layer=view_layer,
-                execution_paths=execution_paths,
-                compact_execution_paths=compact_execution_paths,
-                compact_execution_paths_meta=compact_execution_paths_meta,
-            )
-        )
+        if not reported:
+            not_found.append(raw_name)
 
     return AnalyzeResponse(
         programs=programs,
