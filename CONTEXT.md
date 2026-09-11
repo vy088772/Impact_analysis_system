@@ -69,6 +69,10 @@ _Avoid_: inline SP call, exec target, promoted procedure
 Which stored procedure one Database Invocation runs, whichever field knows: the `procedure_name` the call declared, or a `proven` Embedded Procedure Target when the call declared none. A rating below `proven` answers nothing, because a candidate is not a call. It is the one question `/find_by_sp` asks of an invocation, so no caller has to remember to read two fields.
 _Avoid_: effective procedure, resolved SP name, procedure_name fallback
 
+**Coverage Report**:
+The measurement of how far the analysis got for one System: the share of its Database Invocations that resolve an Executed Procedure Name, and the share that resolve a Resolved Connection Source. The two shares are reported separately and are never combined — the measured repositories have opposite bottlenecks, and one number would hide which one is stuck. Every invocation below either line is counted under a named reason code, because a ratio alone cannot tell a resolution that improved from one that merely became confident. Produced by `service/coverage_report.py` and printed by `python -m tools.coverage_report`.
+_Avoid_: coverage number, resolution rate, analysis score
+
 **Evidence Status**:
 The confidence state of a Database Invocation: `proven`, `likely`, `unresolved`, or `not_applicable`. It rates the available execution and target evidence independently from contract selection status. `not_applicable` marks an invocation with no database evidence to rate. This concept shares its name with, but is unrelated to, `llamaindex-spec-rag`'s per-path/query Evidence Status; see [ADR-0007](docs/adr/0007-evidence-status-name-collision-with-llamaindex-spec-rag.md).
 _Avoid_: contract status, scan success

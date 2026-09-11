@@ -31,66 +31,13 @@ from code_analyzer.csharp_analysis_gateway import (  # noqa: E402
     wrapper_observation_identity,
 )
 from config.settings import settings  # noqa: E402
-from service import analyze_service, repo_manager, scan_store  # noqa: E402
-
-
-def _default_spec_rag_root() -> Path:
-    return Path(settings.AZURE_CLONE_ROOT).resolve().parent.parent.parent / "llamaindex-spec-rag"
-
-
-def _load_catalog(spec_rag_root: Path) -> List[dict]:
-    catalog_path = spec_rag_root / "catalog" / "system_catalog.json"
-    if not catalog_path.exists():
-        return []
-    try:
-        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    systems = payload.get("systems", [])
-    return [item for item in systems if isinstance(item, dict)] if isinstance(systems, list) else []
-
-
-def _catalog_targets(
-    systems: Iterable[dict],
-    requested_systems: Iterable[str],
-) -> Tuple[List[dict], List[str]]:
-    by_id = {
-        str(item.get("system_id") or "").strip(): item
-        for item in systems
-        if str(item.get("system_id") or "").strip()
-    }
-    requested = [str(item).strip() for item in requested_systems if str(item).strip()]
-    selected = requested or list(by_id)
-    targets: List[dict] = []
-    not_found: List[str] = []
-    for system_id in selected:
-        item = by_id.get(system_id)
-        if item is None:
-            not_found.append(system_id)
-            continue
-        azure = item.get("azure") or {}
-        if not isinstance(azure, dict):
-            azure = {}
-        roots = repo_manager.peek_scan_roots(azure)
-        if not roots:
-            targets.append(
-                {
-                    "system_id": system_id,
-                    "root": None,
-                    "configured_contract": str(item.get("wrapper_contract") or ""),
-                    "reason": "source_root_unresolved",
-                }
-            )
-            continue
-        for root in roots:
-            targets.append(
-                {
-                    "system_id": system_id,
-                    "root": Path(root),
-                    "configured_contract": str(item.get("wrapper_contract") or ""),
-                }
-            )
-    return targets, not_found
+from service import analyze_service, scan_store  # noqa: E402
+from service.system_targets import (  # noqa: E402
+    default_spec_rag_root,
+    load_system_catalog,
+    resolve_system_targets,
+    scan_cache_state,
+)
 
 
 def _cached_targets() -> List[dict]:
@@ -183,25 +130,12 @@ def _location(
     return location
 
 
-def _cache_state(root: Path) -> Tuple[bool, str]:
-    if scan_store.has_cache(root):
-        return True, ""
-    status = scan_store.cache_status(root)
-    if status == "current":
-        return True, ""
-    if status == "stale":
-        return False, "scan_cache_stale"
-    if status == "invalid":
-        return False, "scan_cache_invalid"
-    return False, "scan_cache_missing"
-
-
 def _scan_report(
     system_id: str,
     root: Path,
     configured_contract_name: str = "",
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    cache_ready, cache_reason = _cache_state(root)
+    cache_ready, cache_reason = scan_cache_state(root)
     if not cache_ready:
         return (
             {
@@ -427,7 +361,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--spec-rag-root",
-        default=str(_default_spec_rag_root()),
+        default=str(default_spec_rag_root()),
         help="spec-rag project root used to resolve system ids",
     )
     parser.add_argument(
@@ -450,9 +384,9 @@ def main() -> None:
         ]
     else:
         spec_rag_root = Path(args.spec_rag_root)
-        systems = _load_catalog(spec_rag_root)
+        systems = load_system_catalog(spec_rag_root)
         if systems:
-            targets, missing_systems = _catalog_targets(systems, args.system_ids)
+            targets, missing_systems = resolve_system_targets(systems, args.system_ids)
         elif args.system_ids:
             parser.error(f"找不到 system_catalog.json，無法解析 --system：{spec_rag_root}")
         else:
