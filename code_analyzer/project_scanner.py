@@ -510,6 +510,9 @@ class ProjectScanner:
         tracker.connection_resolver = (
             scope if scope is not None else self.connection_resolver
         )
+        tracker.invoked_connection_expressions = self._invoked_connection_expressions(
+            file_key
+        )
 
         result = self.csharp_parser.parse_file(file_path)
 
@@ -525,6 +528,24 @@ class ProjectScanner:
             self.scan_result.unresolved_connections.pop(file_key, None)
         self._record_connection_observations()
         return result
+
+    def _invoked_connection_expressions(self, file_key: str) -> Set[str]:
+        """一個檔案裡，被一次真的 Database Invocation 引用過的連線運算式。
+
+        這個集合已經在 db_invocations[file_key] 上，因為 host 的原始事實在
+        呼叫 `_parse_csharp_file` 之前就寫進去了。回傳給
+        `DBConnectionTracker`，讓「這個接收者的型別沒註冊」這個理由只問曾經
+        真的發生過呼叫的接收者，不是這個檔案裡任何一個宣告（ticket 17）。
+        """
+        records = self.scan_result.db_invocations.get(file_key) or []
+        expressions: Set[str] = set()
+        for record in records:
+            expression = record.get("connection_expression") or record.get(
+                "connection_variable"
+            )
+            if expression and str(expression).strip():
+                expressions.add(str(expression).strip())
+        return expressions
 
     def _record_connection_observations(self) -> None:
         """把目前已建立的每一個 scope 觀察到的環境改寫併進掃描結果。

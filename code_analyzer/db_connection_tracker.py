@@ -5,7 +5,7 @@
 """
 
 import re
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass, field, replace
 
 from .project_connection_scope import (
@@ -13,6 +13,7 @@ from .project_connection_scope import (
     CONTEXT_TYPE_NOT_REGISTERED,
     FIELD_HELD_CONNECTION_NOT_TRACED,
     ProjectConnectionScope,
+    RECEIVER_DECLARATION_UNRESOLVED,
     ROOT_CONFIGURATION_NAMESPACE,
 )
 from .webconfig_connection_resolver import WebConfigConnections, ResolvedConnection
@@ -101,6 +102,12 @@ class DBConnectionTracker:
         self.connections: Dict[str, ConnectionInfo] = {}
         self.connection_resolver: Optional[ConnectionLookupTables] = connection_resolver
         self.unresolved: List[UnresolvedConnection] = []
+        # 這個檔案裡真的發生過 Database Invocation 的連線運算式（變數名）。一個
+        # 型別宣告本身從不是一次呼叫——「這個型別沒註冊」這個理由只問曾經被呼叫
+        # 過的接收者，從不主動去猜哪個變數的型別名字長得像資料庫內容型別
+        # （ticket 17）。呼叫方（ProjectScanner）在每個檔案解析前設定它，就像
+        # 設定 connection_resolver 一樣。
+        self.invoked_connection_expressions: Set[str] = set()
 
     def _project_scope(self) -> Optional[ProjectConnectionScope]:
         """回傳目前的 ProjectConnectionScope，若解析器是 Web.config 的則回傳 None。
@@ -412,8 +419,6 @@ class DBConnectionTracker:
         if scope is None:
             return
 
-        self._report_unregistered_context_types(content, scope)
-
         for context_type in sorted(scope.context_connection_keys):
             pattern = self._CONTEXT_DECLARATION.format(
                 context_type=re.escape(context_type)
@@ -437,58 +442,61 @@ class DBConnectionTracker:
                     server=server,
                 )
 
-    # 框架自己的環境物件，名字結尾是 Context 但一個資料庫都不開。把它們一併報
-    # 成「組合根沒有註冊」只會製造雜訊，讓真正的缺口被淹沒。
-    #
-    # 下半段的六個名字，是實測五個儲存庫掃出來的：這條規則在它們身上報了二十
-    # 四次，二十四次都是這些框架型別，沒有一次是真的——每一個宣告出來的資料庫
-    # 內容型別，組合根都註冊了。
-    #
-    # 一份名單擋不住下一個儲存庫帶來的第七個框架型別。真正的分辨依據是「這個
-    # 型別有沒有被宣告成資料庫內容型別」，而不是它叫什麼名字；換成那條規則是
-    # 另一張票的事，這裡先讓已知的雜訊消失。
-    _AMBIENT_CONTEXT_TYPES = frozenset(
-        {
-            "DbContext",
-            "HttpContext",
-            "ActionContext",
-            "ControllerContext",
-            "ViewContext",
-            "PageContext",
-            "SynchronizationContext",
-            "SecurityContext",
-            "ModelBindingContext",
-            "ValidationContext",
-            # ASP.NET Core MVC 的過濾器管線
-            "ActionExecutingContext",
-            "ActionExecutedContext",
-            "AuthorizationFilterContext",
-            # ASP.NET Core MVC 的用戶端驗證與標籤協助程式
-            "ClientModelValidationContext",
-            "TagHelperContext",
-            # System.DirectoryServices.AccountManagement：目錄，不是資料庫
-            "PrincipalContext",
-        }
-    )
+        # 這一步只問曾經真的被叫用過的接收者（見 __init__ 的
+        # invoked_connection_expressions），所以放在註冊型別的迴圈之後：那個
+        # 迴圈已經把每一個註冊型別的接收者解析進 self.connections，這裡才不會
+        # 把一個其實解析得出來的變數誤判成「型別沒註冊」。
+        self._report_unresolved_context_receivers(content, scope)
 
+    # 任何以 Context 結尾的型別宣告——不分是不是資料庫內容型別。找出宣告只是
+    # 為了讀出接收者自己宣告的型別名稱；決定要不要回報理由的問題永遠是「這個
+    # 接收者有沒有被叫用過」，不是「這個名字長得像不像資料庫內容型別」。
     _ANY_CONTEXT_DECLARATION = r'\b(\w+Context)\s+(@?\w+)\s*(?=[;,)={])'
 
-    def _report_unregistered_context_types(
+    def _report_unresolved_context_receivers(
         self, content: str, scope: ProjectConnectionScope
     ) -> None:
-        """為組合根沒有註冊的資料庫內容型別留下理由。
+        """為一次真的發生過的 Database Invocation，寫下它的接收者為什麼解析
+        不出連線。
 
-        沒有這一步，一個沒被註冊的內容型別就只是安靜地不出現在結果裡——正是
-        這份程式碼要防止的沉默空結果。
+        理由只問這裡：*這次呼叫*解析不出連線——為什麼？從不主動去猜哪個變數
+        的型別名字長得像資料庫內容型別。一個型別即使名字結尾是 Context，只
+        要它從沒被拿去做過一次 Database Invocation，這裡永遠問不到它——框架
+        自己的環境物件（`HttpContext`、`AuthorizationFilterContext`……）因此
+        天生被排除，不必再維護一張隨儲存庫增加的排除名單。
+
+        接收者宣告的型別分三種答案：註冊了（正常解析，前面的迴圈已經做
+        過）、宣告讀得到但沒註冊（`CONTEXT_TYPE_NOT_REGISTERED`）、這個檔案
+        裡讀不到這個接收者宣告成什麼型別（`RECEIVER_DECLARATION_UNRESOLVED`
+        ——兩者是不同的缺口，不能共用一個理由）。
         """
+        invoked = self.invoked_connection_expressions
+        if not invoked:
+            return
+
+        declared_types: Dict[str, Tuple[str, int]] = {}
         for match in re.finditer(self._ANY_CONTEXT_DECLARATION, content):
-            context_type = match.group(1)
             var_name = match.group(2)
-            if context_type in self._AMBIENT_CONTEXT_TYPES:
-                continue
-            if context_type in scope.context_connection_keys:
+            if var_name in declared_types:
                 continue
             line_num = content[:match.start()].count('\n') + 1
+            declared_types[var_name] = (match.group(1), line_num)
+
+        for var_name in sorted(invoked):
+            if var_name in self.connections:
+                continue
+            if any(entry.variable_name == var_name for entry in self.unresolved):
+                continue
+            found = declared_types.get(var_name)
+            if found is None:
+                self._record_unresolved(
+                    var_name, "", self.DB_CONTEXT_TYPE,
+                    RECEIVER_DECLARATION_UNRESOLVED, 0,
+                )
+                continue
+            context_type, line_num = found
+            if context_type in scope.context_connection_keys:
+                continue
             self._resolve_context_type(context_type, var_name, line_num)
 
     # 讀 Configuration 根命名空間的兩種寫法。兩種都是「從根往下找一個鍵」，

@@ -30,6 +30,7 @@ from code_analyzer.project_connection_scope import (
     CONTEXT_TYPE_NOT_REGISTERED,
     NO_PROJECT_CONNECTION_SCOPE,
     ProjectConnectionScopeIndex,
+    RECEIVER_DECLARATION_UNRESOLVED,
     ROOT_CONFIGURATION_NAMESPACE,
 )
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
@@ -83,9 +84,20 @@ def _write_source(path: Path, content: str) -> Path:
     return path
 
 
-def _track(index: ProjectConnectionScopeIndex, source_file: Path, content: str):
-    """依掃描器的做法，用這個檔案所屬的查找表解析它的連線。"""
+def _track(
+    index: ProjectConnectionScopeIndex,
+    source_file: Path,
+    content: str,
+    *,
+    invoked: frozenset = frozenset(),
+):
+    """依掃描器的做法，用這個檔案所屬的查找表解析它的連線。
+
+    `invoked` 模擬 `ProjectScanner` 從 db_invocations 讀出來、餵給 tracker 的
+    「這個檔案裡曾經真的發生過呼叫的連線運算式」集合（ticket 17）。
+    """
     tracker = DBConnectionTracker(connection_resolver=index.scope_for(source_file))
+    tracker.invoked_connection_expressions = set(invoked)
     tracker.analyze_connections(content)
     return tracker
 
@@ -229,7 +241,39 @@ class TestDbContextResolution:
         self, tmp_path: Path
     ):
         """型別名稱不是資料庫名稱——組合根沒有註冊它時，維持 unresolved，而
-        不是把 `LedgerContext` 猜成 `Ledger`。"""
+        不是把 `LedgerContext` 猜成 `Ledger`。理由只在這個接收者真的被拿去
+        做過一次 Database Invocation 時才出現（ticket 17）。"""
+        project = _write_project(
+            tmp_path / "Portal",
+            connection_strings={"Payroll": "Server=srvA;Database=PayrollDb"},
+            composition_root=_composition_root(("PayrollContext", "Payroll")),
+        )
+        source = _write_source(
+            project / "Services" / "LedgerService.cs",
+            "public class LedgerService {\n"
+            "    private readonly LedgerContext _ledger;\n"
+            "    public void Run() { _ledger.Ledgers.ToList(); }\n"
+            "}\n",
+        )
+
+        tracker = _track(
+            ProjectConnectionScopeIndex(tmp_path),
+            source,
+            source.read_text(encoding="utf-8"),
+            invoked=frozenset({"_ledger"}),
+        )
+
+        assert "_ledger" not in tracker.connections
+        assert [entry.reason for entry in tracker.unresolved] == [
+            CONTEXT_TYPE_NOT_REGISTERED
+        ]
+
+    def test_an_unregistered_context_type_never_invoked_is_not_reported(
+        self, tmp_path: Path
+    ):
+        """一個沒註冊的內容型別只是宣告出來、從沒被拿去做過一次 Database
+        Invocation 時，這裡問不到它——理由來自呼叫本身，不是宣告本身
+        （ticket 17）。"""
         project = _write_project(
             tmp_path / "Portal",
             connection_strings={"Payroll": "Server=srvA;Database=PayrollDb"},
@@ -242,21 +286,52 @@ class TestDbContextResolution:
             "}\n",
         )
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, source.read_text(encoding="utf-8"))
+        tracker = _track(
+            ProjectConnectionScopeIndex(tmp_path), source, source.read_text(encoding="utf-8")
+        )
+
+        assert tracker.connections == {}
+        assert tracker.unresolved == []
+
+    def test_an_invoked_receiver_whose_declared_type_cannot_be_read_names_its_own_reason(
+        self, tmp_path: Path
+    ):
+        """一次呼叫發生在一個這個檔案完全找不到宣告的接收者上——連它是不是
+        資料庫內容型別都讀不到。這跟「型別讀得到、只是沒註冊」是不同的缺
+        口，不能共用 `context_type_not_registered`（ticket 17）。"""
+        project = _write_project(
+            tmp_path / "Portal",
+            connection_strings={"Payroll": "Server=srvA;Database=PayrollDb"},
+            composition_root=_composition_root(("PayrollContext", "Payroll")),
+        )
+        source = _write_source(
+            project / "Services" / "LedgerService.cs",
+            "public partial class LedgerService {\n"
+            "    public void Run() { _ledger.Ledgers.ToList(); }\n"
+            "}\n",
+        )
+
+        tracker = _track(
+            ProjectConnectionScopeIndex(tmp_path),
+            source,
+            source.read_text(encoding="utf-8"),
+            invoked=frozenset({"_ledger"}),
+        )
 
         assert "_ledger" not in tracker.connections
         assert [entry.reason for entry in tracker.unresolved] == [
-            CONTEXT_TYPE_NOT_REGISTERED
+            RECEIVER_DECLARATION_UNRESOLVED
         ]
 
     def test_a_framework_context_type_is_not_reported_as_unregistered(
         self, tmp_path: Path
     ):
-        """名字結尾是 Context 的框架型別不是資料庫內容型別。ASP.NET 的過濾
-        器與標籤協助程式、Active Directory 的目錄內容都以 Context 結尾，而
-        它們一個資料庫都不開。把它們報成「組合根沒有註冊」只會製造雜訊，讓
-        真正的缺口被淹沒——實測的五個儲存庫裡，這條規則報了二十四次，沒有
-        一次是真的。"""
+        """名字結尾是 Context 的框架型別不是資料庫內容型別，但這裡不需要靠
+        認得它們的名字才能不誤報——ASP.NET 的過濾器與標籤協助程式、Active
+        Directory 的目錄內容從來不會被拿去做一次 Database Invocation，所以
+        即使它們的宣告就在這個檔案裡，理由只問曾經被呼叫過的接收者，天生問
+        不到它們（ticket 17；實測的五個儲存庫裡，舊的名字比對規則報了二十四
+        次，沒有一次是真的）。"""
         project = _write_project(
             tmp_path / "Portal",
             connection_strings={"Payroll": "Server=srvA;Database=PayrollDb"},
@@ -531,3 +606,51 @@ def test_project_scanner_records_resolved_and_unresolved_connections(tmp_path: P
         for entry in scan_result.unresolved_connections[file_key]
     }
     assert reasons["_ledger"] == ROOT_CONFIGURATION_NAMESPACE
+
+
+def test_project_scanner_only_reports_an_unregistered_context_type_that_a_real_invocation_names(
+    tmp_path: Path,
+):
+    """`db_invocations` 已經是 host 解析出來的真實呼叫事實（見
+    `_parse_csharp_file` 呼叫前一步就寫進 `scan_result.db_invocations`）；
+    `ProjectScanner` 把它引用過的連線運算式餵給 tracker，理由只問這些變數
+    （ticket 17）。這裡直接呼叫 `_parse_csharp_file`，不必真的跑一次
+    StaticAnalyzerHost 去產生 db_invocations。"""
+    (tmp_path / "App.csproj").write_text(
+        '<Project ToolsVersion="15.0"></Project>', encoding="utf-8"
+    )
+    (tmp_path / "appsettings.json").write_text(
+        json.dumps(
+            {"ConnectionStrings": {"Payroll": "Server=srvA;Database=PayrollDb"}},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "Program.cs").write_text(
+        _composition_root(("PayrollContext", "Payroll")), encoding="utf-8"
+    )
+    source = _write_source(
+        tmp_path / "Services" / "LedgerService.cs",
+        "public class LedgerService {\n"
+        "    private readonly LedgerContext _ledger;\n"
+        "    public void Run() { _ledger.Ledgers.ToList(); }\n"
+        "}\n",
+    )
+
+    scanner = ProjectScanner(project_root=str(tmp_path), project_name="App")
+    scanner.scan_result = ProjectScanResult(
+        project_root=str(tmp_path), project_name="App", scan_time=datetime.now()
+    )
+    file_key = str(source.resolve())
+    scanner.scan_result.db_invocations[file_key] = [
+        {"connection_expression": "_ledger"}
+    ]
+
+    scanner._parse_csharp_file(str(source), file_key)
+
+    assert "_ledger" not in scanner.scan_result.connection_sources.get(file_key, {})
+    reasons = {
+        entry["variable_name"]: entry["reason"]
+        for entry in scanner.scan_result.unresolved_connections[file_key]
+    }
+    assert reasons["_ledger"] == CONTEXT_TYPE_NOT_REGISTERED

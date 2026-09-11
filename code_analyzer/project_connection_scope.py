@@ -53,6 +53,10 @@ NO_PROJECT_CONNECTION_SCOPE = "no_project_connection_scope"
 CONNECTION_KEY_NOT_IN_PROJECT_SCOPE = "connection_key_not_in_project_scope"
 ROOT_CONFIGURATION_NAMESPACE = "root_configuration_namespace_not_connection_strings"
 CONTEXT_TYPE_NOT_REGISTERED = "context_type_not_registered"
+# 一個發生過 Database Invocation 的接收者，這份分析在它的檔案裡找不到任何
+# 型別宣告可以讀——不是「型別沒註冊」（那個答案需要先讀到型別名稱），是連型
+# 別名稱都讀不到。兩者是不同的缺口，不能共用同一個理由（ticket 17）。
+RECEIVER_DECLARATION_UNRESOLVED = "receiver_declaration_unresolved"
 # 一個 Field-Held Connection，它持有的值追不回任何一個連線查找鍵。追不到就維
 # 持 unresolved：unresolved 看得見，錯的 {server, database} 不是。
 FIELD_HELD_CONNECTION_NOT_TRACED = "field_held_connection_not_traced"
