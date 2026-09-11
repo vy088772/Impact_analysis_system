@@ -17,8 +17,22 @@ call site resolving must not settle another. Ticket 09 hit that as a live defect
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] An ADR records the decision, the alternative it rejected, and the reason it rejected it.
-- [ ] The ADR states that one call site resolving does not settle another that shares its variable name.
-- [ ] The glossary entry for Field-Held Connection cites the ADR, as its neighbours do.
+- [x] An ADR records the decision, the alternative it rejected, and the reason it rejected it.
+- [x] The ADR states that one call site resolving does not settle another that shares its variable name.
+- [x] The glossary entry for Field-Held Connection cites the ADR, as its neighbours do.
+
+## Note
+
+New `docs/adr/0022-field-held-connection-resolves-at-the-call-site-variable.md`, modelled on
+ADR-0018's shape (Context / Decision / Consequences). It states the alternative (attach to the
+field) and the rejection reason (a `DbInvocation` never names the field, so a reason recorded
+only there is unreachable from the invocation), plus ticket 09's live-defect consequence (a
+resolved variable name must not silently settle another call site sharing that name — the
+tracker records a reason at every call site, never skipping one because an earlier same-named
+call already resolved). `CONTEXT.md`'s **Field-Held Connection** entry now ends with
+`See [ADR-0022](docs/adr/0022-field-held-connection-resolves-at-the-call-site-variable.md).`,
+matching every neighbouring entry in that section. No code changed — this ticket is
+documentation-only, same as its own checklist implies.
+
