@@ -17,7 +17,7 @@ call site resolving must not settle another. Ticket 09 hit that as a live defect
 
 **Blocked by:** None (can start immediately).
 
-**Status:** done
+**Status:** resolved
 
 - [x] An ADR records the decision, the alternative it rejected, and the reason it rejected it.
 - [x] The ADR states that one call site resolving does not settle another that shares its variable name.
