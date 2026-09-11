@@ -259,12 +259,7 @@ def _referenced_dll_path(csproj_path: Path, receiver_type: str) -> Path | None:
     except (OSError, ET.ParseError):
         return None
 
-    for reference in root.iter():
-        if _xml_local_name(reference.tag) != "Reference":
-            continue
-        include = reference.attrib.get("Include", "")
-        if include.split(",", 1)[0].strip() != receiver_type:
-            continue
+    def _hint_dll_path(reference: ET.Element) -> Path | None:
         hint_path = next(
             (
                 child.text
@@ -278,7 +273,29 @@ def _referenced_dll_path(csproj_path: Path, receiver_type: str) -> Path | None:
         normalized_hint_path = hint_path.strip().replace("\\", "/")
         dll_path = (csproj_path.parent / normalized_hint_path).resolve()
         return dll_path if dll_path.is_file() else None
-    return None
+
+    references = [
+        element for element in root.iter() if _xml_local_name(element.tag) == "Reference"
+    ]
+
+    for reference in references:
+        include = reference.attrib.get("Include", "")
+        if include.split(",", 1)[0].strip() == receiver_type:
+            return _hint_dll_path(reference)
+
+    # No <Reference> is literally named after the receiver type -- a shared library (e.g.
+    # IQCS's CommonLibrary.dll) can hold a differently-named wrapper type. When exactly one
+    # <Reference> resolves to a real DLL, it is the only candidate
+    # AssemblyReferenceResolver's own metadata-scan fallback would ever decompile anyway, so
+    # it doubles safely as this client-side cache key too, without re-reading assembly
+    # metadata here. Two or more candidates stay ambiguous: no cache short-circuit, but the
+    # host itself still resolves and caches correctly on its own.
+    hinted_dll_paths = [
+        dll_path
+        for dll_path in (_hint_dll_path(reference) for reference in references)
+        if dll_path is not None
+    ]
+    return hinted_dll_paths[0] if len(hinted_dll_paths) == 1 else None
 
 
 def _xml_local_name(tag: str) -> str:

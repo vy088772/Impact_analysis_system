@@ -409,6 +409,83 @@ def _write_referenced_dll_project(
     return csproj_path
 
 
+def _build_multi_type_assembly_dll(build_dir: Path, assembly_name: str, type_name: str) -> Path:
+    """Compiles an assembly whose file/assembly name differs from the wrapper class it
+    declares -- reproduces IQCS's CommonLibrary.dll, which is referenced under the project-wide
+    name "CommonLibrary" but declares (among other types) the wrapper class SQLDbContext."""
+    build_dir.mkdir(parents=True, exist_ok=True)
+    (build_dir / f"{assembly_name}.csproj").write_text(
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
+        "  <PropertyGroup>\n"
+        "    <TargetFramework>net8.0</TargetFramework>\n"
+        f"    <AssemblyName>{assembly_name}</AssemblyName>\n"
+        "    <Nullable>disable</Nullable>\n"
+        "  </PropertyGroup>\n"
+        "</Project>\n",
+        encoding="utf-8",
+    )
+    (build_dir / f"{type_name}.cs").write_text(
+        "public class SqlConnection { public SqlConnection(string cn) {} }\n"
+        "public class SqlCommand {\n"
+        "    public SqlCommand(string sql, SqlConnection conn) {}\n"
+        "    public object CommandType;\n"
+        "    public int ExecuteNonQuery() => 0;\n"
+        "}\n"
+        f"public class {type_name} {{\n"
+        "    public int ExeProcNon(string sql, SqlConnection conn) {\n"
+        "        var cmd = new SqlCommand(sql, conn);\n"
+        "        return cmd.ExecuteNonQuery();\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    bin_dir = build_dir / "bin"
+    result = subprocess.run(
+        [
+            "dotnet",
+            "build",
+            str(build_dir / f"{assembly_name}.csproj"),
+            "-c",
+            "Release",
+            "-o",
+            str(bin_dir),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return bin_dir / f"{assembly_name}.dll"
+
+
+@requires_dotnet
+def test_decompile_wrapper_resolves_a_receiver_type_declared_inside_a_differently_named_assembly() -> None:
+    """A <Reference> whose assembly name differs from the wrapper class it declares (a shared
+    library referenced under one project-wide name, e.g. IQCS's CommonLibrary.dll declaring
+    SQLDbContext) still resolves: the receiver type is looked up inside each referenced DLL's
+    metadata, not matched against the <Reference Include> name alone."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        wrapper_dll = _build_multi_type_assembly_dll(root / "commonlib", "CommonLibrary", "SQLDbContext")
+        csproj_path = _write_referenced_dll_project(root, "CommonLibrary", wrapper_dll.read_bytes())
+        cache_root = root / "cache"
+
+        result = host.decompile_wrapper(csproj_path, "SQLDbContext", cache_root=cache_root)
+        assert result["status"] != "receiver_not_referenced"
+        assert Path(result["dll_path"]).resolve() == (root / "CommonLibrary.dll").resolve()
+
+        # The client-side response cache (keyed off the resolved DLL's own hash, computed
+        # client-side by `_referenced_dll_path`) must also resolve this differently-named
+        # assembly, or every refresh would re-invoke the host subprocess for it unnecessarily.
+        cached = host.decompile_wrapper(csproj_path, "SQLDbContext", cache_root=cache_root)
+        assert cached["cache_status"] == "hit"
+        assert cached["assembly_identity"] == result["assembly_identity"]
+
+
+
 def test_decompile_wrapper_caches_failed_attempt_by_dll_hash_and_supports_rerun() -> None:
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()

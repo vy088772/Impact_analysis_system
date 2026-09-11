@@ -7,8 +7,9 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 // Resolves a wrapper receiver type (e.g. "SQLFunc") to the exact DLL referenced by a
-// .csproj's <Reference>/<HintPath> entries. Never scans a directory for arbitrary DLLs:
-// a receiver type with no matching <Reference> stays a review candidate.
+// .csproj's <Reference>/<HintPath> entries. Never scans a directory for arbitrary DLLs: a
+// receiver type resolved by neither the <Reference Include> name nor any referenced DLL's
+// own metadata stays a review candidate.
 internal static class AssemblyReferenceResolver
 {
     internal static AssemblyReferenceResolution Resolve(string csprojPath, string receiverTypeName)
@@ -27,24 +28,54 @@ internal static class AssemblyReferenceResolver
         }
 
         var ns = document.Root?.Name.Namespace ?? XNamespace.None;
-        var reference = document
-            .Descendants(ns + "Reference")
-            .FirstOrDefault(element => MatchesAssemblyName(element.Attribute("Include")?.Value, receiverTypeName));
-        if (reference is null)
-            return AssemblyReferenceResolution.Unresolved("receiver_not_referenced");
+        var references = document.Descendants(ns + "Reference").ToList();
+        var csprojDirectory = Path.GetDirectoryName(Path.GetFullPath(csprojPath)) ?? "";
 
+        // Fast path: the assembly is named after the sole wrapper type it exposes (true for
+        // every fixture this repo has decompiled so far, e.g. SQLFunc.dll/SQLFunc).
+        var byName = references
+            .FirstOrDefault(element => MatchesAssemblyName(element.Attribute("Include")?.Value, receiverTypeName));
+        if (byName is not null)
+            return ResolveHintPath(byName, ns, csprojDirectory);
+
+        // Slow path: a shared library referenced under a project-wide assembly name that
+        // differs from the receiver type it declares (e.g. IQCS's CommonLibrary.dll, which
+        // declares SQLDbContext among other types) -- open each referenced DLL's metadata
+        // (no method decompile yet) and keep the first one that actually defines the type.
+        foreach (var reference in references)
+        {
+            var dllPath = HintPathTarget(reference, ns, csprojDirectory);
+            if (dllPath is not null && WrapperAssemblyDecompiler.AssemblyDefinesType(dllPath, receiverTypeName))
+                return AssemblyReferenceResolution.Resolved(dllPath);
+        }
+
+        return AssemblyReferenceResolution.Unresolved("receiver_not_referenced");
+    }
+
+    private static AssemblyReferenceResolution ResolveHintPath(XElement reference, XNamespace ns, string csprojDirectory)
+    {
         var hintPath = reference.Element(ns + "HintPath")?.Value;
         if (string.IsNullOrWhiteSpace(hintPath))
             return AssemblyReferenceResolution.Unresolved("hint_path_missing");
 
-        var csprojDirectory = Path.GetDirectoryName(Path.GetFullPath(csprojPath)) ?? "";
-        var dllPath = Path.GetFullPath(Path.Combine(
-            csprojDirectory,
-            hintPath.Replace('\\', Path.DirectorySeparatorChar)));
-        if (!File.Exists(dllPath))
+        var dllPath = HintPathTarget(reference, ns, csprojDirectory);
+        if (dllPath is null)
             return AssemblyReferenceResolution.Unresolved("referenced_dll_missing");
 
         return AssemblyReferenceResolution.Resolved(dllPath);
+    }
+
+    // Null covers a missing <HintPath> and a HintPath the resolver can't find on disk alike --
+    // both callers already distinguish those two cases from their own surrounding context.
+    private static string? HintPathTarget(XElement reference, XNamespace ns, string csprojDirectory)
+    {
+        var hintPath = reference.Element(ns + "HintPath")?.Value;
+        if (string.IsNullOrWhiteSpace(hintPath))
+            return null;
+        var dllPath = Path.GetFullPath(Path.Combine(
+            csprojDirectory,
+            hintPath.Replace('\\', Path.DirectorySeparatorChar)));
+        return File.Exists(dllPath) ? dllPath : null;
     }
 
     private static bool MatchesAssemblyName(string? include, string receiverTypeName)
@@ -168,6 +199,29 @@ internal static class WrapperAssemblyDecompiler
             root,
             translationProblemMethods,
             translationProblemDefinitions);
+    }
+
+    // Metadata-only membership check for AssemblyReferenceResolver's fallback scan: does this
+    // DLL declare a top-level type by this name at all? No method body is decompiled here, so
+    // this stays cheap even when a project references several DLLs with valid HintPaths.
+    internal static bool AssemblyDefinesType(string dllPath, string typeName)
+    {
+        try
+        {
+            var settings = new DecompilerSettings(ICSharpCode.Decompiler.CSharp.LanguageVersion.Latest);
+            var resolver = new UniversalAssemblyResolver(dllPath, false, null);
+            foreach (var searchDirectory in ReferenceAssemblyDirectories())
+                resolver.AddSearchDirectory(searchDirectory);
+            var peFile = new PEFile(dllPath);
+            var decompiler = new CSharpDecompiler(peFile, resolver, settings);
+            return decompiler.TypeSystem.MainModule.TypeDefinitions.Any(type =>
+                type.DeclaringTypeDefinition is null
+                && string.Equals(type.Name, typeName, StringComparison.Ordinal));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private static WrapperAnalyzer.WrapperDefinition BuildTranslationProblemDefinition(
