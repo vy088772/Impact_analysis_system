@@ -130,10 +130,10 @@ internal static class WrapperAssemblyDecompiler
         try
         {
             var settings = new DecompilerSettings(ICSharpCode.Decompiler.CSharp.LanguageVersion.Latest);
-            var resolver = new UniversalAssemblyResolver(dllPath, false, null);
-            foreach (var searchDirectory in ReferenceAssemblyDirectories())
-                resolver.AddSearchDirectory(searchDirectory);
             var peFile = new PEFile(dllPath);
+            var resolver = new UniversalAssemblyResolver(dllPath, false, null);
+            foreach (var searchDirectory in ReferenceAssemblyDirectoriesForAssembly(peFile))
+                resolver.AddSearchDirectory(searchDirectory);
             decompiler = new CSharpDecompiler(peFile, resolver, settings);
             typeDefinition = decompiler.TypeSystem.MainModule.TypeDefinitions
                 .FirstOrDefault(type => type.DeclaringTypeDefinition is null
@@ -209,10 +209,10 @@ internal static class WrapperAssemblyDecompiler
         try
         {
             var settings = new DecompilerSettings(ICSharpCode.Decompiler.CSharp.LanguageVersion.Latest);
-            var resolver = new UniversalAssemblyResolver(dllPath, false, null);
-            foreach (var searchDirectory in ReferenceAssemblyDirectories())
-                resolver.AddSearchDirectory(searchDirectory);
             var peFile = new PEFile(dllPath);
+            var resolver = new UniversalAssemblyResolver(dllPath, false, null);
+            foreach (var searchDirectory in ReferenceAssemblyDirectoriesForAssembly(peFile))
+                resolver.AddSearchDirectory(searchDirectory);
             var decompiler = new CSharpDecompiler(peFile, resolver, settings);
             return decompiler.TypeSystem.MainModule.TypeDefinitions.Any(type =>
                 type.DeclaringTypeDefinition is null
@@ -256,20 +256,66 @@ internal static class WrapperAssemblyDecompiler
             SourceFilePath: "");
     }
 
+    // net6.0/net8.0 reference assemblies, keyed by the exact moniker
+    // ICSharpCode.Decompiler.Metadata.DotNetCorePathFinderExtensions.DetectTargetFrameworkId
+    // reports for an assembly built against that TargetFramework. Every measured System's
+    // SDK-style project targets one of these two; a framework detection does name, but that is
+    // named nowhere here (a future net7.0/9.0, .NET Standard, ...), degrades to no search
+    // directories rather than guessing at a mismatched set.
+    private static readonly IReadOnlyDictionary<string, string> CoreReferenceAssemblyRelativePaths =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [".NETCoreApp,Version=v6.0"] = Path.Combine("ref", "net6.0"),
+            [".NETCoreApp,Version=v8.0"] = Path.Combine("ref", "net8.0"),
+        };
+
     // Exposed for ProjectCompilationResolver (Semantic Binding Availability), which resolves a
     // project's bare framework references (e.g. "System", "System.Data") against the same
     // downloaded .NET Framework reference assembly package this decompiler already uses to
-    // resolve mscorlib etc. for a decompiled wrapper DLL.
+    // resolve mscorlib etc. for a decompiled .NET Framework wrapper DLL. Every old-style
+    // (non-SDK) project this analyzer reads targets .NET Framework, so this always names the
+    // one Framework set below -- never one of the net6.0/net8.0 sets a modern SDK-style project
+    // needs.
     internal static IEnumerable<string> ReferenceAssemblyDirectories()
+        => DirectoriesForPackage(
+            "microsoft.netframework.referenceassemblies.net48",
+            Path.Combine("build", ".NETFramework", "v4.8"));
+
+    // The reference-assembly directories to examine `peFile` against: the reference assemblies
+    // for the framework it itself targets, not whichever set happened to be on disk. Detection
+    // failing outright, and a `.NETFramework` id of any version -- this analyzer carries one
+    // Framework set and always has -- both resolve against that one set: exactly what every
+    // wrapper DLL decompiled before this ticket did unconditionally (SQLFunc.dll targets 4.5,
+    // SQLObject.dll targets 4.0, both against the 4.8 set). A Framework assembly that detection
+    // fails to name is a case this analyzer already resolved before this ticket, so detection
+    // failure falls back to that same unconditional set, never to nothing.
+    // A `net6.0`/`net8.0` assembly resolves against its own matching set instead. Only a
+    // framework detection *does* name, and this analyzer carries no set for (a future net7.0/9.0,
+    // .NET Standard, ...), yields no search directories: examining it against a mismatched
+    // Framework set could answer a base-type question wrong instead of "cannot answer", so the
+    // assembly still decompiles with the affected external types left unresolved, rather than
+    // guessing at a set that does not describe it.
+    private static IEnumerable<string> ReferenceAssemblyDirectoriesForAssembly(PEFile peFile)
+    {
+        var targetFrameworkId = peFile.DetectTargetFrameworkId();
+        if (string.IsNullOrEmpty(targetFrameworkId)
+            || targetFrameworkId.StartsWith(".NETFramework", StringComparison.Ordinal))
+            return ReferenceAssemblyDirectories();
+        return CoreReferenceAssemblyRelativePaths.TryGetValue(targetFrameworkId, out var relativePath)
+            ? DirectoriesForPackage("microsoft.netcore.app.ref", relativePath)
+            : Array.Empty<string>();
+    }
+
+    private static IEnumerable<string> DirectoriesForPackage(string packageId, string relativePath)
     {
         var nugetRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
-        var packageRoot = Path.Combine(nugetRoot, "microsoft.netframework.referenceassemblies.net48");
+        var packageRoot = Path.Combine(nugetRoot, packageId);
         if (!Directory.Exists(packageRoot))
             yield break;
         foreach (var versionDirectory in Directory.GetDirectories(packageRoot))
         {
-            var buildDirectory = Path.Combine(versionDirectory, "build", ".NETFramework", "v4.8");
+            var buildDirectory = Path.Combine(versionDirectory, relativePath);
             if (Directory.Exists(buildDirectory))
                 yield return buildDirectory;
         }

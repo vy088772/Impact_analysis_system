@@ -4,6 +4,10 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- This project's own net8.0 build already implicitly downloads a Microsoft.NETCore.App.Ref
+         matching its own TargetFramework, which happens to coincide with the net8.0 reference
+         set requested explicitly below (harmless, but NuGet reports it as a duplicate item). -->
+    <NoWarn>$(NoWarn);NU1505</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
@@ -12,5 +16,9 @@
     <!-- Downloaded (not referenced) so the decompiler can resolve mscorlib etc. for
          .NET Framework wrapper DLLs. See WrapperAssemblyDecompiler.ReferenceAssemblyDirectories. -->
     <PackageDownload Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="[1.0.3]" />
+    <!-- Downloaded (not referenced) so the decompiler can resolve System.Data.Common etc. for
+         net6.0/net8.0 wrapper DLLs, which every measured System's SDK-style project targets.
+         See WrapperAssemblyDecompiler.ReferenceAssemblyDirectoriesForAssembly. -->
+    <PackageDownload Include="Microsoft.NETCore.App.Ref" Version="[6.0.36];[8.0.29]" />
   </ItemGroup>
 </Project>
