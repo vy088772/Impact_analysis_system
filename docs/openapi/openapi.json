@@ -207,6 +207,35 @@
         "title": "CodeSnippet",
         "type": "object"
       },
+      "ContractTransactionSummary": {
+        "additionalProperties": true,
+        "description": "`RefreshResponse.contract_transaction` — the Contract Transaction\ncommit outcome for this refresh (`service/contract_transaction.py` via\n`analyze_service.refresh_source()`).\n\n`status` is declared so a later rename fails a test instead of quietly\nemptying the operator-facing line (`refresh_cli._print_contract_transaction`).\n`contracts` names the contracts this refresh wrote or reused; every other\nkey (`transaction_id`, `manifest_path`, `error_code`, `error`) passes\nthrough unchanged via `extra=\"allow\"`.",
+        "properties": {
+          "contracts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Contracts",
+            "type": "array"
+          },
+          "status": {
+            "default": "not_required",
+            "enum": [
+              "committed",
+              "noop",
+              "failed",
+              "not_required",
+              "preflight_failed",
+              "program_scope",
+              "no_system_id"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "ContractTransactionSummary",
+        "type": "object"
+      },
       "FindBySPRequest": {
         "description": "POST /find_by_sp 請求：反查「哪些程式呼叫了這支 SP」（純快取比對，不觸發 clone）。\n\ncache_only=True（預設）時，若該 repo 尚未 clone 過，直接回傳 skipped=True，\n不會觸發 Azure clone —— 這支端點常被逐系統掃描式呼叫（不知道 SP 屬於哪個\n系統），避免對每個未分析過的系統都觸發一次昂貴的 clone。",
         "properties": {
@@ -1182,6 +1211,9 @@
       },
       "RefreshResponse": {
         "properties": {
+          "contract_transaction": {
+            "$ref": "#/components/schemas/ContractTransactionSummary"
+          },
           "database_invocations": {
             "default": 0,
             "title": "Database Invocations",

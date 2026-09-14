@@ -28,13 +28,40 @@ value alone.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The `/refresh` response carries the Contract Transaction outcome as a declared, typed field — a later rename fails a test rather than silently emptying the line
-- [ ] `refresh_cli` prints one line for the Contract Transaction, carrying the status and the contract names
-- [ ] A refresh that commits prints a committed status naming the contracts it wrote
-- [ ] A refresh skipped because Contract Preflight failed reports `preflight_failed`, not `not_required`
-- [ ] A refresh skipped because it was scoped to named programs reports `program_scope`
-- [ ] A refresh skipped because no system identifier was given reports `no_system_id`
-- [ ] A refresh where no Contract needed committing still reports `not_required`, so the word keeps its literal meaning
-- [ ] A refresh that reaches no external wrapper at all prints no Contract Transaction line, so an unrelated refresh gains no noise
+- [x] The `/refresh` response carries the Contract Transaction outcome as a declared, typed field — a later rename fails a test rather than silently emptying the line
+- [x] `refresh_cli` prints one line for the Contract Transaction, carrying the status and the contract names
+- [x] A refresh that commits prints a committed status naming the contracts it wrote
+- [x] A refresh skipped because Contract Preflight failed reports `preflight_failed`, not `not_required`
+- [x] A refresh skipped because it was scoped to named programs reports `program_scope`
+- [x] A refresh skipped because no system identifier was given reports `no_system_id`
+- [x] A refresh where no Contract needed committing still reports `not_required`, so the word keeps its literal meaning
+- [x] A refresh that reaches no external wrapper at all prints no Contract Transaction line, so an unrelated refresh gains no noise
+
+**Note:** `service/schemas.py` adds `ContractTransactionStatus` (a `Literal` of
+the seven real outcomes) and `ContractTransactionSummary` (typed, `extra="allow"`
+for `transaction_id`/`manifest_path`/`error_code`/`error`), and declares it as
+`RefreshResponse.contract_transaction`. `service/analyze_service.py`'s
+`refresh_source` now names the gate that stopped the commit — `program_scope`
+(checked first: a partial refresh never commits), `no_system_id`, then
+`preflight_failed` — before falling through to the commit attempt or the
+literal `not_required`; a new `_selector_names()` helper turns the committed
+selector into the `contracts` list. `llamaindex-spec-rag/impact_orch/refresh_cli.py`
+adds `_print_contract_transaction()`, called from `main()` after the wrapper
+summary; it prints `contract transaction: status=<status> contracts=<names or
+<none>>`, gated on `wrapper_summary.totals.external_wrappers` so a refresh that
+never reaches an external wrapper prints nothing.
+
+Tests: `Impact_analysis_system/tests/test_refresh_atomic_commit.py` (two
+existing assertions renamed from `not_required` to `program_scope`/
+`no_system_id`, plus new `preflight_failed` and literal-`not_required` cases),
+`tests/test_schemas.py` (typed-field + status-enum regression tests), and
+`llamaindex-spec-rag/tests/test_refresh_cli.py` (printed line, per-status text,
+and the no-external-wrapper suppression). `docs/openapi/openapi.json`
+regenerated via `python -m tools.export_openapi_schema` so the schema fixtures
+the CLI tests validate against stay current. The affected
+`Impact_analysis_system` test files and the full
+`llamaindex-spec-rag/tests/test_refresh_cli.py` suite are green; the
+repository-wide `Impact_analysis_system` suite was still running at the time
+of this note.

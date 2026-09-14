@@ -3654,6 +3654,16 @@ def _mark_contract_preflight_failed(
 _ONBOARDING_STATUSES_ELIGIBLE_FOR_COMMIT = frozenset({"created", "reused"})
 
 
+def _selector_names(selector: Any) -> List[str]:
+    """Flatten a Contract Preflight selector (str / list / tuple / None) to
+    the contract name list `contract_transaction.contracts` reports."""
+    if isinstance(selector, str):
+        return [selector] if selector.strip() else []
+    if isinstance(selector, (list, tuple)):
+        return [str(item) for item in selector if str(item).strip()]
+    return []
+
+
 def _contract_revision_reference(
     preflight_registry: Optional[Mapping[str, Any]],
     formal_selector: Any,
@@ -3929,12 +3939,18 @@ def refresh_source(
     # Registry/catalog writes happen only after formal classification and
     # wrapper reconciliation above have already succeeded, and only for a
     # staged proposal complete enough to reuse or create a contract.
-    contract_transaction_summary: Dict[str, Any] = {"status": "not_required"}
-    if (
-        not partial
-        and str(database or "").strip()
-        and preflight.onboarding_status in _ONBOARDING_STATUSES_ELIGIBLE_FOR_COMMIT
-    ):
+    #
+    # Each skip path below names the gate that actually stopped the commit,
+    # so "not_required" keeps its literal meaning: nothing needed committing.
+    # A refresh that never reaches a gate at all falls through unchanged.
+    contract_transaction_summary: Dict[str, Any] = {"status": "not_required", "contracts": []}
+    if partial:
+        contract_transaction_summary = {"status": "program_scope", "contracts": []}
+    elif not str(database or "").strip():
+        contract_transaction_summary = {"status": "no_system_id", "contracts": []}
+    elif preflight.failed:
+        contract_transaction_summary = {"status": "preflight_failed", "contracts": []}
+    elif preflight.onboarding_status in _ONBOARDING_STATUSES_ELIGIBLE_FOR_COMMIT:
         try:
             contract_transaction_summary = commit_staged_contract_transaction(
                 staged_registry=preflight.staged_registry or {"contracts": {}},
@@ -3948,11 +3964,13 @@ def refresh_source(
                     "source_commit": cached_commit(root) or "",
                 },
             )
+            contract_transaction_summary["contracts"] = _selector_names(preflight.formal_selector)
         except ContractTransactionError as exc:
             contract_transaction_summary = {
                 "status": "failed",
                 "error_code": exc.code,
                 "error": str(exc),
+                "contracts": [],
             }
 
     database_invocation_count = len(scan.iter_formal_sp_invocations())

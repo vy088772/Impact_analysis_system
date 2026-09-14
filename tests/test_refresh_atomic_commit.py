@@ -104,6 +104,7 @@ def test_full_refresh_commits_staged_contract_to_active_configuration(
     result = analyze_service.refresh_source({"project": "p", "repo": "r"}, database="Orders")
 
     assert result["contract_transaction"]["status"] == "committed"
+    assert result["contract_transaction"]["contracts"] == ["vendor"]
     registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
     assert "vendor" in registry_after["contracts"]
     catalog_after = json.loads(catalog_path.read_text(encoding="utf-8"))
@@ -148,7 +149,7 @@ def test_program_scoped_refresh_never_commits_even_with_a_complete_proposal(
     )
 
     assert result["partial"] is True
-    assert result["contract_transaction"]["status"] == "not_required"
+    assert result["contract_transaction"]["status"] == "program_scope"
     assert registry_path.read_bytes() == before_registry
     assert catalog_path.read_bytes() == before_catalog
 
@@ -169,5 +170,61 @@ def test_full_refresh_without_a_system_id_does_not_commit(monkeypatch, tmp_path)
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 
-    assert result["contract_transaction"]["status"] == "not_required"
+    assert result["contract_transaction"]["status"] == "no_system_id"
+    assert registry_path.read_bytes() == before_registry
+
+
+def test_full_refresh_reports_preflight_failed_when_contract_preflight_fails(
+    monkeypatch, tmp_path
+) -> None:
+    """A refresh Contract Preflight rejects reports `preflight_failed`, not the
+    literal-opposite-reading `not_required` (05-the-contract-transaction-is-reported.md)."""
+    from service.contract_preflight import ContractPreflightResult, ContractSelector
+
+    root = tmp_path / "Orders"
+    root.mkdir()
+    registry_path, catalog_path = _setup_registry_and_catalog(tmp_path, "Orders")
+    before_registry = registry_path.read_bytes()
+    scan = _scan_with_opaque_wrapper(root, _proposal("vendor", "Vendor.Data"))
+    failed_preflight = ContractPreflightResult(
+        selector=ContractSelector(status="unspecified", reason="selector_contract_not_found"),
+        onboarding_status="preflight_failed",
+        reason="contract_preflight_failed",
+    )
+
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=True: [root])
+    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "load_contract_registry", lambda: {"contracts": {}})
+    monkeypatch.setattr(analyze_service, "cached_commit", lambda scan_root: "deadbeef")
+    monkeypatch.setattr(analyze_service, "run_contract_preflight", lambda *a, **k: failed_preflight)
+    monkeypatch.setattr(analyze_service, "CONTRACT_TRANSACTION_REGISTRY_PATH", registry_path)
+    monkeypatch.setattr(analyze_service, "CONTRACT_TRANSACTION_CATALOG_PATH", catalog_path)
+
+    result = analyze_service.refresh_source({"project": "p", "repo": "r"}, database="Orders")
+
+    assert result["contract_transaction"] == {"status": "preflight_failed", "contracts": []}
+    assert registry_path.read_bytes() == before_registry
+
+
+def test_full_refresh_with_nothing_to_commit_still_reports_not_required(
+    monkeypatch, tmp_path
+) -> None:
+    """No external wrapper, no proposal: the only case where `not_required` keeps
+    its literal meaning — nothing needed committing (05-the-contract-transaction-is-reported.md)."""
+    root = tmp_path / "Orders"
+    root.mkdir()
+    registry_path, catalog_path = _setup_registry_and_catalog(tmp_path, "Orders")
+    before_registry = registry_path.read_bytes()
+    scan = ProjectScanResult(project_root=str(root), project_name="Orders", scan_time=datetime.now())
+
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=True: [root])
+    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "load_contract_registry", lambda: {"contracts": {}})
+    monkeypatch.setattr(analyze_service, "cached_commit", lambda scan_root: "deadbeef")
+    monkeypatch.setattr(analyze_service, "CONTRACT_TRANSACTION_REGISTRY_PATH", registry_path)
+    monkeypatch.setattr(analyze_service, "CONTRACT_TRANSACTION_CATALOG_PATH", catalog_path)
+
+    result = analyze_service.refresh_source({"project": "p", "repo": "r"}, database="Orders")
+
+    assert result["contract_transaction"] == {"status": "not_required", "contracts": []}
     assert registry_path.read_bytes() == before_registry

@@ -196,6 +196,42 @@ class RefreshRequest(BaseModel):
 # `"not_applicable"` used when no database evidence applies.
 EvidenceStatus = Literal["proven", "likely", "unresolved", "not_applicable"]
 
+# The values `contract_transaction.status` can hold, produced by
+# `analyze_service.refresh_source()`. `committed`/`noop`/`failed` come from
+# `contract_transaction.commit_staged_contract_transaction()`; the other
+# three each name one distinct reason the commit step never ran:
+# `preflight_failed` (Contract Preflight rejected this refresh),
+# `program_scope` (the refresh was scoped to named programs), and
+# `no_system_id` (no system identifier was given). `not_required` keeps its
+# literal meaning: nothing needed committing.
+ContractTransactionStatus = Literal[
+    "committed",
+    "noop",
+    "failed",
+    "not_required",
+    "preflight_failed",
+    "program_scope",
+    "no_system_id",
+]
+
+
+class ContractTransactionSummary(BaseModel):
+    """`RefreshResponse.contract_transaction` — the Contract Transaction
+    commit outcome for this refresh (`service/contract_transaction.py` via
+    `analyze_service.refresh_source()`).
+
+    `status` is declared so a later rename fails a test instead of quietly
+    emptying the operator-facing line (`refresh_cli._print_contract_transaction`).
+    `contracts` names the contracts this refresh wrote or reused; every other
+    key (`transaction_id`, `manifest_path`, `error_code`, `error`) passes
+    through unchanged via `extra="allow"`.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    status: ContractTransactionStatus = "not_required"
+    contracts: List[str] = Field(default_factory=list)
+
 
 class WrapperReviewItem(BaseModel):
     """One aggregated wrapper observation flagged for maintainer review.
@@ -295,6 +331,9 @@ class RefreshResponse(BaseModel):
     # root detected as, and the parsers that actually mounted for it.
     framework_reports: List[Dict[str, Any]] = Field(default_factory=list)
     wrapper_summary: WrapperSummary = Field(default_factory=WrapperSummary)
+    contract_transaction: ContractTransactionSummary = Field(
+        default_factory=ContractTransactionSummary
+    )
     # Deprecated aliases retained for clients that have not migrated yet.
     sp_relations: int = 0
     table_relations: int = 0

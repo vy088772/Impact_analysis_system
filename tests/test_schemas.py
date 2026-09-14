@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from service.schemas import (
+    ContractTransactionSummary,
     PathEvidenceResponse,
     RefreshResponse,
     SPMatchProgram,
@@ -111,6 +112,51 @@ def test_dual_fact_pairs_hold_independent_values_on_the_same_response() -> None:
 
 def test_refresh_response_wrapper_summary_is_typed_not_a_bare_dict() -> None:
     assert RefreshResponse.model_fields["wrapper_summary"].annotation is WrapperSummary
+
+
+# --- 05-the-contract-transaction-is-reported.md: type
+# `RefreshResponse.contract_transaction` so a later rename fails a test
+# instead of silently emptying the line on the operator's screen. ---------
+
+
+def test_refresh_response_contract_transaction_is_typed_not_a_bare_dict() -> None:
+    assert (
+        RefreshResponse.model_fields["contract_transaction"].annotation
+        is ContractTransactionSummary
+    )
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "committed",
+        "noop",
+        "failed",
+        "not_required",
+        "preflight_failed",
+        "program_scope",
+        "no_system_id",
+    ],
+)
+def test_contract_transaction_accepts_each_known_status(status: str) -> None:
+    summary = ContractTransactionSummary(status=status)
+    assert summary.status == status
+
+
+def test_contract_transaction_rejects_an_unknown_status() -> None:
+    with pytest.raises(ValidationError):
+        ContractTransactionSummary(status="not_a_real_status")
+
+
+def test_contract_transaction_keeps_unrelated_fields_unvalidated() -> None:
+    summary = ContractTransactionSummary(
+        status="committed",
+        contracts=["vendor"],
+        transaction_id="abc123",
+        manifest_path="/tmp/x.manifest.json",
+    )
+    assert summary.transaction_id == "abc123"
+    assert summary.manifest_path == "/tmp/x.manifest.json"
 
 
 @pytest.mark.parametrize("status", ["proven", "likely", "unresolved", "not_applicable"])
