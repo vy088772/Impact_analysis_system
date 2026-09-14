@@ -77,3 +77,30 @@ of the unclassified set and name the sibling each one calls.
 - Full test suite run before and after (excluding two scripts needing a live SQL Server/ODBC
   connection, unrelated to this change): 876 passed, the same 11 pre-existing failures both
   times, none newly introduced.
+
+### Post-review follow-up
+
+`/code-review` (Standards axis) flagged `GetUnclassifiedPublicMethods` and `GetDelegatedMethods`
+as a near-identical walk (Duplicated Code, judgement call) and `IsSqlCommandType`/
+`IsDataAdapterType` as two separately-spelled provider lists that could drift apart again
+(Repeated Switches, judgement call). Both addressed:
+
+- Extracted `FindUnclassifiedCandidates` — the one walk over "public, ADO.NET-touching,
+  not-yet-classified" methods that both `GetDelegatedMethods` and `GetUnclassifiedPublicMethods`
+  now derive from, so the two outcomes can no longer drift on which methods they decide between.
+- Extracted `AdoNetProviderPrefixes` (`Db`/`Sql`/`OleDb`/`Odbc`/`Npgsql`/`MySql`) as the one list
+  `IsSqlCommandType` and `IsDataAdapterType` both build their comparison from.
+
+The review's third finding (Primitive Obsession — three parallel identity collections instead
+of one value type for the three-way outcome) was left as-is: the review itself called it "not
+clearly wrong," and CONTEXT.md's **Delegated Method** entry already states the "never conflated"
+invariant the finding worried about losing. Introducing a new type for three call sites is the
+kind of generality the spec's own testing conventions warn against reaching for speculatively.
+
+Re-verified after the refactor: full test suite (876 passed, same 11 pre-existing failures) and
+the real `CommonLibrary.dll`/`SQLFunc.dll`/`SQLObject.dll` fixture-gated tests, unchanged output.
+
+The Spec axis found no missing/wrong requirements, only that ticket 01's Y-DOCs-count checkbox
+read more certain than its own Note supported — fixed by annotating that checkbox inline (see
+ticket 01) rather than by changing any code, since the underlying claim was already true and
+already honestly caveated in prose.

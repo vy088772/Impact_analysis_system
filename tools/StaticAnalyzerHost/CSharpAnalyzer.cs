@@ -89,26 +89,30 @@ internal static class CSharpAnalyzer
             CSharpSyntaxTree.ParseText(source, path: inputPath).GetCompilationUnitRoot());
     }
 
+    /// <summary>
+    /// The ADO.NET provider prefixes the command-object and data-adapter recognition rules both
+    /// carry -- named once so the two can never silently drift apart on which providers exist,
+    /// the way they did before the command rule was widened to match this list.
+    /// </summary>
+    private static readonly IReadOnlyList<string> AdoNetProviderPrefixes = new[]
+    {
+        "Db", "Sql", "OleDb", "Odbc", "Npgsql", "MySql",
+    };
+
     /// <summary>Matches the abstract ADO.NET command type and every provider-specific command
-    /// type this codebase's sibling rules already name -- the same provider set
+    /// type in <see cref="AdoNetProviderPrefixes"/> -- the same provider set
     /// <see cref="IsDataAdapterType"/> carries, with `Command` in place of `DataAdapter`.</summary>
     internal static bool IsSqlCommandType(TypeSyntax type)
-        => type.ToString().Split('.').Last() is
-            "DbCommand" or
-            "SqlCommand" or
-            "OleDbCommand" or
-            "OdbcCommand" or
-            "NpgsqlCommand" or
-            "MySqlCommand";
+    {
+        var name = type.ToString().Split('.').Last();
+        return AdoNetProviderPrefixes.Any(prefix => name == prefix + "Command");
+    }
 
     internal static bool IsDataAdapterType(TypeSyntax type)
-        => type.ToString().Split('.').Last() is
-            "DbDataAdapter" or
-            "SqlDataAdapter" or
-            "OleDbDataAdapter" or
-            "OdbcDataAdapter" or
-            "NpgsqlDataAdapter" or
-            "MySqlDataAdapter";
+    {
+        var name = type.ToString().Split('.').Last();
+        return AdoNetProviderPrefixes.Any(prefix => name == prefix + "DataAdapter");
+    }
 
     private static readonly IReadOnlyCollection<string> AdoNetTypeNames = new HashSet<string>(StringComparer.Ordinal)
     {
@@ -1875,12 +1879,12 @@ internal static class WrapperAnalyzer
             .ToList();
 
     /// <summary>
-    /// Assigns every public method of a decompiled receiver type one of three states: classified
-    /// (<paramref name="definitions"/> holds a <see cref="WrapperDefinition"/> for it), non-database
-    /// (its body names no ADO.NET type), or unclassified (its body names an ADO.NET type, but the
-    /// Command Source resolver found nothing usable for it and <see cref="GetDelegatedMethods"/>
-    /// found no single sibling call that explains it either). Returns only the unclassified method
-    /// identities — the honest signal that the public database behavior surface is incomplete.
+    /// A method declared on a decompiled receiver type that is public, names an ADO.NET type
+    /// somewhere in its body, and has no classified <see cref="WrapperDefinition"/> of its own —
+    /// the shared population <see cref="GetUnclassifiedPublicMethods"/> and
+    /// <see cref="GetDelegatedMethods"/> each decide between (delegated vs. still unclassified),
+    /// walked once here so the two outcomes can never silently drift out of sync about which
+    /// methods they are deciding between.
     /// </summary>
     /// <param name="root">
     /// The flat, namespace-less <c>class {ReceiverType} {{ ... }}</c> root
@@ -1889,6 +1893,53 @@ internal static class WrapperAnalyzer
     /// <c>DescendantNodes()</c>, so a compiler-generated nested type a decompiled method body
     /// happens to carry along is never mistaken for a public method of the receiver type itself.
     /// </param>
+    private static IEnumerable<UnclassifiedCandidate> FindUnclassifiedCandidates(
+        CompilationUnitSyntax root,
+        IReadOnlyList<WrapperDefinition> definitions)
+    {
+        var knownTypeIdentities = GetKnownTypeIdentities(new[] { root });
+        var classifiedIdentities = definitions
+            .Select(definition => definition.MethodIdentity)
+            .Where(identity => !string.IsNullOrWhiteSpace(identity))
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var classDeclaration in root.Members.OfType<ClassDeclarationSyntax>())
+        {
+            var siblingNames = classDeclaration.Members
+                .OfType<MethodDeclarationSyntax>()
+                .Select(sibling => sibling.Identifier.Text)
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (var method in classDeclaration.Members.OfType<MethodDeclarationSyntax>())
+            {
+                if (!method.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.PublicKeyword)))
+                    continue;
+                // Blank only when the class itself has no resolvable identity; nothing durable
+                // to name the method by, so it is left out rather than reported under a
+                // fabricated blank-prefixed identity.
+                var methodIdentity = GetMethodIdentity(method, knownTypeIdentities);
+                if (methodIdentity is null || classifiedIdentities.Contains(methodIdentity))
+                    continue;
+                if (!method.DescendantNodes().OfType<TypeSyntax>().Any(CSharpAnalyzer.IsAdoNetType))
+                    continue;
+                yield return new UnclassifiedCandidate(method, methodIdentity, siblingNames);
+            }
+        }
+    }
+
+    private readonly record struct UnclassifiedCandidate(
+        MethodDeclarationSyntax Method,
+        string MethodIdentity,
+        IReadOnlySet<string> SiblingNames);
+
+    /// <summary>
+    /// Assigns every public method of a decompiled receiver type one of three states: classified
+    /// (<paramref name="definitions"/> holds a <see cref="WrapperDefinition"/> for it), non-database
+    /// (its body names no ADO.NET type), or unclassified (its body names an ADO.NET type, but the
+    /// Command Source resolver found nothing usable for it and <see cref="GetDelegatedMethods"/>
+    /// found no single sibling call that explains it either). Returns only the unclassified method
+    /// identities — the honest signal that the public database behavior surface is incomplete.
+    /// </summary>
     /// <param name="delegatedMethods">
     /// The Delegated Methods already resolved for this same <paramref name="root"/> and
     /// <paramref name="definitions"/> (see <see cref="GetDelegatedMethods"/>) — a Delegated
@@ -1900,36 +1951,15 @@ internal static class WrapperAnalyzer
         IReadOnlyList<WrapperDefinition> definitions,
         IReadOnlyList<DelegatedMethod> delegatedMethods)
     {
-        var knownTypeIdentities = GetKnownTypeIdentities(new[] { root });
-        var classifiedIdentities = definitions
-            .Select(definition => definition.MethodIdentity)
-            .Where(identity => !string.IsNullOrWhiteSpace(identity))
-            .ToHashSet(StringComparer.Ordinal);
         var delegatedIdentities = delegatedMethods
             .Select(delegatedMethod => delegatedMethod.MethodIdentity)
             .ToHashSet(StringComparer.Ordinal);
 
-        var unclassified = new List<string>();
-        foreach (var classDeclaration in root.Members.OfType<ClassDeclarationSyntax>())
-        {
-            foreach (var method in classDeclaration.Members.OfType<MethodDeclarationSyntax>())
-            {
-                if (!method.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.PublicKeyword)))
-                    continue;
-                // Blank only when the class itself has no resolvable identity; nothing durable
-                // to name the method by, so it is left out rather than reported under a
-                // fabricated blank-prefixed identity.
-                var methodIdentity = GetMethodIdentity(method, knownTypeIdentities);
-                if (methodIdentity is null
-                    || classifiedIdentities.Contains(methodIdentity)
-                    || delegatedIdentities.Contains(methodIdentity))
-                    continue;
-                if (!method.DescendantNodes().OfType<TypeSyntax>().Any(CSharpAnalyzer.IsAdoNetType))
-                    continue;
-                unclassified.Add(methodIdentity);
-            }
-        }
-        return unclassified.Distinct(StringComparer.Ordinal).ToList();
+        return FindUnclassifiedCandidates(root, definitions)
+            .Select(candidate => candidate.MethodIdentity)
+            .Where(methodIdentity => !delegatedIdentities.Contains(methodIdentity))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
     }
 
     /// <summary>
@@ -1942,48 +1972,23 @@ internal static class WrapperAnalyzer
     internal sealed record DelegatedMethod(string MethodIdentity, string DelegatesTo);
 
     /// <summary>
-    /// Finds every Delegated Method among a receiver type's public methods: one with no Command
-    /// Source of its own (so it would otherwise be reported unclassified, exactly like
-    /// <see cref="GetUnclassifiedPublicMethods"/>'s population), whose body names an ADO.NET type,
-    /// and whose only invocation of a method declared on that same type is a single, unambiguous
-    /// one. A method with its own command construct is never consulted here — that rule already
-    /// classified it. A method calling two or more distinct siblings names no single delegate and
-    /// stays unclassified, same as a method calling none.
+    /// Finds every Delegated Method among a receiver type's public methods: for each candidate in
+    /// <see cref="FindUnclassifiedCandidates"/>'s population, whether its only invocation of a
+    /// method declared on that same type is a single, unambiguous one. A method with its own
+    /// command construct is never consulted here — that rule already classified it. A method
+    /// calling two or more distinct siblings names no single delegate and stays unclassified, same
+    /// as a method calling none.
     /// </summary>
     internal static IReadOnlyList<DelegatedMethod> GetDelegatedMethods(
         CompilationUnitSyntax root,
         IReadOnlyList<WrapperDefinition> definitions)
-    {
-        var knownTypeIdentities = GetKnownTypeIdentities(new[] { root });
-        var classifiedIdentities = definitions
-            .Select(definition => definition.MethodIdentity)
-            .Where(identity => !string.IsNullOrWhiteSpace(identity))
-            .ToHashSet(StringComparer.Ordinal);
-
-        var delegatedMethods = new List<DelegatedMethod>();
-        foreach (var classDeclaration in root.Members.OfType<ClassDeclarationSyntax>())
-        {
-            var siblingNames = classDeclaration.Members
-                .OfType<MethodDeclarationSyntax>()
-                .Select(sibling => sibling.Identifier.Text)
-                .ToHashSet(StringComparer.Ordinal);
-
-            foreach (var method in classDeclaration.Members.OfType<MethodDeclarationSyntax>())
-            {
-                if (!method.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.PublicKeyword)))
-                    continue;
-                var methodIdentity = GetMethodIdentity(method, knownTypeIdentities);
-                if (methodIdentity is null || classifiedIdentities.Contains(methodIdentity))
-                    continue;
-                if (!method.DescendantNodes().OfType<TypeSyntax>().Any(CSharpAnalyzer.IsAdoNetType))
-                    continue;
-                var sibling = ResolveDelegatedSibling(method, siblingNames);
-                if (sibling is not null)
-                    delegatedMethods.Add(new DelegatedMethod(methodIdentity, sibling));
-            }
-        }
-        return delegatedMethods;
-    }
+        => FindUnclassifiedCandidates(root, definitions)
+            .Select(candidate => (
+                candidate.MethodIdentity,
+                Sibling: ResolveDelegatedSibling(candidate.Method, candidate.SiblingNames)))
+            .Where(resolved => resolved.Sibling is not null)
+            .Select(resolved => new DelegatedMethod(resolved.MethodIdentity, resolved.Sibling!))
+            .ToList();
 
     /// <summary>The single sibling method (declared on the same type) this method's body
     /// invokes, or null when it invokes none or more than one -- delegation only ever names

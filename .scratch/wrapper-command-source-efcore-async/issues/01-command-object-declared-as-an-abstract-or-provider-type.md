@@ -29,7 +29,7 @@ method remain unaccounted for — so no Contract is created yet. That is ticket
 - [x] The real shared assembly under the IQCS checkout reports `usp_ExecCmdGetDataSetAsync` as classified (fixture-gated, skipped when the checkout is absent)
 - [x] That same assembly still reports an incomplete behaviour surface, and the remaining unclassified methods are named — a partial repair is not presented as a whole one
 - [x] The existing `SQLFunc` and `SQLObject` classified surfaces are unchanged, asserted whole
-- [x] The Y-DOCs WebForms stored-procedure counts rise or hold, never fall
+- [x] The Y-DOCs WebForms stored-procedure counts rise or hold, never fall (verified indirectly — see Note; no dedicated count tool exists to measure this directly)
 
 ## Note
 
