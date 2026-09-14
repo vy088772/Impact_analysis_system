@@ -1878,7 +1878,8 @@ internal static class WrapperAnalyzer
     /// Assigns every public method of a decompiled receiver type one of three states: classified
     /// (<paramref name="definitions"/> holds a <see cref="WrapperDefinition"/> for it), non-database
     /// (its body names no ADO.NET type), or unclassified (its body names an ADO.NET type, but the
-    /// Command Source resolver found nothing usable for it). Returns only the unclassified method
+    /// Command Source resolver found nothing usable for it and <see cref="GetDelegatedMethods"/>
+    /// found no single sibling call that explains it either). Returns only the unclassified method
     /// identities — the honest signal that the public database behavior surface is incomplete.
     /// </summary>
     /// <param name="root">
@@ -1888,14 +1889,24 @@ internal static class WrapperAnalyzer
     /// <c>DescendantNodes()</c>, so a compiler-generated nested type a decompiled method body
     /// happens to carry along is never mistaken for a public method of the receiver type itself.
     /// </param>
+    /// <param name="delegatedMethods">
+    /// The Delegated Methods already resolved for this same <paramref name="root"/> and
+    /// <paramref name="definitions"/> (see <see cref="GetDelegatedMethods"/>) — a Delegated
+    /// Method counts as understood, so it is excluded from the unclassified set it would
+    /// otherwise fall into.
+    /// </param>
     internal static IReadOnlyList<string> GetUnclassifiedPublicMethods(
         CompilationUnitSyntax root,
-        IReadOnlyList<WrapperDefinition> definitions)
+        IReadOnlyList<WrapperDefinition> definitions,
+        IReadOnlyList<DelegatedMethod> delegatedMethods)
     {
         var knownTypeIdentities = GetKnownTypeIdentities(new[] { root });
         var classifiedIdentities = definitions
             .Select(definition => definition.MethodIdentity)
             .Where(identity => !string.IsNullOrWhiteSpace(identity))
+            .ToHashSet(StringComparer.Ordinal);
+        var delegatedIdentities = delegatedMethods
+            .Select(delegatedMethod => delegatedMethod.MethodIdentity)
             .ToHashSet(StringComparer.Ordinal);
 
         var unclassified = new List<string>();
@@ -1909,7 +1920,9 @@ internal static class WrapperAnalyzer
                 // to name the method by, so it is left out rather than reported under a
                 // fabricated blank-prefixed identity.
                 var methodIdentity = GetMethodIdentity(method, knownTypeIdentities);
-                if (methodIdentity is null || classifiedIdentities.Contains(methodIdentity))
+                if (methodIdentity is null
+                    || classifiedIdentities.Contains(methodIdentity)
+                    || delegatedIdentities.Contains(methodIdentity))
                     continue;
                 if (!method.DescendantNodes().OfType<TypeSyntax>().Any(CSharpAnalyzer.IsAdoNetType))
                     continue;
@@ -1917,6 +1930,84 @@ internal static class WrapperAnalyzer
             }
         }
         return unclassified.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// A Delegated Method: a method with no command construct of its own, whose only database
+    /// contact is a single invocation of another method declared on the same type. It counts as
+    /// understood, a third outcome beside classified and unclassified. Delegation is not followed
+    /// transitively for rating evidence — <see cref="DelegatesTo"/> names where to look; it is not
+    /// itself a database target.
+    /// </summary>
+    internal sealed record DelegatedMethod(string MethodIdentity, string DelegatesTo);
+
+    /// <summary>
+    /// Finds every Delegated Method among a receiver type's public methods: one with no Command
+    /// Source of its own (so it would otherwise be reported unclassified, exactly like
+    /// <see cref="GetUnclassifiedPublicMethods"/>'s population), whose body names an ADO.NET type,
+    /// and whose only invocation of a method declared on that same type is a single, unambiguous
+    /// one. A method with its own command construct is never consulted here — that rule already
+    /// classified it. A method calling two or more distinct siblings names no single delegate and
+    /// stays unclassified, same as a method calling none.
+    /// </summary>
+    internal static IReadOnlyList<DelegatedMethod> GetDelegatedMethods(
+        CompilationUnitSyntax root,
+        IReadOnlyList<WrapperDefinition> definitions)
+    {
+        var knownTypeIdentities = GetKnownTypeIdentities(new[] { root });
+        var classifiedIdentities = definitions
+            .Select(definition => definition.MethodIdentity)
+            .Where(identity => !string.IsNullOrWhiteSpace(identity))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var delegatedMethods = new List<DelegatedMethod>();
+        foreach (var classDeclaration in root.Members.OfType<ClassDeclarationSyntax>())
+        {
+            var siblingNames = classDeclaration.Members
+                .OfType<MethodDeclarationSyntax>()
+                .Select(sibling => sibling.Identifier.Text)
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (var method in classDeclaration.Members.OfType<MethodDeclarationSyntax>())
+            {
+                if (!method.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.PublicKeyword)))
+                    continue;
+                var methodIdentity = GetMethodIdentity(method, knownTypeIdentities);
+                if (methodIdentity is null || classifiedIdentities.Contains(methodIdentity))
+                    continue;
+                if (!method.DescendantNodes().OfType<TypeSyntax>().Any(CSharpAnalyzer.IsAdoNetType))
+                    continue;
+                var sibling = ResolveDelegatedSibling(method, siblingNames);
+                if (sibling is not null)
+                    delegatedMethods.Add(new DelegatedMethod(methodIdentity, sibling));
+            }
+        }
+        return delegatedMethods;
+    }
+
+    /// <summary>The single sibling method (declared on the same type) this method's body
+    /// invokes, or null when it invokes none or more than one -- delegation only ever names
+    /// one sibling, never a set. A recursive self-call never counts as delegation.</summary>
+    private static string? ResolveDelegatedSibling(
+        MethodDeclarationSyntax method,
+        IReadOnlySet<string> siblingNames)
+    {
+        var siblingCalls = method.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Select(invocation => invocation.Expression switch
+            {
+                IdentifierNameSyntax identifier => identifier.Identifier.Text,
+                MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax } member
+                    => member.Name.Identifier.Text,
+                _ => null,
+            })
+            .Where(name => name is not null
+                && name != method.Identifier.Text
+                && siblingNames.Contains(name))
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return siblingCalls.Count == 1 ? siblingCalls[0] : null;
     }
 
     private static (ExpressionSyntax? Argument, string? Literal) ResolveCommandTextArgument(

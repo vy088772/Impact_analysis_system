@@ -142,6 +142,7 @@ internal static class Program
             detail = classification.Detail,
             translation_problem_methods = classification.TranslationProblemMethods,
             wrapper_definitions = classification.WrapperDefinitions,
+            delegated_methods = classification.DelegatedMethods,
             contract_proposals = DecompiledWrapperProposalBuilder.Build(classification, receiverType),
         };
         var cacheStatus = assemblyIdentity is null

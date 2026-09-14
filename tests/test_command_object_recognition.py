@@ -322,14 +322,14 @@ def test_decompile_wrapper_classifies_command_obtained_through_create_command() 
 
 # The full IQCS unclassified surface before this ticket: seven `SQLDbContext` public methods,
 # none classified. After this ticket, three resolve through the widened rule -- including the
-# measured `usp_ExecCmdGetDataSetAsync` -- and four remain, named rather than silently dropped:
-# one uses EF Core's high-level raw-SQL form (its own ticket, out of scope here) and three
-# delegate to a sibling method (ticket 02's Delegated Method).
+# measured `usp_ExecCmdGetDataSetAsync`. The other three that used to remain here
+# (`usp_ExecCmdGetFisrtValueAsync`, `usp_ExecCmdGetDataTableAsync`, `usp_ExecCmdGetJsonObjectAsync`)
+# now resolve as Delegated Methods instead (ticket 02; see
+# tests/test_delegated_method.py::test_real_sqldbcontext_delegating_methods_are_reported_as_delegated).
+# One method remains unclassified for its own, still out-of-scope reason: it uses EF Core's
+# high-level raw-SQL form, a structurally different shape its own ticket covers.
 REMAINING_UNCLASSIFIED_METHODS = {
     "SQLDbContext.usp_ExecCmdGetCountAsync(string,Microsoft.EntityFrameworkCore.SqlParameter[]?,bool)",
-    "SQLDbContext.usp_ExecCmdGetFisrtValueAsync(string,Microsoft.EntityFrameworkCore.SqlParameter[]?,bool)",
-    "SQLDbContext.usp_ExecCmdGetDataTableAsync(string,Microsoft.EntityFrameworkCore.SqlParameter[]?,bool)",
-    "SQLDbContext.usp_ExecCmdGetJsonObjectAsync(string,Microsoft.EntityFrameworkCore.SqlParameter[]?,bool)",
 }
 
 

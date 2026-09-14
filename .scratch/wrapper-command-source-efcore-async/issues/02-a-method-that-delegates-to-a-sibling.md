@@ -21,14 +21,59 @@ of the unclassified set and name the sibling each one calls.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A method with no command construct of its own, whose only database contact is a call to a method declared on the same type, is reported as delegated and names that sibling method
-- [ ] A delegating method that also inspects or reshapes the sibling's result is still reported as delegated — the rule does not require a bare pass-through, because none of the four real methods is one
-- [ ] A method that has both its own command construct and a sibling call is classified by its own Command Source; delegation is consulted only for a method that produced no Command Source
-- [ ] A method that touches a database type and yields neither a Command Source nor a delegation stays unclassified, exactly as it does today
-- [ ] A Delegated Method and an unclassified method are reported under different names, and the behaviour surface completeness check counts a Delegated Method as understood
-- [ ] A Delegated Method does not inherit its sibling's database target; the delegation record states where to look, and nothing more
-- [ ] The real shared assembly under the IQCS checkout reports its four delegating methods as delegated, each naming its sibling (fixture-gated, skipped when the checkout is absent)
-- [ ] `CONTEXT.md` gains **Delegated Method**, defined against "unclassified public method" so the two can never be conflated
-- [ ] The existing `SQLFunc` and `SQLObject` classified surfaces are unchanged, asserted whole — neither assembly gains a delegated method it did not have
+- [x] A method with no command construct of its own, whose only database contact is a call to a method declared on the same type, is reported as delegated and names that sibling method
+- [x] A delegating method that also inspects or reshapes the sibling's result is still reported as delegated — the rule does not require a bare pass-through, because none of the real methods is one
+- [x] A method that has both its own command construct and a sibling call is classified by its own Command Source; delegation is consulted only for a method that produced no Command Source
+- [x] A method that touches a database type and yields neither a Command Source nor a delegation stays unclassified, exactly as it does today
+- [x] A Delegated Method and an unclassified method are reported under different names, and the behaviour surface completeness check counts a Delegated Method as understood
+- [x] A Delegated Method does not inherit its sibling's database target; the delegation record states where to look, and nothing more
+- [x] The real shared assembly under the IQCS checkout reports its delegating methods as delegated, each naming its sibling (fixture-gated, skipped when the checkout is absent)
+- [x] `CONTEXT.md` gains **Delegated Method**, defined against "unclassified public method" so the two can never be conflated
+- [x] The existing `SQLFunc` and `SQLObject` classified surfaces are unchanged, asserted whole — neither assembly gains a delegated method it did not have
+
+## Note
+
+`tools/StaticAnalyzerHost/CSharpAnalyzer.cs` (`WrapperAnalyzer`):
+
+- New `DelegatedMethod(MethodIdentity, DelegatesTo)` record and `GetDelegatedMethods(root,
+  definitions)`: scans the same "no Command Source, touches an ADO.NET type" population
+  `GetUnclassifiedPublicMethods` used to report whole, and resolves the single, unambiguous
+  invocation of a method declared on the same type (`Foo(...)` or `this.Foo(...)`, a recursive
+  self-call excluded). Zero or two-or-more distinct sibling calls both yield no delegation —
+  ambiguity is not guessed at, it stays a gap.
+- `GetUnclassifiedPublicMethods` gained a `delegatedMethods` parameter and now excludes those
+  identities too, so "unclassified" keeps its exact current meaning: neither classified nor
+  delegated. `DecompiledWrapperClassifier.Classify` computes delegation once and threads it to
+  both.
+- `DecompiledWrapperClassification` gained a `DelegatedMethods` field; `Program.cs`'s
+  `decompile-wrapper` response gained a top-level `delegated_methods` array
+  (`{method_identity, delegates_to}` — nothing else, so delegation can never be mistaken for
+  inherited evidence). `public_database_operations_complete` and `unclassified_public_methods`
+  already derive from `UnclassifiedPublicMethods`, so both correctly count a Delegated Method as
+  understood with no separate wiring.
+- New `tests/test_delegated_method.py` covers all six shapes with a stand-in fixture
+  (delegate-and-reshape, both-own-and-sibling classified by its own source, touches-but-calls-no-
+  sibling stays unclassified, two-distinct-siblings stays unclassified), the delegation record's
+  exact two-key shape, and fixture-gated smoke tests against the real `CommonLibrary.dll`,
+  `SQLFunc.dll`, and `SQLObject.dll`.
+- Measured against the real assembly: three methods delegate —
+  `usp_ExecCmdGetFisrtValueAsync` → `usp_ExecCmdGetDataTableAsync` →
+  `usp_ExecCmdGetDataSetAsync`, and `usp_ExecCmdGetJsonObjectAsync` →
+  `usp_ExecCmdGetJsonObjectListAsync` — not the four this ticket's own problem statement named.
+  Ticket 01's Note already flagged this: `usp_ExecCmdGetJsonObjectListAsync` constructs its own
+  `DbCommand` directly (measured, not guessed) and was classified by ticket 01, not delegated
+  here. Only `usp_ExecCmdGetCountAsync` (EF Core's high-level raw-SQL form, its own out-of-scope
+  ticket) remains unclassified; `SQLDbContext`'s seven public methods are now fully accounted
+  for otherwise. `tests/test_command_object_recognition.py`'s ticket-01 fixture test was updated
+  to match (its `REMAINING_UNCLASSIFIED_METHODS` constant shrank from four names to the one that
+  is still genuinely out of scope).
+- `SQLFunc`/`SQLObject` measured to gain zero delegated methods, confirmed by a fixture-gated
+  test each; the existing whole-surface assertions in `tests/test_wrapper_decompilation.py`
+  continue to pass unchanged.
+- `CONTEXT.md` gained a **Delegated Method** entry beside **Command Source**, defined against
+  "unclassified public method" per the acceptance criterion.
+- Full test suite run before and after (excluding two scripts needing a live SQL Server/ODBC
+  connection, unrelated to this change): 876 passed, the same 11 pre-existing failures both
+  times, none newly introduced.
