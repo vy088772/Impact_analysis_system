@@ -3,6 +3,7 @@ using System.Xml.Linq;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.Metadata;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -127,11 +128,13 @@ internal static class WrapperAssemblyDecompiler
 
         CSharpDecompiler decompiler;
         ICSharpCode.Decompiler.TypeSystem.ITypeDefinition? typeDefinition;
+        PEFile peFile;
+        UniversalAssemblyResolver resolver;
         try
         {
             var settings = new DecompilerSettings(ICSharpCode.Decompiler.CSharp.LanguageVersion.Latest);
-            var peFile = new PEFile(dllPath);
-            var resolver = new UniversalAssemblyResolver(dllPath, false, null);
+            peFile = new PEFile(dllPath);
+            resolver = new UniversalAssemblyResolver(dllPath, false, null);
             foreach (var searchDirectory in ReferenceAssemblyDirectoriesForAssembly(peFile))
                 resolver.AddSearchDirectory(searchDirectory);
             decompiler = new CSharpDecompiler(peFile, resolver, settings);
@@ -194,11 +197,99 @@ internal static class WrapperAssemblyDecompiler
         var syntaxTree = CSharpSyntaxTree.ParseText(classSource);
         var root = (CompilationUnitSyntax)syntaxTree.GetRoot();
 
+        var importedNamespaces = usings
+            .Select(ExtractImportedNamespace)
+            .Where(importedNamespace => importedNamespace is not null)
+            .Select(importedNamespace => importedNamespace!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        Compilation? contractCompilation;
+        try
+        {
+            contractCompilation = BuildContractCompilation(peFile, resolver);
+        }
+        catch (Exception)
+        {
+            // A failure here degrades only the contract question the classifier can ask about
+            // this assembly's methods, never the decompile that already succeeded above.
+            contractCompilation = null;
+        }
+
         return WrapperDecompilationResult.Succeeded(
             assemblyIdentity,
             root,
             translationProblemMethods,
-            translationProblemDefinitions);
+            translationProblemDefinitions,
+            contractCompilation,
+            importedNamespaces);
+    }
+
+    // A `using X.Y;` directive names an importable namespace this decompiled source's type
+    // references may resolve against; `using static` and an alias (`using X = Y;`) name
+    // something else and are left out, degrading rather than guessing.
+    private static string? ExtractImportedNamespace(string usingDirectiveText)
+    {
+        var trimmed = usingDirectiveText.Trim().TrimEnd(';').Trim();
+        if (!trimmed.StartsWith("using ", StringComparison.Ordinal))
+            return null;
+        var rest = trimmed["using ".Length..].Trim();
+        if (rest.Length == 0
+            || rest.StartsWith("static ", StringComparison.Ordinal)
+            || rest.Contains('=', StringComparison.Ordinal))
+            return null;
+        return rest;
+    }
+
+    /// <summary>
+    /// A metadata-only compilation carrying the reference assemblies for the framework
+    /// <paramref name="peFile"/> targets, the decompiled assembly itself, and every assembly it
+    /// directly references (resolved the same way the decompile above resolved them) -- "enough
+    /// type information" to answer the command-contract question for a type this assembly's own
+    /// methods actually name, whichever provider declared it. No source is compiled into it; it
+    /// exists only for <see cref="Microsoft.CodeAnalysis.Compilation.GetTypeByMetadataName"/>
+    /// lookups. Null when nothing at all resolved, which degrades every contract question for
+    /// this assembly to the name-comparison fallback rather than failing the decompile.
+    /// </summary>
+    private static Compilation? BuildContractCompilation(PEFile peFile, IAssemblyResolver resolver)
+    {
+        var referencePaths = new List<string> { peFile.FileName };
+        foreach (var directory in ReferenceAssemblyDirectoriesForAssembly(peFile))
+        {
+            if (!Directory.Exists(directory))
+                continue;
+            referencePaths.AddRange(Directory.EnumerateFiles(directory, "*.dll"));
+        }
+        foreach (var reference in peFile.AssemblyReferences)
+        {
+            try
+            {
+                var resolved = resolver.Resolve(reference);
+                if (!string.IsNullOrEmpty(resolved?.FileName))
+                    referencePaths.Add(resolved.FileName);
+            }
+            catch (Exception)
+            {
+                // A reference this decompiler could not locate answers no contract question;
+                // the fallback name comparison decides for whatever type it would have named.
+            }
+        }
+
+        var metadataReferences = new List<MetadataReference>();
+        foreach (var path in referencePaths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                metadataReferences.Add(MetadataReference.CreateFromFile(path));
+            }
+            catch (Exception)
+            {
+                // Same reasoning: an unreadable reference degrades this one contract question,
+                // not the whole decompile.
+            }
+        }
+        return metadataReferences.Count == 0
+            ? null
+            : CSharpCompilation.Create("CommandContractCheck", references: metadataReferences);
     }
 
     // Metadata-only membership check for AssemblyReferenceResolver's fallback scan: does this
@@ -329,14 +420,27 @@ internal sealed record WrapperDecompilationResult(
     string? AssemblyIdentity,
     CompilationUnitSyntax? Root,
     IReadOnlyList<string> TranslationProblemMethods,
-    IReadOnlyList<WrapperAnalyzer.WrapperDefinition> TranslationProblemDefinitions)
+    IReadOnlyList<WrapperAnalyzer.WrapperDefinition> TranslationProblemDefinitions,
+    Compilation? ContractCompilation = null,
+    IReadOnlyList<string>? ImportedNamespaces = null)
 {
     internal static WrapperDecompilationResult Succeeded(
         string assemblyIdentity,
         CompilationUnitSyntax root,
         IReadOnlyList<string> translationProblemMethods,
-        IReadOnlyList<WrapperAnalyzer.WrapperDefinition> translationProblemDefinitions)
-        => new(true, null, null, assemblyIdentity, root, translationProblemMethods, translationProblemDefinitions);
+        IReadOnlyList<WrapperAnalyzer.WrapperDefinition> translationProblemDefinitions,
+        Compilation? contractCompilation,
+        IReadOnlyList<string> importedNamespaces)
+        => new(
+            true,
+            null,
+            null,
+            assemblyIdentity,
+            root,
+            translationProblemMethods,
+            translationProblemDefinitions,
+            contractCompilation,
+            importedNamespaces);
 
     internal static WrapperDecompilationResult Failed(string reason, string? detail, string? assemblyIdentity = null)
         => new(
@@ -367,10 +471,16 @@ internal static class DecompiledWrapperClassifier
                 decompilation.Detail,
                 decompilation.AssemblyIdentity);
 
+        var checker = decompilation.ContractCompilation is null
+            ? null
+            : new MetadataNameCommandContractChecker(
+                decompilation.ContractCompilation,
+                decompilation.ImportedNamespaces ?? Array.Empty<string>());
         var definitions = WrapperAnalyzer.GetDefinitions(
             new[] { decompilation.Root! },
             decompilation.AssemblyIdentity!,
-            decompilation.AssemblyIdentity!);
+            decompilation.AssemblyIdentity!,
+            checker);
         var delegatedMethods = WrapperAnalyzer.GetDelegatedMethods(
             decompilation.Root!,
             definitions);

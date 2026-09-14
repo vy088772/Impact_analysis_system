@@ -1696,7 +1696,12 @@ internal static class WrapperAnalyzer
         CSharpCompilation? compilation = null)
     {
         var roots = sourceRoots.ToList();
-        var wrappers = GetDefinitions(roots);
+        // The local source wrapper path: when a real project compilation is available, the same
+        // command-object recognition rule the decompiled path uses answers the contract question
+        // here too, with no scope switch between the two paths.
+        var wrappers = GetDefinitions(
+            roots,
+            compilation is null ? null : new RoslynCommandContractChecker(compilation));
         var knownTypeIdentities = GetKnownTypeIdentities(roots);
 
         var invocations = new List<DirectSqlInvocation>();
@@ -1835,10 +1840,24 @@ internal static class WrapperAnalyzer
         return definitions;
     }
 
+    /// <summary>
+    /// The local source wrapper path with a real project compilation available: a null
+    /// <paramref name="checker"/> is exactly the cacheable, no-semantic-information case above,
+    /// so it is left to that cache; a real checker always recomputes, the same as the decompiled
+    /// path already does, since a fresh compilation is itself a per-call artefact.
+    /// </summary>
+    internal static List<WrapperDefinition> GetDefinitions(
+        IEnumerable<CompilationUnitSyntax> sourceRoots,
+        ICommandContractChecker? checker)
+        => checker is null
+            ? GetDefinitions(sourceRoots)
+            : GetDefinitions(sourceRoots, "", "", checker);
+
     internal static List<WrapperDefinition> GetDefinitions(
         IEnumerable<CompilationUnitSyntax> sourceRoots,
         string assemblyIdentity,
-        string assemblyRevision)
+        string assemblyRevision,
+        ICommandContractChecker? checker = null)
     {
         var roots = sourceRoots.ToList();
         var methods = roots
@@ -1851,7 +1870,8 @@ internal static class WrapperAnalyzer
                 roots,
                 knownTypeIdentities,
                 assemblyIdentity,
-                assemblyRevision))
+                assemblyRevision,
+                checker))
             .Where(definition => definition is not null)
             .Select(definition => definition!)
             .ToList();
@@ -2707,25 +2727,29 @@ internal static class WrapperAnalyzer
     /// </summary>
     private static class CommandSourceResolver
     {
-        private static readonly IReadOnlyList<Func<MethodDeclarationSyntax, IEnumerable<CommandSource>>> Rules
-            = new Func<MethodDeclarationSyntax, IEnumerable<CommandSource>>[]
-            {
-                ResolveCommandObjectSources,
-                ResolveDeclaredCommandSources,
-                ResolveDataAdapterSources,
-            };
-
-        internal static IReadOnlyList<CommandSource> Resolve(MethodDeclarationSyntax method)
-            => Rules
-                .SelectMany(rule => rule(method))
+        /// <summary>
+        /// Resolves one method's Command Sources. <paramref name="checker"/> answers the
+        /// command-object recognition rules' contract question when it can; the data adapter
+        /// rule takes no checker and keeps its current name-based form (out of scope here).
+        /// </summary>
+        internal static IReadOnlyList<CommandSource> Resolve(
+            MethodDeclarationSyntax method,
+            ICommandContractChecker? checker)
+            => ResolveCommandObjectSources(method, checker)
+                .Concat(ResolveDeclaredCommandSources(method, checker))
+                .Concat(ResolveDataAdapterSources(method))
                 .OrderBy(source => source.SpanStart)
                 .ToList();
 
-        /// <summary>An explicit command object construction, e.g. <c>new SqlCommand(sql, conn)</c>.</summary>
-        private static IEnumerable<CommandSource> ResolveCommandObjectSources(MethodDeclarationSyntax method)
+        /// <summary>An explicit command object construction, e.g. <c>new SqlCommand(sql, conn)</c>
+        /// or, for a provider named nowhere in the analyzer, <c>new FooProviderCommand(sql, conn)</c>
+        /// -- recognised because it implements <c>IDbCommand</c> when the contract can be checked.</summary>
+        private static IEnumerable<CommandSource> ResolveCommandObjectSources(
+            MethodDeclarationSyntax method,
+            ICommandContractChecker? checker)
             => method.DescendantNodes()
                 .OfType<ObjectCreationExpressionSyntax>()
-                .Where(creation => CSharpAnalyzer.IsSqlCommandType(creation.Type))
+                .Where(creation => CommandContractChecks.IsCommandContractType(creation.Type, checker))
                 .Select(creation =>
                 {
                     var variable = ResolveVariableName(creation);
@@ -2748,11 +2772,13 @@ internal static class WrapperAnalyzer
         /// object creation is left to <see cref="ResolveCommandObjectSources"/>, so the same
         /// command is never counted twice.
         /// </summary>
-        private static IEnumerable<CommandSource> ResolveDeclaredCommandSources(MethodDeclarationSyntax method)
+        private static IEnumerable<CommandSource> ResolveDeclaredCommandSources(
+            MethodDeclarationSyntax method,
+            ICommandContractChecker? checker)
         {
             foreach (var declaration in method.DescendantNodes().OfType<VariableDeclarationSyntax>())
             {
-                if (!CSharpAnalyzer.IsSqlCommandType(declaration.Type))
+                if (!CommandContractChecks.IsCommandContractType(declaration.Type, checker))
                     continue;
                 foreach (var variable in declaration.Variables)
                 {
@@ -2812,9 +2838,10 @@ internal static class WrapperAnalyzer
         IReadOnlyList<CompilationUnitSyntax> sourceRoots,
         IReadOnlyCollection<string> knownTypeIdentities,
         string assemblyIdentity = "",
-        string assemblyRevision = "")
+        string assemblyRevision = "",
+        ICommandContractChecker? checker = null)
     {
-        var commandSources = CommandSourceResolver.Resolve(method);
+        var commandSources = CommandSourceResolver.Resolve(method, checker);
         var commandSource = commandSources.FirstOrDefault();
         if (commandSource is null)
             return null;

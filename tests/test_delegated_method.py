@@ -68,9 +68,12 @@ def _build_delegation_shapes_dll(build_dir: Path) -> Path:
     that touches an ADO.NET type but calls no sibling (stays unclassified), and a method that
     calls two distinct siblings (ambiguous -- names no single delegate, stays unclassified).
 
-    The `SqlConnection`/`DbCommand` types here are stand-ins declared in the same file: the
-    decompiler's recognition matches by syntactic type name only, so this exercises the exact
-    same path without an external ADO.NET reference.
+    `SqlConnection` here is a minimal real `System.Data.Common.DbConnection` subclass (ticket 04:
+    command-object recognition now checks the `IDbCommand` contract first, so a wrapper method
+    obtaining its command through `CreateCommand()` must actually resolve to a real ADO.NET
+    command type -- a same-file stand-in class that merely shares the name `DbCommand` no longer
+    qualifies, by design). No external ADO.NET package reference is needed: `DbConnection`/
+    `DbCommand` are part of the base class library the net8.0 SDK already references.
     """
     build_dir.mkdir(parents=True, exist_ok=True)
     (build_dir / "Wrapper.csproj").write_text(
@@ -84,13 +87,36 @@ def _build_delegation_shapes_dll(build_dir: Path) -> Path:
         encoding="utf-8",
     )
     (build_dir / "Wrapper.cs").write_text(
-        "public class DbCommand {\n"
-        "    public string CommandText;\n"
-        "    public int ExecuteNonQuery() => 1;\n"
+        "using System.Data;\n"
+        "using System.Data.Common;\n"
+        "public class FakeCommand : DbCommand {\n"
+        "    public override string CommandText { get; set; } = \"\";\n"
+        "    public override int CommandTimeout { get; set; }\n"
+        "    public override CommandType CommandType { get; set; }\n"
+        "    public override bool DesignTimeVisible { get; set; }\n"
+        "    public override UpdateRowSource UpdatedRowSource { get; set; }\n"
+        "    protected override DbConnection DbConnection { get; set; }\n"
+        "    protected override DbParameterCollection DbParameterCollection { get; } = null;\n"
+        "    protected override DbTransaction DbTransaction { get; set; }\n"
+        "    public override void Cancel() {}\n"
+        "    public override int ExecuteNonQuery() => 1;\n"
+        "    public override object ExecuteScalar() => null;\n"
+        "    public override void Prepare() {}\n"
+        "    protected override DbParameter CreateDbParameter() => null;\n"
+        "    protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior) => null;\n"
         "}\n"
-        "public class SqlConnection {\n"
+        "public class SqlConnection : DbConnection {\n"
         "    public SqlConnection(string cn) {}\n"
-        "    public DbCommand CreateCommand() => new DbCommand();\n"
+        "    public override string ConnectionString { get; set; } = \"\";\n"
+        "    public override string Database => \"\";\n"
+        "    public override string DataSource => \"\";\n"
+        "    public override string ServerVersion => \"\";\n"
+        "    public override ConnectionState State => ConnectionState.Closed;\n"
+        "    public override void ChangeDatabase(string databaseName) {}\n"
+        "    public override void Close() {}\n"
+        "    public override void Open() {}\n"
+        "    protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel) => null;\n"
+        "    protected override DbCommand CreateDbCommand() => new FakeCommand();\n"
         "}\n"
         "public class Wrapper {\n"
         "    private string strCn;\n"
