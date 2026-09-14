@@ -2719,6 +2719,17 @@ internal static class WrapperAnalyzer
     /// directly. Null when the connection is found only through a later property assignment, a
     /// factory receiver, or not at all.
     /// </param>
+    /// <param name="FactoryConnectionExpression">
+    /// The receiver of a command factory call, e.g. the <c>conn</c> in <c>conn.CreateCommand()</c>
+    /// -- already trimmed to text. Null unless the rule's construct is such a factory call. Read
+    /// only as a last-resort connection: the constructor-argument rule and the <c>Connection</c>
+    /// property assignment rule both take priority over it.
+    /// </param>
+    /// <param name="FactoryConnectionIsContextFacade">
+    /// True when <see cref="FactoryConnectionExpression"/>'s receiver is a database context's own
+    /// <c>Database</c> facade (e.g. <c>Database.GetDbConnection()</c>) rather than a connection the
+    /// wrapper holds itself. Meaningless when <see cref="FactoryConnectionExpression"/> is null.
+    /// </param>
     /// <param name="ResolveTerminalSinks">
     /// This Command Source's own terminal sink calls within the method. Each rule brings its own,
     /// so recognizing a further construct never reaches back into the classification flow.
@@ -2731,6 +2742,8 @@ internal static class WrapperAnalyzer
         ObjectCreationExpressionSyntax? PropertyInitializerOwner,
         ExpressionSyntax? CommandTextExpression,
         string? ConnectionExpression,
+        string? FactoryConnectionExpression,
+        bool FactoryConnectionIsContextFacade,
         Func<MethodDeclarationSyntax, IReadOnlyList<InvocationExpressionSyntax>> ResolveTerminalSinks,
         int SpanStart);
 
@@ -2773,6 +2786,8 @@ internal static class WrapperAnalyzer
                         creation,
                         creation.ArgumentList?.Arguments.ElementAtOrDefault(0)?.Expression,
                         creation.ArgumentList?.Arguments.ElementAtOrDefault(1)?.Expression?.ToString().Trim(),
+                        null,
+                        false,
                         method => variable is null
                             ? Array.Empty<InvocationExpressionSyntax>()
                             : ResolveCommandTerminalSinkInvocations(method, variable),
@@ -2801,12 +2816,15 @@ internal static class WrapperAnalyzer
                         || value is ObjectCreationExpressionSyntax)
                         continue;
                     var variableName = variable.Identifier.Text;
+                    var factoryConnection = ResolveFactoryConnection(value);
                     yield return new CommandSource(
                         variableName,
                         variableName,
                         null,
                         null,
                         null,
+                        factoryConnection.Expression,
+                        factoryConnection.IsContextFacade,
                         method => ResolveCommandTerminalSinkInvocations(method, variableName),
                         variable.SpanStart);
                 }
@@ -2844,10 +2862,68 @@ internal static class WrapperAnalyzer
                     null,
                     arguments.Value[0].Expression,
                     arguments.Value[1].Expression.ToString().Trim(),
+                    null,
+                    false,
                     method => ResolveAdapterFillInvocations(method, variable),
                     creation.SpanStart);
             }
         }
+
+        /// <summary>
+        /// The connection behind a command factory call, e.g. the <c>conn</c> in
+        /// <c>conn.CreateCommand()</c> -- and whether that same receiver is a database context's
+        /// own <c>Database</c> facade (<c>Database.GetDbConnection().CreateCommand()</c>,
+        /// <c>this.Database.GetDbConnection().CreateCommand()</c>, a qualified
+        /// <c>context.Database.GetDbConnection().CreateCommand()</c>) rather than a connection
+        /// the wrapper holds itself. Both facts come from one match, read structurally from the
+        /// written shape, the same way every other rule in this resolver classifies a construct;
+        /// no semantic model is consulted. <c>(null, false)</c> unless <paramref name="initializer"/>
+        /// is itself a call to a method literally named <c>CreateCommand</c> -- the one factory
+        /// shape a receiver is known to be a connection for.
+        /// </summary>
+        private static (string? Expression, bool IsContextFacade) ResolveFactoryConnection(
+            ExpressionSyntax initializer)
+        {
+            if (initializer is not InvocationExpressionSyntax
+                {
+                    Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "CreateCommand" } factory,
+                })
+                return (null, false);
+            return (factory.Expression.ToString().Trim(), IsDatabaseFacadeConnectionExpression(factory.Expression));
+        }
+
+        /// <summary>
+        /// True for an expression that reaches a database context's own <c>Database</c> facade's
+        /// connection: the facade itself, or a call to its <c>GetDbConnection()</c> method.
+        /// <c>GetDbConnection()</c> is actually an EF Core extension method, so it is written as
+        /// fluent instance-call syntax in source (<c>Database.GetDbConnection()</c>) but a
+        /// decompiled assembly renders the same call as its true static-method shape
+        /// (<c>RelationalDatabaseFacadeExtensions.GetDbConnection(Database)</c>, the facade as
+        /// its one argument rather than as a receiver) -- both are recognised here.
+        /// </summary>
+        private static bool IsDatabaseFacadeConnectionExpression(ExpressionSyntax expression)
+        {
+            if (IsDatabaseFacadeExpression(expression))
+                return true;
+            if (expression is not InvocationExpressionSyntax
+                {
+                    Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "GetDbConnection" } member,
+                } invocation)
+                return false;
+            if (IsDatabaseFacadeExpression(member.Expression))
+                return true;
+            return invocation.ArgumentList.Arguments.Count == 1
+                && IsDatabaseFacadeExpression(invocation.ArgumentList.Arguments[0].Expression);
+        }
+
+        /// <summary>
+        /// True for a bare reference to a <c>Database</c> facade property -- <c>Database</c>
+        /// (implicit <c>this</c>) or a qualified <c>x.Database</c>/<c>((T)x).Database</c>,
+        /// whatever the receiver, since only the accessed member's name states the facade.
+        /// </summary>
+        private static bool IsDatabaseFacadeExpression(ExpressionSyntax expression)
+            => expression is IdentifierNameSyntax { Identifier.Text: "Database" }
+                or MemberAccessExpressionSyntax { Name.Identifier.Text: "Database" };
     }
 
     private static WrapperDefinition? CreateDefinition(
@@ -2923,6 +2999,18 @@ internal static class WrapperAnalyzer
             connectionExpression = assignment.Right.ToString().Trim();
         }
 
+        // The command-factory rule runs last: only when the constructor-argument rule and the
+        // Connection property assignment rule above both resolved nothing does the factory call's
+        // own receiver -- e.g. the connection in `connection.CreateCommand()` -- become the
+        // connection. An already-resolved connectionExpression therefore never changes here.
+        var connectionIsContextConnection = false;
+        if (string.IsNullOrWhiteSpace(connectionExpression)
+            && !string.IsNullOrWhiteSpace(commandSource.FactoryConnectionExpression))
+        {
+            connectionExpression = commandSource.FactoryConnectionExpression;
+            connectionIsContextConnection = commandSource.FactoryConnectionIsContextFacade;
+        }
+
         var commandTextParameter = ResolveCommandTextParameterName(
             commandTextExpression,
             parameters);
@@ -2966,7 +3054,8 @@ internal static class WrapperAnalyzer
             assemblyRevision,
             unresolvedReason,
             DeclaresConnectionAsLocal: DeclaresConnectionAsLocal(method, connectionExpression),
-            SourceFilePath: method.SyntaxTree?.FilePath ?? "");
+            SourceFilePath: method.SyntaxTree?.FilePath ?? "",
+            ConnectionIsContextConnection: connectionIsContextConnection);
     }
 
     /// <summary>
@@ -4260,7 +4349,8 @@ internal static class WrapperAnalyzer
         string AssemblyRevision,
         string? UnresolvedReason,
         bool DeclaresConnectionAsLocal,
-        string SourceFilePath)
+        string SourceFilePath,
+        bool ConnectionIsContextConnection = false)
     {
         /// <summary>
         /// True when this wrapper supplies the connection for a call made from

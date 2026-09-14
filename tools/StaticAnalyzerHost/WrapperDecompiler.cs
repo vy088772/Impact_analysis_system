@@ -604,7 +604,9 @@ internal static class DecompiledWrapperProposalBuilder
                     ? "constructor_connection"
                     : string.IsNullOrWhiteSpace(definition.ConnectionExpression)
                         ? ""
-                        : "wrapper_connection",
+                        : definition.ConnectionIsContextConnection
+                            ? "context_connection"
+                            : "wrapper_connection",
                 semantics,
                 definition.TerminalSink,
                 !string.Equals(
