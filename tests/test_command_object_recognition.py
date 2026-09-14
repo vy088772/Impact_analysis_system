@@ -344,15 +344,14 @@ def test_decompile_wrapper_classifies_command_obtained_through_create_command() 
 
 # The full IQCS unclassified surface before this ticket: seven `SQLDbContext` public methods,
 # none classified. After this ticket, three resolve through the widened rule -- including the
-# measured `usp_ExecCmdGetDataSetAsync`. The other three that used to remain here
+# measured `usp_ExecCmdGetDataSetAsync`. The other three
 # (`usp_ExecCmdGetFisrtValueAsync`, `usp_ExecCmdGetDataTableAsync`, `usp_ExecCmdGetJsonObjectAsync`)
-# now resolve as Delegated Methods instead (ticket 02; see
+# resolve as Delegated Methods instead (ticket 02; see
 # tests/test_delegated_method.py::test_real_sqldbcontext_delegating_methods_are_reported_as_delegated).
-# One method remains unclassified for its own, still out-of-scope reason: it uses EF Core's
-# high-level raw-SQL form, a structurally different shape its own ticket covers.
-REMAINING_UNCLASSIFIED_METHODS = {
-    "SQLDbContext.usp_ExecCmdGetCountAsync(string,Microsoft.EntityFrameworkCore.SqlParameter[]?,bool)",
-}
+# The seventh, `usp_ExecCmdGetCountAsync` -- EF Core's high-level raw-SQL form -- classifies
+# through its own rule (ticket 08; see
+# tests/test_raw_sql_execution_command_source.py::test_real_sqldbcontext_reports_all_seven_methods_classified_or_delegated),
+# so none stay unclassified.
 
 
 @requires_iqcs_fixture
@@ -362,9 +361,8 @@ def test_real_sqldbcontext_usp_execcmdgetdatasetasync_becomes_classified() -> No
     `usp_ExecCmdGetDataSetAsync` obtains its command through
     `Database.GetDbConnection().CreateCommand()`, declared as `DbCommand`. It moves from the
     unclassified set to a classified wrapper definition, carrying its reachable
-    stored-procedure command semantics and its terminal sink. The behaviour surface stays
-    incomplete -- a partial repair is not presented as a whole one -- and the remaining
-    unclassified methods are named.
+    stored-procedure command semantics and its terminal sink. The behaviour surface is complete:
+    every other `SQLDbContext` public method is by now classified or delegated too.
     """
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
@@ -386,5 +384,5 @@ def test_real_sqldbcontext_usp_execcmdgetdatasetasync_becomes_classified() -> No
     assert data_set[0]["reaches_stored_procedure_sink"] is True
 
     snapshot = result["contract_proposals"][0]["implementation_snapshot"]
-    assert snapshot["public_database_operations_complete"] is False
-    assert set(snapshot["unclassified_public_methods"]) == REMAINING_UNCLASSIFIED_METHODS
+    assert snapshot["public_database_operations_complete"] is True
+    assert snapshot["unclassified_public_methods"] == []

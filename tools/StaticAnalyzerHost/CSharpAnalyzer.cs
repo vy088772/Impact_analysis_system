@@ -2736,6 +2736,14 @@ internal static class WrapperAnalyzer
     /// </param>
     /// <param name="SpanStart">Where this Command Source's own construct begins, for ordering
     /// multiple sources the way they appear in the method.</param>
+    /// <param name="ResolveOwnModeSemantics">
+    /// Overrides command-semantics resolution for a construct with no <c>CommandType</c> property
+    /// to read at all -- raw SQL executed through the <c>Database</c> facade, say, whose "mode" is
+    /// instead read from whichever parameter guards the method's own command-text construction.
+    /// Null for every rule whose construct does carry a <c>CommandType</c> property: those keep
+    /// resolving semantics from <see cref="CommandPropertyReceiver"/>'s property assignments,
+    /// exactly as before this field existed.
+    /// </param>
     private sealed record CommandSource(
         string? VariableName,
         string CommandPropertyReceiver,
@@ -2745,7 +2753,8 @@ internal static class WrapperAnalyzer
         string? FactoryConnectionExpression,
         bool FactoryConnectionIsContextFacade,
         Func<MethodDeclarationSyntax, IReadOnlyList<InvocationExpressionSyntax>> ResolveTerminalSinks,
-        int SpanStart);
+        int SpanStart,
+        Func<MethodDeclarationSyntax, (string? ModeParameter, string Semantics)>? ResolveOwnModeSemantics = null);
 
     /// <summary>
     /// Resolves the Command Sources of one method. Every construct that can supply a command text
@@ -2765,6 +2774,7 @@ internal static class WrapperAnalyzer
             => ResolveCommandObjectSources(method, checker)
                 .Concat(ResolveDeclaredCommandSources(method, checker))
                 .Concat(ResolveDataAdapterSources(method))
+                .Concat(ResolveRawSqlExecutionSources(method))
                 .OrderBy(source => source.SpanStart)
                 .ToList();
 
@@ -2924,6 +2934,170 @@ internal static class WrapperAnalyzer
         private static bool IsDatabaseFacadeExpression(ExpressionSyntax expression)
             => expression is IdentifierNameSyntax { Identifier.Text: "Database" }
                 or MemberAccessExpressionSyntax { Name.Identifier.Text: "Database" };
+
+        /// <summary>The four raw-SQL execution methods EF Core's <c>Database</c> facade exposes,
+        /// recognised together (ticket 08): they share one receiver and one return semantics, and
+        /// differ only in whether the text is interpolated or raw and sync or async. The deferred
+        /// <c>FromSqlRaw</c>/<c>FromSqlInterpolated</c> forms are not named here -- they return a
+        /// queryable, execute later, and hang off a <c>DbSet</c> rather than this facade.</summary>
+        private static readonly string[] RawSqlExecutionMethodNames =
+        {
+            "ExecuteSqlRaw", "ExecuteSqlRawAsync", "ExecuteSqlInterpolated", "ExecuteSqlInterpolatedAsync",
+        };
+
+        /// <summary>
+        /// Raw SQL executed directly through a database context's own <c>Database</c> facade, e.g.
+        /// <c>Database.ExecuteSqlInterpolatedAsync(formattableText)</c>. This shape constructs no
+        /// command object and binds no command variable: its command text is an argument of the
+        /// execution call itself, and that same call is its own terminal sink. Its connection is
+        /// always the facade -- reported the same last-resort way a command factory's receiver is
+        /// (<see cref="CommandSource.FactoryConnectionExpression"/>), so <c>CreateDefinition</c>
+        /// needs no new branch to report <c>context_connection</c> for it.
+        /// </summary>
+        private static IEnumerable<CommandSource> ResolveRawSqlExecutionSources(MethodDeclarationSyntax method)
+        {
+            foreach (var invocation in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (MatchRawSqlExecutionCall(invocation) is not { } call)
+                    continue;
+                var commandText = ResolveUltimateCommandTextExpression(call.SqlTextArgument, method);
+                yield return new CommandSource(
+                    null,
+                    "",
+                    null,
+                    commandText,
+                    null,
+                    call.FacadeExpression.ToString().Trim(),
+                    true,
+                    _ => new[] { invocation },
+                    invocation.SpanStart,
+                    ResolveOwnModeSemantics: ResolveRawSqlMethodSemantics);
+            }
+        }
+
+        /// <summary>
+        /// Matches a call to one of <see cref="RawSqlExecutionMethodNames"/> on a database
+        /// context's own <c>Database</c> facade -- <c>Database.ExecuteSqlRawAsync(sql, ...)</c> in
+        /// source, or its decompiled static-extension-method shape,
+        /// <c>RelationalDatabaseFacadeExtensions.ExecuteSqlRawAsync(Database, sql, ...)</c> (the
+        /// facade as the invocation's first argument rather than its receiver -- the same
+        /// source/decompiled duality <see cref="IsDatabaseFacadeConnectionExpression"/> already
+        /// resolves for <c>GetDbConnection()</c>). Returns the facade expression and the call's
+        /// own SQL-text argument, whichever shape matched.
+        /// </summary>
+        private static (ExpressionSyntax FacadeExpression, ExpressionSyntax? SqlTextArgument)? MatchRawSqlExecutionCall(
+            InvocationExpressionSyntax invocation)
+        {
+            if (invocation.Expression is not MemberAccessExpressionSyntax { Name.Identifier.Text: var methodName } member
+                || !RawSqlExecutionMethodNames.Contains(methodName, StringComparer.Ordinal))
+                return null;
+
+            if (IsDatabaseFacadeExpression(member.Expression))
+                return (member.Expression, invocation.ArgumentList.Arguments.ElementAtOrDefault(0)?.Expression);
+
+            if (invocation.ArgumentList.Arguments.Count >= 1
+                && IsDatabaseFacadeExpression(invocation.ArgumentList.Arguments[0].Expression))
+                return (
+                    invocation.ArgumentList.Arguments[0].Expression,
+                    invocation.ArgumentList.Arguments.ElementAtOrDefault(1)?.Expression);
+
+            return null;
+        }
+
+        /// <summary>
+        /// Traces a raw-SQL execution call's own text argument back to the method's own parameter
+        /// that ultimately supplies it, so the target a call site names is traced exactly as it is
+        /// for a sibling method whose command object reads <c>cmd.CommandText = sqlCmd</c> directly.
+        /// The measured real shape needs this: the execution call's argument is a local
+        /// <c>FormattableString</c> built by <c>FormattableStringFactory.Create(text, ...)</c> from
+        /// a further local assigned from the method's own command-text parameter at its
+        /// declaration. Each hop below undoes one such indirection -- an interpolated string's own
+        /// one interpolation hole, a <c>*.Create(text, ...)</c> call's own first argument, or a
+        /// local's own declaration initializer -- stopping the moment neither shape matches, so a
+        /// parameter reached directly (no declarator at all) or any other expression is returned
+        /// as-is rather than guessed at further. No semantic model is consulted, matching every
+        /// other rule in this resolver; a bounded hop count guards against a self-referential
+        /// declaration this syntax-only walk could otherwise loop on forever.
+        /// </summary>
+        private static ExpressionSyntax? ResolveUltimateCommandTextExpression(
+            ExpressionSyntax? expression,
+            MethodDeclarationSyntax method)
+        {
+            var current = expression;
+            for (var hop = 0; hop < 5 && current is not null; hop++)
+            {
+                if (current is InterpolatedStringExpressionSyntax
+                    {
+                        Contents: [InterpolationSyntax interpolation],
+                    })
+                {
+                    current = interpolation.Expression;
+                    continue;
+                }
+                if (current is InvocationExpressionSyntax
+                    {
+                        Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "Create" },
+                        ArgumentList.Arguments: [var firstArgument, ..],
+                    })
+                {
+                    current = firstArgument.Expression;
+                    continue;
+                }
+                if (current is IdentifierNameSyntax identifier)
+                {
+                    var declarator = method.DescendantNodes()
+                        .OfType<VariableDeclaratorSyntax>()
+                        .FirstOrDefault(candidate => candidate.Identifier.Text == identifier.Identifier.Text);
+                    if (declarator?.Initializer?.Value is { } initializerValue)
+                    {
+                        current = initializerValue;
+                        continue;
+                    }
+                    // No declarator at all: either a parameter (the answer this walk exists to
+                    // find) or a field/unresolvable name -- either way, nothing more to unwrap.
+                    return current;
+                }
+                return current;
+            }
+            return current;
+        }
+
+        /// <summary>
+        /// A raw-SQL Command Source carries no <c>CommandType</c> property to read a mode from, so
+        /// it cannot answer through <c>ResolveMethodSemantics</c>'s existing property-assignment
+        /// reading. Its own mode signal is structural instead: a boolean parameter guarding a
+        /// conditional (an <c>if</c> or a ternary, matched the same way
+        /// <see cref="FindModeParameterFromCondition"/> already matches one for a `CommandType`
+        /// assignment) that reassigns some local before the method returns. Measured directly
+        /// against the real shape: <c>if (isSP) { text = "exec " + sqlCmd + " "; }</c> is exactly
+        /// this pattern, guarded by the same <c>isSP</c> parameter its six sibling methods guard
+        /// their own <c>CommandType.StoredProcedure</c> assignment with.
+        /// </summary>
+        private static (string? ModeParameter, string Semantics) ResolveRawSqlMethodSemantics(
+            MethodDeclarationSyntax method)
+        {
+            var parameters = method.ParameterList.Parameters
+                .Select(parameter => parameter.Identifier.Text)
+                .ToList();
+            foreach (var assignment in method.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                var conditional = assignment.Right.DescendantNodesAndSelf()
+                    .OfType<ConditionalExpressionSyntax>()
+                    .FirstOrDefault();
+                if (conditional is not null)
+                {
+                    var ternaryParameter = FindModeParameterFromCondition(conditional.Condition, parameters);
+                    if (ternaryParameter is not null)
+                        return (ternaryParameter, "call_site");
+                }
+
+                var enclosingIf = assignment.FirstAncestorOrSelf<IfStatementSyntax>();
+                var ifParameter = FindModeParameterFromCondition(enclosingIf?.Condition, parameters);
+                if (ifParameter is not null)
+                    return (ifParameter, "call_site");
+            }
+            return (null, "fixed_inline_sql");
+        }
     }
 
     private static WrapperDefinition? CreateDefinition(
@@ -3015,11 +3189,25 @@ internal static class WrapperAnalyzer
             commandTextExpression,
             parameters);
         var commandTextParameterIndex = parameters.IndexOf(commandTextParameter ?? "");
-        var modeParameter = FindModeParameter(method, commandTypeAssignments, parameters);
+
+        // A construct with its own CommandType-free mode signal (raw SQL executed through the
+        // Database facade, say) supplies ResolveOwnModeSemantics and is read through it instead of
+        // the property-assignment-driven resolution every other rule still uses unchanged.
+        string? modeParameter;
+        string methodSemantics;
+        if (commandSource.ResolveOwnModeSemantics is not null)
+        {
+            (modeParameter, var ownSemantics) = commandSource.ResolveOwnModeSemantics(method);
+            methodSemantics = commandSources.Count > 1 ? "unresolved" : ownSemantics;
+        }
+        else
+        {
+            modeParameter = FindModeParameter(method, commandTypeAssignments, parameters);
+            methodSemantics = commandSources.Count > 1
+                ? "unresolved"
+                : ResolveMethodSemantics(commandTypeAssignments, modeParameter);
+        }
         var modeParameterIndex = parameters.IndexOf(modeParameter ?? "");
-        var methodSemantics = commandSources.Count > 1
-            ? "unresolved"
-            : ResolveMethodSemantics(commandTypeAssignments, modeParameter);
         var terminalSink = commandSources.Count > 1
             ? null
             : ResolveTerminalSinkName(method, commandSource);

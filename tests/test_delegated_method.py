@@ -268,8 +268,9 @@ def test_real_sqldbcontext_delegating_methods_are_reported_as_delegated() -> Non
     """Fixture-gated smoke test against the real `CommonLibrary.dll` checked out under IQCS.
 
     The three methods whose only database contact is a call to a sibling move out of the
-    unclassified set and name the sibling each one calls. Only `usp_ExecCmdGetCountAsync`
-    remains unclassified, for its own out-of-scope reason (EF Core's high-level raw-SQL form).
+    unclassified set and name the sibling each one calls. `usp_ExecCmdGetCountAsync` -- EF
+    Core's raw-SQL execution form -- classifies through its own rule (ticket 08), so the
+    surface is complete: none of `SQLDbContext`'s seven public methods stay unclassified.
     """
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
@@ -288,10 +289,8 @@ def test_real_sqldbcontext_delegating_methods_are_reported_as_delegated() -> Non
     assert delegations == REAL_DELEGATIONS
 
     snapshot = result["contract_proposals"][0]["implementation_snapshot"]
-    assert snapshot["public_database_operations_complete"] is False
-    assert snapshot["unclassified_public_methods"] == [
-        "SQLDbContext.usp_ExecCmdGetCountAsync(string,Microsoft.EntityFrameworkCore.SqlParameter[]?,bool)"
-    ]
+    assert snapshot["public_database_operations_complete"] is True
+    assert snapshot["unclassified_public_methods"] == []
 
 
 @requires_stc_fixture

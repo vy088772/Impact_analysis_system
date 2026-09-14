@@ -325,30 +325,29 @@ def test_constructor_argument_connection_is_unaffected_by_the_new_rule() -> None
     assert operation["connection_behavior_boundary"] == "constructor_connection"
 
 
-# The full IQCS unclassified surface after tickets 01, 02 and 04: `usp_ExecCmdGetDataSetAsync`,
+# The full IQCS surface after tickets 01, 02, 04 and 07: `usp_ExecCmdGetDataSetAsync`,
 # `usp_ExecCmdGetJsonObjectListAsync` and `usp_ExecCmdGetJsonToTabletListAsync` classify through
-# the widened command-object rule; the three delegating methods report as Delegated Methods; only
-# `usp_ExecCmdGetCountAsync` -- EF Core's raw-SQL execution form, ticket 08's shape -- stays
-# unclassified. Before this ticket, the three classified methods reported an empty Connection
-# Behavior Boundary because their command comes from `Database.GetDbConnection().CreateCommand()`.
+# the widened command-object rule; the three delegating methods report as Delegated Methods. Now
+# that ticket 08 has landed, `usp_ExecCmdGetCountAsync` -- EF Core's raw-SQL execution form --
+# classifies too, and reports `context_connection` the same last-resort way: its receiver is
+# also the `Database` facade. The four together were the classified methods that used to report
+# an empty Connection Behavior Boundary before ticket 07.
 REAL_CLASSIFIED_METHODS = {
     "usp_ExecCmdGetDataSetAsync",
     "usp_ExecCmdGetJsonObjectListAsync",
     "usp_ExecCmdGetJsonToTabletListAsync",
+    "usp_ExecCmdGetCountAsync",
 }
-REMAINING_UNCLASSIFIED_METHOD = (
-    "SQLDbContext.usp_ExecCmdGetCountAsync(string,Microsoft.EntityFrameworkCore.SqlParameter[]?,bool)"
-)
 
 
 @requires_iqcs_fixture
 def test_real_sqldbcontext_methods_report_context_connection_boundary() -> None:
     """Fixture-gated smoke test against the real `CommonLibrary.dll` checked out under IQCS.
-    All three classified `SQLDbContext` methods obtain their command through
-    `Database.GetDbConnection().CreateCommand()` and now report `context_connection` instead of
-    an empty boundary. The proposal no longer fails on `connection_behavior_boundary_missing`,
-    but a partial repair is not presented as a whole one: `usp_ExecCmdGetCountAsync` still blocks
-    completeness on its own, unrelated reason."""
+    All four classified `SQLDbContext` methods report `context_connection` -- the three whose
+    command comes from `Database.GetDbConnection().CreateCommand()`, and
+    `usp_ExecCmdGetCountAsync`, whose raw-SQL execution call runs directly on the same `Database`
+    facade (ticket 08). The proposal no longer fails on `connection_behavior_boundary_missing`,
+    and the behaviour surface is complete: none of the seven public methods stay unclassified."""
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
 
@@ -369,8 +368,8 @@ def test_real_sqldbcontext_methods_report_context_connection_boundary() -> None:
     snapshot = result["contract_proposals"][0]["implementation_snapshot"]
     validation = validate_implementation_snapshot(snapshot)
     assert "connection_behavior_boundary_missing" not in validation["unresolved_reasons"]
-    assert snapshot["public_database_operations_complete"] is False
-    assert snapshot["unclassified_public_methods"] == [REMAINING_UNCLASSIFIED_METHOD]
+    assert snapshot["public_database_operations_complete"] is True
+    assert snapshot["unclassified_public_methods"] == []
 
 
 @requires_stc_fixture
