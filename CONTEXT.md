@@ -98,7 +98,7 @@ The manifest-backed atomic replacement of the external wrapper registry and, whe
 _Avoid_: atomic commit, registry write, two-file write
 
 **Command Source**:
-The construct inside one wrapper method that supplies the method's command text and terminal sink. A method has a Command Source when a resolution rule recognizes its construct — today an explicit command object construction, or a data adapter construction taking a command text argument and a connection argument. A method that touches a database type but yields no Command Source is a visible gap, not a silent drop.
+The construct inside one wrapper method that supplies the method's command text and terminal sink. A method has a Command Source when a resolution rule recognizes its construct — today an explicit command object construction (the abstract ADO.NET command type or any of a multi-provider list of provider-specific types, not one named type alone), a command object obtained through a factory call such as a connection's `CreateCommand()` and bound to a locally declared variable of a command type, or a data adapter construction taking a command text argument and a connection argument. A method that touches a database type but yields no Command Source is a visible gap, not a silent drop.
 _Avoid_: SqlCommand construction, command builder
 
 **Implementation Snapshot**:

@@ -89,13 +89,17 @@ internal static class CSharpAnalyzer
             CSharpSyntaxTree.ParseText(source, path: inputPath).GetCompilationUnitRoot());
     }
 
-    /// <summary>Matches only the exact type name `SqlCommand`, not unrelated types sharing the suffix (e.g. MySqlCommand).</summary>
+    /// <summary>Matches the abstract ADO.NET command type and every provider-specific command
+    /// type this codebase's sibling rules already name -- the same provider set
+    /// <see cref="IsDataAdapterType"/> carries, with `Command` in place of `DataAdapter`.</summary>
     internal static bool IsSqlCommandType(TypeSyntax type)
-    {
-        var typeName = type.ToString();
-        var lastSegment = typeName.Split('.').Last();
-        return lastSegment == "SqlCommand";
-    }
+        => type.ToString().Split('.').Last() is
+            "DbCommand" or
+            "SqlCommand" or
+            "OleDbCommand" or
+            "OdbcCommand" or
+            "NpgsqlCommand" or
+            "MySqlCommand";
 
     internal static bool IsDataAdapterType(TypeSyntax type)
         => type.ToString().Split('.').Last() is
@@ -2574,7 +2578,10 @@ internal static class WrapperAnalyzer
     /// <summary>
     /// The construct that supplies one wrapper method's command text and terminal sink.
     /// </summary>
-    /// <param name="Creation">The construction the rule recognized.</param>
+    /// <param name="Creation">The construction the rule recognized, if any. Null when the
+    /// command object was obtained through a factory call rather than direct construction --
+    /// e.g. a connection's <c>CreateCommand()</c> -- so there is no constructor argument list to
+    /// read a command text or connection argument from.</param>
     /// <param name="VariableName">The variable the construction is bound to, if any.</param>
     /// <param name="CommandPropertyReceiver">
     /// The receiver text whose <c>CommandText</c>/<c>CommandType</c>/<c>Connection</c> assignments
@@ -2587,12 +2594,15 @@ internal static class WrapperAnalyzer
     /// This Command Source's own terminal sink calls within the method. Each rule brings its own,
     /// so recognizing a further construct never reaches back into the classification flow.
     /// </param>
+    /// <param name="SpanStart">Where this Command Source's own construct begins, for ordering
+    /// multiple sources the way they appear in the method.</param>
     private sealed record CommandSource(
-        ObjectCreationExpressionSyntax Creation,
+        ObjectCreationExpressionSyntax? Creation,
         string? VariableName,
         string CommandPropertyReceiver,
         ObjectCreationExpressionSyntax? PropertyInitializerOwner,
-        Func<MethodDeclarationSyntax, IReadOnlyList<InvocationExpressionSyntax>> ResolveTerminalSinks);
+        Func<MethodDeclarationSyntax, IReadOnlyList<InvocationExpressionSyntax>> ResolveTerminalSinks,
+        int SpanStart);
 
     /// <summary>
     /// Resolves the Command Sources of one method. Every construct that can supply a command text
@@ -2605,13 +2615,14 @@ internal static class WrapperAnalyzer
             = new Func<MethodDeclarationSyntax, IEnumerable<CommandSource>>[]
             {
                 ResolveCommandObjectSources,
+                ResolveDeclaredCommandSources,
                 ResolveDataAdapterSources,
             };
 
         internal static IReadOnlyList<CommandSource> Resolve(MethodDeclarationSyntax method)
             => Rules
                 .SelectMany(rule => rule(method))
-                .OrderBy(source => source.Creation.SpanStart)
+                .OrderBy(source => source.SpanStart)
                 .ToList();
 
         /// <summary>An explicit command object construction, e.g. <c>new SqlCommand(sql, conn)</c>.</summary>
@@ -2629,8 +2640,40 @@ internal static class WrapperAnalyzer
                         creation,
                         method => variable is null
                             ? Array.Empty<InvocationExpressionSyntax>()
-                            : ResolveCommandTerminalSinkInvocations(method, variable));
+                            : ResolveCommandTerminalSinkInvocations(method, variable),
+                        creation.SpanStart);
                 });
+
+        /// <summary>
+        /// A local variable declared as a command type but obtained through a factory call
+        /// rather than direct construction, e.g. <c>DbCommand cmd = connection.CreateCommand();</c>.
+        /// The command's own construction happens outside the method (inside the factory), so
+        /// only the variable's declared type can be asked; an initializer that is itself an
+        /// object creation is left to <see cref="ResolveCommandObjectSources"/>, so the same
+        /// command is never counted twice.
+        /// </summary>
+        private static IEnumerable<CommandSource> ResolveDeclaredCommandSources(MethodDeclarationSyntax method)
+        {
+            foreach (var declaration in method.DescendantNodes().OfType<VariableDeclarationSyntax>())
+            {
+                if (!CSharpAnalyzer.IsSqlCommandType(declaration.Type))
+                    continue;
+                foreach (var variable in declaration.Variables)
+                {
+                    if (variable.Initializer is not { Value: var value }
+                        || value is ObjectCreationExpressionSyntax)
+                        continue;
+                    var variableName = variable.Identifier.Text;
+                    yield return new CommandSource(
+                        null,
+                        variableName,
+                        variableName,
+                        null,
+                        method => ResolveCommandTerminalSinkInvocations(method, variableName),
+                        variable.SpanStart);
+                }
+            }
+        }
 
         /// <summary>
         /// A data adapter construction that takes a command text argument and a connection
@@ -2662,7 +2705,8 @@ internal static class WrapperAnalyzer
                     // assigns to the command the adapter built for itself.
                     $"{variable}.SelectCommand",
                     null,
-                    method => ResolveAdapterFillInvocations(method, variable));
+                    method => ResolveAdapterFillInvocations(method, variable),
+                    creation.SpanStart);
             }
         }
     }
@@ -2712,9 +2756,9 @@ internal static class WrapperAnalyzer
         var requiredParameterCount = method.ParameterList.Parameters.Count(parameter =>
             parameter.Default is null
             && !parameter.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.ParamsKeyword)));
-        var commandTextExpression = commandSource.Creation.ArgumentList?.Arguments
+        var commandTextExpression = commandSource.Creation?.ArgumentList?.Arguments
             .ElementAtOrDefault(0)?.Expression;
-        var connectionExpression = commandSource.Creation.ArgumentList?.Arguments
+        var connectionExpression = commandSource.Creation?.ArgumentList?.Arguments
             .ElementAtOrDefault(1)?.Expression?.ToString().Trim();
         var commandTextAssignments = GetCommandPropertyAssignments(
             method,
