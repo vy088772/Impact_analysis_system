@@ -60,8 +60,10 @@ existing assertions renamed from `not_required` to `program_scope`/
 `llamaindex-spec-rag/tests/test_refresh_cli.py` (printed line, per-status text,
 and the no-external-wrapper suppression). `docs/openapi/openapi.json`
 regenerated via `python -m tools.export_openapi_schema` so the schema fixtures
-the CLI tests validate against stay current. The affected
-`Impact_analysis_system` test files and the full
-`llamaindex-spec-rag/tests/test_refresh_cli.py` suite are green; the
-repository-wide `Impact_analysis_system` suite was still running at the time
-of this note.
+the CLI tests validate against stay current.
+
+Full suite run: `Impact_analysis_system` — 890 passed, 12 failed, 1 skipped;
+every failure was confirmed pre-existing against the parent commit (Windows
+path/line-ending formatting and a Web.config fixture issue, none touching
+`contract_transaction`, `refresh_source`, or `refresh_cli`). `llamaindex-spec-rag/tests/test_refresh_cli.py`
+— 23 passed.
