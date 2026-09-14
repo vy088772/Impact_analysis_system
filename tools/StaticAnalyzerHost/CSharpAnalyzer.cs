@@ -2692,19 +2692,32 @@ internal static class WrapperAnalyzer
     }
 
     /// <summary>
-    /// The construct that supplies one wrapper method's command text and terminal sink.
+    /// The construct that supplies one wrapper method's command text and terminal sink. A
+    /// constructed command object bound to a variable is one way to answer that -- not the only
+    /// shape this record can hold. A rule with no command object at all (a raw-SQL execution
+    /// call, say) states its command text and its terminal sink directly and leaves the
+    /// variable-shaped fields at their empty defaults; nothing downstream requires them.
     /// </summary>
-    /// <param name="Creation">The construction the rule recognized, if any. Null when the
-    /// command object was obtained through a factory call rather than direct construction --
-    /// e.g. a connection's <c>CreateCommand()</c> -- so there is no constructor argument list to
-    /// read a command text or connection argument from.</param>
-    /// <param name="VariableName">The variable the construction is bound to, if any.</param>
+    /// <param name="VariableName">The variable the construction is bound to, if any. Null when
+    /// the rule's construct binds no variable -- either because the command object was obtained
+    /// through a factory call rather than direct construction (e.g. a connection's
+    /// <c>CreateCommand()</c>), or because the rule's construct is not a command object at all.</param>
     /// <param name="CommandPropertyReceiver">
     /// The receiver text whose <c>CommandText</c>/<c>CommandType</c>/<c>Connection</c> assignments
-    /// govern this Command Source. Empty when the construction is bound to no variable.
+    /// govern this Command Source. Empty when there is no such receiver to read assignments from.
     /// </param>
     /// <param name="PropertyInitializerOwner">
     /// The construction whose object initializer sets command properties, if any.
+    /// </param>
+    /// <param name="CommandTextExpression">
+    /// This Command Source's own command text argument, if the rule's construct carries one
+    /// directly. Null when the command text is found only through a later property assignment
+    /// (read separately, via <see cref="CommandPropertyReceiver"/>) or not at all.
+    /// </param>
+    /// <param name="ConnectionExpression">
+    /// This Command Source's own connection argument text, if the rule's construct carries one
+    /// directly. Null when the connection is found only through a later property assignment, a
+    /// factory receiver, or not at all.
     /// </param>
     /// <param name="ResolveTerminalSinks">
     /// This Command Source's own terminal sink calls within the method. Each rule brings its own,
@@ -2713,10 +2726,11 @@ internal static class WrapperAnalyzer
     /// <param name="SpanStart">Where this Command Source's own construct begins, for ordering
     /// multiple sources the way they appear in the method.</param>
     private sealed record CommandSource(
-        ObjectCreationExpressionSyntax? Creation,
         string? VariableName,
         string CommandPropertyReceiver,
         ObjectCreationExpressionSyntax? PropertyInitializerOwner,
+        ExpressionSyntax? CommandTextExpression,
+        string? ConnectionExpression,
         Func<MethodDeclarationSyntax, IReadOnlyList<InvocationExpressionSyntax>> ResolveTerminalSinks,
         int SpanStart);
 
@@ -2754,10 +2768,11 @@ internal static class WrapperAnalyzer
                 {
                     var variable = ResolveVariableName(creation);
                     return new CommandSource(
-                        creation,
                         variable,
                         variable ?? "",
                         creation,
+                        creation.ArgumentList?.Arguments.ElementAtOrDefault(0)?.Expression,
+                        creation.ArgumentList?.Arguments.ElementAtOrDefault(1)?.Expression?.ToString().Trim(),
                         method => variable is null
                             ? Array.Empty<InvocationExpressionSyntax>()
                             : ResolveCommandTerminalSinkInvocations(method, variable),
@@ -2787,9 +2802,10 @@ internal static class WrapperAnalyzer
                         continue;
                     var variableName = variable.Identifier.Text;
                     yield return new CommandSource(
+                        variableName,
+                        variableName,
                         null,
-                        variableName,
-                        variableName,
+                        null,
                         null,
                         method => ResolveCommandTerminalSinkInvocations(method, variableName),
                         variable.SpanStart);
@@ -2821,12 +2837,13 @@ internal static class WrapperAnalyzer
                 if (variable is null)
                     continue;
                 yield return new CommandSource(
-                    creation,
                     variable,
                     // An adapter has no CommandType of its own; the mode is whatever the method
                     // assigns to the command the adapter built for itself.
                     $"{variable}.SelectCommand",
                     null,
+                    arguments.Value[0].Expression,
+                    arguments.Value[1].Expression.ToString().Trim(),
                     method => ResolveAdapterFillInvocations(method, variable),
                     creation.SpanStart);
             }
@@ -2844,10 +2861,6 @@ internal static class WrapperAnalyzer
         var commandSources = CommandSourceResolver.Resolve(method, checker);
         var commandSource = commandSources.FirstOrDefault();
         if (commandSource is null)
-            return null;
-
-        var commandVariable = commandSource.VariableName;
-        if (commandVariable is null)
             return null;
 
         var commandTypeAssignments = GetCommandPropertyAssignments(
@@ -2879,10 +2892,8 @@ internal static class WrapperAnalyzer
         var requiredParameterCount = method.ParameterList.Parameters.Count(parameter =>
             parameter.Default is null
             && !parameter.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.ParamsKeyword)));
-        var commandTextExpression = commandSource.Creation?.ArgumentList?.Arguments
-            .ElementAtOrDefault(0)?.Expression;
-        var connectionExpression = commandSource.Creation?.ArgumentList?.Arguments
-            .ElementAtOrDefault(1)?.Expression?.ToString().Trim();
+        var commandTextExpression = commandSource.CommandTextExpression;
+        var connectionExpression = commandSource.ConnectionExpression;
         var commandTextAssignments = GetCommandPropertyAssignments(
             method,
             commandSource,
