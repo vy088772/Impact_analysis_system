@@ -14,10 +14,13 @@ A Delegated Method counts as understood. The set of unclassified public methods
 — the set that blocks Contract creation — keeps its current meaning: a method
 the resolver could not account for by any rule.
 
-Measured outcome: the shared `SQLDbContext`'s four delegating methods
-(`usp_ExecCmdGetFisrtValueAsync`, `usp_ExecCmdGetDataTableAsync`,
-`usp_ExecCmdGetJsonObjectAsync`, `usp_ExecCmdGetJsonObjectListAsync`) move out
-of the unclassified set and name the sibling each one calls.
+Measured outcome: the shared `SQLDbContext`'s three delegating methods move out
+of the unclassified set and name the sibling each one calls —
+`usp_ExecCmdGetFisrtValueAsync` to `usp_ExecCmdGetDataTableAsync`,
+`usp_ExecCmdGetDataTableAsync` to `usp_ExecCmdGetDataSetAsync`, and
+`usp_ExecCmdGetJsonObjectAsync` to `usp_ExecCmdGetJsonObjectListAsync`.
+`usp_ExecCmdGetJsonObjectListAsync` is not among them: it carries its own
+Command Source and ticket 01 already classified it.
 
 **Blocked by:** None — can start immediately.
 

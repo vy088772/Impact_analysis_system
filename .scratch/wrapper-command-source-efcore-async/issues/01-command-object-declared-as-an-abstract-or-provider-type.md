@@ -12,12 +12,14 @@ has always compared against a multi-provider list. This ticket brings the two
 into agreement by widening the command rule's comparison to the same list
 shape, adding the abstract command type alongside the provider-specific ones.
 
-Measured outcome: the shared `SQLDbContext`'s `usp_ExecCmdGetDataSetAsync`
-moves from the unclassified set to a classified wrapper definition, carrying
-its stored-procedure command semantics and its terminal sink. The behaviour
-surface stays incomplete — four sibling methods and one Entity Framework Core
-method remain unaccounted for — so no Contract is created yet. That is ticket
-02's and a later ticket's work.
+Measured outcome: the shared `SQLDbContext`'s `usp_ExecCmdGetDataSetAsync`,
+`usp_ExecCmdGetJsonObjectListAsync` and `usp_ExecCmdGetJsonToTabletListAsync`
+move from the unclassified set to classified wrapper definitions, each carrying
+its command semantics and its terminal sink. The behaviour surface stays
+incomplete — three sibling methods and one Entity Framework Core method remain
+unaccounted for, and every classified method still reports an empty Connection
+Behavior Boundary — so no Contract is created yet. That is ticket 02's, ticket
+07's and ticket 08's work.
 
 **Blocked by:** None — can start immediately.
 
