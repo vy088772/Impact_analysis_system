@@ -4,11 +4,13 @@ Azure DevOps 程式碼擷取器
 使用 git clone（含 PAT 驗證）將 Azure Repos 的程式碼下載至本機目錄
 """
 
-import subprocess
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Optional
 from urllib.parse import quote
+
+from code_analyzer.clone_synchroniser import CloneSynchroniser, SynchroniseError
 
 
 class AzureFetchError(Exception):
@@ -30,7 +32,8 @@ class AzureDevOpsFetcher:
     """
 
     def __init__(self, org: str, project: str, repo: str, pat: str,
-                 branch: str = 'main', clone_dir: str = ''):
+                 branch: str = 'main', clone_dir: str = '',
+                 synchroniser: Optional[CloneSynchroniser] = None):
         if not all([org, project, repo, pat]):
             raise AzureFetchError(
                 "缺少必要設定：AZURE_DEVOPS_ORG、AZURE_DEVOPS_PROJECT、"
@@ -43,6 +46,7 @@ class AzureDevOpsFetcher:
         self.branch = branch
         self.clone_dir = clone_dir
         self._temp_dir = None   # 若使用暫存目錄，記錄以便清理
+        self._synchroniser = synchroniser or CloneSynchroniser()
 
     # ------------------------------------------------------------------
     # 公開方法
@@ -50,29 +54,34 @@ class AzureDevOpsFetcher:
 
     def fetch(self, update: bool = True) -> Path:
         """
-        Clone 或更新程式碼，回傳本機路徑。
+        Clone 或同步程式碼，回傳本機路徑。
 
         - 若 clone_dir 已存在且含 .git：
-            update=True  → 執行 git pull（更新）。
+            update=True  → 交由同步器執行 fetch、reset --hard、clean。
             update=False → 直接沿用現有 clone（不連線、不更新）。
-        - 若 clone_dir 為空，建立暫存目錄後 clone。
+        - 若 clone_dir 為空或尚未 clone 過，一律交由同步器建立 clone。
         - 回傳 clone 根目錄的 Path 物件。
         """
         target = self._resolve_target()
+        already_cloned = self._synchroniser.is_cloned(target)
 
-        if (target / '.git').exists():
-            if update:
-                print(f"📂 目錄已存在，執行 git pull：{target}")
-                self._git_pull(target)
-            else:
-                print(f"📂 已存在 clone，沿用（未更新）：{target}")
+        if already_cloned and not update:
+            print(f"📂 已存在 clone，沿用（未更新）：{target}")
+            return target
+
+        if already_cloned:
+            print(f"🔄 目錄已存在，執行同步：{target}")
         else:
             print(f"⬇️  開始 clone：{self._safe_url()}")
             print(f"   分支：{self.branch}")
             print(f"   目標：{target}")
-            self._git_clone(target)
-            print(f"✅ Clone 完成：{target}")
 
+        try:
+            self._synchroniser.synchronise(target, self._build_clone_url(), self.branch)
+        except SynchroniseError as exc:
+            raise AzureFetchError(_mask_pat(str(exc))) from exc
+
+        print(f"✅ 同步完成：{target}")
         return target
 
     def cleanup(self):
@@ -114,60 +123,6 @@ class AzureDevOpsFetcher:
             f"https://***@dev.azure.com"
             f"/{self.org}/{project_encoded}/_git/{repo_encoded}"
         )
-
-    def _git_clone(self, target: Path):
-        """執行 git clone"""
-        cmd = [
-            'git', '-c', 'credential.helper=',  # 繞過本機 Git Credential Manager，
-            # 避免它攔截 dev.azure.com 認證、要求 credential.useHttpPath 設定，
-            # 直接使用 URL 內嵌的 PAT 做 Basic Auth
-            'clone',
-            '--branch', self.branch,
-            '--single-branch',
-            '--depth', '1',          # shallow clone，加速下載
-            self._build_clone_url(),
-            str(target)
-        ]
-        self._run(cmd)
-
-    def _git_pull(self, target: Path):
-        """在現有目錄執行 git pull"""
-        # 既有 clone 的 origin URL 可能沒有內嵌憑證（或內嵌的 PAT 已過期），
-        # 先用目前設定重新寫入 origin URL，pull 時才不必依賴本機 Git Credential
-        # Manager（避免它攔截 dev.azure.com 認證、要求 credential.useHttpPath 設定）
-        self._run(['git', '-C', str(target), 'remote', 'set-url', 'origin', self._build_clone_url()])
-        cmd = ['git', '-c', 'credential.helper=', '-C', str(target), 'pull', '--ff-only']
-        self._run(cmd)
-        print("✅ git pull 完成")
-
-    @staticmethod
-    def _run(cmd: list):
-        """執行外部命令，失敗時拋出 AzureFetchError"""
-        # 隱藏命令列輸出中的 PAT（替換含 @ 的 URL 片段）
-        display_cmd = [
-            part if '@' not in part else part.split('@')[-1]
-            for part in cmd
-        ]
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-        except FileNotFoundError:
-            raise AzureFetchError(
-                "找不到 git 指令，請確認 Git 已安裝並加入 PATH"
-            )
-        except subprocess.TimeoutExpired:
-            raise AzureFetchError("git 操作逾時（超過 300 秒）")
-
-        if result.returncode != 0:
-            # 過濾錯誤訊息中可能洩漏的 PAT
-            stderr = result.stderr or ''
-            raise AzureFetchError(
-                f"git 操作失敗（exit {result.returncode}）\n{_mask_pat(stderr)}"
-            )
 
 
 def _mask_pat(text: str) -> str:
