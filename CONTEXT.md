@@ -149,6 +149,10 @@ _Avoid_: file discovery, source scan, compile items
 The `obj/project.assets.json` one NuGet restore writes for one SDK-style Project, and the only place consulted for which assembly each package reference compiles against. A project already carrying assets is never restored again; a project carrying none is restored once. Nothing here guesses at a NuGet folder layout or hunts through a .NET installation. When two assemblies of one name arrive, the higher assembly version wins, which is the rule MSBuild's own conflict resolution follows — preferring the targeting pack unconditionally is wrong and produces CS1705.
 _Avoid_: nuget cache, packages folder, project.json
 
+**Local Implementer**:
+The one concrete class in the current scan that implements an interface-typed wrapper receiver and itself declares the invoked method. When exactly one exists, the call is rated as source-backed, the same as a directly-typed local wrapper; zero leaves the interface as an unresolved external wrapper receiver, unchanged; two or more is reported as `ambiguous_implementation`, a Wrapper Resolution Status, and neither declaration order nor name similarity ever breaks the tie.
+_Avoid_: DI resolution, interface binding, local implementation
+
 **Declaring Receiver Type**:
 The type one wrapper Contract is keyed on: the type that *declares* the invoked method, which for a local database context deriving from an external base class is that base, not the local subclass. It is reported beside a provenance saying how it was reached — `declaring_type` from the bound method symbol's containing type, `receiver_declaration` when the receiver's own declared type declares the method, `declaring_type_unresolved` when a receiver type resolved but inherits the method from a base this analysis cannot see, and blank when no receiver type resolved at all. The rule only ever walks *from* a receiver type the syntax already resolved; it never invents one where none was reported before.
 _Avoid_: receiver class, wrapper class, declared type

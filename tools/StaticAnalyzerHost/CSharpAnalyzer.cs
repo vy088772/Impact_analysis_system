@@ -1454,6 +1454,8 @@ internal static class WrapperAnalyzer
     private static List<WrapperDefinition>? _definitionsCache;
     private static IReadOnlyList<CompilationUnitSyntax>? _usedWrapperMethodIdentitiesRoots;
     private static IReadOnlySet<string>? _usedWrapperMethodIdentitiesCache;
+    private static IReadOnlyList<CompilationUnitSyntax>? _allClassDeclarationsRoots;
+    private static IReadOnlyList<ClassDeclarationSyntax>? _allClassDeclarationsCache;
     private static readonly DeclarationIndex<ClassDeclarationSyntax> ClassDeclarationsByIdentity =
         new(CSharpAnalyzer.GetTypeIdentity);
     private static readonly DeclarationIndex<TypeDeclarationSyntax> TypeDeclarationsByName =
@@ -1532,6 +1534,28 @@ internal static class WrapperAnalyzer
         IEnumerable<CompilationUnitSyntax> sourceRoots,
         string typeIdentity)
         => ClassDeclarationsByIdentity.Lookup(AsRootList(sourceRoots), typeIdentity);
+
+    /// <summary>
+    /// Every class declaration anywhere in the corpus, memoized the same way <see
+    /// cref="GetDefinitions(IEnumerable{CompilationUnitSyntax})"/> and <see
+    /// cref="GetKnownTypeIdentities"/> already are: a full corpus walk run once per call site
+    /// (ticket 01's Local Implementer search asks this once per unresolved interface-typed
+    /// call) is exactly the "three and a half minutes" pattern <see cref="GetClassDeclarations"/>
+    /// above was indexed to avoid -- so this is memoized on the same root-identity basis rather
+    /// than re-walking `DescendantNodes()` per call.
+    /// </summary>
+    private static IReadOnlyList<ClassDeclarationSyntax> GetAllClassDeclarations(
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots)
+    {
+        if (SameRoots(sourceRoots, _allClassDeclarationsRoots))
+            return _allClassDeclarationsCache!;
+        var declarations = sourceRoots
+            .SelectMany(sourceRoot => sourceRoot.DescendantNodes().OfType<ClassDeclarationSyntax>())
+            .ToList();
+        _allClassDeclarationsRoots = sourceRoots;
+        _allClassDeclarationsCache = declarations;
+        return declarations;
+    }
 
     /// <summary>
     /// Every type declaration in the corpus carrying the given simple name -- the name a
@@ -1746,7 +1770,8 @@ internal static class WrapperAnalyzer
                         method,
                         callerClass,
                         roots,
-                        compilation);
+                        compilation,
+                        wrappers);
                     if (unavailable is not null)
                         invocations.Add(unavailable);
                     continue;
@@ -2148,7 +2173,8 @@ internal static class WrapperAnalyzer
         MethodDeclarationSyntax caller,
         string callerClass,
         IReadOnlyList<CompilationUnitSyntax> sourceRoots,
-        CSharpCompilation? compilation)
+        CSharpCompilation? compilation,
+        IReadOnlyList<WrapperDefinition> wrappers)
     {
         if (call.Expression is not MemberAccessExpressionSyntax member)
             return null;
@@ -2161,6 +2187,23 @@ internal static class WrapperAnalyzer
         var (commandTextKind, literalText, commandTextUnresolvedReason) =
             ResolveExternalCommandText(commandTextArgument, caller, call);
         var boundSymbol = TryResolveBoundWrapperSymbol(call, compilation);
+        var receiverType = ResolveWrapperReceiverType(call, caller, boundSymbol, sourceRoots);
+        var methodName = member.Name.Identifier.Text;
+        var localImplementers = ResolveLocalImplementers(receiverType, methodName, sourceRoots);
+        // Exactly one Local Implementer: if its own method was already scanned into a
+        // WrapperDefinition (it reaches a terminal database sink, the same way any directly-typed
+        // local wrapper's method would), that definition's own facts are reused here -- no new
+        // extraction, the existing definition just reached through a different receiver identity.
+        // A Local Implementer whose method never became a WrapperDefinition (it builds a
+        // SqlParameter but never touches a command object, say) still redirects -- receiver_type
+        // and receiver_implementation_identity are what the gateway's `if source_available:`
+        // branch actually needs to classify the call `source_wrapper`; nothing else is required.
+        var localImplementer = localImplementers.Count == 1 ? localImplementers[0] : null;
+        var localWrapperDefinition = localImplementer is null
+            ? null
+            : wrappers.FirstOrDefault(wrapper =>
+                wrapper.MethodName == methodName
+                && wrapper.TypeIdentity == localImplementer.TypeIdentity);
 
         return CreateUnavailableInvocation(
             caller,
@@ -2172,8 +2215,10 @@ internal static class WrapperAnalyzer
             mode,
             call,
             boundSymbol,
-            ResolveWrapperReceiverType(call, caller, boundSymbol, sourceRoots),
-            commandTextUnresolvedReason);
+            receiverType,
+            commandTextUnresolvedReason,
+            localImplementer,
+            localWrapperDefinition);
     }
 
     /// <summary>
@@ -2329,6 +2374,182 @@ internal static class WrapperAnalyzer
         return declarations.Any(declaration => declaration.BaseList is not null);
     }
 
+    /// <summary>One local class the current scan root can hand back for an interface-typed
+    /// wrapper receiver -- its bare simple name (what a directly-typed receiver would already
+    /// report) alongside the full type identity <see cref="WrapperDefinition.TypeIdentity"/> is
+    /// keyed on, so the caller can look up whether this exact class's method already has a
+    /// scanned <see cref="WrapperDefinition"/> to redirect to.</summary>
+    private sealed record LocalImplementerCandidate(string ClassName, string TypeIdentity);
+
+    /// <summary>
+    /// Ticket 01 (wrapper-receiver-resolves-through-interface): when <paramref name="receiverType"/>
+    /// names an interface the current scan root declares (not a class -- a class-typed receiver is
+    /// already handled by <see cref="ResolveWrapperReceiverType"/> itself), the one local class that
+    /// both implements the interface and itself declares <paramref name="methodName"/> is its Local
+    /// Implementer. A field typed as a DI-style service interface is otherwise reported as an
+    /// unavailable external wrapper receiver even though its implementation sits right here in the
+    /// same corpus.
+    ///
+    /// This runs for any resolved <paramref name="receiverType"/>, not only
+    /// <see cref="ResolvedReceiverType.ReceiverDeclaration"/>: with a real compilation available
+    /// (the common case -- every measured run has one), the compiler binds an interface-typed
+    /// receiver's call to the interface's own declared method, so <see
+    /// cref="ResolveWrapperReceiverType"/> reports <see cref="ResolvedReceiverType.Declaring"/>
+    /// instead, naming the very same interface. Both provenances name a type; only whether that
+    /// type is a corpus interface decides whether this method applies, never which provenance
+    /// produced it.
+    ///
+    /// Zero candidates or two-or-more candidates are both reported as an empty list: a genuinely
+    /// external interface (no local implementer at all) is left exactly as
+    /// <see cref="ResolveWrapperReceiverType"/> already reports it, and a tie between two or more
+    /// local classes is never broken by declaration order, file order, or name similarity -- ticket
+    /// 02 turns that case into its own distinct, reviewable outcome; this method must not guess
+    /// between them.
+    /// </summary>
+    private static IReadOnlyList<LocalImplementerCandidate> ResolveLocalImplementers(
+        ResolvedReceiverType receiverType,
+        string methodName,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots)
+    {
+        if (string.IsNullOrWhiteSpace(receiverType.ReceiverType) || string.IsNullOrEmpty(methodName))
+            return Array.Empty<LocalImplementerCandidate>();
+
+        var interfaceName = receiverType.ReceiverType.Trim();
+        var isCorpusInterface = GetTypeDeclarationsByName(sourceRoots, interfaceName)
+            .OfType<InterfaceDeclarationSyntax>()
+            .Any();
+        return isCorpusInterface
+            ? FindLocalImplementers(interfaceName, methodName, sourceRoots)
+            : Array.Empty<LocalImplementerCandidate>();
+    }
+
+    /// <summary>Every local class in <paramref name="sourceRoots"/> that implements
+    /// <paramref name="interfaceName"/> (directly, or through a further base class in the same
+    /// corpus) and itself declares <paramref name="methodName"/> (or inherits its declaration from
+    /// that same base-class chain) -- a class's identity counts once even when split across several
+    /// `partial` declarations.</summary>
+    private static IReadOnlyList<LocalImplementerCandidate> FindLocalImplementers(
+        string interfaceName,
+        string methodName,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots)
+    {
+        var evaluatedIdentities = new HashSet<string>(StringComparer.Ordinal);
+        var matches = new List<LocalImplementerCandidate>();
+        foreach (var classDeclaration in GetAllClassDeclarations(sourceRoots))
+        {
+            // An abstract class can never be the thing a DI container hands back for an interface
+            // field, so it is never itself a Local Implementer -- only a rung a concrete subclass
+            // climbs through (still walked by ImplementsInterfaceTransitively/DeclaresMethodTransitively
+            // below). Without this guard, the "abstract base implements most of the interface,
+            // concrete subclass fills in the rest" pattern the ticket calls out would surface both
+            // the base and the subclass as tied candidates, reporting a tie that was never really one.
+            if (classDeclaration.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.AbstractKeyword)))
+                continue;
+
+            var typeIdentity = CSharpAnalyzer.GetTypeIdentity(classDeclaration);
+            if (!ShouldVisit(typeIdentity, evaluatedIdentities))
+                continue;
+
+            if (ImplementsInterfaceTransitively(
+                    classDeclaration,
+                    interfaceName,
+                    sourceRoots,
+                    new HashSet<string>(StringComparer.Ordinal))
+                && DeclaresMethodTransitively(
+                    classDeclaration,
+                    methodName,
+                    sourceRoots,
+                    new HashSet<string>(StringComparer.Ordinal)))
+                matches.Add(new LocalImplementerCandidate(classDeclaration.Identifier.Text, typeIdentity));
+        }
+        return matches;
+    }
+
+    /// <summary>True when <paramref name="classDeclaration"/>'s base list (across every `partial`
+    /// declaration sharing its identity) names <paramref name="interfaceName"/> directly, or names a
+    /// further class in the same corpus that does -- the "abstract base implements most of the
+    /// interface, concrete subclass fills in the rest" pattern.</summary>
+    private static bool ImplementsInterfaceTransitively(
+        ClassDeclarationSyntax classDeclaration,
+        string interfaceName,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots,
+        HashSet<string> visitedTypeIdentities)
+    {
+        var typeIdentity = CSharpAnalyzer.GetTypeIdentity(classDeclaration);
+        if (!ShouldVisit(typeIdentity, visitedTypeIdentities))
+            return false;
+
+        var baseNames = BaseListNames(classDeclaration, typeIdentity, sourceRoots);
+        if (baseNames.Contains(interfaceName, StringComparer.Ordinal))
+            return true;
+
+        return baseNames
+            .SelectMany(baseName => GetTypeDeclarationsByName(sourceRoots, baseName))
+            .OfType<ClassDeclarationSyntax>()
+            .Any(baseClass => ImplementsInterfaceTransitively(
+                baseClass, interfaceName, sourceRoots, visitedTypeIdentities));
+    }
+
+    /// <summary>True when <paramref name="classDeclaration"/> (across every `partial` declaration
+    /// sharing its identity) declares <paramref name="methodName"/> itself, or a further base class
+    /// in the same corpus does.</summary>
+    private static bool DeclaresMethodTransitively(
+        ClassDeclarationSyntax classDeclaration,
+        string methodName,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots,
+        HashSet<string> visitedTypeIdentities)
+    {
+        var typeIdentity = CSharpAnalyzer.GetTypeIdentity(classDeclaration);
+        if (!ShouldVisit(typeIdentity, visitedTypeIdentities))
+            return false;
+
+        var partials = PartialDeclarationsIncludingSelf(classDeclaration, typeIdentity, sourceRoots);
+        if (partials.Any(declaration => declaration.Members
+            .OfType<MethodDeclarationSyntax>()
+            .Any(method => method.Identifier.Text == methodName)))
+            return true;
+
+        return BaseListNames(classDeclaration, typeIdentity, sourceRoots)
+            .SelectMany(baseName => GetTypeDeclarationsByName(sourceRoots, baseName))
+            .OfType<ClassDeclarationSyntax>()
+            .Any(baseClass => DeclaresMethodTransitively(
+                baseClass, methodName, sourceRoots, visitedTypeIdentities));
+    }
+
+    /// <summary>The bare base-list type names (as written at each declaration site) across every
+    /// `partial` declaration sharing <paramref name="classDeclaration"/>'s identity.</summary>
+    private static IReadOnlyList<string> BaseListNames(
+        ClassDeclarationSyntax classDeclaration,
+        string typeIdentity,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots)
+        => PartialDeclarationsIncludingSelf(classDeclaration, typeIdentity, sourceRoots)
+            .Where(declaration => declaration.BaseList is not null)
+            .SelectMany(declaration => declaration.BaseList!.Types)
+            .Select(baseType => baseType.Type.ToString().Trim())
+            .ToList();
+
+    /// <summary>Every declaration sharing <paramref name="classDeclaration"/>'s type identity
+    /// (every `partial` part the corpus carries), with <paramref name="classDeclaration"/> itself
+    /// included even when its identity could not be resolved (and so the index above cannot find
+    /// it by that identity).</summary>
+    private static IReadOnlyList<ClassDeclarationSyntax> PartialDeclarationsIncludingSelf(
+        ClassDeclarationSyntax classDeclaration,
+        string typeIdentity,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots)
+    {
+        var partials = GetClassDeclarations(sourceRoots, typeIdentity).ToList();
+        if (!partials.Contains(classDeclaration))
+            partials.Add(classDeclaration);
+        return partials;
+    }
+
+    /// <summary>The shared cycle guard for every Local Implementer walk above: a type with no
+    /// resolvable identity is always walked (there is nothing to dedupe it by), and a type with
+    /// one is walked at most once per traversal -- <see cref="HashSet{T}.Add"/> reports whether it
+    /// was newly seen.</summary>
+    private static bool ShouldVisit(string typeIdentity, HashSet<string> visited)
+        => string.IsNullOrEmpty(typeIdentity) || visited.Add(typeIdentity);
+
     // Symbol acceptance rule (ticket 06): accept a bound method symbol only when the compiler
     // returned one resolved symbol and returned no candidate set. A non-empty candidate set
     // means overload resolution could not choose between two or more methods -- that is exactly
@@ -2412,8 +2633,19 @@ internal static class WrapperAnalyzer
         InvocationExpressionSyntax call,
         BoundWrapperSymbolFacts? boundSymbol,
         ResolvedReceiverType receiverType,
-        string? commandTextUnresolvedReason = null)
-        => new(
+        string? commandTextUnresolvedReason = null,
+        LocalImplementerCandidate? localImplementer = null,
+        WrapperDefinition? localWrapperDefinition = null)
+    {
+        // Ticket 01: exactly one Local Implementer redirects this call to source-backed evidence,
+        // named by receiver_implementation_identity, the same way a directly-typed local wrapper
+        // already is. When that implementer's own method was already scanned into a
+        // WrapperDefinition, its method-semantics/terminal-sink/identity facts are reused here
+        // unchanged -- the same fields a directly-typed local wrapper (WrapperAnalyzer.Analyze's
+        // resolution.Candidates[0] path) already reports from the very same WrapperDefinition, no
+        // new extraction. Zero or two-or-more candidates leave WrapperSourceAvailable false,
+        // exactly as reported before this ticket (a tie is ticket 02's distinct outcome).
+        return new(
             callerClass,
             caller.Identifier.Text,
             commandTextKind,
@@ -2425,18 +2657,24 @@ internal static class WrapperAnalyzer
             "source_wrapper",
             null,
             member.Name.Identifier.Text,
-            false,
-            false,
+            localImplementer is not null,
+            localWrapperDefinition?.ReachesStoredProcedureSink ?? false,
             mode,
             new[] { caller.Identifier.Text, member.Name.Identifier.Text },
             WrapperReceiverType: receiverType.ReceiverType,
             WrapperMethodArity: call.ArgumentList.Arguments.Count,
-            WrapperMethodIdentity: boundSymbol?.MethodIdentity,
-            WrapperParameterTypes: boundSymbol?.ParameterTypes,
-            WrapperAssemblyIdentity: boundSymbol?.AssemblyIdentity,
+            WrapperMethodIdentity: localWrapperDefinition?.MethodIdentity ?? boundSymbol?.MethodIdentity,
+            WrapperParameterTypes: localWrapperDefinition?.ParameterTypes ?? boundSymbol?.ParameterTypes,
+            WrapperAssemblyIdentity: localWrapperDefinition?.AssemblyIdentity ?? boundSymbol?.AssemblyIdentity,
+            WrapperAssemblyRevision: localWrapperDefinition?.AssemblyRevision,
+            WrapperMethodSemantics: localWrapperDefinition?.MethodSemantics,
+            WrapperTerminalSink: localWrapperDefinition?.TerminalSink,
+            WrapperUnresolvedReason: localWrapperDefinition?.UnresolvedReason,
             WrapperReceiverTypeProvenance: receiverType.Provenance,
             CommandTypeArgumentObserved: HasModeLiteralArgument(call),
-            CommandTextUnresolvedReason: commandTextUnresolvedReason);
+            CommandTextUnresolvedReason: commandTextUnresolvedReason,
+            ReceiverImplementationIdentity: localImplementer?.ClassName);
+    }
 
     /// <summary>One externally referenced wrapper call's uniquely bound method symbol facts —
     /// only ever built when the compiler resolved the call to exactly one method with no
