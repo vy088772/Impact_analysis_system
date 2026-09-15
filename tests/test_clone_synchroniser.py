@@ -297,3 +297,95 @@ def test_a_rebuilt_meta_records_the_time_as_unknown_when_the_refresh_then_fails(
     assert "refreshed_at" in meta
     assert meta["refreshed_at"] is None
     assert '"refreshed_at": null' in raw_text
+
+
+# ----------------------------------------------------------------------
+# Ticket 05: the declared branch decides; a mismatch re-clones.
+#
+# See .scratch/refresh-resets-the-clone-to-the-remote/issues/
+# 05-declared-branch-decides-and-a-mismatch-re-clones.md
+# ----------------------------------------------------------------------
+
+def _push_new_branch(tmp_path: Path, bare: Path, branch: str, filename: str, content: str) -> str:
+    """Branch off the seed's current HEAD, add one file unique to the new
+    branch, and push it to `bare`. Returns the new commit hash.
+
+    The seed is left checked out on `branch` afterwards.
+    """
+    seed = tmp_path / "seed"
+    _run(["git", "-C", str(seed), "checkout", "-q", "-b", branch])
+    (seed / filename).write_text(content, encoding="utf-8")
+    _run(["git", "-C", str(seed), "add", "."])
+    _run(["git", "-C", str(seed), "commit", "-q", "-m", f"add {filename} on {branch}"])
+    _run(["git", "-C", str(seed), "push", "-q", str(bare), branch])
+    result = subprocess.run(
+        ["git", "-C", str(seed), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    )
+    return result.stdout.strip()
+
+
+def test_a_refresh_whose_declared_branch_equals_the_recorded_branch_fetches_and_resets(tmp_path):
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    newest = _push_second_commit(tmp_path, bare, branch)
+
+    with patch.object(CloneSynchroniser, "_clone") as mocked_clone:
+        CloneSynchroniser().synchronise(target, str(bare), branch)
+        mocked_clone.assert_not_called()
+
+    assert _head_commit(target) == newest
+    assert _is_clean(target)
+
+
+def test_a_refresh_whose_declared_branch_differs_from_the_recorded_branch_reclones_it(tmp_path):
+    main_branch = "main"
+    feature_branch = "feature"
+    bare = _make_remote(tmp_path, main_branch)
+    target = tmp_path / "clone"
+
+    CloneSynchroniser().synchronise(target, str(bare), main_branch)
+    # A single-branch, shallow clone has no `origin/feature` to reset onto —
+    # this is exactly why a plain fetch/reset cannot serve a branch change.
+    feature_commit = _push_new_branch(tmp_path, bare, feature_branch, "feature_only.txt", "only on feature\n")
+
+    # A marker planted inside .git survives an ordinary fetch/reset/clean
+    # (which never touches .git's own contents), so its disappearance
+    # proves the whole directory was deleted, not merely refreshed.
+    marker = target / ".git" / "planted_before_mismatch.marker"
+    marker.write_text("still here?\n", encoding="utf-8")
+
+    CloneSynchroniser().synchronise(target, str(bare), feature_branch)
+
+    assert not marker.exists()
+    assert (target / "feature_only.txt").read_text(encoding="utf-8") == "only on feature\n"
+    assert _head_commit(target) == feature_commit
+    assert _is_clean(target)
+
+    meta = _read_meta(target)
+    assert meta["branch"] == feature_branch
+    assert meta["commit"] == feature_commit
+
+
+def test_a_missing_meta_json_is_not_treated_as_a_branch_mismatch(tmp_path):
+    """Rebuilding a missing meta.json asks git for the branch the clone is
+    actually on. When that matches the declared branch, the refresh must
+    take the fetch/reset/clean path, not the delete-and-reclone path —
+    "no record" and "different record" are not the same thing."""
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    (target / "meta.json").unlink()
+    newest = _push_second_commit(tmp_path, bare, branch)
+
+    with patch.object(CloneSynchroniser, "_clone") as mocked_clone:
+        CloneSynchroniser().synchronise(target, str(bare), branch)
+        mocked_clone.assert_not_called()
+
+    assert _head_commit(target) == newest
+    assert _is_clean(target)

@@ -11,10 +11,14 @@ PAT、System 或 catalog。呼叫端保證：呼叫 synchronise() 之後，targe
 
 每次成功的 synchronise() 都在 target 目錄裡寫下 `meta.json`：宣告
 （settings、catalog）講的是意圖，這個檔案講的是事實——clone 目前實際停在
-哪個分支、哪個 commit、上一次成功 refresh 是何時。見 ADR-0023。
+哪個分支、哪個 commit、上一次成功 refresh 是何時。宣告的 branch 才有決定
+權：當它跟 meta.json 記錄的 branch 不同，代表這個 clone 停在錯的分支上，
+synchronise() 整個刪掉 target 重新 clone，不嘗試用 fetch 硬湊。見
+ADR-0023。
 """
 
 import json
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,28 +38,38 @@ class CloneSynchroniser:
     def synchronise(self, target: Path, remote_url: str, branch: str) -> None:
         """同步 target 目錄至 remote_url 的 branch 分支。
 
-        target 尚未 clone 過時執行 clone；已存在時執行
-        fetch、reset --hard、clean 這個固定序列。
+        branch 是宣告的分支（settings、catalog 講的意圖）。target 尚未
+        clone 過時執行 clone；已存在時，先比對這個宣告的 branch 跟
+        meta.json 記錄的 branch：兩者相同才執行 fetch、reset --hard、
+        clean 這個固定序列；兩者不同就整個刪掉 target 目錄，改當成
+        「尚未 clone 過」重新 clone 宣告的 branch——因為 clone 是 shallow
+        加 single-branch，fetch 設定只認得 clone 當初指定的那個分支，換
+        分支不是 fetch 能做到的事，見 ADR-0023。
 
         成功後一律在 target 寫下 meta.json，記錄 branch、目前的 commit、
         與這次成功 refresh 的時間。若 target 已 clone 過但 meta.json 遺失
         （例如上一次 refresh 中途失敗，或這是一個尚未被本機制接手的舊
         clone），先問 git 這個 clone 目前停在哪個分支，重建一份時間欄位為
         unknown 的 meta.json——這個重建本身不觸發重新 clone，也不代表
-        refresh 已經完成；接下來仍照常跑 fetch/reset/clean，成功後再用
-        本次已知的 branch、新 commit、目前時間覆寫過去。
+        refresh 已經完成；重建出來的 branch 接下來仍會拿去跟宣告的 branch
+        比對，遺失 meta.json 本身不等於分支不符。比對通過後仍照常跑
+        fetch/reset/clean，成功後再用本次已知的 branch、新 commit、目前
+        時間覆寫過去。
         """
         target = Path(target)
 
         if self.is_cloned(target):
             if not self._meta_path(target).exists():
                 self._rebuild_meta(target)
-            self._fetch(target, remote_url)
-            self._reset_hard(target, branch)
-            self._clean(target)
+            if self._recorded_branch(target) != branch:
+                shutil.rmtree(target)
+                self._clone_fresh(target, remote_url, branch)
+            else:
+                self._fetch(target, remote_url)
+                self._reset_hard(target, branch)
+                self._clean(target)
         else:
-            target.mkdir(parents=True, exist_ok=True)
-            self._clone(target, remote_url, branch)
+            self._clone_fresh(target, remote_url, branch)
 
         self._write_meta(target, branch=branch, commit=self._current_commit(target),
                           refreshed_at=_now_iso())
@@ -68,6 +82,13 @@ class CloneSynchroniser:
     # ------------------------------------------------------------------
     # 內部方法
     # ------------------------------------------------------------------
+
+    def _clone_fresh(self, target: Path, remote_url: str, branch: str) -> None:
+        """在一個保證不含既有內容的 target 上建立全新 clone。呼叫端須自行
+        保證 target 尚未存在或已清空——沒有 clone 過的第一次同步，以及
+        branch 不符、target 已被整個刪掉之後的重新 clone，都走這條路。"""
+        target.mkdir(parents=True, exist_ok=True)
+        self._clone(target, remote_url, branch)
 
     def _clone(self, target: Path, remote_url: str, branch: str) -> None:
         self._git(None, [
@@ -143,6 +164,12 @@ class CloneSynchroniser:
 
     def _meta_path(self, target: Path) -> Path:
         return Path(target) / self.META_FILENAME
+
+    def _recorded_branch(self, target: Path) -> Optional[str]:
+        """讀出 meta.json 目前記錄的 branch。呼叫前必須先確保 meta.json
+        存在（缺少時 synchronise() 已經呼叫過 _rebuild_meta()）。"""
+        meta = json.loads(self._meta_path(target).read_text(encoding='utf-8'))
+        return meta.get('branch')
 
     def _rebuild_meta(self, target: Path) -> None:
         """meta.json 遺失時的自救：問 git 這個 clone 目前停在哪個分支與
