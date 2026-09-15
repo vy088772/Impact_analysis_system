@@ -4,11 +4,13 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `CONTEXT.md` carries one term for the local copy of a repository.
-- [ ] The entry states that the copy mirrors one branch of one remote.
-- [ ] The entry states that the copy holds no work, and that a refresh replaces it whole.
-- [ ] The entry states that one copy can serve several Systems.
-- [ ] The entry links to ADR-0023.
-- [ ] The entry names the synonyms to avoid, following the `_Avoid_` convention already in the file.
+- [x] `CONTEXT.md` carries one term for the local copy of a repository.
+- [x] The entry states that the copy mirrors one branch of one remote.
+- [x] The entry states that the copy holds no work, and that a refresh replaces it whole.
+- [x] The entry states that one copy can serve several Systems.
+- [x] The entry links to ADR-0023.
+- [x] The entry names the synonyms to avoid, following the `_Avoid_` convention already in the file.
+
+**Notes:** Added a new "Repository Management" section to `CONTEXT.md`, after "Web Application Analysis", with one term, **Clone**. The entry covers the mirror-of-one-branch rule, the no-work/whole-replacement rule, the one-clone-serves-several-Systems rule, and links to [ADR-0023](../../../docs/adr/0023-a-clone-is-a-read-only-mirror-reset-to-the-remote.md). `_Avoid_` lists: local copy, working copy, checkout, repo directory, workspace.

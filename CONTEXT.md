@@ -199,3 +199,9 @@ _Avoid_: project type, required parsers, framework gate
 The stored procedures and tables a screen reaches by rendering a ViewComponent or a partial view — the MVC/Core counterpart of a WebForms user control. A ViewComponent's `Invoke`/`InvokeAsync` method is the only member reported; a partial view holds no server code of its own and only forwards to whatever it renders in turn, so resolution walks the render chain (partial through partial, partial through ViewComponent) and reports every ViewComponent actually reached. Every fact reached this way is labelled as coming from a shared component — merged into the screen's own `stored_procedures`/`tables`/`database_invocations`, but never merged into its `methods`, and broken out again in `shared_component_contributions` — so a menu or selector component rendered on many screens is never mistaken for one screen's own access. A component reaching no database contributes nothing, not an empty entry.
 _Avoid_: partial contribution, component SPs, included control
 
+## Repository Management
+
+**Clone**:
+The local, read-only mirror of one branch of one remote repository that a refresh keeps under `data/repos/<project>/<repo>`. It holds no person's and no program's work — a refresh discards whatever it finds inside and replaces the Clone whole, rather than merging into it. One Clone can serve several Systems, each scanning its own subdirectories. See [ADR-0023](docs/adr/0023-a-clone-is-a-read-only-mirror-reset-to-the-remote.md).
+_Avoid_: local copy, working copy, checkout, repo directory, workspace
+
