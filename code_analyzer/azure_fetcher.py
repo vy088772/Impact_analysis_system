@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
-from code_analyzer.clone_synchroniser import CloneSynchroniser, SynchroniseError
+from code_analyzer.clone_synchroniser import CloneSynchroniser, SynchroniseError, SynchroniseResult
 
 
 class AzureFetchError(Exception):
@@ -60,6 +60,9 @@ class AzureDevOpsFetcher:
             update=True  → 交由同步器執行 fetch、reset --hard、clean。
             update=False → 直接沿用現有 clone（不連線、不更新）。
         - 若 clone_dir 為空或尚未 clone 過，一律交由同步器建立 clone。
+        - 若同步器回傳忙碌（目錄的鎖被另一次 refresh 握著），拋出
+          AzureFetchError 告知忙碌，不宣稱同步已完成、也不回傳 target——
+          呼叫端據此知道要重試，而不是把一個沒發生的更新當成已經發生。
         - 回傳 clone 根目錄的 Path 物件。
         """
         target = self._resolve_target()
@@ -77,9 +80,14 @@ class AzureDevOpsFetcher:
             print(f"   目標：{target}")
 
         try:
-            self._synchroniser.synchronise(target, self._build_clone_url(), self.branch)
+            result = self._synchroniser.synchronise(target, self._build_clone_url(), self.branch)
         except SynchroniseError as exc:
             raise AzureFetchError(_mask_pat(str(exc))) from exc
+
+        if result is SynchroniseResult.BUSY:
+            raise AzureFetchError(
+                f"⏳ 同步忙碌中：另一個 refresh 正在使用這個目錄，請稍後再試：{target}"
+            )
 
         print(f"✅ 同步完成：{target}")
         return target

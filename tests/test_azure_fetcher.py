@@ -17,31 +17,42 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
-from code_analyzer.clone_synchroniser import SynchroniseError
+from code_analyzer.clone_synchroniser import SynchroniseError, SynchroniseResult
 
 
-class _RecordingSynchroniser:
+class _FakeSynchroniser:
+    """假同步器的共用底子：只認得 .git 是否存在，跟真正的
+    CloneSynchroniser.is_cloned() 判斷方式一致。各假同步器只需各自定義
+    synchronise() 要回傳或拋出什麼。"""
+
+    @staticmethod
+    def is_cloned(target):
+        return (Path(target) / ".git").exists()
+
+
+class _RecordingSynchroniser(_FakeSynchroniser):
     def __init__(self):
         self.calls = []
 
-    @staticmethod
-    def is_cloned(target):
-        return (Path(target) / ".git").exists()
-
     def synchronise(self, target, remote_url, branch):
         self.calls.append((Path(target), remote_url, branch))
+        return SynchroniseResult.SYNCHRONISED
 
 
-class _FailingSynchroniser:
+class _FailingSynchroniser(_FakeSynchroniser):
     def __init__(self, message):
         self._message = message
 
-    @staticmethod
-    def is_cloned(target):
-        return (Path(target) / ".git").exists()
-
     def synchronise(self, target, remote_url, branch):
         raise SynchroniseError(self._message)
+
+
+class _BusySynchroniser(_FakeSynchroniser):
+    """模擬目錄的鎖被另一次 refresh 握著：synchronise() 不拋例外，
+    回傳 SynchroniseResult.BUSY，且完全沒有改動 target。"""
+
+    def synchronise(self, target, remote_url, branch):
+        return SynchroniseResult.BUSY
 
 
 def _fetcher(tmp_path, synchroniser):
@@ -79,6 +90,16 @@ def test_fetch_masks_the_pat_in_a_synchronise_failure(tmp_path):
 
     assert "s3cr3t-pat" not in str(exc_info.value)
     assert "https://***@dev.azure.com" in str(exc_info.value)
+
+
+def test_fetch_raises_when_the_synchroniser_reports_busy(tmp_path):
+    """User Story 10: the operator sees that the mirror is busy, not a false
+    success. AzureDevOpsFetcher.fetch() must read the SynchroniseResult and
+    refuse to claim completion on BUSY."""
+    fetcher = _fetcher(tmp_path, _BusySynchroniser())
+
+    with pytest.raises(AzureFetchError, match="忙碌"):
+        fetcher.fetch()
 
 
 def test_fetch_with_update_false_on_an_existing_clone_does_not_call_the_synchroniser(tmp_path):
