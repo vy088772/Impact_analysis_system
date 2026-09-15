@@ -1936,6 +1936,26 @@ class SpCatalog:
                     qualified_names[canonical_database].add(f"{schema}.{normalized_name}")
         return cls(bare_names, qualified_names)
 
+    @classmethod
+    def merged(cls, catalogs: Iterable["SpCatalog"]) -> "SpCatalog":
+        """Union several single-database catalogs into one multi-database catalog.
+
+        A system commonly spans several real SQL databases (ADR-0009: Database
+        identity is decoupled from System), each loaded separately as its own
+        catalog via `load_sp_catalog(name)`. A gateway instance holds one
+        catalog for a whole refresh, so those are merged here -- keyed by each
+        source catalog's own database name, never mixing two databases'
+        procedures under one key.
+        """
+        merged_bare: Dict[str, Set[str]] = {}
+        merged_qualified: Dict[str, Set[str]] = {}
+        for catalog in catalogs:
+            for database, names in catalog.procedures_by_database.items():
+                merged_bare.setdefault(database, set()).update(names)
+            for database, names in catalog.qualified_procedures_by_database.items():
+                merged_qualified.setdefault(database, set()).update(names)
+        return cls(merged_bare, merged_qualified)
+
     def contains(
         self,
         database: str,

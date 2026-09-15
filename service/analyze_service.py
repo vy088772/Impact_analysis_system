@@ -1021,6 +1021,32 @@ def _remap_connection_source(value: Any, database: str) -> Any:
     return database
 
 
+def _referenced_databases(scans: Iterable[ProjectScanResult]) -> List[str]:
+    """Distinct real database names a system's own connection strings resolve to.
+
+    `reconcile_refresh_wrappers`'s `database` argument is the string a whole-
+    system `/refresh` request carries as `req.system` (see api.py) -- a system
+    id such as "Y-Docs_TTPUR", not a real SQL database name; no cache file is
+    ever saved under that name, so `load_sp_catalog(database)` alone always
+    comes back empty for it. A system commonly spans several real databases
+    (ADR-0009: Database identity is decoupled from System) named per file by
+    its own Web.config connection string, exactly what `database_attribution`
+    already reports as "resolved" on each review item. Walking every file's
+    already-resolved connection sources here names those real databases too,
+    so the catalog covers whatever a call could actually resolve to.
+    """
+    names: Dict[str, None] = {}
+    for scan in scans:
+        raw_by_file = getattr(scan, "db_invocations", {}) or {}
+        for source_file in raw_by_file:
+            sources = _execution_connection_sources(scan, str(source_file), "")
+            for value in sources.values():
+                name = _connection_source_database(value).strip()
+                if name:
+                    names.setdefault(name, None)
+    return list(names)
+
+
 def _execution_connection_sources(
     scan: ProjectScanResult,
     file_path: str,
@@ -3362,7 +3388,29 @@ def reconcile_refresh_wrappers(
         normalized_contract = explicit_contract
     # refresh 流程只知道 database 名稱（沒有請求帶 db_server 進來），
     # 由 sql_cache_store.resolve_server() 回推。
-    catalog = load_sp_catalog(database)
+    #
+    # `database` here is frequently a system id (a whole-system /refresh's
+    # `req.system`, e.g. "Y-Docs_TTPUR"), not any one real SQL database --
+    # `load_sp_catalog(database)` alone then always comes back empty, so
+    # every call into that system's real databases (PUR, Response, ...)
+    # would misreport not_in_resolved_catalog regardless of whether those
+    # databases were ever scanned. `_referenced_databases` names the real
+    # databases the scans' own connection strings resolve to; each is loaded
+    # and merged in alongside `database` so a call is checked against its
+    # own database's catalog.
+    #
+    # An empty `database` is a deliberate signal from registry-only wrapper-
+    # contract acceptance (reclassify_cached_scans) that database evidence
+    # stays unresolved on purpose -- it must touch no SQL cache at all, so
+    # cross-database discovery is skipped for it too, exactly like the old
+    # single `load_sp_catalog("")` call it replaces.
+    scans = list(scans)
+    if database:
+        catalog_databases = dict.fromkeys(_referenced_databases(scans))
+        catalog_databases.setdefault(database, None)
+        catalog = SpCatalog.merged(load_sp_catalog(name) for name in catalog_databases)
+    else:
+        catalog = load_sp_catalog(database)
     wrapper_review_exclusions = load_wrapper_review_exclusions(database)
 
     for scan in scans:

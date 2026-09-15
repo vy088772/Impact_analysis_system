@@ -305,6 +305,103 @@ def test_report_evidence_and_provenance_match_refresh_reconciliation(
     assert report_observation["locations"][0]["evidence_status"] == "proven"
 
 
+def test_refresh_reconciliation_checks_a_calls_own_database_not_the_system_id(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """`reconcile_refresh_wrappers(database=...)` is called from refresh_source()
+    with the *system id* (refresh_cli/api.py never learn a real SQL database name --
+    see rag_client.refresh()/RefreshRequest.system), not any one real database. A
+    system commonly spans several real databases; a call whose Web.config
+    connection string resolves to a different one (ticket 01's
+    {"database":..., "server":...} shape) must be checked against THAT database's
+    own SP catalog, not the (always-empty, since no cache file is ever named after
+    a system id) catalog `load_sp_catalog(system_id)` returns alone -- otherwise
+    every cross-database call in a multi-database system is permanently flagged
+    not_in_resolved_catalog regardless of whether its real database was scanned."""
+    source_file = tmp_path / "OrderPage.cs"
+    record = _record(connection_expression="conn")
+    scan = SimpleNamespace(
+        project_root=str(tmp_path),
+        db_invocations={str(source_file): [record]},
+        connection_sources={str(source_file.resolve()): {"conn": "PUR"}},
+    )
+
+    def fake_load_cached(database, schema, server=""):
+        if database != "PUR":
+            return None
+        return {
+            "database": "PUR",
+            "schema": "dbo",
+            "procedures": [{"name": "dbo.usp_SO_Delete"}],
+        }
+
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", fake_load_cached)
+
+    refresh = analyze_service.reconcile_refresh_wrappers(
+        [scan],
+        database="Y-Docs_TTPUR",
+        explicit_contract="sqlobject",
+        contract_registry={
+            "sqlobject": {
+                "name": "sqlobject",
+                "receiver_types": ["SQLObject"],
+                "methods": {
+                    "ExeProcNon": {"mode": "stored_procedure", "sink": "ExecuteNonQuery"},
+                },
+            }
+        },
+    )
+
+    observation = refresh["observations"][0]
+    assert observation["evidence_reason"] != "not_in_resolved_catalog"
+    assert observation["evidence_status"] == "proven"
+
+
+def test_refresh_reconciliation_with_no_database_touches_no_sql_cache(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """An empty `database` is registry-only acceptance's deliberate signal
+    (reclassify_cached_scans' docstring: "Registry-only acceptance may omit
+    it; that deliberately keeps database evidence unresolved rather than
+    selecting an unknown catalog") that database evidence stays unresolved
+    and NO SQL cache read happens at all -- even when a file's own connection
+    string resolves to a real database name. Cross-database catalog discovery
+    must not override that: it activates only when a caller passes a
+    `database`, never as a side effect of scans naming real databases."""
+    source_file = tmp_path / "OrderPage.cs"
+    record = _record(connection_expression="conn")
+    scan = SimpleNamespace(
+        project_root=str(tmp_path),
+        db_invocations={str(source_file): [record]},
+        connection_sources={str(source_file.resolve()): {"conn": "PUR"}},
+    )
+
+    def fail_if_touched(*args, **kwargs):
+        raise AssertionError("empty database must not read any SQL cache")
+
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", fail_if_touched)
+
+    refresh = analyze_service.reconcile_refresh_wrappers(
+        [scan],
+        database="",
+        explicit_contract="sqlobject",
+        contract_registry={
+            "sqlobject": {
+                "name": "sqlobject",
+                "receiver_types": ["SQLObject"],
+                "methods": {
+                    "ExeProcNon": {"mode": "stored_procedure", "sink": "ExecuteNonQuery"},
+                },
+            }
+        },
+    )
+
+    observation = refresh["observations"][0]
+    assert observation["evidence_status"] != "proven"
+
+
 def test_refresh_reconciliation_drops_reviewed_exclusions_from_totals_and_detail(
     tmp_path: Path,
     monkeypatch,
