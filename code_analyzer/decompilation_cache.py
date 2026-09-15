@@ -24,7 +24,12 @@ class DecompilationAttemptCache:
     def host_root(self) -> Path:
         return self.root / "host"
 
-    def load(self, assembly_identity: str, receiver_type: str) -> dict[str, Any] | None:
+    def load(
+        self,
+        assembly_identity: str,
+        receiver_type: str,
+        host_identity: str | None,
+    ) -> dict[str, Any] | None:
         document = self._load_document(assembly_identity)
         if document is None:
             return None
@@ -33,6 +38,17 @@ class DecompilationAttemptCache:
             return None
         entry = attempts.get(receiver_type)
         if not isinstance(entry, Mapping):
+            return None
+        # host_identity is tracked per receiver-type entry, not once for the whole
+        # document: one DLL (e.g. IQCS's CommonLibrary.dll) can hold dozens of receiver
+        # types cached in the same file, and a refresh re-verifies them one at a time.
+        # Invalidating at the document level would either wipe every sibling entry on
+        # the first re-save (losing real cached work) or, worse, let a still-stale
+        # sibling entry ride along as "fresh" once the document's own field was bumped
+        # by an unrelated receiver type -- exactly the silent staleness ADR-0026 exists
+        # to rule out. An entry with no `host_identity` at all (written before this
+        # change) or `host_identity=None` (current host binary unhashable) is a miss too.
+        if host_identity is None or entry.get("host_identity") != host_identity:
             return None
         response = entry.get("response")
         if not isinstance(response, Mapping):
@@ -44,6 +60,7 @@ class DecompilationAttemptCache:
         assembly_identity: str,
         receiver_type: str,
         response: Mapping[str, Any],
+        host_identity: str | None,
     ) -> None:
         try:
             self.root.mkdir(parents=True, exist_ok=True)
@@ -58,6 +75,7 @@ class DecompilationAttemptCache:
                 document["attempts"] = attempts
             attempts[receiver_type] = {
                 "saved_at": time.time(),
+                "host_identity": host_identity,
                 "response": dict(response),
             }
             self._atomic_write(assembly_identity, document)

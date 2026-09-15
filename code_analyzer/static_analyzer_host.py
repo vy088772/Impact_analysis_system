@@ -7,6 +7,7 @@ import hashlib
 import subprocess
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Any, Callable
 
@@ -41,6 +42,15 @@ class StaticAnalyzerHost:
     @property
     def dll_path(self) -> Path:
         return self.project_path.parent / "bin" / "Debug" / "net8.0" / "StaticAnalyzerHost.dll"
+
+    @cached_property
+    def host_identity(self) -> str | None:
+        """A SHA-256 of the compiled host binary itself, computed once per instance
+        (not once per `decompile_wrapper` call -- a refresh calls it for dozens of
+        receiver types) so a cache keyed on it never re-hashes the same file per lookup.
+        A refresh always calls `ensure_ready()` before any `decompile_wrapper` call,
+        so the DLL is already built by the time this is first read."""
+        return _sha256_file(self.dll_path)
 
     def build(self) -> Path:
         if not self.project_path.exists():
@@ -143,10 +153,11 @@ class StaticAnalyzerHost:
     ) -> dict[str, Any]:
         dll_path = _referenced_dll_path(csproj_path, receiver_type)
         assembly_identity = _sha256_file(dll_path) if dll_path is not None else None
+        host_identity = self.host_identity
         cache = DecompilationAttemptCache(cache_root)
         cached_response = None
         if assembly_identity is not None:
-            cached_response = cache.load(assembly_identity, receiver_type)
+            cached_response = cache.load(assembly_identity, receiver_type, host_identity)
         if cached_response is not None and not rerun:
             return _with_decompilation_metadata(
                 cached_response,
@@ -193,7 +204,7 @@ class StaticAnalyzerHost:
             attempted=attempted,
         )
         if assembly_identity is not None:
-            cache.save(assembly_identity, receiver_type, response)
+            cache.save(assembly_identity, receiver_type, response, host_identity)
         return response
 
     def _run(self, *args: str) -> dict[str, Any]:

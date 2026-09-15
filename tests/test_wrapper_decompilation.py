@@ -534,6 +534,215 @@ def test_decompile_wrapper_caches_failed_attempt_by_dll_hash_and_supports_rerun(
         assert host_cached["decompilation_attempt"]["attempted"] is False
 
 
+def test_decompile_wrapper_client_cache_records_the_running_host_identity() -> None:
+    """The client-side cache document (`data/decompilation_cache/<hash>.json`) stores
+    the analyzer host's own identity alongside each receiver type's attempt, so an
+    analyzer improvement -- which never changes the wrapped DLL's hash -- can still be
+    told apart from a stale negative result (ADR-0026, ticket 09)."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        cache_root = root / "decompilation-cache"
+        csproj_path = _write_referenced_dll_project(root, "Broken", b"not a real dll")
+
+        first = host.decompile_wrapper(csproj_path, "Broken", cache_root=cache_root)
+        cache_path = cache_root / f"{first['assembly_identity']}.json"
+        document = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert document["attempts"]["Broken"]["host_identity"] == host.host_identity
+
+
+def _strip_or_replace_attempt_host_identity(
+    cache_path: Path,
+    receiver_type: str,
+    replacement: str | None,
+) -> None:
+    document = json.loads(cache_path.read_text(encoding="utf-8"))
+    entry = document["attempts"][receiver_type]
+    if replacement is None:
+        del entry["host_identity"]
+    else:
+        entry["host_identity"] = replacement
+    cache_path.write_text(json.dumps(document), encoding="utf-8")
+
+
+def test_decompile_wrapper_treats_client_cache_without_host_identity_as_a_miss() -> None:
+    """A cache entry written before this ticket landed has no `host_identity` key at
+    all, at either cache layer -- it must be re-attempted automatically, with no manual
+    `rerun` step, exactly like `SQLDbContext`'s pre-existing cache entry."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        cache_root = root / "decompilation-cache"
+        csproj_path = _write_referenced_dll_project(root, "Broken", b"not a real dll")
+
+        first = host.decompile_wrapper(csproj_path, "Broken", cache_root=cache_root)
+        _strip_or_replace_attempt_host_identity(
+            cache_root / f"{first['assembly_identity']}.json", "Broken", None
+        )
+        _strip_or_replace_attempt_host_identity(
+            cache_root / "host" / f"{first['assembly_identity']}.json", "Broken", None
+        )
+
+        stale = host.decompile_wrapper(csproj_path, "Broken", cache_root=cache_root)
+        assert stale["cache_status"] == "miss"
+        assert stale["decompilation_attempt"]["attempted"] is True
+
+
+def test_decompile_wrapper_treats_client_cache_with_mismatched_host_identity_as_a_miss() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        cache_root = root / "decompilation-cache"
+        csproj_path = _write_referenced_dll_project(root, "Broken", b"not a real dll")
+
+        first = host.decompile_wrapper(csproj_path, "Broken", cache_root=cache_root)
+        _strip_or_replace_attempt_host_identity(
+            cache_root / f"{first['assembly_identity']}.json",
+            "Broken",
+            "a-different-host-binary-hash",
+        )
+        _strip_or_replace_attempt_host_identity(
+            cache_root / "host" / f"{first['assembly_identity']}.json",
+            "Broken",
+            "a-different-host-binary-hash",
+        )
+
+        stale = host.decompile_wrapper(csproj_path, "Broken", cache_root=cache_root)
+        assert stale["cache_status"] == "miss"
+        assert stale["decompilation_attempt"]["attempted"] is True
+
+
+def test_client_cache_re_saving_one_stale_receiver_type_does_not_revive_a_sibling(
+    tmp_path: Path,
+) -> None:
+    """CommonLibrary.dll-shaped regression, exercised directly against
+    `DecompilationAttemptCache`: one DLL's cache file holds dozens of receiver types
+    (ticket 09's real SQLDbContext bug lived in exactly such a file, among ~40 other
+    cached types). Re-verifying and re-saving one stale entry after a host rebuild must
+    neither delete the other cached entries in the same file nor -- more subtly -- let
+    an untouched, still-stale sibling start being served as a cache hit merely because
+    some other entry in the same document was refreshed. A document-level host_identity
+    check (instead of per-attempt) would fail exactly this."""
+    from code_analyzer.decompilation_cache import DecompilationAttemptCache
+
+    cache_root = tmp_path / "decompilation-cache"
+    cache = DecompilationAttemptCache(cache_root)
+    assembly_identity = "shared-dll-hash"
+    old_host = "old-host-binary-hash"
+    new_host = "new-host-binary-hash"
+
+    cache.save(assembly_identity, "SQLDbContext", {"status": "decompile_failed"}, old_host)
+    cache.save(assembly_identity, "OtherType", {"status": "decompile_failed"}, old_host)
+
+    # Host rebuilt: both entries are now stale.
+    assert cache.load(assembly_identity, "SQLDbContext", new_host) is None
+    assert cache.load(assembly_identity, "OtherType", new_host) is None
+
+    # Only "SQLDbContext" gets re-attempted and re-saved this refresh...
+    cache.save(assembly_identity, "SQLDbContext", {"status": "resolved"}, new_host)
+
+    # ...which must not delete "OtherType" from the same cache file...
+    cache_path = cache_root / f"{assembly_identity}.json"
+    document = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert "OtherType" in document["attempts"]
+
+    # ...and must not silently revive it as a cache hit either.
+    assert cache.load(assembly_identity, "OtherType", new_host) is None
+    assert cache.load(assembly_identity, "SQLDbContext", new_host) == {"status": "resolved"}
+
+
+def test_decompile_wrapper_console_command_treats_host_cache_without_host_identity_as_a_miss() -> None:
+    """Same guarantee at the host's own cache layer (`<cache-root>/<hash>.json`, written
+    by the C# `DecompilationAttemptCache`), reached directly through the console command
+    the way the client-side cache above cannot exercise it."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        cache_root = root / "decompilation-cache"
+        csproj_path = _write_referenced_dll_project(root, "Broken", b"not a real dll")
+
+        def run_command(*extra_args: str) -> dict:
+            result = subprocess.run(
+                [
+                    "dotnet",
+                    str(host.dll_path),
+                    "decompile-wrapper",
+                    "--csproj",
+                    str(csproj_path),
+                    "--receiver-type",
+                    "Broken",
+                    "--cache-root",
+                    str(cache_root),
+                    *extra_args,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            assert result.returncode == 0, result.stderr
+            return json.loads(result.stdout)
+
+        first = run_command()
+        assert first["cache_status"] == "miss"
+
+        cache_path = cache_root / f"{first['assembly_identity']}.json"
+        document = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert "host_identity" in document["attempts"]["Broken"]
+        del document["attempts"]["Broken"]["host_identity"]
+        cache_path.write_text(json.dumps(document), encoding="utf-8")
+
+        stale = run_command()
+        assert stale["cache_status"] == "miss"
+
+
+def test_decompile_wrapper_console_command_treats_host_cache_with_mismatched_host_identity_as_a_miss() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        cache_root = root / "decompilation-cache"
+        csproj_path = _write_referenced_dll_project(root, "Broken", b"not a real dll")
+
+        def run_command(*extra_args: str) -> dict:
+            result = subprocess.run(
+                [
+                    "dotnet",
+                    str(host.dll_path),
+                    "decompile-wrapper",
+                    "--csproj",
+                    str(csproj_path),
+                    "--receiver-type",
+                    "Broken",
+                    "--cache-root",
+                    str(cache_root),
+                    *extra_args,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            assert result.returncode == 0, result.stderr
+            return json.loads(result.stdout)
+
+        first = run_command()
+        cache_path = cache_root / f"{first['assembly_identity']}.json"
+        document = json.loads(cache_path.read_text(encoding="utf-8"))
+        document["attempts"]["Broken"]["host_identity"] = "a-different-host-binary-hash"
+        cache_path.write_text(json.dumps(document), encoding="utf-8")
+
+        stale = run_command()
+        assert stale["cache_status"] == "miss"
+
+
 def test_decompile_wrapper_marks_unattempted_resolution_as_not_attempted() -> None:
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
@@ -606,8 +815,8 @@ def test_implementation_snapshot_operation_carries_required_parameter_count() ->
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
 
-    # A private cache root: the shared one is keyed by assembly identity alone, so it
-    # would serve a response recorded by an older build of the host.
+    # A private cache root, purely for test isolation from whatever the shared
+    # data/decompilation_cache already holds for SQLObject.
     with tempfile.TemporaryDirectory() as temp_dir:
         result = host.decompile_wrapper(
             TTPUR_CSPROJ, "SQLObject", cache_root=Path(temp_dir)

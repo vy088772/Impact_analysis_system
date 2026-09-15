@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -6,11 +8,17 @@ internal sealed class DecompilationAttemptCache
     private const int CacheVersion = 1;
     private readonly string root;
 
+    // Computed once per cache instance, not once per TryGet/Save call: a refresh may
+    // call decompile-wrapper for dozens of receiver types, each constructing its own
+    // Program invocation, but within one such invocation the host binary never changes.
+    private readonly string? hostIdentity;
+
     internal DecompilationAttemptCache(string? cacheRoot)
     {
         root = string.IsNullOrWhiteSpace(cacheRoot)
             ? DefaultRoot()
             : Path.GetFullPath(cacheRoot);
+        hostIdentity = ComputeHostIdentity();
     }
 
     internal bool TryGet(
@@ -29,6 +37,7 @@ internal sealed class DecompilationAttemptCache
             if (!IsCurrentDocument(rootElement, assemblyIdentity)
                 || !rootElement.TryGetProperty("attempts", out var attempts)
                 || !attempts.TryGetProperty(receiverType, out var attempt)
+                || !AttemptMatchesHost(attempt)
                 || !attempt.TryGetProperty("response", out var cachedResponse))
                 return false;
             response = cachedResponse.Clone();
@@ -39,6 +48,19 @@ internal sealed class DecompilationAttemptCache
             return false;
         }
     }
+
+    // host_identity is tracked per receiver-type attempt, not once for the whole
+    // document: one DLL (e.g. IQCS's CommonLibrary.dll) can hold dozens of receiver
+    // types cached in the same file, and a refresh re-verifies them one at a time.
+    // Checking it at the document level would either wipe every sibling entry on the
+    // first re-save, or let a still-stale sibling ride along as "fresh" once the
+    // document's own field was bumped by an unrelated receiver type -- exactly the
+    // silent staleness ADR-0026 exists to rule out. An entry with no host_identity at
+    // all (written before this change) is a miss too, the same as a mismatch.
+    private bool AttemptMatchesHost(JsonElement attempt)
+        => hostIdentity is not null
+            && attempt.TryGetProperty("host_identity", out var storedHostIdentity)
+            && storedHostIdentity.GetString() == hostIdentity;
 
     internal void Save(
         string assemblyIdentity,
@@ -57,6 +79,7 @@ internal sealed class DecompilationAttemptCache
             attempts[receiverType] = new JsonObject
             {
                 ["saved_at"] = DateTimeOffset.UtcNow.ToString("O"),
+                ["host_identity"] = hostIdentity,
                 ["response"] = JsonNode.Parse(response.GetRawText()),
             };
 
@@ -110,6 +133,23 @@ internal sealed class DecompilationAttemptCache
     private static bool IsCurrentDocument(JsonObject document, string assemblyIdentity)
         => document["cache_version"]?.GetValue<int>() == CacheVersion
             && document["assembly_identity"]?.GetValue<string>() == assemblyIdentity;
+
+    private static string? ComputeHostIdentity()
+    {
+        try
+        {
+            var hostPath = Assembly.GetExecutingAssembly().Location;
+            if (string.IsNullOrEmpty(hostPath))
+                hostPath = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(hostPath) || !File.Exists(hostPath))
+                return null;
+            return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(hostPath))).ToLowerInvariant();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 
     private static string DefaultRoot()
     {

@@ -125,6 +125,10 @@ _Avoid_: mode inference, command type guess
 An Implementation Snapshot that has passed completeness validation — every relevant operation has a resolved body, mode, and sink, with a single exact assembly identity — and may therefore supply reusable wrapper semantics. Passing this bar does not itself prove a procedure target; it only qualifies the snapshot as evidence.
 _Avoid_: draft snapshot, decompiled output
 
+**Decompilation Attempt Cache**:
+The persistent record of one external wrapper receiver's decompiled Implementation Snapshot, keyed by the source DLL's Assembly Revision Boundary and the analyzer host's own build identity — so a receiver already decompiled under the current host build is not decompiled again, and one decompiled under an older host build is treated as not yet attempted rather than trusted forever. See [ADR-0026](docs/adr/0026-decompilation-cache-keys-on-the-analyzer-hosts-own-identity.md).
+_Avoid_: decompilation result, cached snapshot
+
 **Assembly Revision Boundary**:
 The identity scope within which every method fact in one Implementation Snapshot must originate from the same exact external assembly (the same byte-identical DLL, hashed rather than assumed from name/version alone for unsigned or unversioned assemblies). Facts from two different revisions are never combined into one snapshot.
 _Avoid_: assembly version, DLL name
