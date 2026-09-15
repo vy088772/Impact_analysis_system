@@ -10,9 +10,11 @@ See .scratch/refresh-resets-the-clone-to-the-remote/issues/
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -20,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from code_analyzer.clone_synchroniser import CloneSynchroniser
+from code_analyzer.clone_synchroniser import CloneSynchroniser, SynchroniseError
 
 
 def _run(cmd: list, cwd: Path = None) -> None:
@@ -73,11 +75,15 @@ def _head_commit(target: Path) -> str:
 
 
 def _is_clean(target: Path) -> bool:
+    """"Clean" ignoring `meta.json`: ticket 04 adds it as an untracked,
+    intentional bookkeeping file that every successful synchronise() writes
+    back, so its presence alone must not read as a dirty working tree."""
     result = subprocess.run(
         ["git", "-C", str(target), "status", "--porcelain"],
         check=True, capture_output=True, text=True,
     )
-    return result.stdout.strip() == ""
+    lines = [line for line in result.stdout.splitlines() if line.strip() != "?? meta.json"]
+    return "\n".join(lines).strip() == ""
 
 
 def test_first_synchronise_clones_target_to_the_remote_branch(tmp_path):
@@ -195,3 +201,99 @@ def test_no_clone_config_records_the_line_ending_setting(tmp_path):
     )
     assert result.returncode != 0
     assert result.stdout.strip() == ""
+
+
+# ----------------------------------------------------------------------
+# Ticket 04: meta.json records what the clone holds.
+#
+# See .scratch/refresh-resets-the-clone-to-the-remote/issues/
+# 04-meta-json-records-what-the-clone-holds.md
+# ----------------------------------------------------------------------
+
+def _read_meta(target: Path) -> dict:
+    return json.loads((target / "meta.json").read_text(encoding="utf-8"))
+
+
+def test_a_first_time_clone_writes_meta_json_immediately(tmp_path):
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    meta = _read_meta(target)
+    assert meta["branch"] == branch
+    assert meta["commit"] == _head_commit(target)
+    assert isinstance(meta["refreshed_at"], str) and meta["refreshed_at"] != ""
+
+
+def test_a_successful_refresh_records_the_new_branch_commit_and_time(tmp_path):
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+    first_refreshed_at = _read_meta(target)["refreshed_at"]
+
+    newest = _push_second_commit(tmp_path, bare, branch)
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    meta = _read_meta(target)
+    assert meta["branch"] == branch
+    assert meta["commit"] == newest
+    assert isinstance(meta["refreshed_at"], str) and meta["refreshed_at"] != ""
+    # Not asserting the two timestamps differ: a fast machine can complete
+    # both refreshes within the same clock tick.
+    assert first_refreshed_at is not None
+
+
+def test_a_refresh_that_finds_no_meta_json_still_ends_with_a_correct_one(tmp_path):
+    """A missing meta.json is not a reason to clone again — the existing
+    clone is fetched/reset/cleaned as usual, and ends with a meta.json that
+    reflects the completed refresh (known time), not the rebuilt stand-in."""
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+    original_dot_git = target / ".git"
+    assert original_dot_git.exists()
+
+    (target / "meta.json").unlink()
+    newest = _push_second_commit(tmp_path, bare, branch)
+
+    with patch.object(CloneSynchroniser, "_clone") as mocked_clone:
+        CloneSynchroniser().synchronise(target, str(bare), branch)
+        mocked_clone.assert_not_called()
+
+    meta = _read_meta(target)
+    assert meta["branch"] == branch
+    assert meta["commit"] == newest
+    assert isinstance(meta["refreshed_at"], str) and meta["refreshed_at"] != ""
+
+
+def test_a_rebuilt_meta_records_the_time_as_unknown_when_the_refresh_then_fails(tmp_path):
+    """When meta.json is missing, the clone is asked which branch it holds
+    and a stand-in meta.json is written with an unknown time before the
+    risky fetch/reset run. If that fetch then fails, the stand-in survives —
+    an honest, if incomplete, record beats no record at all.
+
+    Also checks that "unknown" is an explicit JSON `null`, not merely an
+    absent key: the two states must stay distinguishable on disk."""
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+    commit_before_failure = _head_commit(target)
+
+    (target / "meta.json").unlink()
+
+    broken_remote = str(tmp_path / "does-not-exist.git")
+    with pytest.raises(SynchroniseError):
+        CloneSynchroniser().synchronise(target, broken_remote, branch)
+
+    raw_text = (target / "meta.json").read_text(encoding="utf-8")
+    meta = json.loads(raw_text)
+    assert meta["branch"] == branch
+    assert meta["commit"] == commit_before_failure
+    assert "refreshed_at" in meta
+    assert meta["refreshed_at"] is None
+    assert '"refreshed_at": null' in raw_text

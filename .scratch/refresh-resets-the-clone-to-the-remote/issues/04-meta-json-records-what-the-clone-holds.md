@@ -6,13 +6,15 @@ Losing the file costs nothing. The cleaning step deletes it on every refresh, an
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A successful refresh writes `meta.json` inside the clone directory.
-- [ ] The file records the branch, the commit, and the time of the last successful refresh.
-- [ ] The time field holds an explicit unknown value when the time is unknown.
-- [ ] That unknown value is distinct from a real time, and distinct from a missing field.
-- [ ] A refresh that finds no `meta.json` asks git which branch the clone holds, and rebuilds the file.
-- [ ] A rebuilt file records the time as unknown.
-- [ ] A missing `meta.json` never triggers a fresh clone.
-- [ ] A first-time clone writes `meta.json` immediately.
+- [x] A successful refresh writes `meta.json` inside the clone directory.
+- [x] The file records the branch, the commit, and the time of the last successful refresh.
+- [x] The time field holds an explicit unknown value when the time is unknown.
+- [x] That unknown value is distinct from a real time, and distinct from a missing field.
+- [x] A refresh that finds no `meta.json` asks git which branch the clone holds, and rebuilds the file.
+- [x] A rebuilt file records the time as unknown.
+- [x] A missing `meta.json` never triggers a fresh clone.
+- [x] A first-time clone writes `meta.json` immediately.
+
+**Notes:** `CloneSynchroniser.synchronise()` (`code_analyzer/clone_synchroniser.py`) now ends every successful call — the existing-clone branch and the first-clone branch alike — with one unconditional `_write_meta()` call recording `branch` (the declared branch just synced to), `commit` (`git rev-parse HEAD`, read after the sync completes), and `refreshed_at` (`datetime.now(timezone.utc).isoformat()`). `meta.json` is untracked, so `git clean -fd` removes it on every existing-clone refresh; this final write puts it straight back with the now-current facts, which is why `test_a_clone_*`/`test_synchronise_*` in ticket 02's section needed `_is_clean()` updated to treat a lone `?? meta.json` line as clean rather than dirty — `meta.json`'s presence is expected, not leftover state ticket 02 was guarding against. When an existing clone is missing `meta.json` at the start of a refresh (a clone never managed by this code, or one that crashed between a previous `clean` and its write-back), `_rebuild_meta()` asks git directly (`rev-parse --abbrev-ref HEAD` / `rev-parse HEAD`) for the branch and commit the clone currently holds — not the declared `branch` parameter — and writes a stand-in `meta.json` with `refreshed_at: null` (JSON `null`, not an absent key, so "unknown" and "missing" stay distinguishable on disk) before the fetch/reset run. `is_cloned()` still only checks for `.git`, so a missing `meta.json` never routes into the clone branch. If the refresh then succeeds, the final unconditional write immediately overwrites the stand-in with real values — so "time is unknown" is the on-disk end-state only when the refresh fails after the stand-in is written (fetch/reset error) and never after an ordinary successful rebuild-triggered refresh; this matches ADR-0023's framing of the rebuild as a resilience measure, not a persistent state. Tests: 5 new cases in `tests/test_clone_synchroniser.py` cover a first-time clone's immediate write, a normal refresh's updated record, a missing-`meta.json` refresh still reaching a correct end state without triggering `_clone` (asserted via `mock.patch.object`, not by inspecting git command sequences), and a forced-failure case (fetch pointed at a nonexistent remote) proving the rebuilt stand-in — including the explicit `null` — survives when the refresh doesn't complete. Ran `/code-review` (Standards + Spec sub-agents): Spec axis found all 8 checklist items implemented and tested, no scope creep (no ticket 05 branch-mismatch logic added), and confirmed the "rebuilt file records unknown time" behaviour matches the ADR's intent as a failure-path safeguard rather than a normal end-state. Standards axis found no hard violations; three minor judgement-call smells were fixed — `_git()` now returns its command's stdout so `_current_branch`/`_current_commit` call it directly instead of a second helper (`_git_output`) that duplicated the command-building logic, and the two near-identical forced-failure tests were merged into one. Re-ran the full `test_clone_synchroniser.py` + `test_azure_fetcher.py` suite after the fixes — 13 passed. Full suite: 921 passed, 12 failed (same pre-existing ODBC/DB-connectivity failures noted in tickets 02/03's notes; none touch `clone_synchroniser`, `azure_fetcher`, or `repo_manager`).
