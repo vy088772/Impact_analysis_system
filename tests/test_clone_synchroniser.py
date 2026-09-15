@@ -11,8 +11,10 @@ See .scratch/refresh-resets-the-clone-to-the-remote/issues/
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from code_analyzer.clone_synchroniser import CloneSynchroniser, SynchroniseError
+from code_analyzer.clone_synchroniser import CloneSynchroniser, SynchroniseError, SynchroniseResult
 
 
 def _run(cmd: list, cwd: Path = None) -> None:
@@ -389,3 +391,194 @@ def test_a_missing_meta_json_is_not_treated_as_a_branch_mismatch(tmp_path):
 
     assert _head_commit(target) == newest
     assert _is_clean(target)
+
+
+# ----------------------------------------------------------------------
+# Ticket 06: a lock guards each clone directory.
+#
+# See .scratch/refresh-resets-the-clone-to-the-remote/issues/
+# 06-a-lock-guards-each-clone-directory.md
+# ----------------------------------------------------------------------
+
+def _lock_path(target: Path) -> Path:
+    return target.parent / f"{target.name}.lock"
+
+
+def test_a_successful_refresh_reports_synchronised_and_leaves_no_lock_behind(tmp_path):
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+
+    result = CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    assert result is SynchroniseResult.SYNCHRONISED
+    assert not _lock_path(target).exists()
+
+
+def test_the_lock_file_sits_beside_the_target_directory_not_inside_it(tmp_path):
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+
+    # A lock held at the moment of the call must live in target.parent,
+    # never inside target itself where `clean -fd` could reach it.
+    lock = _lock_path(target)
+    lock.write_text("held\n", encoding="utf-8")
+
+    result = CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    assert result is SynchroniseResult.BUSY
+    assert lock.parent == target.parent
+    assert not (target / "clone.lock").exists()
+
+
+def test_a_second_refresh_finding_the_lock_held_returns_busy_and_changes_nothing(tmp_path):
+    """Two Systems can point the catalog at the same clone directory. The
+    lock is keyed on that directory, not on either System, so a refresh
+    started while the directory's lock is held must stop untouched."""
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+    commit_before = _head_commit(target)
+    meta_before = _read_meta(target)
+    _push_second_commit(tmp_path, bare, branch)
+
+    # Simulate a second System's refresh already running against the same
+    # directory by planting a fresh lock file ourselves.
+    _lock_path(target).write_text(
+        json.dumps({"pid": 999999, "acquired_at": "now"}), encoding="utf-8"
+    )
+
+    with patch.object(CloneSynchroniser, "_fetch") as mocked_fetch:
+        result = CloneSynchroniser().synchronise(target, str(bare), branch)
+        mocked_fetch.assert_not_called()
+
+    assert result is SynchroniseResult.BUSY
+    assert _head_commit(target) == commit_before
+    assert _read_meta(target) == meta_before
+    assert _lock_path(target).exists()
+
+
+def test_git_clean_never_reaches_a_lock_file_beside_the_target(tmp_path):
+    """The lock's placement, not a special case inside `_clean()`, is what
+    protects it: `git clean -fd` runs scoped to `target` and cannot reach a
+    file beside it. Driving `_clean()` directly (rather than a full
+    synchronise() cycle) proves this independently of whether the lock has
+    already been released by the time synchronise() returns."""
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    lock = _lock_path(target)
+    lock.write_text("still here?\n", encoding="utf-8")
+    (target / "leftover.txt").write_text("build output\n", encoding="utf-8")
+
+    CloneSynchroniser()._clean(target)
+
+    assert lock.exists()
+    assert not (target / "leftover.txt").exists()
+
+
+def test_a_failure_while_writing_the_lock_file_leaves_no_orphan_lock(tmp_path):
+    """A lock file that fails to finish writing must not linger on disk —
+    otherwise it sits there, unowned, until the 30-minute abandonment
+    timeout, blocking every refresh in between for no reason."""
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    lock = _lock_path(target)
+
+    with patch("code_analyzer.clone_synchroniser.os.write", side_effect=OSError("disk full")):
+        with pytest.raises(OSError):
+            CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    assert not lock.exists()
+
+
+def test_a_release_never_deletes_a_lock_that_was_taken_over_while_it_ran(tmp_path):
+    """A refresh that runs past the abandonment timeout may find its own
+    lock already taken over by the next refresh. Its own release at the end
+    must not delete that new lock -- doing so would let a third refresh
+    start concurrently with the one that took over, defeating the point of
+    the lock."""
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    lock = _lock_path(target)
+    synchroniser = CloneSynchroniser()
+    token = synchroniser._acquire_lock(lock)
+    assert token is not None
+
+    # Simulate a second refresh stealing this (now-abandoned, in this
+    # scenario) lock while the first is still running.
+    lock.write_text("someone-elses-token", encoding="utf-8")
+
+    synchroniser._release_lock(lock, token)
+
+    assert lock.read_text(encoding="utf-8") == "someone-elses-token"
+
+
+def test_a_lock_older_than_thirty_minutes_counts_as_abandoned_and_is_taken_over(tmp_path):
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+    newest = _push_second_commit(tmp_path, bare, branch)
+
+    lock = _lock_path(target)
+    lock.write_text("stale\n", encoding="utf-8")
+    stale_time = time.time() - CloneSynchroniser.ABANDONED_LOCK_SECONDS - 60
+    os.utime(lock, (stale_time, stale_time))
+
+    result = CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    assert result is SynchroniseResult.SYNCHRONISED
+    assert _head_commit(target) == newest
+    assert not lock.exists()
+
+
+def test_a_lock_younger_than_thirty_minutes_is_not_abandoned(tmp_path):
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+    commit_before = _head_commit(target)
+    _push_second_commit(tmp_path, bare, branch)
+
+    lock = _lock_path(target)
+    lock.write_text("recent\n", encoding="utf-8")
+    recent_time = time.time() - CloneSynchroniser.ABANDONED_LOCK_SECONDS + 60
+    os.utime(lock, (recent_time, recent_time))
+
+    result = CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    assert result is SynchroniseResult.BUSY
+    assert _head_commit(target) == commit_before
+
+
+def test_a_refresh_releases_its_lock_when_it_fails(tmp_path):
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    broken_remote = str(tmp_path / "does-not-exist.git")
+    with pytest.raises(SynchroniseError):
+        CloneSynchroniser().synchronise(target, broken_remote, branch)
+
+    assert not _lock_path(target).exists()
+
+
+def test_a_refresh_releases_its_lock_after_a_first_time_clone(tmp_path):
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+
+    result = CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    assert result is SynchroniseResult.SYNCHRONISED
+    assert not _lock_path(target).exists()

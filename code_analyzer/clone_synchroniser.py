@@ -15,12 +15,29 @@ PAT、System 或 catalog。呼叫端保證：呼叫 synchronise() 之後，targe
 權：當它跟 meta.json 記錄的 branch 不同，代表這個 clone 停在錯的分支上，
 synchronise() 整個刪掉 target 重新 clone，不嘗試用 fetch 硬湊。見
 ADR-0023。
+
+一把鎖守著每個 target 目錄：鎖認的是目錄本身，不是哪個 System——一個
+repository 可以被兩個 System 同時指到同一個 target，鎖必須擋住兩邊同時
+refresh 同一個目錄，而不是分別記在各自的 System 上。鎖檔案放在 target
+「旁邊」（target 的兄弟檔案），不是 target 裡面：clean -fd 只清 target
+內部，鎖放外面才不會被自己保護的那次 refresh 清掉。找到鎖已被握住時，
+synchronise() 立刻回傳 SynchroniseResult.BUSY，不做任何改動，也不等待、
+不重試——兩邊要抓的內容相同，等待也不會等出更好的結果，只會不知道要等
+多久。超過 ABANDONED_LOCK_SECONDS（30 分鐘）沒被釋放的鎖視為被棄置（多半
+是前一次 refresh 的行程當掉），下一次 refresh 直接接手。鎖在失敗與成功
+兩種結尾都會釋放，且只釋放自己拿到的那一份——見 _release_lock，這是為了
+「這次 refresh 跑得比逾時還久、鎖已經被下一次接手」的情況：舊的一方
+不能把接手者正在用的鎖也一併刪掉。見 ADR-0023。
 """
 
 import json
+import os
 import shutil
 import subprocess
+import time
+import uuid
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -30,13 +47,27 @@ class SynchroniseError(Exception):
     pass
 
 
+class SynchroniseResult(Enum):
+    """synchronise() 的結果。BUSY 不是錯誤——目錄的鎖被另一次 refresh 握著，
+    這次呼叫沒有做任何事，呼叫端可以直接再問一次，不必當成例外處理。"""
+    SYNCHRONISED = 'synchronised'
+    BUSY = 'busy'
+
+
 class CloneSynchroniser:
     """讓一個目標目錄的內容等於某個遠端分支的內容。"""
 
     META_FILENAME = 'meta.json'
+    LOCK_SUFFIX = '.lock'
+    ABANDONED_LOCK_SECONDS = 30 * 60
 
-    def synchronise(self, target: Path, remote_url: str, branch: str) -> None:
+    def synchronise(self, target: Path, remote_url: str, branch: str) -> SynchroniseResult:
         """同步 target 目錄至 remote_url 的 branch 分支。
+
+        呼叫一開始先抓 target 目錄的鎖。抓不到（鎖被另一次 refresh 握著，
+        且未逾時）就立刻回傳 SynchroniseResult.BUSY，之後的步驟一概不做，
+        target 目錄維持原狀；抓到之後才進入下面描述的同步序列，最後不論
+        成功或拋出例外都會釋放鎖（見 _acquire_lock/_release_lock）。
 
         branch 是宣告的分支（settings、catalog 講的意圖）。target 尚未
         clone 過時執行 clone；已存在時，先比對這個宣告的 branch 跟
@@ -57,22 +88,32 @@ class CloneSynchroniser:
         時間覆寫過去。
         """
         target = Path(target)
+        lock_path = self._lock_path(target)
 
-        if self.is_cloned(target):
-            if not self._meta_path(target).exists():
-                self._rebuild_meta(target)
-            if self._recorded_branch(target) != branch:
-                shutil.rmtree(target)
-                self._clone_fresh(target, remote_url, branch)
+        token = self._acquire_lock(lock_path)
+        if token is None:
+            return SynchroniseResult.BUSY
+
+        try:
+            if self.is_cloned(target):
+                if not self._meta_path(target).exists():
+                    self._rebuild_meta(target)
+                if self._recorded_branch(target) != branch:
+                    shutil.rmtree(target)
+                    self._clone_fresh(target, remote_url, branch)
+                else:
+                    self._fetch(target, remote_url)
+                    self._reset_hard(target, branch)
+                    self._clean(target)
             else:
-                self._fetch(target, remote_url)
-                self._reset_hard(target, branch)
-                self._clean(target)
-        else:
-            self._clone_fresh(target, remote_url, branch)
+                self._clone_fresh(target, remote_url, branch)
 
-        self._write_meta(target, branch=branch, commit=self._current_commit(target),
-                          refreshed_at=_now_iso())
+            self._write_meta(target, branch=branch, commit=self._current_commit(target),
+                              refreshed_at=_now_iso())
+        finally:
+            self._release_lock(lock_path, token)
+
+        return SynchroniseResult.SYNCHRONISED
 
     @staticmethod
     def is_cloned(target: Path) -> bool:
@@ -157,6 +198,89 @@ class CloneSynchroniser:
             raise SynchroniseError(f"git 操作失敗（exit {result.returncode}）\n{stderr}")
 
         return result.stdout
+
+    # ------------------------------------------------------------------
+    # 目錄鎖
+    # ------------------------------------------------------------------
+
+    def _lock_path(self, target: Path) -> Path:
+        """鎖檔案的路徑：target 的兄弟檔案，檔名是 target 目錄名加上
+        LOCK_SUFFIX。放在 target 外面，clean -fd（只清 target 內部）就
+        絕對碰不到它。"""
+        target = Path(target)
+        return target.parent / f'{target.name}{self.LOCK_SUFFIX}'
+
+    def _acquire_lock(self, lock_path: Path) -> Optional[str]:
+        """嘗試抓 target 目錄的鎖，抓到就回傳這次持有的 token，抓不到回傳
+        None。
+
+        鎖檔案用 O_CREAT|O_EXCL 建立，這個系統呼叫本身是原子的，兩個
+        行程同時搶同一個鎖檔案時只有一個會成功。第一次搶輸了，代表鎖被
+        握著（可能是另一次還在跑的 refresh，也可能是逾時被棄置），此時
+        看鎖檔案的年紀：超過 ABANDONED_LOCK_SECONDS 就刪掉重搶一次，接手
+        這把被棄置的鎖；沒超過就回傳 None，讓呼叫端當成 BUSY，不等待、
+        不重試。
+
+        每次成功建立都寫入一個新產生的 token 當內容，讓 _release_lock 只
+        釋放「確實還是自己的」那一份——見它的說明。"""
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
+
+        if self._create_lock_file(lock_path, token):
+            return token
+
+        if not self._lock_is_abandoned(lock_path):
+            return None
+
+        lock_path.unlink(missing_ok=True)
+        return token if self._create_lock_file(lock_path, token) else None
+
+    @staticmethod
+    def _create_lock_file(lock_path: Path, token: str) -> bool:
+        """用 O_EXCL 原子建立鎖檔案，內容寫入 token；已存在就回傳 False，
+        不覆寫、不拋例外。建立之後任何失敗（寫入或關閉檔案）都先把這個
+        檔案刪掉再往外拋例外——鎖不會在半途留下一個沒有人管、要等 30
+        分鐘逾時才會被清掉的孤兒檔案。"""
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return False
+        try:
+            try:
+                os.write(fd, token.encode('utf-8'))
+            finally:
+                os.close(fd)
+        except OSError:
+            lock_path.unlink(missing_ok=True)
+            raise
+        return True
+
+    def _lock_is_abandoned(self, lock_path: Path) -> bool:
+        """鎖檔案的最後修改時間距今是否已超過 ABANDONED_LOCK_SECONDS。
+        檔案在檢查的當下剛好消失（另一次 refresh 剛釋放），視為可以重搶，
+        不當成「仍被握著」。"""
+        try:
+            age_seconds = time.time() - lock_path.stat().st_mtime
+        except FileNotFoundError:
+            return True
+        return age_seconds > self.ABANDONED_LOCK_SECONDS
+
+    @staticmethod
+    def _release_lock(lock_path: Path, token: str) -> None:
+        """釋放鎖，但只釋放「確實還是自己的」那一份：讀出鎖檔案目前的
+        內容，跟自己當初拿到的 token 一致才刪除。
+
+        一次 refresh 若跑得比 ABANDONED_LOCK_SECONDS 還久，它的鎖可能已
+        經被下一次 refresh 當成棄置接手，鎖檔案裡的內容這時是對方的新
+        token；呼叫端在 finally 走到這裡若不比對就直接刪，刪掉的會是
+        接手者正在用的鎖，讓兩次 refresh 又同時跑起來，違背鎖原本要擋
+        的事。讀不到檔案（已經被刪過）視為沒有自己的鎖可釋放。"""
+        try:
+            current_token = lock_path.read_text(encoding='utf-8')
+        except FileNotFoundError:
+            return
+        if current_token == token:
+            lock_path.unlink(missing_ok=True)
 
     # ------------------------------------------------------------------
     # meta.json
