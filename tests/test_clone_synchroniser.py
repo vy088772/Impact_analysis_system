@@ -142,3 +142,56 @@ def test_synchronise_reaches_the_newest_commit_from_a_clean_clone_too(tmp_path):
 
     assert _head_commit(target) == newest
     assert _is_clean(target)
+
+
+def test_a_conversion_enabled_clone_matches_a_conversion_disabled_one_after_refresh(tmp_path):
+    """Ticket 03: the refresh states its line-ending behaviour in the git
+    command itself, so a host whose git converts line endings on checkout
+    ends up byte-identical to one that never did."""
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+
+    # A clone made as if on a host whose git config turns conversion on.
+    converting = tmp_path / "converting_clone"
+    _run([
+        "git", "-c", "core.autocrlf=true",
+        "clone", "-q", "--branch", branch, "--single-branch", "--depth", "1",
+        str(bare), str(converting),
+    ])
+
+    # A clone made through the synchroniser, which pins conversion off.
+    pinned = tmp_path / "pinned_clone"
+    CloneSynchroniser().synchronise(pinned, str(bare), branch)
+
+    newest = _push_second_commit(tmp_path, bare, branch)
+
+    # Refresh both through the synchroniser. The host-level setting on
+    # `converting` must not survive the refresh.
+    CloneSynchroniser().synchronise(converting, str(bare), branch)
+    CloneSynchroniser().synchronise(pinned, str(bare), branch)
+
+    assert _head_commit(converting) == newest
+    assert _head_commit(pinned) == newest
+    assert (converting / "a.txt").read_bytes() == (pinned / "a.txt").read_bytes()
+    assert (converting / "b.txt").read_bytes() == (pinned / "b.txt").read_bytes()
+
+
+def test_no_clone_config_records_the_line_ending_setting(tmp_path):
+    """Ticket 03: the setting is passed with `-c` on each command, never
+    written into the clone's own git config."""
+    branch = "main"
+    bare = _make_remote(tmp_path, branch)
+    target = tmp_path / "clone"
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    _push_second_commit(tmp_path, bare, branch)
+    CloneSynchroniser().synchronise(target, str(bare), branch)
+
+    # `--local` reads only this clone's own config file, never the host's
+    # system/global config — the setting must be absent here specifically.
+    result = subprocess.run(
+        ["git", "-C", str(target), "config", "--local", "--get", "core.autocrlf"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert result.stdout.strip() == ""

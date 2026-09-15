@@ -55,24 +55,40 @@ class CloneSynchroniser:
             '--depth', '1',
             remote_url,
             str(target),
-        ], with_no_credential_helper=True)
+        ], with_no_credential_helper=True, pin_line_endings=True)
 
     def _fetch(self, target: Path, remote_url: str) -> None:
         # 既有 clone 的 origin URL 可能沒有內嵌憑證（或內嵌的憑證已過期），
         # 先用目前的 remote_url 重新寫入，才不必依賴本機 Git Credential Manager。
         self._git(target, ['remote', 'set-url', 'origin', remote_url])
-        self._git(target, ['fetch', 'origin', '--depth', '1'], with_no_credential_helper=True)
+        self._git(
+            target,
+            ['fetch', 'origin', '--depth', '1'],
+            with_no_credential_helper=True,
+            pin_line_endings=True,
+        )
 
     def _reset_hard(self, target: Path, branch: str) -> None:
-        self._git(target, ['reset', '--hard', f'origin/{branch}'])
+        self._git(target, ['reset', '--hard', f'origin/{branch}'], pin_line_endings=True)
 
     def _clean(self, target: Path) -> None:
         self._git(target, ['clean', '-fd'])
 
-    def _git(self, target, args: list, with_no_credential_helper: bool = False) -> None:
+    def _git(
+        self,
+        target,
+        args: list,
+        with_no_credential_helper: bool = False,
+        pin_line_endings: bool = False,
+    ) -> None:
         cmd = ['git']
         if with_no_credential_helper:
             cmd += ['-c', 'credential.helper=']
+        if pin_line_endings:
+            # 每個會寫入工作目錄的指令都在指令本身關閉換行轉換，理由與上面的
+            # credential.helper 相同：refresh 的行為不可依賴執行機器本身的
+            # git 設定。用 -c 傳入、不寫進 clone 自己的 git config。
+            cmd += ['-c', 'core.autocrlf=false']
         if target is not None:
             cmd += ['-C', str(target)]
         cmd += args
