@@ -139,7 +139,14 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # Component Contribution」條目）。舊快取的 razor_results 一律看不到任何共用元
 # 件參照，/analyze 因此答不出 ViewComponent／partial view 貢獻的 SP／資料表，
 # 必須重新掃描才會補上。
-_CACHE_VERSION = 35
+# v36：外部 wrapper 呼叫的每個引數新增 observed_arguments（Observed Argument
+# Facts，見 CONTEXT.md 條目與 ADR-0028）：kind、literal、unresolved_reason 三
+# 欄，語法層面直接記錄，不讀 Contract。呼叫端省略的尾端選擇性引數，補記其宣告
+# 端預設值（來自語意繫結，非 Contract）。評分階段（analysis gateway）靠這個欄
+# 位在 rating time 決定 call_site Contract 的 Command Mode。舊快取的
+# db_invocations 沒有這個欄位，call_site 方法因此答不出剛才被接受的 Contract，
+# 必須重新掃描才會補上。
+_CACHE_VERSION = 36
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

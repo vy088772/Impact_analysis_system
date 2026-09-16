@@ -1395,6 +1395,8 @@ _KNOWN_TERMINAL_SINKS = {
     "executereaderasync": "ExecuteReaderAsync",
     "executescalar": "ExecuteScalar",
     "executescalarasync": "ExecuteScalarAsync",
+    "executesqlinterpolated": "ExecuteSqlInterpolated",
+    "executesqlinterpolatedasync": "ExecuteSqlInterpolatedAsync",
     "fill": "Fill",
     "fillasync": "FillAsync",
 }
@@ -1580,6 +1582,69 @@ def _wrapper_contract_default_mode(candidate: Mapping[str, Any]) -> str:
     if normalized in {"stored_procedure", "storedprocedure"}:
         return "stored_procedure"
     return ""
+
+
+_STORED_PROCEDURE_MODE_LITERALS = {"true", "sp", "storedprocedure"}
+
+
+def _observed_argument_facts(raw: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    """The scan's Observed Argument Facts for one wrapper call, one entry per
+    call-site argument in declaration order. See CONTEXT.md "Observed Argument
+    Facts" and ADR-0028."""
+    facts = raw.get("observed_arguments")
+    if not isinstance(facts, (list, tuple)):
+        return ()
+    return tuple(fact for fact in facts if isinstance(fact, Mapping))
+
+
+def _rating_time_command_mode(
+    method_contract: Mapping[str, Any], raw: Mapping[str, Any]
+) -> tuple[Optional[bool], str, bool]:
+    """Decide a `call_site` Contract method's Command Mode at rating time
+    (Rating-Time Command Mode, ADR-0028): read the Contract's `command_type`
+    argument role, find that index in the scan's Observed Argument Facts, and
+    apply the convention the analyzer host already applies to a local wrapper --
+    `true`, `"SP"` and `"StoredProcedure"` mean a stored procedure, `false` means
+    an inline SQL command. An argument that stayed unresolved at scan time -- a
+    variable, an expression or a call -- leaves the Command Mode unresolved; this
+    function never falls back to a default.
+
+    Returns ``(stored_procedure_mode, mode_reason, role_declared)``.
+    ``stored_procedure_mode`` is ``None`` when the mode stays unresolved.
+    ``role_declared`` is ``True`` only when this Contract method names a
+    `command_type` argument role *and* the raw fact actually carries Observed
+    Argument Facts (a scan captured after this ticket) -- the caller must
+    trust this function's answer exclusively in that case, never falling back
+    to the scan-time `wrapper_mode` guess just because the argument at that
+    index stayed unresolved. A raw fact from a scan captured before this
+    ticket carries no `observed_arguments` key at all; that legacy shape
+    leaves room for the older fallback, exactly as it did before this ticket,
+    since Rating-Time Command Mode's own promise -- no default, ever -- only
+    covers a call this mechanism actually observed.
+    """
+    roles = _first_fact(method_contract, "argument_roles", "parameter_roles", "roles")
+    mode_index = (
+        _optional_int_fact(roles.get("command_type")) if isinstance(roles, Mapping) else None
+    )
+    if mode_index is None or mode_index < 0:
+        return None, "", False
+    if not isinstance(raw.get("observed_arguments"), (list, tuple)):
+        return None, "", False
+
+    facts = _observed_argument_facts(raw)
+    if mode_index >= len(facts):
+        return None, "", True
+
+    fact = facts[mode_index]
+    if _text_fact(fact.get("kind")).casefold() != "literal":
+        return None, "", True
+
+    literal_text = _text_fact(fact.get("literal")).casefold()
+    if literal_text in _STORED_PROCEDURE_MODE_LITERALS:
+        return True, "", True
+    if literal_text == "false":
+        return False, "inline_sql", True
+    return None, "", True
 
 
 def _wrapper_method_identity(candidate: Mapping[str, Any]) -> str:
@@ -2488,12 +2553,33 @@ class CSharpAnalysisGateway:
 
         contract_mode = str(method_contract.get("mode") or "")
         contract_mode_key = contract_mode.casefold()
+        rating_time_result = (
+            _rating_time_command_mode(method_contract, raw)
+            if contract_mode_key == "call_site"
+            else (None, "", False)
+        )
+        rating_time_mode, _, rating_time_role_declared = rating_time_result
         if contract_mode_key == "inline_sql":
             stored_procedure_mode = False
             mode_reason = "inline_sql"
         elif contract_mode_key == "stored_procedure":
             stored_procedure_mode = True
             mode_reason = ""
+        elif contract_mode_key == "call_site" and rating_time_role_declared:
+            # The Contract names a `command_type` argument role for this method: rating-time
+            # resolution owns the answer completely from here. Falling through to the
+            # scan-time `wrapper_mode` guess below just because this call's own recorded
+            # argument stayed unresolved would let an unrelated literal elsewhere in the same
+            # call silently pick the mode -- exactly the default ADR-0028 forbids.
+            if rating_time_mode is True:
+                stored_procedure_mode = True
+                mode_reason = ""
+            elif rating_time_mode is False:
+                stored_procedure_mode = False
+                mode_reason = "inline_sql"
+            else:
+                stored_procedure_mode = False
+                mode_reason = "wrapper_mode_unresolved"
         elif contract_mode_key == "call_site" and raw_mode == "inline_sql":
             stored_procedure_mode = False
             mode_reason = "inline_sql"

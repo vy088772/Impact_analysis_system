@@ -1353,7 +1353,8 @@ internal sealed record DirectSqlInvocation(
     string? WrapperReceiverTypeProvenance = null,
     bool CommandTypeArgumentObserved = false,
     string? CommandTextUnresolvedReason = null,
-    IReadOnlyList<string>? WrapperImplementationCandidates = null);
+    IReadOnlyList<string>? WrapperImplementationCandidates = null,
+    IReadOnlyList<ObservedArgumentFact>? ObservedArguments = null);
 
 /// <summary>One ambiguous/unavailable overload candidate's bound-implementation and signature facts.</summary>
 internal sealed record WrapperOverloadCandidateFact(
@@ -1363,6 +1364,23 @@ internal sealed record WrapperOverloadCandidateFact(
     int? MethodArity,
     IReadOnlyList<string> ParameterTypes,
     string MethodIdentity);
+
+/// <summary>Ticket 02 (Rating-Time Command Mode): the raw fact the scan records for one
+/// call-site argument of a wrapper call, read from the syntax alone. <see cref="Kind"/> is
+/// `"literal"` when the argument is a compile-time literal and `"dynamic"` otherwise;
+/// <see cref="Literal"/> carries the literal's text (a bool literal as `"true"`/`"false"`,
+/// case-preserved for a string literal); <see cref="UnresolvedReason"/> names why a dynamic
+/// argument stayed unresolved (`"variable"`, `"call"` or `"expression"`). The scan reads no
+/// Contract, so it does not know which argument, if any, carries the Command Mode -- the
+/// gateway reads the Contract's `command_type` argument role at rating time and looks up the
+/// value recorded here at that index. Mirrors the three fields already recorded for the
+/// command text argument (<see cref="DirectSqlInvocation.CommandTextKind"/>,
+/// <see cref="DirectSqlInvocation.CommandTextLiteral"/>,
+/// <see cref="DirectSqlInvocation.CommandTextUnresolvedReason"/>).</summary>
+internal sealed record ObservedArgumentFact(
+    string Kind,
+    string? Literal,
+    string? UnresolvedReason);
 
 internal static class SyntaxBranchAnalyzer
 {
@@ -2225,7 +2243,8 @@ internal static class WrapperAnalyzer
             commandTextUnresolvedReason,
             localImplementer,
             localWrapperDefinition,
-            tiedImplementers);
+            tiedImplementers,
+            BuildObservedArgumentFacts(call, compilation));
     }
 
     /// <summary>
@@ -2643,7 +2662,8 @@ internal static class WrapperAnalyzer
         string? commandTextUnresolvedReason = null,
         LocalImplementerCandidate? localImplementer = null,
         WrapperDefinition? localWrapperDefinition = null,
-        IReadOnlyList<LocalImplementerCandidate>? tiedImplementers = null)
+        IReadOnlyList<LocalImplementerCandidate>? tiedImplementers = null,
+        IReadOnlyList<ObservedArgumentFact>? observedArguments = null)
     {
         // Ticket 01: exactly one Local Implementer redirects this call to source-backed evidence,
         // named by receiver_implementation_identity, the same way a directly-typed local wrapper
@@ -2686,7 +2706,8 @@ internal static class WrapperAnalyzer
             ReceiverImplementationIdentity: localImplementer?.ClassName,
             WrapperImplementationCandidates: tiedImplementers
                 ?.Select(candidate => candidate.ClassName)
-                .ToArray());
+                .ToArray(),
+            ObservedArguments: observedArguments);
     }
 
     /// <summary>One externally referenced wrapper call's uniquely bound method symbol facts —
@@ -2908,6 +2929,81 @@ internal static class WrapperAnalyzer
                 && (text.Equals("SQL", StringComparison.OrdinalIgnoreCase)
                     || text.Equals("Text", StringComparison.OrdinalIgnoreCase)
                     || text.Equals("Inline", StringComparison.OrdinalIgnoreCase)));
+
+    /// <summary>Ticket 02 (Rating-Time Command Mode): records, for every argument of an
+    /// external wrapper call, the Observed Argument Facts the gateway reads at rating time.
+    /// The scan reads no Contract here -- it does not know which index, if any, is the mode
+    /// argument, so it records the same three facts for every argument alike and leaves the
+    /// interpretation to the gateway (ADR-0028).
+    ///
+    /// A call that omits a trailing optional argument (every `usp_ExecCmd*` call in IQCS omits
+    /// `isSP`, relying on its own `= true` default) is not "a variable, an expression or a
+    /// call" -- it supplies nothing at all, and what applies is the parameter's own declared
+    /// default value, not anything the call site wrote. That default is read from the bound
+    /// method symbol the same way the analyzer host already binds a wrapper call's method
+    /// identity (see <see cref="TryResolveBoundWrapperSymbol"/>) -- semantic binding to the
+    /// referenced assembly's own metadata, not a Contract read. Only a uniquely bound symbol
+    /// (no candidate set) is trusted; an unresolved or ambiguous binding leaves the omitted
+    /// position unrecorded, exactly as if nothing were known about it.</summary>
+    private static IReadOnlyList<ObservedArgumentFact> BuildObservedArgumentFacts(
+        InvocationExpressionSyntax call,
+        CSharpCompilation? compilation)
+    {
+        var facts = call.ArgumentList.Arguments
+            .Select(argument => ClassifyObservedArgument(argument.Expression))
+            .ToList();
+
+        if (compilation is null || !compilation.ContainsSyntaxTree(call.SyntaxTree))
+            return facts;
+
+        var semanticModel = compilation.GetSemanticModel(call.SyntaxTree);
+        var symbolInfo = semanticModel.GetSymbolInfo(call);
+        if (symbolInfo.Symbol is not IMethodSymbol method || !symbolInfo.CandidateSymbols.IsEmpty)
+            return facts;
+
+        var parameters = method.Parameters;
+        for (var index = facts.Count; index < parameters.Length; index++)
+            facts.Add(ClassifyOmittedParameterDefault(parameters[index]));
+
+        return facts;
+    }
+
+    private static ObservedArgumentFact ClassifyOmittedParameterDefault(IParameterSymbol parameter)
+    {
+        if (!parameter.HasExplicitDefaultValue)
+            return new ObservedArgumentFact("dynamic", null, "omitted_no_default");
+        return parameter.ExplicitDefaultValue switch
+        {
+            true => new ObservedArgumentFact("literal", "true", null),
+            false => new ObservedArgumentFact("literal", "false", null),
+            string text => new ObservedArgumentFact("literal", text, null),
+            null => new ObservedArgumentFact("dynamic", null, "null_literal"),
+            var value => new ObservedArgumentFact("literal", value.ToString(), null),
+        };
+    }
+
+    private static ObservedArgumentFact ClassifyObservedArgument(ExpressionSyntax expression)
+    {
+        switch (expression)
+        {
+            case LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.TrueLiteralExpression):
+                return new ObservedArgumentFact("literal", "true", null);
+            case LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.FalseLiteralExpression):
+                return new ObservedArgumentFact("literal", "false", null);
+            case LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.NullLiteralExpression):
+                return new ObservedArgumentFact("dynamic", null, "null_literal");
+            case LiteralExpressionSyntax literal when literal.Token.Value is string text:
+                return new ObservedArgumentFact("literal", text, null);
+            case LiteralExpressionSyntax literal:
+                return new ObservedArgumentFact("literal", literal.Token.ValueText, null);
+            case InvocationExpressionSyntax:
+                return new ObservedArgumentFact("dynamic", null, "call");
+            case IdentifierNameSyntax:
+                return new ObservedArgumentFact("dynamic", null, "variable");
+            default:
+                return new ObservedArgumentFact("dynamic", null, "expression");
+        }
+    }
 
     private static bool LooksLikeInlineSql(string text)
         => SqlTextClassifier.LooksLikeInlineSql(text);
