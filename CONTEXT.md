@@ -106,7 +106,7 @@ Where one wrapper method's connection comes from, recorded per operation in a Co
 _Avoid_: connection ownership, connection scope, who opens the connection
 
 **Delegated Method**:
-A public wrapper method that constructs no command of its own, whose only database contact is a single, unambiguous invocation of another method declared on the same type — the sibling it delegates to. It is not required to be a bare pass-through: a method that inspects or reshapes the sibling's result is still delegated. A method with both its own command construct and a sibling call is classified by its own Command Source instead; delegation is only ever consulted for a method that produced none. A Delegated Method counts as understood by the behaviour surface completeness check — unlike an unclassified public method, a method that touches a database type but the resolver could not account for by any rule, which still blocks Contract creation. The two are never conflated: a Delegated Method's own database target is not copied from its sibling, and delegation is not followed transitively — the record names the sibling and nothing more.
+A public wrapper method that constructs no command of its own, whose only database contact is a single, unambiguous invocation of another method declared on the same type — the sibling it delegates to. It is not required to be a bare pass-through: a method that inspects or reshapes the sibling's result is still delegated. A method with both its own command construct and a sibling call is classified by its own Command Source instead; delegation is only ever consulted for a method that produced none. A Delegated Method counts as understood by the behaviour surface completeness check — unlike an unclassified public method, a method that touches a database type but the resolver could not account for by any rule, which still blocks Contract creation. The two are never conflated: a Delegated Method's own database target is not copied from its sibling, and delegation is not followed transitively — the record names the sibling and nothing more. Following a chain to its end happens once, and only when a Delegation Alias is derived from this record for a Contract.
 _Avoid_: pass-through method, forwarding wrapper, proxy method
 
 **Implementation Snapshot**:
@@ -156,6 +156,26 @@ _Avoid_: DI resolution, interface binding, local implementation
 **Declaring Receiver Type**:
 The type one wrapper Contract is keyed on: the type that *declares* the invoked method, which for a local database context deriving from an external base class is that base, not the local subclass. It is reported beside a provenance saying how it was reached — `declaring_type` from the bound method symbol's containing type, `receiver_declaration` when the receiver's own declared type declares the method, `declaring_type_unresolved` when a receiver type resolved but inherits the method from a base this analysis cannot see, and blank when no receiver type resolved at all. The rule only ever walks *from* a receiver type the syntax already resolved; it never invents one where none was reported before.
 _Avoid_: receiver class, wrapper class, declared type
+
+**Delegation Alias**:
+The entry a Contract carries for one Delegated Method: the delegating method's name, pointing at the operation that performs the work. It is derived by following a delegation chain to its end, so one lookup answers a call site match and an alias never points at another alias. It sits outside the behaviour signature, so adding one never changes the Contract Fingerprint and a System already reusing that Contract keeps reusing it. A call matched through an alias reports the method name the source code uses, and records the alias beside it. An alias is consulted only when a method name matches no operation directly. See [ADR-0027](docs/adr/0027-a-delegation-alias-sits-outside-the-contract-behaviour-signature.md).
+_Avoid_: method alias, forwarding entry, delegated contract method
+
+**Observed Argument Facts**:
+What one scan records for each argument of a wrapper call: the kind of the argument, its literal value when one exists, and the reason the value stayed unresolved. The scan reads the syntax alone and reads no Contract, so a Contract accepted later can still interpret what was recorded. An argument holding a variable, an expression or a call records no value and names its reason, and that absence is never read as a default.
+_Avoid_: argument list, call arguments, parameter values
+
+**Rating-Time Command Mode**:
+The choice between an inline SQL command and a stored procedure, decided when a Database Invocation is rated rather than when it is scanned. The gateway reads the Contract's `command_type` argument role, finds that argument in the Observed Argument Facts, and applies the same convention the analyzer host applies to a local wrapper: `true`, `"SP"` and `"StoredProcedure"` mean a stored procedure, and `false` means inline SQL. An unresolved argument leaves the mode unresolved rather than falling back to either value. See [ADR-0028](docs/adr/0028-the-command-mode-resolves-at-rating-time.md).
+_Avoid_: scan-time mode, mode heuristic, wrapper mode guess
+
+**Observed Call Evidence**:
+The proof that a Local Implementer's method touches no database: it holds at least one Database Invocation record, and every record it holds names no database receiver type. A method holding no record at all proves nothing, because the scan does not record a call to another method inside the same project; such a method stays in review. A method this evidence clears is classified `not_applicable` by rule, with no exclusion entry written for it in any System. See [ADR-0029](docs/adr/0029-observed-call-evidence-requires-at-least-one-record.md).
+_Avoid_: no-database proof, clean method check, zero-record rule
+
+**Global Exclusion Tier**:
+The `_global` key in the wrapper review exclusion registry, whose entries apply to every System. It holds a triage decision that does not change between Systems — a framework method that is never a database wrapper. A System's own entry wins over a global entry for the same receiver type and method name, so one System can still disagree. `_global` is never treated as a System identifier.
+_Avoid_: shared exclusions, default exclusions, wildcard system
 
 ## Web Application Analysis
 

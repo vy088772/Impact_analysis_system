@@ -549,6 +549,210 @@
     }
   },
   "contracts": {
+    "sqldbcontext": {
+      "behavior_signature": {
+        "operations": [
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 2
+            },
+            "branch_rules": [
+              {
+                "mode": "call_site",
+                "sink": "ExecuteReaderAsync"
+              }
+            ],
+            "connection_behavior_boundary": "context_connection",
+            "effective_command_semantics": "call_site",
+            "method_arity": 3,
+            "method_identity": "sqldbcontext.usp_execcmdgetdatasetasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+            "method_name": "usp_execcmdgetdatasetasync",
+            "operation_identity": "sqldbcontext.usp_execcmdgetdatasetasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+            "parameter_types": [
+              "string",
+              "microsoft.entityframeworkcore.sqlparameter[]?",
+              "bool"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteReaderAsync"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 2
+            },
+            "branch_rules": [
+              {
+                "mode": "call_site",
+                "sink": "ExecuteReaderAsync"
+              }
+            ],
+            "connection_behavior_boundary": "context_connection",
+            "effective_command_semantics": "call_site",
+            "method_arity": 3,
+            "method_identity": "sqldbcontext.usp_execcmdgetjsonobjectlistasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+            "method_name": "usp_execcmdgetjsonobjectlistasync",
+            "operation_identity": "sqldbcontext.usp_execcmdgetjsonobjectlistasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+            "parameter_types": [
+              "string",
+              "microsoft.entityframeworkcore.sqlparameter[]?",
+              "bool"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteReaderAsync"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 2
+            },
+            "branch_rules": [
+              {
+                "mode": "call_site",
+                "sink": "ExecuteReaderAsync"
+              }
+            ],
+            "connection_behavior_boundary": "context_connection",
+            "effective_command_semantics": "call_site",
+            "method_arity": 3,
+            "method_identity": "sqldbcontext.usp_execcmdgetjsontotabletlistasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+            "method_name": "usp_execcmdgetjsontotabletlistasync",
+            "operation_identity": "sqldbcontext.usp_execcmdgetjsontotabletlistasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+            "parameter_types": [
+              "string",
+              "microsoft.entityframeworkcore.sqlparameter[]?",
+              "bool"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteReaderAsync"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 2
+            },
+            "branch_rules": [
+              {
+                "mode": "call_site",
+                "sink": "ExecuteSqlInterpolatedAsync"
+              }
+            ],
+            "connection_behavior_boundary": "context_connection",
+            "effective_command_semantics": "call_site",
+            "method_arity": 3,
+            "method_identity": "sqldbcontext.usp_execcmdgetcountasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+            "method_name": "usp_execcmdgetcountasync",
+            "operation_identity": "sqldbcontext.usp_execcmdgetcountasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+            "parameter_types": [
+              "string",
+              "microsoft.entityframeworkcore.sqlparameter[]?",
+              "bool"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteSqlInterpolatedAsync"
+          }
+        ],
+        "signature_version": "contract-behavior-v1"
+      },
+      "comparison_report": "comparison-caae2859194fd7ad80cfbaca7a22d2901826cf6bcf43fb9adbd5b806a2bf3fc9",
+      "comparison_reports": {
+        "history": [
+          "comparison-caae2859194fd7ad80cfbaca7a22d2901826cf6bcf43fb9adbd5b806a2bf3fc9"
+        ],
+        "latest": "comparison-caae2859194fd7ad80cfbaca7a22d2901826cf6bcf43fb9adbd5b806a2bf3fc9"
+      },
+      "contract_fingerprint": "caae2859194fd7ad80cfbaca7a22d2901826cf6bcf43fb9adbd5b806a2bf3fc9",
+      "evidence_kind": "decompiled_auto",
+      "implementation_snapshots": [
+        {
+          "artifact_identity": "/Users/topmost/yuhsienTseng/Impact_analysis_system/data/repos/System_Dept_1/IQCS/bin/Debug/net6.0/CommonLibrary.dll@sha256:3ed1dd1b4e2d10e695c72ef17c373ff05d792acba89dc5506cb5c49634cd5bad",
+          "assembly_identity": "3ed1dd1b4e2d10e695c72ef17c373ff05d792acba89dc5506cb5c49634cd5bad",
+          "assembly_revision": "3ed1dd1b4e2d10e695c72ef17c373ff05d792acba89dc5506cb5c49634cd5bad",
+          "behavior_surface_unit": "SQLDbContext",
+          "snapshot_identity": "614ec1c6d7e9e15e9922c0d62903ba63f3941edee065924d430b84aebdccc5bc"
+        }
+      ],
+      "lifecycle": {
+        "revision": 1,
+        "status": "accepted"
+      },
+      "methods": {
+        "usp_ExecCmdGetCountAsync": {
+          "argument_roles": {
+            "command_text": 0,
+            "command_type": 2
+          },
+          "connection_behavior_boundary": "context_connection",
+          "method_arity": 3,
+          "method_identity": "sqldbcontext.usp_execcmdgetcountasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+          "mode": "call_site",
+          "parameter_types": [
+            "string",
+            "microsoft.entityframeworkcore.sqlparameter[]?",
+            "bool"
+          ],
+          "required_parameter_count": 1,
+          "sink": "ExecuteSqlInterpolatedAsync"
+        },
+        "usp_ExecCmdGetDataSetAsync": {
+          "argument_roles": {
+            "command_text": 0,
+            "command_type": 2
+          },
+          "connection_behavior_boundary": "context_connection",
+          "method_arity": 3,
+          "method_identity": "sqldbcontext.usp_execcmdgetdatasetasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+          "mode": "call_site",
+          "parameter_types": [
+            "string",
+            "microsoft.entityframeworkcore.sqlparameter[]?",
+            "bool"
+          ],
+          "required_parameter_count": 1,
+          "sink": "ExecuteReaderAsync"
+        },
+        "usp_ExecCmdGetJsonObjectListAsync": {
+          "argument_roles": {
+            "command_text": 0,
+            "command_type": 2
+          },
+          "connection_behavior_boundary": "context_connection",
+          "method_arity": 3,
+          "method_identity": "sqldbcontext.usp_execcmdgetjsonobjectlistasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+          "mode": "call_site",
+          "parameter_types": [
+            "string",
+            "microsoft.entityframeworkcore.sqlparameter[]?",
+            "bool"
+          ],
+          "required_parameter_count": 1,
+          "sink": "ExecuteReaderAsync"
+        },
+        "usp_ExecCmdGetJsonToTabletListAsync": {
+          "argument_roles": {
+            "command_text": 0,
+            "command_type": 2
+          },
+          "connection_behavior_boundary": "context_connection",
+          "method_arity": 3,
+          "method_identity": "sqldbcontext.usp_execcmdgetjsontotabletlistasync(string,microsoft.entityframeworkcore.sqlparameter[]?,bool)",
+          "mode": "call_site",
+          "parameter_types": [
+            "string",
+            "microsoft.entityframeworkcore.sqlparameter[]?",
+            "bool"
+          ],
+          "required_parameter_count": 1,
+          "sink": "ExecuteReaderAsync"
+        }
+      },
+      "receiver_types": [
+        "SQLDbContext"
+      ],
+      "signature_version": "contract-behavior-v1",
+      "status": "accepted"
+    },
     "sqlfunc": {
       "behavior_signature": {
         "operations": [
