@@ -1352,7 +1352,8 @@ internal sealed record DirectSqlInvocation(
     string? CommandTextProvenance = null,
     string? WrapperReceiverTypeProvenance = null,
     bool CommandTypeArgumentObserved = false,
-    string? CommandTextUnresolvedReason = null);
+    string? CommandTextUnresolvedReason = null,
+    IReadOnlyList<string>? WrapperImplementationCandidates = null);
 
 /// <summary>One ambiguous/unavailable overload candidate's bound-implementation and signature facts.</summary>
 internal sealed record WrapperOverloadCandidateFact(
@@ -2204,6 +2205,11 @@ internal static class WrapperAnalyzer
             : wrappers.FirstOrDefault(wrapper =>
                 wrapper.MethodName == methodName
                 && wrapper.TypeIdentity == localImplementer.TypeIdentity);
+        // Ticket 02: two or more Local Implementers is a real tie, never broken by declaration
+        // order, file order, or name similarity -- every tied class name is reported so the
+        // gateway can surface it as its own distinct, reviewable outcome instead of silently
+        // falling through to the same unresolved_contract a genuinely external interface gets.
+        var tiedImplementers = localImplementers.Count >= 2 ? localImplementers : null;
 
         return CreateUnavailableInvocation(
             caller,
@@ -2218,7 +2224,8 @@ internal static class WrapperAnalyzer
             receiverType,
             commandTextUnresolvedReason,
             localImplementer,
-            localWrapperDefinition);
+            localWrapperDefinition,
+            tiedImplementers);
     }
 
     /// <summary>
@@ -2399,12 +2406,12 @@ internal static class WrapperAnalyzer
     /// type is a corpus interface decides whether this method applies, never which provenance
     /// produced it.
     ///
-    /// Zero candidates or two-or-more candidates are both reported as an empty list: a genuinely
-    /// external interface (no local implementer at all) is left exactly as
-    /// <see cref="ResolveWrapperReceiverType"/> already reports it, and a tie between two or more
-    /// local classes is never broken by declaration order, file order, or name similarity -- ticket
-    /// 02 turns that case into its own distinct, reviewable outcome; this method must not guess
-    /// between them.
+    /// Every match this method finds is returned as-is -- zero, one, or two-or-more -- and the
+    /// caller decides what each count means: zero leaves the interface exactly as
+    /// <see cref="ResolveWrapperReceiverType"/> already reports it, one redirects to source-backed
+    /// evidence, and two-or-more (ticket 02: wrapper-receiver-resolves-through-interface, issue
+    /// 02) is reported by name as a tie, never broken by declaration order, file order, or name
+    /// similarity.
     /// </summary>
     private static IReadOnlyList<LocalImplementerCandidate> ResolveLocalImplementers(
         ResolvedReceiverType receiverType,
@@ -2635,7 +2642,8 @@ internal static class WrapperAnalyzer
         ResolvedReceiverType receiverType,
         string? commandTextUnresolvedReason = null,
         LocalImplementerCandidate? localImplementer = null,
-        WrapperDefinition? localWrapperDefinition = null)
+        WrapperDefinition? localWrapperDefinition = null,
+        IReadOnlyList<LocalImplementerCandidate>? tiedImplementers = null)
     {
         // Ticket 01: exactly one Local Implementer redirects this call to source-backed evidence,
         // named by receiver_implementation_identity, the same way a directly-typed local wrapper
@@ -2643,8 +2651,10 @@ internal static class WrapperAnalyzer
         // WrapperDefinition, its method-semantics/terminal-sink/identity facts are reused here
         // unchanged -- the same fields a directly-typed local wrapper (WrapperAnalyzer.Analyze's
         // resolution.Candidates[0] path) already reports from the very same WrapperDefinition, no
-        // new extraction. Zero or two-or-more candidates leave WrapperSourceAvailable false,
-        // exactly as reported before this ticket (a tie is ticket 02's distinct outcome).
+        // new extraction. Zero candidates leave WrapperSourceAvailable false, exactly as reported
+        // before this ticket. Ticket 02: two or more candidates also leave WrapperSourceAvailable
+        // false, but name every tied class in WrapperImplementationCandidates so the gateway can
+        // report the tie as its own distinct, reviewable outcome instead of silently discarding it.
         return new(
             callerClass,
             caller.Identifier.Text,
@@ -2673,7 +2683,10 @@ internal static class WrapperAnalyzer
             WrapperReceiverTypeProvenance: receiverType.Provenance,
             CommandTypeArgumentObserved: HasModeLiteralArgument(call),
             CommandTextUnresolvedReason: commandTextUnresolvedReason,
-            ReceiverImplementationIdentity: localImplementer?.ClassName);
+            ReceiverImplementationIdentity: localImplementer?.ClassName,
+            WrapperImplementationCandidates: tiedImplementers
+                ?.Select(candidate => candidate.ClassName)
+                .ToArray());
     }
 
     /// <summary>One externally referenced wrapper call's uniquely bound method symbol facts —

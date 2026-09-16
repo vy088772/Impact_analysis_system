@@ -2250,6 +2250,30 @@ class CSharpAnalysisGateway:
                 contract_identity_facts=source_contract_facts,
             )
 
+        # Ticket 02 (wrapper-receiver-resolves-through-interface): the host reports two or more
+        # tied Local Implementers as `wrapper_implementation_candidates`, never as a resolved
+        # `wrapper_source_available=true` fact -- so this check sits beside `source_available`,
+        # not inside it. Left unhandled, this raw fact would otherwise fall through to the same
+        # `unresolved_contract` outcome a genuinely external interface receives (no candidates at
+        # all), silently erasing the tie ticket 02 exists to surface.
+        implementation_candidates = tuple(
+            name
+            for name in (
+                str(item).strip()
+                for item in raw.get("wrapper_implementation_candidates") or ()
+            )
+            if name
+        )
+        if implementation_candidates:
+            return result(
+                wrapper_kind="source_wrapper",
+                status="ambiguous_implementation",
+                selection_source="ambiguous_local_implementation",
+                candidate_contracts=implementation_candidates,
+                reason="multiple_classes_implement_receiver_type",
+                review_candidate=True,
+            )
+
         explicit_name = ""
         explicit_names: tuple[str, ...] = ()
         explicit_selected = False

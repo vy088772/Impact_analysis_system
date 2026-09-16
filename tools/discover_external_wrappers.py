@@ -281,7 +281,13 @@ def build_report(targets: Iterable[dict], missing_systems: Iterable[str] = ()) -
                 item.get("evidence_status") == "not_applicable" for item in observations
             ),
             "unresolved": sum(
-                item["status"] in {"ambiguous_contract", "unresolved_contract", "unresolved_method", "receiver_mismatch"}
+                item["status"] in {
+                    "ambiguous_contract",
+                    "ambiguous_implementation",
+                    "unresolved_contract",
+                    "unresolved_method",
+                    "receiver_mismatch",
+                }
                 for item in observations
             ),
         },

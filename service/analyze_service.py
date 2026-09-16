@@ -3612,6 +3612,7 @@ def reconcile_refresh_wrappers(
     )
     unresolved_statuses = {
         "ambiguous_contract",
+        "ambiguous_implementation",
         "unresolved_contract",
         "unresolved_method",
         "receiver_mismatch",

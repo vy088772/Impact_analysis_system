@@ -82,7 +82,7 @@ The system-level choice of reusable semantics for an unavailable external wrappe
 _Avoid_: wrapper method list, SP proof
 
 **Wrapper Resolution Status**:
-The categorical outcome of matching one wrapper invocation's Command Source to a Contract during reconciliation — for example `source_wrapper`, `explicit_selected`, `unresolved_contract`, `ambiguous_contract`, `receiver_mismatch`, `unresolved_method`, or `not_applicable`. It is independent of Evidence Status and does not itself rate database-target proof.
+The categorical outcome of matching one wrapper invocation's Command Source to a Contract during reconciliation — for example `source_wrapper`, `explicit_selected`, `unresolved_contract`, `ambiguous_contract`, `ambiguous_implementation`, `receiver_mismatch`, `unresolved_method`, or `not_applicable`. It is independent of Evidence Status and does not itself rate database-target proof.
 _Avoid_: classification status, wrapper status
 
 **Contract Preflight**:
