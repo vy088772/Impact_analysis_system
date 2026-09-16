@@ -141,6 +141,57 @@ def _operation_name(operation: Mapping[str, Any]) -> str:
     return method_name.casefold()
 
 
+def _delegating_bare_name(method_identity: object) -> str:
+    """The bare method name a ``DelegatedMethod.method_identity`` names.
+
+    ``method_identity`` arrives as ``"Type.method(param,param)"``. Only the
+    bare name is comparable against ``delegates_to``, which the decompiler
+    already reports as a bare sibling name, never a qualified identity.
+    """
+    text = _text(method_identity)
+    match = re.match(r"^(?:.*\.)?([^.()]+)\(", text)
+    if match:
+        return match.group(1).strip()
+    return text.split("(", 1)[0].strip()
+
+
+def flatten_delegation_aliases(
+    delegated_methods: object,
+) -> dict[str, str]:
+    """Follow every Delegated Method's chain to the operation that does the work.
+
+    Returns ``{delegating_method_name: final_operation_name}``. A two-step
+    chain flattens to one hop: an alias never points at another alias, only
+    at the operation that performs the work (ADR-0027). A cycle -- which the
+    decompiler's own non-transitive recording should never produce, but which
+    this function does not trust blindly -- stops at the point it repeats
+    rather than looping forever.
+    """
+    if not isinstance(delegated_methods, (list, tuple)):
+        return {}
+    raw_targets: dict[str, str] = {}
+    for item in delegated_methods:
+        if not isinstance(item, Mapping):
+            continue
+        name = _delegating_bare_name(item.get("method_identity"))
+        target = _text(item.get("delegates_to"))
+        if name and target:
+            raw_targets[name] = target
+
+    aliases: dict[str, str] = {}
+    for name in raw_targets:
+        current = raw_targets[name]
+        seen = {name, current}
+        while current in raw_targets:
+            next_target = raw_targets[current]
+            if next_target in seen:
+                break
+            current = next_target
+            seen.add(current)
+        aliases[name] = current
+    return aliases
+
+
 def _operation_records(value: object) -> list[dict[str, Any]]:
     if isinstance(value, Mapping):
         records: list[dict[str, Any]] = []
@@ -705,6 +756,7 @@ def versioned_contract_from_proposal(proposal: Mapping[str, Any]) -> tuple[dict[
         if not _is_non_database_operation(operation)
     ]
     methods = _snapshot_method_projection(snapshot_operations, provided_methods)
+    delegation_aliases = flatten_delegation_aliases(snapshot.get("delegated_methods"))
 
     entry = {
         "receiver_types": list(receiver_types),
@@ -723,6 +775,8 @@ def versioned_contract_from_proposal(proposal: Mapping[str, Any]) -> tuple[dict[
     }
     if evidence_kind:
         entry["evidence_kind"] = evidence_kind
+    if delegation_aliases:
+        entry["delegation_aliases"] = delegation_aliases
     return entry, report
 
 
@@ -742,4 +796,5 @@ __all__ = [
     "compare_contract_surfaces",
     "implementation_snapshot_reference",
     "versioned_contract_from_proposal",
+    "flatten_delegation_aliases",
 ]

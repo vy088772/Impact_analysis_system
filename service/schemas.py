@@ -95,6 +95,7 @@ class WrapperEvidenceFields(BaseModel):
     contract: str = ""
     contract_mode: str = ""
     contract_sink: str = ""
+    contract_delegation_alias: str = ""
     wrapper_receiver_type: str = ""
     candidate_contracts: List[str] = Field(default_factory=list)
     receiver_type: str = ""

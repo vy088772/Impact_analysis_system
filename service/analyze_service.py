@@ -882,12 +882,21 @@ def _populate_decompilation_proposals(
             if not isinstance(current_proposals, list):
                 current_proposals = []
                 scan.contract_proposals = current_proposals
+            delegated_methods = response.get("delegated_methods")
             for proposal in proposals:
                 if not isinstance(proposal, Mapping):
                     continue
                 proposal_entry = dict(proposal)
                 if not str(proposal_entry.get("evidence_kind") or "").strip():
                     proposal_entry["evidence_kind"] = DECOMPILED_AUTO_EVIDENCE_KIND
+                if delegated_methods:
+                    snapshot = proposal_entry.get("implementation_snapshot")
+                    if isinstance(snapshot, Mapping) and not snapshot.get(
+                        "delegated_methods"
+                    ):
+                        snapshot = dict(snapshot)
+                        snapshot["delegated_methods"] = list(delegated_methods)
+                        proposal_entry["implementation_snapshot"] = snapshot
                 if proposal_entry not in current_proposals:
                     current_proposals.append(proposal_entry)
             attempts.append(

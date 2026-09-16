@@ -99,6 +99,30 @@ def test_behavior_change_creates_a_new_fingerprint() -> None:
     assert compute_contract_fingerprint(stored_procedure) != compute_contract_fingerprint(inline_sql)
 
 
+def test_a_delegated_method_on_the_snapshot_arrives_as_a_delegation_alias_and_does_not_move_the_fingerprint() -> None:
+    """Ticket 03: `versioned_contract_from_proposal` bakes a Delegation Alias into a freshly
+    accepted Contract from the snapshot's `delegated_methods`, and ADR-0027's promise -- the
+    alias sits outside the behaviour signature -- holds for a fresh acceptance too, not only
+    for the migration that retrofits an already-accepted Contract."""
+    without_delegation = _snapshot(_operation())
+    with_delegation = {
+        **without_delegation,
+        "delegated_methods": [
+            {
+                "method_identity": "Vendor.Data.SQLObject.RunLegacy(System.String)",
+                "delegates_to": "Run",
+            }
+        ],
+    }
+
+    entry, _report = versioned_contract_from_proposal(
+        _versioned_proposal("first", with_delegation)
+    )
+
+    assert entry["delegation_aliases"] == {"RunLegacy": "Run"}
+    assert entry["contract_fingerprint"] == compute_contract_fingerprint(without_delegation)
+
+
 def test_distinct_implementation_boundaries_do_not_share_a_fingerprint() -> None:
     first = _snapshot(_operation())
     second = {

@@ -663,6 +663,11 @@
         "latest": "comparison-caae2859194fd7ad80cfbaca7a22d2901826cf6bcf43fb9adbd5b806a2bf3fc9"
       },
       "contract_fingerprint": "caae2859194fd7ad80cfbaca7a22d2901826cf6bcf43fb9adbd5b806a2bf3fc9",
+      "delegation_aliases": {
+        "usp_ExecCmdGetDataTableAsync": "usp_ExecCmdGetDataSetAsync",
+        "usp_ExecCmdGetFisrtValueAsync": "usp_ExecCmdGetDataSetAsync",
+        "usp_ExecCmdGetJsonObjectAsync": "usp_ExecCmdGetJsonObjectListAsync"
+      },
       "evidence_kind": "decompiled_auto",
       "implementation_snapshots": [
         {

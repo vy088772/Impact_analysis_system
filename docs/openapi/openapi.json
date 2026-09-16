@@ -766,6 +766,11 @@
             "title": "Contract",
             "type": "string"
           },
+          "contract_delegation_alias": {
+            "default": "",
+            "title": "Contract Delegation Alias",
+            "type": "string"
+          },
           "contract_lifecycle_status": {
             "default": "",
             "title": "Contract Lifecycle Status",
@@ -1511,6 +1516,11 @@
             "title": "Contract",
             "type": "string"
           },
+          "contract_delegation_alias": {
+            "default": "",
+            "title": "Contract Delegation Alias",
+            "type": "string"
+          },
           "contract_fingerprint": {
             "default": "",
             "title": "Contract Fingerprint",
@@ -1817,6 +1827,11 @@
           "contract": {
             "default": "",
             "title": "Contract",
+            "type": "string"
+          },
+          "contract_delegation_alias": {
+            "default": "",
+            "title": "Contract Delegation Alias",
             "type": "string"
           },
           "contract_fingerprint": {

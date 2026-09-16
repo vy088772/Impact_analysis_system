@@ -173,7 +173,7 @@ def _read_manifest(manifest_path: Path) -> dict[str, Any]:
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
-_VALID_TRIGGERS = ("refresh", "manual_acceptance")
+_VALID_TRIGGERS = ("refresh", "manual_acceptance", "contract_migration")
 
 
 def commit_staged_contract_transaction(
@@ -194,9 +194,10 @@ def commit_staged_contract_transaction(
     or post-commit validation rolls the active files back to their previous
     bytes; both remain byte-for-byte unchanged in that case.
 
-    ``trigger`` records which workflow ("refresh" or "manual_acceptance")
-    produced this commit, verbatim, in the transaction manifest, so a
-    manifest found on disk after an interruption is self-describing.
+    ``trigger`` records which workflow ("refresh", "manual_acceptance" or
+    "contract_migration") produced this commit, verbatim, in the transaction
+    manifest, so a manifest found on disk after an interruption is
+    self-describing.
     """
     if trigger not in _VALID_TRIGGERS:
         _error(
