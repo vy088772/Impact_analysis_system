@@ -3,11 +3,6 @@
     "IQCS": [
       {
         "receiver_type": "IUtilityService",
-        "method_name": "SqlParam",
-        "reason": "reviewed_2026-09-16_not_sqlfunc_utilityservice_builds_sqlparameter_only"
-      },
-      {
-        "receiver_type": "IUtilityService",
         "method_name": "ViewPath",
         "reason": "reviewed_2026-09-16_not_sqlfunc_utilityservice_builds_view_path_string_only"
       }

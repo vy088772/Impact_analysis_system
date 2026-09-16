@@ -25,6 +25,7 @@ from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
     SpCatalog,
+    build_observed_call_evidence_index,
 )
 from code_analyzer.project_scanner import ProjectScanResult
 
@@ -76,8 +77,15 @@ def rate_scan_invocations(
     database nobody has scanned still counts as resolved.
     """
     connection_sources_by_file = getattr(scan, "connection_sources", {}) or {}
+    raw_by_file = getattr(scan, "db_invocations", {}) or {}
+    # ADR-0029 / Observed Call Evidence (ticket 04): built once from the whole scan, before
+    # any of the per-file gateways below, so a Local Implementer's own method still counts
+    # even when it lives in a different file than the call being rated.
+    observed_call_evidence_index = build_observed_call_evidence_index(
+        raw_by_file, contract_registry
+    )
     rated: Dict[str, List[DbInvocation]] = {}
-    for file_key, raw_invocations in (getattr(scan, "db_invocations", {}) or {}).items():
+    for file_key, raw_invocations in raw_by_file.items():
         if not raw_invocations:
             continue
         gateway = CSharpAnalysisGateway(
@@ -86,6 +94,7 @@ def rate_scan_invocations(
             external_wrapper_contract=external_wrapper_contract,
             external_wrapper_contracts=contract_registry,
             wrapper_review_exclusions=wrapper_review_exclusions,
+            observed_call_evidence_index=observed_call_evidence_index,
         )
         rated[file_key] = gateway.resolve_direct_invocations(
             _relative_path(file_key, root),

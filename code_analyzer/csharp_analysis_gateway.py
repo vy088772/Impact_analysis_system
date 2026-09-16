@@ -910,6 +910,89 @@ def _receiver_type_matches_contract(
     )
 
 
+def _known_database_receiver_types(
+    external_wrapper_contracts: Optional[Mapping[str, Any]],
+) -> Set[str]:
+    """Every receiver type any registered external wrapper Contract names.
+
+    Observed Call Evidence (ticket 04, accepted-contract-resolves-its-calls) judges a
+    nested wrapper call inside a Local Implementer's own method by the same receiver-type
+    vocabulary the Contract registry already uses -- the registry is shared across every
+    System, so this recognition needs no per-System tuning and no new C# host fact.
+    """
+    contracts = (
+        _normalize_external_wrapper_contract_registry(external_wrapper_contracts)
+        if external_wrapper_contracts is not None
+        else _load_external_wrapper_contracts()
+    )
+    known: Set[str] = set()
+    for contract in contracts.values():
+        receiver_types = contract.get("receiver_types")
+        if not isinstance(receiver_types, (list, tuple, set)):
+            continue
+        for candidate in receiver_types:
+            normalized = _normalize_type_identity(candidate)
+            if normalized:
+                known.add(normalized)
+    return known
+
+
+def _record_names_database_receiver_type(
+    record: Mapping[str, Any],
+    known_database_receiver_types: Set[str],
+) -> bool:
+    receiver = _text_fact(_first_fact(record, "wrapper_receiver_type", "receiver_type"))
+    if not receiver:
+        return False
+    return _normalize_type_identity(receiver) in known_database_receiver_types
+
+
+def _observed_call_evidence_key(class_name: object, method_name: object) -> tuple[str, str]:
+    """The one normalization `build_observed_call_evidence_index` and its gateway-side
+    lookup must agree on: a class/method pair is the same key however either side's
+    casing or surrounding whitespace was written."""
+    return (
+        str(class_name or "").strip().casefold(),
+        str(method_name or "").strip().casefold(),
+    )
+
+
+def build_observed_call_evidence_index(
+    raw_by_file: Optional[Mapping[Any, Iterable[Mapping[str, Any]]]],
+    external_wrapper_contracts: Optional[Mapping[str, Any]] = None,
+) -> Dict[tuple[str, str], bool]:
+    """Index every class/method the whole scan found, and whether it touches a database.
+
+    ADR-0029 / Observed Call Evidence needs facts from across the whole scan, but the
+    rating step builds one `CSharpAnalysisGateway` per source file, so a Local
+    Implementer's own method commonly lives in a file a different gateway instance never
+    sees (`IUtilityService.SqlParam` is declared in `UtilityService.cs`; a call through the
+    interface is rated from whatever file calls it). This index is built once, before any
+    gateway, from every raw Database Invocation record the scan holds, and shared by every
+    gateway the rating step then constructs.
+
+    A key absent from the returned mapping means the scan holds no record at all for that
+    class/method -- ADR-0029 requires at least one record before a method can be cleared,
+    so an absent key is never treated the same as a present one mapped to `False`.
+    """
+    known_database_receiver_types = _known_database_receiver_types(external_wrapper_contracts)
+    index: Dict[tuple[str, str], bool] = {}
+    for records in (raw_by_file or {}).values():
+        for record in records or ():
+            if not isinstance(record, Mapping):
+                continue
+            class_name = str(record.get("class_name") or "").strip()
+            method_name = str(record.get("method_name") or "").strip()
+            if not class_name or not method_name:
+                continue
+            key = _observed_call_evidence_key(class_name, method_name)
+            touches_database = _record_names_database_receiver_type(
+                record, known_database_receiver_types
+            )
+            index[key] = index.get(key, False) or touches_database
+    return index
+
+
 def _candidate_arity(candidate: Mapping[str, Any]) -> Optional[int]:
     arity = _optional_int_fact(_first_fact(candidate, "method_arity", "arity"))
     if arity is not None:
@@ -2139,6 +2222,7 @@ class CSharpAnalysisGateway:
         external_wrapper_contract: Optional[Mapping[str, Any]] = None,
         external_wrapper_contracts: Optional[Mapping[str, Any]] = None,
         wrapper_review_exclusions: Optional[Iterable[Mapping[str, Any]]] = None,
+        observed_call_evidence_index: Optional[Mapping[tuple[str, str], bool]] = None,
     ):
         self._catalog = catalog
         self._connection_sources = connection_sources or {}
@@ -2151,6 +2235,12 @@ class CSharpAnalysisGateway:
         )
         self._wrapper_review_exclusions = _normalize_wrapper_review_exclusions(
             wrapper_review_exclusions
+        )
+        # ADR-0029 / Observed Call Evidence (ticket 04): built once for the whole scan by
+        # `build_observed_call_evidence_index` and shared by every per-file gateway the
+        # rating step constructs -- never rebuilt from this one file's own raw facts alone.
+        self._observed_call_evidence_index: Dict[tuple[str, str], bool] = dict(
+            observed_call_evidence_index or {}
         )
 
     def _load_contract(self, contract_name: str) -> Optional[Dict[str, Any]]:
@@ -2176,6 +2266,21 @@ class CSharpAnalysisGateway:
             ),
             "",
         )
+
+    def _observed_call_evidence_clears(
+        self, implementation_identity: str, wrapper_method: str
+    ) -> bool:
+        """ADR-0029: clear only when at least one record exists and none touches a database.
+
+        A key absent from the index (no record at all) must never read the same as a key
+        mapped to `False` (records exist, none of them name a database receiver type) --
+        the scan does not record a call to another method inside the same project, so an
+        absent key proves nothing and the method stays in review.
+        """
+        if not implementation_identity or not wrapper_method:
+            return False
+        key = _observed_call_evidence_key(implementation_identity, wrapper_method)
+        return self._observed_call_evidence_index.get(key) is False
 
     def reconcile_wrapper(
         self,
@@ -2379,6 +2484,23 @@ class CSharpAnalysisGateway:
                     contract_identity_facts=source_contract_facts,
                 )
             stored_procedure_mode, mode_reason = source_mode()
+            # ADR-0029 / Observed Call Evidence (ticket 04): only ever intervenes where the
+            # call would otherwise stay `wrapper_mode_unresolved` forever -- a Local
+            # Implementer method whose own body reached a real terminal sink already earns
+            # `fixed_inline_sql`/`fixed_stored_procedure` above (via the existing
+            # WrapperDefinition reuse), so this branch never second-guesses a call that
+            # already carries real database evidence.
+            if mode_reason == "wrapper_mode_unresolved" and self._observed_call_evidence_clears(
+                binding["implementation_identity"], wrapper_method
+            ):
+                return result(
+                    wrapper_kind="source_wrapper",
+                    status="not_applicable",
+                    selection_source="observed_call_evidence",
+                    reason="observed_call_evidence_no_database_receiver_type",
+                    review_candidate=False,
+                    contract_identity_facts=source_contract_facts,
+                )
             return result(
                 wrapper_kind="source_wrapper",
                 status="source_wrapper",

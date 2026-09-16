@@ -28,6 +28,7 @@ from code_analyzer.csharp_analysis_gateway import (
     InvocationEvidence,
     SpCatalog,
     WRAPPER_EVIDENCE_FIELDS,
+    build_observed_call_evidence_index,
     invocation_wrapper_evidence_fields,
     load_external_wrapper_contract,
     load_wrapper_review_exclusions,
@@ -1633,6 +1634,12 @@ def _rated_execution_invocations(
     external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
         _rating_config_inputs(scope)
     )
+    # ADR-0029 / Observed Call Evidence (ticket 04): built once from the whole scan's raw
+    # facts, not per file -- a Local Implementer's own method commonly lives in a file a
+    # different file's gateway never sees.
+    observed_call_evidence_index = build_observed_call_evidence_index(
+        raw_by_file, contract_registry
+    )
 
     for file_result in matched_files:
         file_key = str(Path(file_result.file_path).resolve())
@@ -1650,6 +1657,7 @@ def _rated_execution_invocations(
             external_wrapper_contract=external_wrapper_contract,
             external_wrapper_contracts=contract_registry,
             wrapper_review_exclusions=wrapper_review_exclusions,
+            observed_call_evidence_index=observed_call_evidence_index,
         )
         relative_path = _rel(file_result.file_path, root)
         for invocation in gateway.resolve_direct_invocations(
@@ -3432,6 +3440,12 @@ def reconcile_refresh_wrappers(
         wrapper_calls = 0
         root_observation_keys: set[tuple] = set()
         raw_by_file = getattr(scan, "db_invocations", {}) or {}
+        # ADR-0029 / Observed Call Evidence (ticket 04): one index per scan, built before
+        # any of this scan's per-file gateways, so a Local Implementer's own method still
+        # counts even when it lives in a different file than the call being rated.
+        observed_call_evidence_index = build_observed_call_evidence_index(
+            raw_by_file, contract_registry
+        )
         for source_file in sorted(raw_by_file, key=lambda item: str(item).casefold()):
             relative_path = _rel(str(source_file), root)
             snapshot_hash = _refresh_wrapper_snapshot_hash(scan, relative_path)
@@ -3445,6 +3459,7 @@ def reconcile_refresh_wrappers(
                 external_wrapper_contract=external_wrapper_contract,
                 external_wrapper_contracts=contract_registry,
                 wrapper_review_exclusions=wrapper_review_exclusions,
+                observed_call_evidence_index=observed_call_evidence_index,
             )
             records = raw_by_file.get(source_file, []) or []
             for record in records:
