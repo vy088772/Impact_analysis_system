@@ -14,15 +14,23 @@ mechanism. No code changes accompany this ticket.
 **Blocked by:** None — independent of tickets 01 and 02, can start
 immediately or run in parallel.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] ADR-0028 gains a dated amendment (following the ADR-0006-amends-ADR-0005
+- [x] ADR-0028 gains a dated amendment (following the ADR-0006-amends-ADR-0005
       precedent) stating the semantic-binding refinement and its guard.
-- [ ] The amendment states plainly that semantic binding to a referenced
+- [x] The amendment states plainly that semantic binding to a referenced
       assembly's own metadata is not a Contract read, so ADR-0028's original
       guarantee is not mistaken for broken.
-- [ ] `accepted-contract-resolves-its-calls`'s own Implementation Decisions
+- [x] `accepted-contract-resolves-its-calls`'s own Implementation Decisions
       section no longer states the analyzer host records these facts "from
       the syntax alone" without qualification; the corrected text points at
       the ADR-0028 amendment for the full guard description.
-- [ ] No production code changes accompany this ticket.
+- [x] No production code changes accompany this ticket.
+
+**Note:** Followed the ADR-0006-amends-ADR-0005 precedent exactly: created a
+new, separate ADR file (`docs/adr/0030-an-omitted-trailing-optional-arguments-
+default-value-is-read-by-semantic-binding.md`) with an `Amends: ADR 0028`
+header, rather than editing ADR-0028 in place — ADR-0006 did the same to
+ADR-0005. `accepted-contract-resolves-its-calls`'s spec.md Implementation
+Decisions section (the "Rating-Time Command Mode" subsection) is corrected in
+place and now points at ADR-0030. No code changed.

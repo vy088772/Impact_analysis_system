@@ -162,10 +162,14 @@ approves a list instead of reading source code.
   argument it records three things: the kind of the argument, the literal value
   when one exists, and the reason that the value stayed unresolved. This mirrors
   the three fields the command text argument already uses.
-- The analyzer host records these facts from the syntax alone. It reads no
-  Contract, and it gains no Contract input channel. The scan produces facts. The
-  rating step interprets them. This boundary already holds elsewhere in the
-  system, and this change keeps it.
+- The analyzer host records these facts from the syntax at each call site,
+  with one refinement: an omitted trailing optional argument's declared
+  default value is read via semantic binding to the referenced assembly's own
+  metadata, guarded so that only a uniquely bound symbol is trusted (see
+  ADR-0030 for the full guard description). This is not a Contract read. The
+  analyzer host still reads no Contract, and still gains no Contract input
+  channel. The scan produces facts. The rating step interprets them. This
+  boundary already holds elsewhere in the system, and this change keeps it.
 - The existing command text fields stay exactly as they are. The command text
   argument is not folded into the new structure. That path works and carries
   tests, and a rewrite buys nothing.
