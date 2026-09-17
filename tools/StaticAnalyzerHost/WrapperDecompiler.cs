@@ -150,45 +150,13 @@ internal static class WrapperAssemblyDecompiler
         if (typeDefinition is null)
             return WrapperDecompilationResult.Failed("type_not_found", null, assemblyIdentity);
 
-        var methodSources = new List<string>();
-        var translationProblemMethods = new List<string>();
-        var translationProblemDefinitions = new List<WrapperAnalyzer.WrapperDefinition>();
-        foreach (var method in typeDefinition.Methods)
-        {
-            if (method.MetadataToken.IsNil)
-                continue;
-            try
-            {
-                methodSources.Add(decompiler.DecompileAsString(method.MetadataToken));
-            }
-            catch (Exception)
-            {
-                // The method's body could not be decompiled at all, so it never becomes a
-                // MethodDeclarationSyntax that CreateDefinition could classify; still surface it
-                // as a distinct, identifiable fact rather than letting it vanish from the output.
-                translationProblemMethods.Add(method.Name);
-                translationProblemDefinitions.Add(BuildTranslationProblemDefinition(
-                    receiverTypeName,
-                    method,
-                    assemblyIdentity));
-            }
-        }
+        var declaredMethods = typeDefinition.Methods
+            .Where(method => !method.MetadataToken.IsNil)
+            .ToList();
 
-        // Each per-method decompile emits its own leading `using` directives, which are not
-        // valid syntax inside a class body: hoist and de-duplicate them above the wrapper class.
-        var usings = new List<string>();
-        var members = new List<string>();
-        foreach (var methodSource in methodSources)
-        {
-            var snippetRoot = CSharpSyntaxTree.ParseText(methodSource).GetCompilationUnitRoot();
-            foreach (var usingDirective in snippetRoot.Usings)
-            {
-                var usingText = usingDirective.ToFullString().Trim();
-                if (!usings.Contains(usingText))
-                    usings.Add(usingText);
-            }
-            members.AddRange(snippetRoot.Members.Select(member => member.ToFullString()));
-        }
+        var (usings, members, translationProblemMethods, translationProblemDefinitions) =
+            TryDecompileWholeType(decompiler, typeDefinition, receiverTypeName, declaredMethods, assemblyIdentity)
+            ?? DecompilePerMethod(decompiler, declaredMethods, receiverTypeName, assemblyIdentity);
 
         var classSource = string.Join("\n", usings)
             + $"\nclass {receiverTypeName}\n{{\n"
@@ -222,6 +190,286 @@ internal static class WrapperAssemblyDecompiler
             translationProblemDefinitions,
             contractCompilation,
             importedNamespaces);
+    }
+
+    /// <summary>
+    /// Decompiles <paramref name="typeDefinition"/> in one pass instead of one method at a time.
+    /// Per-method decompilation (<see cref="DecompilePerMethod"/>, still the fallback below) asks
+    /// ICSharpCode.Decompiler to disambiguate a short type name -- e.g. <c>SqlParameter</c> --
+    /// using only that one method's own references, and it can resolve the wrong one of two
+    /// namespaces the type imports for different reasons (see the
+    /// <c>sqldbcontext-contract-resolves-its-real-calls</c> spec: <c>usp_ExecCmdGetDataSetAsync</c>'s
+    /// own <c>Microsoft.Data.SqlClient.SqlParameter[]</c> parameter came back per-method as
+    /// <c>Microsoft.EntityFrameworkCore.SqlParameter[]?</c> -- a namespace that does not even
+    /// declare a <c>SqlParameter</c> type -- while decompiling the whole <c>SQLDbContext</c> type
+    /// together, where the decompiler sees every namespace the type's methods actually use, named
+    /// it correctly). Returns null when the whole-type decompile or its own re-parse fails, or when
+    /// the receiver type's own declaration cannot be found in the result, so the caller falls back
+    /// to the always-worked per-method path rather than losing a receiver type this decompiler can
+    /// still handle one method at a time.
+    /// </summary>
+    private static (
+        List<string> Usings,
+        List<string> Members,
+        List<string> TranslationProblemMethods,
+        List<WrapperAnalyzer.WrapperDefinition> TranslationProblemDefinitions
+    )? TryDecompileWholeType(
+        CSharpDecompiler decompiler,
+        ICSharpCode.Decompiler.TypeSystem.ITypeDefinition typeDefinition,
+        string receiverTypeName,
+        IReadOnlyList<ICSharpCode.Decompiler.TypeSystem.IMethod> declaredMethods,
+        string assemblyIdentity)
+    {
+        string wholeTypeSource;
+        try
+        {
+            wholeTypeSource = decompiler.DecompileTypeAsString(typeDefinition.FullTypeName);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        CompilationUnitSyntax fileRoot;
+        try
+        {
+            fileRoot = CSharpSyntaxTree.ParseText(wholeTypeSource).GetCompilationUnitRoot();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        var typeDeclaration = fileRoot.DescendantNodes()
+            .OfType<TypeDeclarationSyntax>()
+            .FirstOrDefault(candidate => candidate.Identifier.Text == receiverTypeName);
+        if (typeDeclaration is null)
+            return null;
+
+        var usings = fileRoot.Usings
+            .Select(usingDirective => usingDirective.ToFullString().Trim())
+            .Where(usingText => !string.IsNullOrWhiteSpace(usingText))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        // Whole-type decompilation lets ICSharpCode.Decompiler print a parameter's type as a
+        // short name (e.g. `SqlParameter[]?`) whenever the whole type's own imports make it
+        // locally unambiguous -- correct, from the decompiler's point of view, but this
+        // repository's own short-name-to-namespace guess (CSharpAnalyzer.ResolveKnownTypeIdentities,
+        // used identically for real, non-decompiled source) has no way to know that guess is
+        // right, and a type imported for an unrelated method elsewhere in this same class can
+        // out-rank the correct one. Qualifying every parameter type here, directly from this
+        // method's own real metadata rather than a name guess, means the text handed to that
+        // shared resolver is already unambiguous and needs no guessing at all.
+        var methodsByShape = declaredMethods
+            .Where(method => !IsConstructorLike(method.Name))
+            .ToLookup(method => (method.Name, ParameterShapeSignature(method)));
+        var members = typeDeclaration.Members
+            .Select(member => member is MethodDeclarationSyntax methodSyntax
+                ? QualifyParameterTypes(methodSyntax, UniqueMatchOrNull(
+                    methodsByShape[(methodSyntax.Identifier.Text, ParameterShapeSignature(methodSyntax))]))
+                : member)
+            .Select(member => member.ToFullString())
+            .ToList();
+
+        // A declared method absent from the decompiled type's own members is exactly what the
+        // per-method path below reports as a translation problem for that one method: this
+        // repository always surfaces such a method by name rather than letting it silently vanish.
+        // A constructor is never classified as a wrapper method either way (it decompiles as a
+        // ConstructorDeclarationSyntax, not a MethodDeclarationSyntax) -- reporting it "missing"
+        // here would be a false positive, not a real translation problem.
+        var decompiledMethodNames = typeDeclaration.Members
+            .OfType<MethodDeclarationSyntax>()
+            .Select(method => method.Identifier.Text)
+            .ToHashSet(StringComparer.Ordinal);
+        var missingMethods = declaredMethods
+            .Where(method => !IsConstructorLike(method.Name) && !decompiledMethodNames.Contains(method.Name))
+            .ToList();
+
+        return (
+            usings,
+            members,
+            missingMethods.Select(method => method.Name).ToList(),
+            missingMethods
+                .Select(method => BuildTranslationProblemDefinition(receiverTypeName, method, assemblyIdentity))
+                .ToList()
+        );
+    }
+
+    private static bool IsConstructorLike(string methodName) => methodName.StartsWith('.');
+
+    /// <summary>A same-name, same-arity overload pair that differs only in whether one parameter
+    /// is an array (e.g. SQLFunc's own `CreateReader(string, SqlParameter)` next to
+    /// `CreateReader(string, SqlParameter[])`) is common enough in this registry's own fixtures
+    /// that arity alone is not a safe key for matching a decompiled method back to its real
+    /// metadata. Array-ness of each parameter, cheap to read from either side and already exactly
+    /// what tells such a pair apart syntactically, extends the key enough to keep them distinct.
+    /// </summary>
+    private static string ParameterShapeSignature(ICSharpCode.Decompiler.TypeSystem.IMethod method) =>
+        string.Concat(method.Parameters.Select(parameter =>
+            parameter.Type is ICSharpCode.Decompiler.TypeSystem.ArrayType ? 'A' : 'S'));
+
+    private static string ParameterShapeSignature(MethodDeclarationSyntax methodSyntax) =>
+        string.Concat(methodSyntax.ParameterList.Parameters.Select(parameter =>
+        {
+            var type = parameter.Type;
+            if (type is NullableTypeSyntax nullableSyntax)
+                type = nullableSyntax.ElementType;
+            return type is ArrayTypeSyntax ? 'A' : 'S';
+        }));
+
+    /// <summary>Only a uniquely bound method is trusted for the parameter-type substitution
+    /// above -- a same-name, same-arity, same-shape overload this repository's own real metadata
+    /// still cannot tell apart (an actual arity+shape collision, rather than the array-vs-not
+    /// case <see cref="ParameterShapeSignature(ICSharpCode.Decompiler.TypeSystem.IMethod)"/>
+    /// already resolves) is left for the pre-existing name-guess resolver rather than risking the
+    /// wrong overload's parameter types.</summary>
+    private static ICSharpCode.Decompiler.TypeSystem.IMethod? UniqueMatchOrNull(
+        IEnumerable<ICSharpCode.Decompiler.TypeSystem.IMethod> candidates)
+    {
+        using var enumerator = candidates.GetEnumerator();
+        if (!enumerator.MoveNext())
+            return null;
+        var match = enumerator.Current;
+        return enumerator.MoveNext() ? null : match;
+    }
+
+    /// <summary>Rewrites <paramref name="methodSyntax"/>'s own parameter types to their real,
+    /// fully qualified names, read directly from <paramref name="method"/>'s metadata rather than
+    /// guessed from the decompiled text -- see <see cref="TryDecompileWholeType"/>'s own remark on
+    /// why a name guess is not good enough here. A null <paramref name="method"/> (no unique
+    /// metadata match) or a parameter-count mismatch (should not happen once matched by arity, but
+    /// never trusted blindly) leaves the syntax exactly as decompiled.</summary>
+    private static MethodDeclarationSyntax QualifyParameterTypes(
+        MethodDeclarationSyntax methodSyntax,
+        ICSharpCode.Decompiler.TypeSystem.IMethod? method)
+    {
+        if (method is null)
+            return methodSyntax;
+        var parameters = methodSyntax.ParameterList.Parameters;
+        if (parameters.Count != method.Parameters.Count)
+            return methodSyntax;
+
+        var updated = methodSyntax;
+        for (var index = 0; index < parameters.Count; index++)
+        {
+            var originalParameter = parameters[index];
+            if (originalParameter.Type is null)
+                continue;
+            var qualifiedType = QualifyElementType(originalParameter.Type, method.Parameters[index].Type);
+            if (qualifiedType is null)
+                continue;
+            // Re-fetch the current parameter node by position: earlier iterations already
+            // replaced nodes in `updated`, so `originalParameter` itself may no longer be part
+            // of this method's own (updated) tree.
+            var currentParameter = updated.ParameterList.Parameters[index];
+            updated = updated.ReplaceNode(currentParameter, currentParameter.WithType(qualifiedType));
+        }
+        return updated;
+    }
+
+    /// <summary>Finds the innermost element-type name inside <paramref name="syntax"/> (unwrapping
+    /// `?` and `[]`) and, only when it is a short, undotted name (never a predefined type like
+    /// `string`), replaces just that name with <paramref name="realType"/>'s own real
+    /// namespace-qualified name. A `?` nullable-reference-type annotation directly on the
+    /// parameter is dropped, not just left in place: it is compile-time-only and erased at
+    /// runtime, so a real call site's own argument carries no equivalent annotation to match
+    /// against, and this repository's own parameter-type identity never carries one either (see
+    /// the fixture `_TRUE_PARAMETER_TYPES` in test_rating_time_command_mode.py and
+    /// test_delegation_alias.py -- deliberately `SqlParameter[]`, never `SqlParameter[]?`). An
+    /// array wrapper (`[]`) is kept exactly as decompiled; only the annotation is dropped. Null
+    /// means nothing needed replacing (a predefined type, or a shape this does not recognize) and
+    /// the original syntax is kept as-is.</summary>
+    private static TypeSyntax? QualifyElementType(
+        TypeSyntax syntax,
+        ICSharpCode.Decompiler.TypeSystem.IType realType)
+    {
+        var withoutNullableAnnotation = syntax is NullableTypeSyntax nullableSyntax
+            ? nullableSyntax.ElementType
+            : syntax;
+
+        var elementSyntax = withoutNullableAnnotation;
+        while (elementSyntax is ArrayTypeSyntax arraySyntax)
+            elementSyntax = arraySyntax.ElementType;
+        if (elementSyntax is not IdentifierNameSyntax identifier)
+            return null;
+
+        var effectiveRealType = realType is ICSharpCode.Decompiler.TypeSystem.ArrayType arrayType
+            ? arrayType.ElementType
+            : realType;
+        if (string.IsNullOrEmpty(effectiveRealType.Namespace))
+            return null;
+        var qualifiedName = $"{effectiveRealType.Namespace}.{effectiveRealType.Name}";
+        // ParseTypeName's result carries no trivia of its own; the space between the parameter's
+        // type and its name is trivia on the ORIGINAL type node (trailing) or the identifier
+        // token after it (leading) depending on how the decompiler printed it, so the new syntax
+        // must inherit the original's own trivia, not just its text -- dropping it silently
+        // concatenates the type and the parameter's name (e.g. `SqlParametervarParameter`).
+        var qualifiedSyntax = SyntaxFactory.ParseTypeName(qualifiedName).WithTriviaFrom(identifier);
+
+        // `identifier` is the whole (denullabled) type itself for a non-array parameter --
+        // `ReplaceNode` only replaces a proper descendant, never the root it is called on, so
+        // that case returns the qualified syntax directly rather than trying to replace a node
+        // within itself.
+        return ReferenceEquals(identifier, withoutNullableAnnotation)
+            ? qualifiedSyntax
+            : withoutNullableAnnotation.ReplaceNode(identifier, qualifiedSyntax);
+    }
+
+    /// <summary>
+    /// Decompiles one method at a time, the way this decompiler always worked before whole-type
+    /// decompilation (<see cref="TryDecompileWholeType"/>) became the first attempt. Each
+    /// per-method decompile emits its own leading `using` directives, which are not valid syntax
+    /// inside a class body: hoist and de-duplicate them above the wrapper class.
+    /// </summary>
+    private static (
+        List<string> Usings,
+        List<string> Members,
+        List<string> TranslationProblemMethods,
+        List<WrapperAnalyzer.WrapperDefinition> TranslationProblemDefinitions
+    ) DecompilePerMethod(
+        CSharpDecompiler decompiler,
+        IReadOnlyList<ICSharpCode.Decompiler.TypeSystem.IMethod> declaredMethods,
+        string receiverTypeName,
+        string assemblyIdentity)
+    {
+        var methodSources = new List<string>();
+        var translationProblemMethods = new List<string>();
+        var translationProblemDefinitions = new List<WrapperAnalyzer.WrapperDefinition>();
+        foreach (var method in declaredMethods)
+        {
+            try
+            {
+                methodSources.Add(decompiler.DecompileAsString(method.MetadataToken));
+            }
+            catch (Exception)
+            {
+                // The method's body could not be decompiled at all, so it never becomes a
+                // MethodDeclarationSyntax that CreateDefinition could classify; still surface it
+                // as a distinct, identifiable fact rather than letting it vanish from the output.
+                translationProblemMethods.Add(method.Name);
+                translationProblemDefinitions.Add(BuildTranslationProblemDefinition(
+                    receiverTypeName,
+                    method,
+                    assemblyIdentity));
+            }
+        }
+
+        var usings = new List<string>();
+        var members = new List<string>();
+        foreach (var methodSource in methodSources)
+        {
+            var snippetRoot = CSharpSyntaxTree.ParseText(methodSource).GetCompilationUnitRoot();
+            foreach (var usingDirective in snippetRoot.Usings)
+            {
+                var usingText = usingDirective.ToFullString().Trim();
+                if (!usings.Contains(usingText))
+                    usings.Add(usingText);
+            }
+            members.AddRange(snippetRoot.Members.Select(member => member.ToFullString()));
+        }
+
+        return (usings, members, translationProblemMethods, translationProblemDefinitions);
     }
 
     // A `using X.Y;` directive names an importable namespace this decompiled source's type

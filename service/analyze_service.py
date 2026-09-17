@@ -4076,6 +4076,177 @@ def refresh_source(
     }
 
 
+class ReDecompileError(RuntimeError):
+    """An explicit, named re-decompile request could not complete.
+
+    Raised instead of guessing or partially committing: ``code`` names
+    exactly which step stopped the attempt (sync, decompile, or accept), so
+    a caller never mistakes a stopped attempt for a silent no-op.
+    """
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
+def redecompile_wrapper_receiver(
+    source: dict,
+    receiver_type: str,
+) -> dict:
+    """Explicitly re-decompile one named external wrapper receiver type and
+    commit its result as a registry entry.
+
+    This is the maintainer bypass ADR-0005/0006 already describe --
+    ``StaticAnalyzerHost.decompile_wrapper(..., rerun=True)`` forcing a fresh
+    attempt past any cached one for that receiver's DLL only -- reached
+    through an entry point that runs regardless of whether this system
+    already has a valid ``wrapper_contract`` selector configured. It is
+    deliberately not `refresh_source()`: that function's decompile-based
+    onboarding only ever runs when a selector is unspecified (US2's own
+    "valid selector never triggers decompilation" guarantee, which this
+    function must not disturb), and its Contract Preflight short-circuits to
+    "selected" without even looking at new proposals once a selector already
+    resolves. Calling this function requires naming the receiver type
+    explicitly; it never runs as a side effect of a bare, selector-less
+    refresh.
+
+    Contract acceptance for the result reuses `run_contract_preflight` with
+    no selector, so a fresh proposal is evaluated the same way a from-scratch
+    onboarding attempt would be: reused when its Contract Fingerprint matches
+    an existing entry, created under the existing fingerprint-suffix
+    collision convention otherwise (ADR-0006). The commit that follows never
+    touches any system's catalog selector (`staged_selector=None`) -- only
+    the registry gains the new entry; repointing a System's selector at it is
+    a separate, explicit step.
+
+    Needs no live database connection: syncing the checkout, scanning it, and
+    decompiling the referenced DLL are all local operations, never a SQL
+    Server round trip.
+    """
+    normalized_receiver = str(receiver_type or "").strip()
+    if not normalized_receiver:
+        raise ReDecompileError(
+            "receiver_type_required",
+            "receiver_type 不可為空：這個入口只接受明確命名一個 receiver type 的請求，"
+            "不會退化成 selector-less 的整批重新掃描。",
+        )
+
+    try:
+        roots = resolve_scan_roots(source, refresh=True)
+    except (AzureFetchError, ValueError) as exc:
+        raise ReDecompileError("checkout_sync_failed", str(exc)) from exc
+    if not roots:
+        raise ReDecompileError(
+            "checkout_sync_failed", "resolve_scan_roots 未回傳任何可掃描的路徑。"
+        )
+    root = roots[0]
+
+    scan = get_or_scan(root, refresh=True)
+    external_sources = _external_wrapper_sources(scan)
+    matched_receiver = next(
+        (
+            name
+            for name in external_sources
+            if name.casefold() == normalized_receiver.casefold()
+        ),
+        None,
+    )
+    if matched_receiver is None:
+        raise ReDecompileError(
+            "receiver_not_referenced",
+            f"掃描結果中找不到外部 wrapper receiver：{normalized_receiver}",
+        )
+
+    csproj_path = _find_source_csproj(root, external_sources[matched_receiver])
+    if csproj_path is None:
+        raise ReDecompileError(
+            "csproj_not_found",
+            f"找不到 {matched_receiver} 對應、且唯一可判定的 .csproj。",
+        )
+
+    try:
+        host = StaticAnalyzerHost.for_project(Path(__file__).resolve().parent.parent)
+        host.ensure_ready()
+    except StaticAnalyzerHostError as exc:
+        raise ReDecompileError("decompiler_host_unavailable", str(exc)) from exc
+
+    try:
+        response = host.decompile_wrapper(csproj_path, matched_receiver, rerun=True)
+    except StaticAnalyzerHostError as exc:
+        raise ReDecompileError("decompiler_failed", str(exc)) from exc
+
+    attempt = _decompilation_attempt_record(
+        response, receiver_type=matched_receiver, csproj_path=csproj_path
+    )
+
+    proposals_raw = response.get("contract_proposals") or []
+    if isinstance(proposals_raw, Mapping):
+        proposals_raw = [proposals_raw]
+    delegated_methods = response.get("delegated_methods")
+    staged_proposals: list[dict[str, Any]] = []
+    for proposal in proposals_raw:
+        if not isinstance(proposal, Mapping):
+            continue
+        proposal_entry = dict(proposal)
+        if not str(proposal_entry.get("evidence_kind") or "").strip():
+            proposal_entry["evidence_kind"] = DECOMPILED_AUTO_EVIDENCE_KIND
+        if delegated_methods:
+            snapshot = proposal_entry.get("implementation_snapshot")
+            if isinstance(snapshot, Mapping) and not snapshot.get("delegated_methods"):
+                snapshot = dict(snapshot)
+                snapshot["delegated_methods"] = list(delegated_methods)
+                proposal_entry["implementation_snapshot"] = snapshot
+        staged_proposals.append(proposal_entry)
+
+    if not staged_proposals:
+        raise ReDecompileError(
+            "decompilation_incomplete",
+            f"{matched_receiver} 的反編譯結果不完整，未產生任何可接受的 Contract 提案："
+            f"{attempt.get('detail') or attempt.get('reasons')}",
+        )
+
+    scan.contract_proposals = staged_proposals
+    registry = load_contract_registry()
+    preflight = run_contract_preflight(
+        [scan],
+        selector=None,
+        registry=registry,
+        allow_onboarding=True,
+    )
+    if preflight.onboarding_status not in _ONBOARDING_STATUSES_ELIGIBLE_FOR_COMMIT:
+        raise ReDecompileError(
+            "contract_not_accepted",
+            f"反編譯結果未能形成可接受的 Contract（onboarding_status="
+            f"{preflight.onboarding_status!r}，reason={preflight.reason!r}）。",
+        )
+
+    try:
+        transaction = commit_staged_contract_transaction(
+            staged_registry=preflight.staged_registry or {"contracts": {}},
+            trigger="manual_acceptance",
+            staged_selector=None,
+            system_id="",
+            registry_path=CONTRACT_TRANSACTION_REGISTRY_PATH,
+            catalog_path=CONTRACT_TRANSACTION_CATALOG_PATH,
+            source_revision={
+                "scan_root": str(root),
+                "source_commit": cached_commit(root) or "",
+                "receiver_type": matched_receiver,
+            },
+        )
+    except ContractTransactionError as exc:
+        raise ReDecompileError("commit_failed", str(exc)) from exc
+
+    return {
+        "receiver_type": matched_receiver,
+        "csproj_path": str(csproj_path),
+        "decompilation_attempt": attempt,
+        "onboarding_status": preflight.onboarding_status,
+        "contract_names": _selector_names(preflight.formal_selector),
+        "contract_transaction": transaction,
+    }
+
+
 def refresh_sql_source(
     database: str,
     server: str,

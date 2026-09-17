@@ -257,9 +257,9 @@ def test_delegation_shapes_are_classified_correctly() -> None:
 # fourth, `usp_ExecCmdGetJsonObjectListAsync`, that ticket 01 measured as constructing its own
 # command directly and classifying on its own).
 REAL_DELEGATIONS = {
-    "SQLDbContext.usp_ExecCmdGetFisrtValueAsync(string,Microsoft.EntityFrameworkCore.SqlParameter[]?,bool)": "usp_ExecCmdGetDataTableAsync",
-    "SQLDbContext.usp_ExecCmdGetDataTableAsync(string,Microsoft.EntityFrameworkCore.SqlParameter[]?,bool)": "usp_ExecCmdGetDataSetAsync",
-    "SQLDbContext.usp_ExecCmdGetJsonObjectAsync(string,Microsoft.EntityFrameworkCore.SqlParameter[]?,bool)": "usp_ExecCmdGetJsonObjectListAsync",
+    "SQLDbContext.usp_ExecCmdGetFisrtValueAsync(string,Microsoft.Data.SqlClient.SqlParameter[],bool)": "usp_ExecCmdGetDataTableAsync",
+    "SQLDbContext.usp_ExecCmdGetDataTableAsync(string,Microsoft.Data.SqlClient.SqlParameter[],bool)": "usp_ExecCmdGetDataSetAsync",
+    "SQLDbContext.usp_ExecCmdGetJsonObjectAsync(string,Microsoft.Data.SqlClient.SqlParameter[],bool)": "usp_ExecCmdGetJsonObjectListAsync",
 }
 
 
