@@ -146,7 +146,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 位在 rating time 決定 call_site Contract 的 Command Mode。舊快取的
 # db_invocations 沒有這個欄位，call_site 方法因此答不出剛才被接受的 Contract，
 # 必須重新掃描才會補上。
-_CACHE_VERSION = 36
+# v37：RazorParser 的 `_extract_ui_fields` 新增 `@Html.<Method>For(<lambda>,
+# ...)` Helper 辨識（見 `.scratch/razor-ui-fields-cover-html-for-helpers/
+# spec.md`）：DisplayNameFor/LabelFor 貢獻 label、DisplayFor 貢獻 value、
+# TextBoxFor/TextAreaFor 貢獻 input，HiddenFor 不貢獻。舊快取的 razor_results
+# 之 ui_fields 對這些 Helper 一律是空清單，必須重新掃描才會補上。
+_CACHE_VERSION = 37
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

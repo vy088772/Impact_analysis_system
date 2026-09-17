@@ -53,3 +53,67 @@ def test_a_model_bound_label_with_no_text_contributes_only_the_model_property(
     result = _parse(tmp_path, '<label asp-for="OrderNo"></label>')
 
     assert result.ui_fields == [{"kind": "label", "data_field": "OrderNo"}]
+
+
+def test_display_name_for_with_a_direct_binding_produces_a_label_entry(
+    tmp_path: Path,
+) -> None:
+    result = _parse(tmp_path, "@Html.DisplayNameFor(m => m.OrderNo)")
+
+    assert result.ui_fields == [{"kind": "label", "data_field": "OrderNo"}]
+
+
+def test_label_for_with_a_direct_binding_produces_a_label_entry(
+    tmp_path: Path,
+) -> None:
+    result = _parse(tmp_path, "@Html.LabelFor(m => m.OrderNo)")
+
+    assert result.ui_fields == [{"kind": "label", "data_field": "OrderNo"}]
+
+
+def test_display_for_with_a_direct_binding_produces_a_value_entry(
+    tmp_path: Path,
+) -> None:
+    result = _parse(tmp_path, "@Html.DisplayFor(m => m.OrderNo)")
+
+    assert result.ui_fields == [{"kind": "value", "data_field": "OrderNo"}]
+
+
+def test_text_box_for_with_a_direct_binding_produces_an_input_entry(
+    tmp_path: Path,
+) -> None:
+    result = _parse(
+        tmp_path, '@Html.TextBoxFor(m => m.OrderNo, new { @class = "form-control" })'
+    )
+
+    assert result.ui_fields == [{"kind": "input", "data_field": "OrderNo"}]
+
+
+def test_text_area_for_with_a_direct_binding_produces_an_input_entry(
+    tmp_path: Path,
+) -> None:
+    result = _parse(tmp_path, "@Html.TextAreaFor(m => m.Memo)")
+
+    assert result.ui_fields == [{"kind": "input", "data_field": "Memo"}]
+
+
+def test_hidden_for_produces_no_ui_fields_entry(tmp_path: Path) -> None:
+    result = _parse(tmp_path, "@Html.HiddenFor(m => m.OrderNo)")
+
+    assert result.ui_fields == []
+
+
+def test_a_collection_indexed_binding_produces_raw_text_with_no_data_field(
+    tmp_path: Path,
+) -> None:
+    result = _parse(tmp_path, "@Html.DisplayFor(m => m.Items[i].Property)")
+
+    assert result.ui_fields == [{"kind": "value", "text": "m.Items[i].Property"}]
+
+
+def test_a_non_model_lambda_parameter_binding_produces_raw_text_with_no_data_field(
+    tmp_path: Path,
+) -> None:
+    result = _parse(tmp_path, "@Html.DisplayFor(item => item.UserName)")
+
+    assert result.ui_fields == [{"kind": "value", "text": "item.UserName"}]

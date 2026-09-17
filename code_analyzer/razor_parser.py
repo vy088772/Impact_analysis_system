@@ -67,6 +67,27 @@ class RazorParser:
     LABEL_PATTERN = re.compile(r'<label\b([^>]*)>(.*?)</label>', re.IGNORECASE | re.DOTALL)
     ASP_FOR_PATTERN = re.compile(r'asp-for\s*=\s*"([^"]+)"', re.IGNORECASE)
 
+    # `@Html.<Method>For(<lambda>, ...)` Helpers — this codebase's MVC-style
+    # views label and bind fields through these instead of asp-for. Scoped to
+    # the five Helpers actually observed plus the excluded HiddenFor (see
+    # `.scratch/razor-ui-fields-cover-html-for-helpers/spec.md`).
+    HTML_FOR_HELPER_PATTERN = re.compile(
+        r'@Html\.(DisplayNameFor|LabelFor|DisplayFor|TextBoxFor|TextAreaFor|HiddenFor)\('
+        r'\s*\w+\s*=>\s*([^,)]+?)\s*[,)]'
+    )
+    _HTML_FOR_HELPER_KIND = {
+        'DisplayNameFor': 'label',
+        'LabelFor': 'label',
+        'DisplayFor': 'value',
+        'TextBoxFor': 'input',
+        'TextAreaFor': 'input',
+    }
+    # Only a direct `m.Property`/`Model.Property` binding resolves safely
+    # against the view's own @model class. A collection-indexed binding or a
+    # binding through any other identifier (a foreach loop variable, for
+    # example) names a property on some other type.
+    _DIRECT_MODEL_BINDING_PATTERN = re.compile(r'^(?:m|Model)\.([A-Za-z_]\w*)$')
+
     # View Anchor（見 CONTEXT.md「View Anchor」條目）。決定式：markup 層的
     # asp-action/asp-controller/asp-page 屬性，或純 HTML <form action="...">。
     ANCHOR_TAG_ATTRS_PATTERN = re.compile(r'<\w+\b([^>]*)>', re.IGNORECASE)
@@ -309,7 +330,7 @@ class RazorParser:
 
     def _extract_ui_fields(self, content: str) -> List[Dict]:
         """
-        擷取畫面上實際顯示給使用者看的欄位文字，來源有二：
+        擷取畫面上實際顯示給使用者看的欄位文字，來源有三：
 
         1. 純 HTML 標記文字——`<th>` 欄位標題、`<label>` 內的文字。
         2. 模型繫結屬性（`asp-for="Prop"`）命名的模型屬性——當 `<label>` 完全沒有
@@ -319,6 +340,14 @@ class RazorParser:
            進一步解析出實際顯示文字，由 `razor_display_field_resolver`（讀取
            模型類別與 .resx 資源檔）在掃描完 C# 檔案後接手，這個解析器只看得到
            單一 .cshtml 檔案，看不到模型類別。
+        3. `@Html.<Method>For(<lambda>, ...)` Helper 呼叫——這個 codebase 的
+           MVC-style 畫面絕大多數用這組 Helper 標記與繫結欄位，而不是
+           asp-for。依 Helper 分類成 label/value/input（`HiddenFor` 不貢獻任
+           何項目），lambda 繫結的屬性若是直接的 `m.Property`／
+           `Model.Property` 形狀，同樣貢獻 `data_field` 交給
+           `razor_display_field_resolver` 解析；集合索引或非 m/Model 參數
+           的繫結（例如 foreach 迴圈變數）只留下原始繫結運算式當 `text`，不
+           貢獻 `data_field`，避免解析器誤配到其他型別同名的屬性上。
         """
         fields: List[Dict] = []
 
@@ -339,6 +368,19 @@ class RazorParser:
                 entry['data_field'] = asp_for.group(1)
             if text or asp_for:
                 fields.append(entry)
+
+        for match in self.HTML_FOR_HELPER_PATTERN.finditer(content):
+            method_name = match.group(1)
+            if method_name == 'HiddenFor':
+                continue
+            bound_expression = match.group(2).strip()
+            helper_entry: Dict[str, str] = {'kind': self._HTML_FOR_HELPER_KIND[method_name]}
+            direct_match = self._DIRECT_MODEL_BINDING_PATTERN.match(bound_expression)
+            if direct_match:
+                helper_entry['data_field'] = direct_match.group(1)
+            else:
+                helper_entry['text'] = bound_expression
+            fields.append(helper_entry)
 
         return fields
 
