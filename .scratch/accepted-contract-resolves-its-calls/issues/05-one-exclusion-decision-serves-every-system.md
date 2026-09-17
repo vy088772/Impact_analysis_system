@@ -20,15 +20,32 @@ System's list.
 
 **Blocked by:** 01 — The ADRs and the glossary record the decisions.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] An entry under `_global` applies to a System that has no list of its own
-- [ ] An entry under `_global` applies to a System that has a list of its own,
+**Note:** `load_wrapper_review_exclusions()` in
+`code_analyzer/csharp_analysis_gateway.py` now merges the `_global` tier with
+a System's own list, keyed by `(receiver_type, method_name)`; the System's own
+entry wins on a matching key. A new `_wrapper_review_exclusion_key()` helper
+computes that key and is shared with `_normalize_wrapper_review_exclusions()`
+so the key shape has one definition. `config/wrapper_review_exclusions.json`
+moved STC's 17 framework-method entries (Add, Combine, Create, Exists,
+FindByValue, FindControl, Format, GetExtension, HtmlEncode, IndexOf, Join,
+MapPath, Replace, SendMail, Write, DataTable.Select, string.Replace) to
+`_global`. STC's own `bindConsignee` (a local helper, not framework) and
+IQCS's own `ViewPath`/`IUtilityService` (an application-defined interface, not
+framework) stayed in their System's list. Reviewed via `/code-review`
+(Standards + Spec axes, both parallel sub-agents): Spec axis found full
+checklist coverage with correct classification and no scope creep; Standards
+axis flagged one Duplicated Code judgement call, now fixed by the shared key
+helper above.
+
+- [x] An entry under `_global` applies to a System that has no list of its own
+- [x] An entry under `_global` applies to a System that has a list of its own,
       alongside that System's entries
-- [ ] A System's own entry wins over a global entry for the same receiver type
+- [x] A System's own entry wins over a global entry for the same receiver type
       and method name
-- [ ] `_global` is never treated as a System identifier when a System is looked
+- [x] `_global` is never treated as a System identifier when a System is looked
       up by name
-- [ ] The framework entries already recorded for one System move to the global
+- [x] The framework entries already recorded for one System move to the global
       tier, and that System reports the same exclusions as before the move
-- [ ] An entry naming a System's own custom type stays in that System's list
+- [x] An entry naming a System's own custom type stays in that System's list

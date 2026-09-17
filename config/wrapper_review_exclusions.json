@@ -1,22 +1,10 @@
 {
   "systems": {
-    "IQCS": [
-      {
-        "receiver_type": "IUtilityService",
-        "method_name": "ViewPath",
-        "reason": "reviewed_2026-09-16_not_sqlfunc_utilityservice_builds_view_path_string_only"
-      }
-    ],
-    "STC": [
+    "_global": [
       {
         "receiver_type": "",
         "method_name": "Add",
         "reason": "reviewed_2026-08-14_not_sqlfunc_dictionary_or_collection_add"
-      },
-      {
-        "receiver_type": "",
-        "method_name": "bindConsignee",
-        "reason": "reviewed_2026-08-14_not_sqlfunc_local_helper_method"
       },
       {
         "receiver_type": "",
@@ -97,6 +85,20 @@
         "receiver_type": "string",
         "method_name": "Replace",
         "reason": "reviewed_2026-08-14_not_sqlfunc_string_replace"
+      }
+    ],
+    "IQCS": [
+      {
+        "receiver_type": "IUtilityService",
+        "method_name": "ViewPath",
+        "reason": "reviewed_2026-09-16_not_sqlfunc_utilityservice_builds_view_path_string_only"
+      }
+    ],
+    "STC": [
+      {
+        "receiver_type": "",
+        "method_name": "bindConsignee",
+        "reason": "reviewed_2026-08-14_not_sqlfunc_local_helper_method"
       }
     ]
   }

@@ -508,9 +508,12 @@ def test_wrapper_review_exclusion_is_scoped_to_exact_receiver_and_method() -> No
 
 def test_stc_wrapper_review_exclusions_are_loaded_from_repository_config() -> None:
     """Regression guard tying config/wrapper_review_exclusions.json to the
-    loader: the reviewed STC framework-method false positives (Add, Write,
-    FindControl, DataTable.Select, string.Replace, ...) must still resolve,
-    and an unrelated system id must see no exclusions at all."""
+    loader: the reviewed framework-method false positives (Add, Write,
+    FindControl, DataTable.Select, string.Replace, ...) now live in the
+    Global Exclusion Tier and must still resolve for STC, alongside STC's
+    own `bindConsignee` entry. An unrelated system id sees the same global
+    entries, since a decision that holds for every system needs no per-system
+    copy. An empty system id still sees no exclusions at all."""
     stc_exclusions = gateway_module.load_wrapper_review_exclusions("STC")
     normalized = gateway_module._normalize_wrapper_review_exclusions(stc_exclusions)
 
@@ -518,9 +521,112 @@ def test_stc_wrapper_review_exclusions_are_loaded_from_repository_config() -> No
     assert normalized[("", "findcontrol")]
     assert normalized[("datatable", "select")]
     assert normalized[("string", "replace")]
+    assert normalized[("", "bindconsignee")] == "reviewed_2026-08-14_not_sqlfunc_local_helper_method"
 
-    assert gateway_module.load_wrapper_review_exclusions("PUR") == ()
+    pur_exclusions = gateway_module.load_wrapper_review_exclusions("PUR")
+    pur_normalized = gateway_module._normalize_wrapper_review_exclusions(pur_exclusions)
+    assert pur_normalized[("", "add")] == "reviewed_2026-08-14_not_sqlfunc_dictionary_or_collection_add"
+    assert ("", "bindconsignee") not in pur_normalized
+
     assert gateway_module.load_wrapper_review_exclusions("") == ()
+
+
+def test_global_exclusion_tier_applies_to_a_system_with_no_list_of_its_own(monkeypatch) -> None:
+    """A framework decision recorded once under `_global` reaches a system
+    that has never had its own exclusion list at all."""
+    monkeypatch.setattr(
+        gateway_module,
+        "_load_wrapper_review_exclusions_registry",
+        lambda: {
+            "_global": (
+                {"receiver_type": "", "method_name": "Format", "reason": "framework_string_format"},
+            ),
+        },
+    )
+
+    exclusions = gateway_module.load_wrapper_review_exclusions("NewSystem")
+    normalized = gateway_module._normalize_wrapper_review_exclusions(exclusions)
+
+    assert normalized[("", "format")] == "framework_string_format"
+
+
+def test_global_exclusion_tier_applies_alongside_a_systems_own_list(monkeypatch) -> None:
+    """A system that already keeps its own list still inherits the global
+    entries that are not already decided by that system's own list."""
+    monkeypatch.setattr(
+        gateway_module,
+        "_load_wrapper_review_exclusions_registry",
+        lambda: {
+            "_global": (
+                {"receiver_type": "", "method_name": "Format", "reason": "framework_string_format"},
+            ),
+            "STC": (
+                {"receiver_type": "", "method_name": "bindConsignee", "reason": "stc_local_helper"},
+            ),
+        },
+    )
+
+    exclusions = gateway_module.load_wrapper_review_exclusions("STC")
+    normalized = gateway_module._normalize_wrapper_review_exclusions(exclusions)
+
+    assert normalized[("", "format")] == "framework_string_format"
+    assert normalized[("", "bindconsignee")] == "stc_local_helper"
+
+
+def test_a_systems_own_entry_wins_over_a_global_entry_for_the_same_key(monkeypatch) -> None:
+    """A name that means something different in one system keeps an escape
+    route: the system's own entry for that exact receiver/method pair wins
+    over the global tier's entry for the same pair."""
+    monkeypatch.setattr(
+        gateway_module,
+        "_load_wrapper_review_exclusions_registry",
+        lambda: {
+            "_global": (
+                {"receiver_type": "", "method_name": "Format", "reason": "global_reason"},
+            ),
+            "STC": (
+                {"receiver_type": "", "method_name": "Format", "reason": "stc_specific_reason"},
+            ),
+        },
+    )
+
+    exclusions = gateway_module.load_wrapper_review_exclusions("STC")
+    normalized = gateway_module._normalize_wrapper_review_exclusions(exclusions)
+
+    assert normalized[("", "format")] == "stc_specific_reason"
+
+
+def test_global_is_never_treated_as_a_system_identifier(monkeypatch) -> None:
+    """Looking a system up by the name `_global` must not return the global
+    tier's own entries -- `_global` is a tier, not a system."""
+    monkeypatch.setattr(
+        gateway_module,
+        "_load_wrapper_review_exclusions_registry",
+        lambda: {
+            "_global": (
+                {"receiver_type": "", "method_name": "Format", "reason": "framework_string_format"},
+            ),
+        },
+    )
+
+    assert gateway_module.load_wrapper_review_exclusions("_global") == ()
+    assert gateway_module.load_wrapper_review_exclusions("_GLOBAL") == ()
+
+
+def test_a_systems_own_custom_type_entry_stays_in_that_systems_list() -> None:
+    """IQCS's `IUtilityService.ViewPath` entry names IQCS's own custom
+    interface, not framework behavior, so it stays in IQCS's own list rather
+    than moving to the global tier."""
+    registry = gateway_module._load_wrapper_review_exclusions_registry()
+
+    iqcs_keys = {gateway_module._wrapper_review_exclusion_key(entry) for entry in registry["IQCS"]}
+    assert ("iutilityservice", "viewpath") in iqcs_keys
+
+    global_keys = {
+        gateway_module._wrapper_review_exclusion_key(entry)
+        for entry in registry.get(gateway_module.GLOBAL_EXCLUSION_TIER_KEY, ())
+    }
+    assert ("iutilityservice", "viewpath") not in global_keys
 
 
 def test_external_contract_without_receiver_identity_cannot_be_selected() -> None:

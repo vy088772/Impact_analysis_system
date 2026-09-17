@@ -805,6 +805,13 @@ def _normalize_external_wrapper_contract_registry(
     return loaded_contracts
 
 
+def _wrapper_review_exclusion_key(entry: Mapping[str, Any]) -> tuple[str, str]:
+    """The exact (receiver, method) pair one exclusion entry decides for."""
+    receiver_type = _text_fact(entry.get("receiver_type"))
+    method_name = _text_fact(entry.get("method_name") or entry.get("wrapper_method"))
+    return (receiver_type.casefold(), method_name.casefold())
+
+
 def _normalize_wrapper_review_exclusions(
     exclusions: Optional[Iterable[Mapping[str, Any]]],
 ) -> Dict[tuple[str, str], str]:
@@ -820,13 +827,15 @@ def _normalize_wrapper_review_exclusions(
     for entry in exclusions or ():
         if not isinstance(entry, Mapping):
             continue
-        method_name = _text_fact(entry.get("method_name") or entry.get("wrapper_method"))
-        if not method_name:
+        receiver_key, method_key = _wrapper_review_exclusion_key(entry)
+        if not method_key:
             continue
-        receiver_type = _text_fact(entry.get("receiver_type"))
         reason = _text_fact(entry.get("reason")) or "reviewed_non_wrapper_method"
-        normalized[(receiver_type.casefold(), method_name.casefold())] = reason
+        normalized[(receiver_key, method_key)] = reason
     return normalized
+
+
+GLOBAL_EXCLUSION_TIER_KEY = "_global"
 
 
 def _load_wrapper_review_exclusions_registry() -> Dict[str, tuple[Dict[str, Any], ...]]:
@@ -859,12 +868,21 @@ def load_wrapper_review_exclusions(system: str) -> tuple[Dict[str, Any], ...]:
     receiver type could not be resolved locally and is not actually a
     database wrapper call. Scoped per system so the same method name can be
     treated differently across unrelated codebases.
+
+    The registry also holds a Global Exclusion Tier under the key
+    ``_global``. Every entry there applies to every system, so a decision
+    that never changes between systems -- a framework method that is never a
+    database wrapper -- is reviewed once instead of once per system. A
+    system's own entry for the same receiver type and method name wins over
+    the global one, leaving an escape route for a name that means something
+    different in one system. ``_global`` is itself never treated as a system
+    id: looking it up by name returns no exclusions.
     """
     normalized_system = str(system or "").strip().casefold()
-    if not normalized_system:
+    if not normalized_system or normalized_system == GLOBAL_EXCLUSION_TIER_KEY:
         return ()
     registry = _load_wrapper_review_exclusions_registry()
-    return next(
+    system_rules = next(
         (
             rules
             for key, rules in registry.items()
@@ -872,6 +890,16 @@ def load_wrapper_review_exclusions(system: str) -> tuple[Dict[str, Any], ...]:
         ),
         (),
     )
+    global_rules = registry.get(GLOBAL_EXCLUSION_TIER_KEY, ())
+    if not global_rules:
+        return system_rules
+    if not system_rules:
+        return global_rules
+    system_keys = {_wrapper_review_exclusion_key(entry) for entry in system_rules}
+    inherited_global_rules = tuple(
+        entry for entry in global_rules if _wrapper_review_exclusion_key(entry) not in system_keys
+    )
+    return system_rules + inherited_global_rules
 
 
 def load_external_wrapper_contract(contract_name: str) -> Optional[Dict[str, Any]]:
