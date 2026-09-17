@@ -805,11 +805,21 @@ def _normalize_external_wrapper_contract_registry(
     return loaded_contracts
 
 
+def wrapper_review_exclusion_key(receiver_type: str, method_name: str) -> tuple[str, str]:
+    """The exact (receiver, method) identity every exclusion consumer keys on.
+
+    Public so a consumer outside this module (the Exclusion Candidate Tool,
+    ticket 06) computes the same identity a registry entry does, rather than
+    re-deriving its own case-fold rule that could quietly drift from this one.
+    """
+    return (str(receiver_type or "").strip().casefold(), str(method_name or "").strip().casefold())
+
+
 def _wrapper_review_exclusion_key(entry: Mapping[str, Any]) -> tuple[str, str]:
     """The exact (receiver, method) pair one exclusion entry decides for."""
     receiver_type = _text_fact(entry.get("receiver_type"))
     method_name = _text_fact(entry.get("method_name") or entry.get("wrapper_method"))
-    return (receiver_type.casefold(), method_name.casefold())
+    return wrapper_review_exclusion_key(receiver_type, method_name)
 
 
 def _normalize_wrapper_review_exclusions(
@@ -900,6 +910,28 @@ def load_wrapper_review_exclusions(system: str) -> tuple[Dict[str, Any], ...]:
         entry for entry in global_rules if _wrapper_review_exclusion_key(entry) not in system_keys
     )
     return system_rules + inherited_global_rules
+
+
+def known_framework_receiver_types() -> frozenset[str]:
+    """The receiver types the Global Exclusion Tier already treats as framework behaviour.
+
+    A maintainer who moved a receiver type's exclusion entry to ``_global`` (for
+    example ``DataTable`` or ``string``) has already decided that type describes
+    framework behaviour, not one System's own code. The Exclusion Candidate Tool
+    (ticket 06) reuses that same decision: a new candidate whose receiver type is
+    already known here is proposed for the global tier, so the same type is never
+    reviewed twice under two different names. Names are casefolded, matching every
+    other lookup in this registry.
+    """
+    registry = _load_wrapper_review_exclusions_registry()
+    return frozenset(
+        receiver_type
+        for receiver_type, _method_type in (
+            _wrapper_review_exclusion_key(entry)
+            for entry in registry.get(GLOBAL_EXCLUSION_TIER_KEY, ())
+        )
+        if receiver_type
+    )
 
 
 def load_external_wrapper_contract(contract_name: str) -> Optional[Dict[str, Any]]:

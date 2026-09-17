@@ -629,6 +629,39 @@ def test_a_systems_own_custom_type_entry_stays_in_that_systems_list() -> None:
     assert ("iutilityservice", "viewpath") not in global_keys
 
 
+def test_known_framework_receiver_types_reads_the_global_tiers_own_receiver_types(monkeypatch) -> None:
+    """Ticket 06 (Exclusion Candidate Tool): a receiver type a maintainer already
+    moved to `_global` (DataTable, string, ...) is a type the tool can recognize
+    for a brand-new candidate too, without a second hardcoded list."""
+    monkeypatch.setattr(
+        gateway_module,
+        "_load_wrapper_review_exclusions_registry",
+        lambda: {
+            "_global": (
+                {"receiver_type": "DataTable", "method_name": "Select", "reason": "r"},
+                {"receiver_type": "", "method_name": "Format", "reason": "r"},
+            ),
+            "IQCS": (
+                {"receiver_type": "IUtilityService", "method_name": "ViewPath", "reason": "r"},
+            ),
+        },
+    )
+
+    known = gateway_module.known_framework_receiver_types()
+
+    assert known == frozenset({"datatable"})
+
+
+def test_known_framework_receiver_types_is_empty_when_the_global_tier_has_none(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gateway_module,
+        "_load_wrapper_review_exclusions_registry",
+        lambda: {"_global": ()},
+    )
+
+    assert gateway_module.known_framework_receiver_types() == frozenset()
+
+
 def test_external_contract_without_receiver_identity_cannot_be_selected() -> None:
     gateway = CSharpAnalysisGateway(
         SpCatalog.from_databases({"OrdersDb": ["usp_SaveOrder"]}),
