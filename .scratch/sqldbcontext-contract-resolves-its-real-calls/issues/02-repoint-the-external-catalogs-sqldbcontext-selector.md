@@ -10,14 +10,31 @@ different System could carry a different Contract Fingerprint entirely.
 **Blocked by:** 01 — Re-decompile and accept sqldbcontext against its real
 parameter types (the new entry's name is only known once that ticket lands).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The external system catalog is checked directly for every System whose
+- [x] The external system catalog is checked directly for every System whose
       `wrapper_contract` names `sqldbcontext` today.
-- [ ] Each System found there (today expected to be IQCS alone) has its
+- [x] Each System found there (today expected to be IQCS alone) has its
       `wrapper_contract` field repointed to the new entry's name.
-- [ ] No other field on that System's entry, and no other System's entry, is
+- [x] No other field on that System's entry, and no other System's entry, is
       touched.
-- [ ] The edit is made in the catalog repository's working tree only; the
+- [x] The edit is made in the catalog repository's working tree only; the
       commit there is left to that repository's own owner, since this
       repository does not own it.
+
+## Note (implementation)
+
+**The check.** Searched `llamaindex-spec-rag/catalog/system_catalog.json`
+(case-insensitive, whole file) for `sqldbcontext`. One match:
+`system_id: "IQCS"`, `wrapper_contract: "sqldbcontext"`, line 863. No other
+System entry names it, so IQCS alone was in scope — matching ticket 01's
+expectation, but confirmed against the catalog itself, not assumed.
+
+**The edit.** `wrapper_contract` on the IQCS entry changed from
+`"sqldbcontext"` to `"sqldbcontext-53e5d16df832"` (ticket 01's new registry
+entry). `git diff` in `llamaindex-spec-rag` shows exactly one changed line,
+one field, one System entry — nothing else in the file touched.
+
+**Left uncommitted.** The edit sits in `llamaindex-spec-rag`'s working tree.
+That repository is not owned here, so no commit was made there; its own owner
+commits it.
