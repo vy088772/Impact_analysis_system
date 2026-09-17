@@ -16,7 +16,7 @@ anything either -- the caller decides what, if anything, to do with the fragment
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Any, Dict, Iterable, List, Mapping, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from code_analyzer.csharp_analysis_gateway import (
     DbInvocation,
@@ -36,6 +36,17 @@ _CandidateKey = Tuple[str, str]
 PROPOSED_PENDING_REVIEW_REASON = "proposed_pending_review"
 
 
+def _wrapper_method_and_receiver(invocation: DbInvocation) -> Optional[Tuple[str, str]]:
+    """The (method name, receiver type) an invocation names, or ``None`` when it
+    names no method at all -- the one shape a candidate group and a resolved-pair
+    record both build themselves from, so the two never drift on how a pair is read
+    off an invocation."""
+    method_name = str(invocation.wrapper_method or "").strip()
+    if not method_name:
+        return None
+    return method_name, str(invocation.wrapper_receiver_type or "").strip()
+
+
 def scan_review_candidates(
     invocations: Iterable[DbInvocation],
 ) -> Dict[_CandidateKey, Dict[str, Any]]:
@@ -51,10 +62,10 @@ def scan_review_candidates(
     for invocation in invocations:
         if not invocation.wrapper_review_candidate:
             continue
-        method_name = str(invocation.wrapper_method or "").strip()
-        if not method_name:
+        pair = _wrapper_method_and_receiver(invocation)
+        if pair is None:
             continue
-        receiver_type = str(invocation.wrapper_receiver_type or "").strip()
+        method_name, receiver_type = pair
         key = wrapper_review_exclusion_key(receiver_type, method_name)
         entry = grouped.setdefault(
             key,
@@ -78,10 +89,10 @@ def scan_resolved_pairs(invocations: Iterable[DbInvocation]) -> set[_CandidateKe
     for invocation in invocations:
         if not invocation.wrapper_kind or invocation.wrapper_review_candidate:
             continue
-        method_name = str(invocation.wrapper_method or "").strip()
-        if not method_name:
+        pair = _wrapper_method_and_receiver(invocation)
+        if pair is None:
             continue
-        receiver_type = str(invocation.wrapper_receiver_type or "").strip()
+        method_name, receiver_type = pair
         resolved.add(wrapper_review_exclusion_key(receiver_type, method_name))
     return resolved
 

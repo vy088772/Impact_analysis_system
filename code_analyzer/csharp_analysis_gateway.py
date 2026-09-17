@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Set
+from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set
 
 from .external_wrapper_contracts import (
     CONTRACT_SIGNATURE_SCHEMA_VERSION,
@@ -805,6 +805,13 @@ def _normalize_external_wrapper_contract_registry(
     return loaded_contracts
 
 
+def _casefold_pair(first: object, second: object) -> tuple[str, str]:
+    """Fold two loosely-written strings into the one identity every lookup on
+    that pair must agree on, however either side's casing or surrounding
+    whitespace was written."""
+    return (str(first or "").strip().casefold(), str(second or "").strip().casefold())
+
+
 def wrapper_review_exclusion_key(receiver_type: str, method_name: str) -> tuple[str, str]:
     """The exact (receiver, method) identity every exclusion consumer keys on.
 
@@ -812,7 +819,7 @@ def wrapper_review_exclusion_key(receiver_type: str, method_name: str) -> tuple[
     ticket 06) computes the same identity a registry entry does, rather than
     re-deriving its own case-fold rule that could quietly drift from this one.
     """
-    return (str(receiver_type or "").strip().casefold(), str(method_name or "").strip().casefold())
+    return _casefold_pair(receiver_type, method_name)
 
 
 def _wrapper_review_exclusion_key(entry: Mapping[str, Any]) -> tuple[str, str]:
@@ -1011,10 +1018,7 @@ def _observed_call_evidence_key(class_name: object, method_name: object) -> tupl
     """The one normalization `build_observed_call_evidence_index` and its gateway-side
     lookup must agree on: a class/method pair is the same key however either side's
     casing or surrounding whitespace was written."""
-    return (
-        str(class_name or "").strip().casefold(),
-        str(method_name or "").strip().casefold(),
-    )
+    return _casefold_pair(class_name, method_name)
 
 
 def build_observed_call_evidence_index(
@@ -1165,6 +1169,24 @@ def _narrow_by_mode_argument_carriage(
     return carriers if len(carriers) == 1 else matching
 
 
+class WrapperContractMethodMatch(NamedTuple):
+    """The result of matching a call site's method name against a Contract.
+
+    A data clump of four values that always travel together -- the matched
+    method entry (or ``None``), the reason a caller reads when it is ``None``,
+    the candidate entries considered, and the Delegation Alias consulted (empty
+    when the match was direct). Naming the clump keeps a caller that only wants
+    ``.contract`` from having to track every field a later change adds; a
+    caller that unpacks the four fields positionally, as the existing call
+    sites and tests do, still works unchanged since a NamedTuple is a tuple.
+    """
+
+    contract: Optional[Mapping[str, Any]]
+    reason: str
+    candidates: tuple[Mapping[str, Any], ...]
+    delegation_alias_target: str = ""
+
+
 def _wrapper_contract_method(
     contract: Optional[Mapping[str, Any]],
     method_name: str,
@@ -1173,7 +1195,7 @@ def _wrapper_contract_method(
     method_arity: Optional[int] = None,
     parameter_types: Iterable[str] = (),
     command_type_mode_observed: bool = False,
-) -> tuple[Optional[Mapping[str, Any]], str, tuple[Mapping[str, Any], ...], str]:
+) -> WrapperContractMethodMatch:
     """Match a call site's method name against a Contract, consulting a
     Delegation Alias only when the name matches no operation directly.
 
@@ -1181,11 +1203,11 @@ def _wrapper_contract_method(
     ``method_not_in_contract`` does this consult ``contract["delegation_aliases"]``
     -- the delegating name's entry, flattened by the decompiler to the
     operation that performs the work -- and retry the lookup against that
-    operation's own name. The returned 4th element is the alias target
+    operation's own name. ``delegation_alias_target`` is the alias target
     consulted (empty when no alias was used), so a caller can record it as
     provenance beside the method name the source code used (ADR-0027).
     """
-    direct_contract, direct_reason, direct_candidates = _wrapper_contract_method_direct(
+    direct = _wrapper_contract_method_direct(
         contract,
         method_name,
         method_identity=method_identity,
@@ -1193,8 +1215,8 @@ def _wrapper_contract_method(
         parameter_types=parameter_types,
         command_type_mode_observed=command_type_mode_observed,
     )
-    if direct_contract is not None or direct_reason != "method_not_in_contract":
-        return direct_contract, direct_reason, direct_candidates, ""
+    if direct.contract is not None or direct.reason != "method_not_in_contract":
+        return WrapperContractMethodMatch(direct.contract, direct.reason, direct.candidates)
 
     aliases = contract.get("delegation_aliases") if isinstance(contract, Mapping) else None
     folded_name = str(method_name or "").casefold()
@@ -1209,7 +1231,7 @@ def _wrapper_contract_method(
             "",
         )
     if not alias_target:
-        return direct_contract, direct_reason, direct_candidates, ""
+        return WrapperContractMethodMatch(direct.contract, direct.reason, direct.candidates)
 
     # The observed method identity names the delegating method itself, not the
     # aliased operation -- it can never equal the target's own identity, so it
@@ -1217,18 +1239,18 @@ def _wrapper_contract_method(
     # `candidate_matches` rejection). Arity and parameter types describe the
     # call's own argument shape, which a delegating method and the operation
     # it forwards to share, so those still narrow an overloaded target.
-    alias_contract, alias_reason, alias_candidates = _wrapper_contract_method_direct(
+    alias = _wrapper_contract_method_direct(
         contract,
         alias_target,
         method_arity=method_arity,
         parameter_types=parameter_types,
         command_type_mode_observed=command_type_mode_observed,
     )
-    if alias_contract is None:
+    if alias.contract is None:
         # The alias itself resolves to no operation in this Contract -- report
         # the original, direct-match failure rather than a confusing new one.
-        return direct_contract, direct_reason, direct_candidates, ""
-    return alias_contract, alias_reason, alias_candidates, alias_target
+        return WrapperContractMethodMatch(direct.contract, direct.reason, direct.candidates)
+    return WrapperContractMethodMatch(alias.contract, alias.reason, alias.candidates, alias_target)
 
 
 def _wrapper_contract_method_direct(
@@ -1239,13 +1261,13 @@ def _wrapper_contract_method_direct(
     method_arity: Optional[int] = None,
     parameter_types: Iterable[str] = (),
     command_type_mode_observed: bool = False,
-) -> tuple[Optional[Mapping[str, Any]], str, tuple[Mapping[str, Any], ...]]:
+) -> WrapperContractMethodMatch:
     if contract is None:
-        return None, "method_not_in_contract", ()
+        return WrapperContractMethodMatch(None, "method_not_in_contract", ())
     methods = contract.get("methods", {})
     folded_name = str(method_name or "").casefold()
     if not folded_name or not isinstance(methods, Mapping):
-        return None, "method_not_in_contract", ()
+        return WrapperContractMethodMatch(None, "method_not_in_contract", ())
 
     named_methods: List[Mapping[str, Any]] = []
     for name, value in methods.items():
@@ -1259,7 +1281,7 @@ def _wrapper_contract_method_direct(
         )
 
     if not named_methods:
-        return None, "method_not_in_contract", ()
+        return WrapperContractMethodMatch(None, "method_not_in_contract", ())
 
     observed_identity = _normalize_type_identity(method_identity)
     observed_parameters = tuple(
@@ -1308,26 +1330,26 @@ def _wrapper_contract_method_direct(
         if not has_signature:
             # A signature-less contract entry can't confirm it is the observed overload.
             if observed_signature:
-                return None, "ambiguous_overload", tuple(named_methods)
-            return candidate, "", tuple(named_methods)
+                return WrapperContractMethodMatch(None, "ambiguous_overload", tuple(named_methods))
+            return WrapperContractMethodMatch(candidate, "", tuple(named_methods))
         if candidate_matches(candidate):
-            return candidate, "", tuple(named_methods)
-        return None, "overload_not_found", tuple(named_methods)
+            return WrapperContractMethodMatch(candidate, "", tuple(named_methods))
+        return WrapperContractMethodMatch(None, "overload_not_found", tuple(named_methods))
 
     if not observed_identity and method_arity is None and not observed_parameters:
-        return None, "ambiguous_overload", tuple(named_methods)
+        return WrapperContractMethodMatch(None, "ambiguous_overload", tuple(named_methods))
 
     matching = tuple(candidate for candidate in named_methods if candidate_matches(candidate))
     if len(matching) > 1 and command_type_mode_observed:
         matching = _narrow_by_mode_argument_carriage(matching, method_arity)
     if len(matching) == 1:
-        return matching[0], "", tuple(named_methods)
+        return WrapperContractMethodMatch(matching[0], "", tuple(named_methods))
     if len(matching) > 1:
         merged = _merge_ambiguous_candidates_by_shared_mode(matching)
         if merged is not None:
-            return merged, "ambiguous_overload_mode_resolved", tuple(named_methods)
-        return None, "ambiguous_overload", tuple(named_methods)
-    return None, "overload_not_found", tuple(named_methods)
+            return WrapperContractMethodMatch(merged, "ambiguous_overload_mode_resolved", tuple(named_methods))
+        return WrapperContractMethodMatch(None, "ambiguous_overload", tuple(named_methods))
+    return WrapperContractMethodMatch(None, "overload_not_found", tuple(named_methods))
 
 
 def _merge_ambiguous_candidates_by_shared_mode(
@@ -1559,13 +1581,13 @@ def _source_contract_conflict_facts(
         contract_receiver_identity,
     ):
         return {}
-    method_contract, _, _, _ = _wrapper_contract_method(
+    method_contract = _wrapper_contract_method(
         contract,
         wrapper_method,
         method_identity=_text_fact(method_facts.get("method_identity")),
         method_arity=method_facts.get("method_arity"),
         parameter_types=method_facts.get("parameter_types", ()),
-    )
+    ).contract
     if method_contract is None:
         return {}
     contract_mode = _text_fact(method_contract.get("mode")).casefold()
@@ -2692,13 +2714,13 @@ class CSharpAnalysisGateway:
                     candidate_identity, candidate_parameter_types, _ = (
                         _semantic_bound_method_facts(raw, method_facts, candidate)
                     )
-                    method_contract, _, _, _ = _wrapper_contract_method(
+                    method_contract = _wrapper_contract_method(
                         candidate,
                         wrapper_method,
                         method_identity=candidate_identity,
                         method_arity=method_facts["method_arity"],
                         parameter_types=candidate_parameter_types,
-                    )
+                    ).contract
                     if method_contract is not None:
                         method_matches.append(candidate)
                 if method_matches:

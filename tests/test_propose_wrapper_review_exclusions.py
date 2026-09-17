@@ -127,6 +127,30 @@ def test_an_empty_receiver_type_candidate_proposes_the_global_tier(
     assert report["candidates"][0]["tier"] == GLOBAL_EXCLUSION_TIER_KEY
 
 
+def test_render_report_text_names_the_system_a_candidate_was_seen_in(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A candidate carries a `systems` list, never a `system_id` key -- the table
+    renderer must read the collection it was actually given, not a field that
+    was never there (regression: this used to raise KeyError for any non-empty
+    report, since --format table is the CLI's own default)."""
+    root = tmp_path / "IQCS"
+    root.mkdir()
+    key = _file_key(root, "UtilityService.cs")
+    scan = _scan(
+        root,
+        db_invocations={key: [_wrapper_call()]},
+        connection_sources={key: {"conn": {"database": "OrdersDb", "server": "sql01"}}},
+    )
+    _stub_measurement(monkeypatch, {str(root): scan})
+
+    report = tool.build_report([{"system_id": "IQCS", "root": root, "configured_contract": ""}])
+    text = tool.render_report_text(report)
+
+    assert "IQCS" in text
+    assert "IUtilityService" in text
+
+
 def test_a_repeat_run_never_forces_a_rescan_and_the_registry_file_stays_untouched(
     tmp_path: Path, monkeypatch
 ) -> None:

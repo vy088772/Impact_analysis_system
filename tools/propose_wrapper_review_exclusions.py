@@ -125,7 +125,7 @@ def render_report_text(report: Mapping[str, Any]) -> str:
             f"{candidate['tier']}  {candidate['receiver_type']!r}.{candidate['method_name']}  "
             f"calls={candidate['call_count']}  "
             f"resolved_elsewhere={candidate['resolved_elsewhere']}  "
-            f"(seen in {candidate['system_id']})"
+            f"(seen in {', '.join(candidate['systems'])})"
         )
     if not report.get("candidates"):
         lines.append("no exclusion candidates")
