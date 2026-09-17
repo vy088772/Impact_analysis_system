@@ -3620,7 +3620,20 @@ def reconcile_refresh_wrappers(
         },
         key=str.casefold,
     )
-    review_items = [item for item in observations if item["review_candidate"]]
+    # `review_candidate` answers "is the wrapper classification itself ambiguous"
+    # -- it says nothing about whether the resolved database has been scanned.
+    # `not_in_resolved_catalog` is the one evidence_reason `impact_orch.refresh_cli`
+    # already assumes appears here regardless of `review_candidate` (see its own
+    # `_needs_review`/`_print_uncataloged_database_hints`, which dedupe these by
+    # (server, database) into one hint line rather than one row per call): a call
+    # that resolves to exactly one procedure name through a Delegation Alias or a
+    # Contract's own operation, with no overload tie, is never a review candidate,
+    # but its database can still be one nobody has run `refresh_sql_cli` against.
+    review_items = [
+        item
+        for item in observations
+        if item["review_candidate"] or item["evidence_reason"] == "not_in_resolved_catalog"
+    ]
     review_reasons = sorted(
         {
             str(reason)

@@ -981,6 +981,134 @@ def test_refresh_selector_does_not_prove_database_evidence(monkeypatch, tmp_path
     assert summary["totals"]["evidence_unresolved"] == 1
 
 
+def test_uncataloged_database_call_reaches_review_items_even_when_unambiguous(
+    monkeypatch, tmp_path
+) -> None:
+    """A call that resolves cleanly through a Delegation Alias -- one operation, no
+    overload tie, `review_candidate=False` -- must still reach `review_items` when its
+    evidence_reason is `not_in_resolved_catalog`. `review_items` is the one list both
+    `_print_wrapper_review_details` and `_print_uncataloged_database_hints` in
+    `impact_orch.refresh_cli` read; a call that never reaches it gets no
+    "資料庫未建檔" hint printed either, even though the resolved database and server
+    are both known. `review_items = [item for item in observations if
+    item["review_candidate"]]` conflated "the wrapper classification itself is
+    ambiguous" with "a human should see this" -- IQCS's real `SQLDbContext` calls
+    are the case that tells them apart: unambiguous wrapper classification, but a
+    database nobody has run `refresh_sql_cli` against yet.
+    """
+    root = tmp_path / "IQCS"
+    source_file = root / "Services" / "MonthlyPlanMtnService.cs"
+    root.mkdir()
+    # The real raw scan fact for IQCS's `MonthlyPlanMtnService.GetMonthlyPlanResult`
+    # (from `data/scan_cache/d817e29ab991764b.pkl`), with `connection_sources` below
+    # pointing it at a database no one has scanned yet. A hand-trimmed record without
+    # `observed_arguments`/`wrapper_parameter_types`/`wrapper_method_arity` never
+    # reaches the Rating-Time Command Mode / Delegation Alias mechanisms at all (it
+    # falls back to a generic `method_not_in_contract`, a different failure than the
+    # one this test targets) -- the full shape is what actually exercises them.
+    scan = ProjectScanResult(
+        project_root=str(root),
+        project_name="IQCS",
+        scan_time=datetime.now(),
+        db_invocations={
+            str(source_file): [
+                {
+                    "branch_context": None,
+                    "class_name": "MonthlyPlanMtnService",
+                    "command_text": "[dbo].[usp_IQCMgmt_Com_MonthlyPlanQry]",
+                    "command_text_argument": None,
+                    "command_text_kind": "literal",
+                    "command_text_literal": None,
+                    "command_text_provenance": None,
+                    "command_text_source_end_offset": None,
+                    "command_text_source_start_offset": None,
+                    "command_text_unresolved_reason": None,
+                    "command_type_argument_observed": False,
+                    "command_type_mode": None,
+                    "command_type_stored_procedure": False,
+                    "connection_expression": "_db",
+                    "connection_expression_candidates": None,
+                    "end_offset": 1379,
+                    "invocation_kind": "source_wrapper",
+                    "method_chain": ["GetMonthlyPlanResult", "usp_ExecCmdGetDataTableAsync"],
+                    "method_name": "GetMonthlyPlanResult",
+                    "observed_arguments": [
+                        {"kind": "dynamic", "literal": None, "unresolved_reason": "variable"},
+                        {"kind": "dynamic", "literal": None, "unresolved_reason": "variable"},
+                        {"kind": "literal", "literal": "true", "unresolved_reason": None},
+                    ],
+                    "receiver_assembly_identity": None,
+                    "receiver_assembly_revision": None,
+                    "receiver_assignment_facts": None,
+                    "receiver_binding_provenance": None,
+                    "receiver_construction_facts": None,
+                    "receiver_expression": None,
+                    "receiver_implementation_identity": None,
+                    "receiver_name": None,
+                    "receiver_type": None,
+                    "start_offset": 1327,
+                    "terminal_sink": None,
+                    "wrapper_assembly_identity": (
+                        "3ed1dd1b4e2d10e695c72ef17c373ff05d792acba89dc5506cb5c49634cd5bad"
+                    ),
+                    "wrapper_assembly_revision": None,
+                    "wrapper_class_name": None,
+                    "wrapper_implementation_candidates": None,
+                    "wrapper_implementation_identity": None,
+                    "wrapper_method_arity": 2,
+                    "wrapper_method_identity": (
+                        "SQLDbContext.usp_ExecCmdGetDataTableAsync("
+                        "string,Microsoft.Data.SqlClient.SqlParameter[],bool)"
+                    ),
+                    "wrapper_method_name": "usp_ExecCmdGetDataTableAsync",
+                    "wrapper_method_semantics": None,
+                    "wrapper_mode": "unknown",
+                    "wrapper_overload_ambiguous": False,
+                    "wrapper_overload_candidates": None,
+                    "wrapper_parameter_types": [
+                        "string",
+                        "Microsoft.Data.SqlClient.SqlParameter[]",
+                        "bool",
+                    ],
+                    "wrapper_reaches_stored_procedure_sink": False,
+                    "wrapper_receiver_type": "SQLDbContext",
+                    "wrapper_receiver_type_provenance": "declaring_type",
+                    "wrapper_source_available": False,
+                    "wrapper_terminal_sink": None,
+                    "wrapper_unresolved_reason": None,
+                }
+            ]
+        },
+        connection_sources={
+            str(source_file): {
+                "_db": {"database": "IQCS_UNSCANNED_TEST_DB", "server": "test-server"}
+            }
+        },
+    )
+
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
+    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+
+    result = analyze_service.refresh_source(
+        {"project": "p", "repo": "r"},
+        # The real, already-fixed on-disk entry (ticket 01) -- its
+        # `delegation_aliases` resolves `usp_ExecCmdGetDataTableAsync` to
+        # `usp_ExecCmdGetDataSetAsync` without any overload ambiguity.
+        wrapper_contract="sqldbcontext-53e5d16df832",
+    )
+
+    summary = result["wrapper_summary"]
+    observation = summary["observations"][0]
+    assert observation["evidence_reason"] == "not_in_resolved_catalog"
+    assert observation["review_candidate"] is False
+    assert observation["database"] == "IQCS_UNSCANNED_TEST_DB"
+
+    review_items = summary["review_items"]
+    assert len(review_items) == 1
+    assert review_items[0]["evidence_reason"] == "not_in_resolved_catalog"
+    assert review_items[0]["database"] == "IQCS_UNSCANNED_TEST_DB"
+
+
 def test_refresh_reconciles_multi_root_wrappers_with_root_provenance(monkeypatch, tmp_path) -> None:
     roots = [tmp_path / "TTPUR", tmp_path / "ATV"]
     scans = {}
