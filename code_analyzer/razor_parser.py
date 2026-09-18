@@ -70,10 +70,15 @@ class RazorParser:
     # `@Html.<Method>For(<lambda>, ...)` Helpers — this codebase's MVC-style
     # views label and bind fields through these instead of asp-for. Scoped to
     # the five Helpers actually observed plus the excluded HiddenFor (see
-    # `.scratch/razor-ui-fields-cover-html-for-helpers/spec.md`).
+    # `.scratch/razor-ui-fields-cover-html-for-helpers/spec.md`). Captures the
+    # lambda's own declared parameter name (group 2) alongside the bound
+    # expression (group 3), so the direct-binding check can compare against
+    # it instead of assuming a hardcoded name (see
+    # `.scratch/razor-ui-fields-direct-binding-matches-the-declared-
+    # parameter-name/spec.md`).
     HTML_FOR_HELPER_PATTERN = re.compile(
         r'@Html\.(DisplayNameFor|LabelFor|DisplayFor|TextBoxFor|TextAreaFor|HiddenFor)\('
-        r'\s*\w+\s*=>\s*([^,)]+?)\s*[,)]'
+        r'\s*(\w+)\s*=>\s*([^,)]+?)\s*[,)]'
     )
     _HTML_FOR_HELPER_KIND = {
         'DisplayNameFor': 'label',
@@ -82,11 +87,15 @@ class RazorParser:
         'TextBoxFor': 'input',
         'TextAreaFor': 'input',
     }
-    # Only a direct `m.Property`/`Model.Property` binding resolves safely
-    # against the view's own @model class. A collection-indexed binding or a
-    # binding through any other identifier (a foreach loop variable, for
-    # example) names a property on some other type.
-    _DIRECT_MODEL_BINDING_PATTERN = re.compile(r'^(?:m|Model)\.([A-Za-z_]\w*)$')
+    # Only a direct `<declared-param>.Property`/`Model.Property` binding
+    # resolves safely against the view's own @model class. `Model` is
+    # Razor's ambient page-model property and always resolves regardless of
+    # what the lambda's own parameter is named; any other leading identifier
+    # (a foreach loop variable closed over instead of the declared
+    # parameter, for example) names a property on some other type. A
+    # collection-indexed or multi-level binding is never direct, whatever
+    # the parameter is named.
+    _DIRECT_MODEL_BINDING_TEMPLATE = r'^(?:{param}|Model)\.([A-Za-z_]\w*)$'
 
     # View Anchor（見 CONTEXT.md「View Anchor」條目）。決定式：markup 層的
     # asp-action/asp-controller/asp-page 屬性，或純 HTML <form action="...">。
@@ -343,11 +352,14 @@ class RazorParser:
         3. `@Html.<Method>For(<lambda>, ...)` Helper 呼叫——這個 codebase 的
            MVC-style 畫面絕大多數用這組 Helper 標記與繫結欄位，而不是
            asp-for。依 Helper 分類成 label/value/input（`HiddenFor` 不貢獻任
-           何項目），lambda 繫結的屬性若是直接的 `m.Property`／
-           `Model.Property` 形狀，同樣貢獻 `data_field` 交給
-           `razor_display_field_resolver` 解析；集合索引或非 m/Model 參數
-           的繫結（例如 foreach 迴圈變數）只留下原始繫結運算式當 `text`，不
-           貢獻 `data_field`，避免解析器誤配到其他型別同名的屬性上。
+           何項目），lambda 繫結的屬性若是直接的
+           `<lambda 自己宣告的參數>.Property` 形狀，或直接的
+           `Model.Property`（Razor 的環境頁面模型屬性，不論 lambda 參數叫什
+           麼名字都能解析），同樣貢獻 `data_field` 交給
+           `razor_display_field_resolver` 解析；集合索引、多層繫結、或透過
+           非「該呼叫自己宣告的參數」與非 `Model` 的識別字（例如 foreach 迴
+           圈變數）的繫結，只留下原始繫結運算式當 `text`，不貢獻
+           `data_field`，避免解析器誤配到其他型別同名的屬性上。
         """
         fields: List[Dict] = []
 
@@ -373,9 +385,13 @@ class RazorParser:
             method_name = match.group(1)
             if method_name == 'HiddenFor':
                 continue
-            bound_expression = match.group(2).strip()
+            lambda_param = match.group(2)
+            bound_expression = match.group(3).strip()
             helper_entry: Dict[str, str] = {'kind': self._HTML_FOR_HELPER_KIND[method_name]}
-            direct_match = self._DIRECT_MODEL_BINDING_PATTERN.match(bound_expression)
+            direct_pattern = re.compile(
+                self._DIRECT_MODEL_BINDING_TEMPLATE.format(param=re.escape(lambda_param))
+            )
+            direct_match = direct_pattern.match(bound_expression)
             if direct_match:
                 helper_entry['data_field'] = direct_match.group(1)
             else:

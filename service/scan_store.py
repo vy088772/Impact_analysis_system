@@ -156,7 +156,14 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # receiver-type/issues/01-...md`）：宣告型別跟資料庫毫無關係的接收者不再進
 # unresolved_connections。舊快取的 unresolved_connections 仍帶著這些噪音，
 # 必須重新掃描才會濾掉。
-_CACHE_VERSION = 38
+# v39：RazorParser 的 `_extract_ui_fields` 直接繫結判定改比對
+# `@Html.<Method>For(<lambda>, ...)` 呼叫自己宣告的 lambda 參數，不再寫死
+# `m`（見 `.scratch/razor-ui-fields-direct-binding-matches-the-declared-
+# parameter-name/spec.md`）：`model => model.Property` 之類的繫結現在也貢獻
+# `data_field`；字面 `Model` 不論參數叫什麼名字都仍照舊解析。舊快取對這些非
+# m/Model 參數的直接繫結一律只有 `text`，沒有 `data_field`，必須重新掃描才
+# 會補上。
+_CACHE_VERSION = 39
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
