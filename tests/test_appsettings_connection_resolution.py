@@ -654,3 +654,155 @@ def test_project_scanner_only_reports_an_unregistered_context_type_that_a_real_i
         for entry in scanner.scan_result.unresolved_connections[file_key]
     }
     assert reasons["_ledger"] == CONTEXT_TYPE_NOT_REGISTERED
+
+
+def test_project_scanner_drops_a_non_database_receiver_from_unresolved_connections(
+    tmp_path: Path,
+):
+    """一個 Database Invocation 的連線運算式，接收者宣告的型別跟資料庫毫無
+    關係（這裡是 `IConfiguration`）時，不該再冒出一個 unresolved_connections
+    項目——它從沒被四條餵 connection_sources 的路徑當成候選過（ticket 01）。
+
+    這裡讓 StaticAnalyzerHost 真的跑一次 `new SqlCommand(sql, _config)`，
+    產生真正的 db_invocations，而不是像上一個測試那樣手動塞一筆——驗證的是
+    `ProjectScanner.refresh_csharp_files()` 端到端的結果，不指名是哪個內部
+    函式做的過濾。
+    """
+    (tmp_path / "App.csproj").write_text(
+        '<Project ToolsVersion="15.0"></Project>', encoding="utf-8"
+    )
+    (tmp_path / "appsettings.json").write_text(
+        json.dumps(
+            {"ConnectionStrings": {"Payroll": "Server=srvA;Database=PayrollDb"}},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "Program.cs").write_text(
+        _composition_root(("PayrollContext", "Payroll")), encoding="utf-8"
+    )
+    source = _write_source(
+        tmp_path / "Services" / "NoticeService.cs",
+        "using System.Data.SqlClient;\n"
+        "public class NoticeService {\n"
+        "    private readonly IConfiguration _config;\n"
+        "    public void Run() {\n"
+        '        SqlCommand command = new SqlCommand("sp_notify", _config);\n'
+        "        command.ExecuteNonQuery();\n"
+        "    }\n"
+        "}\n",
+    )
+
+    scanner = ProjectScanner(project_root=str(tmp_path), project_name="App")
+    scan_result = ProjectScanResult(
+        project_root=str(tmp_path), project_name="App", scan_time=datetime.now()
+    )
+    scan_result = scanner.refresh_csharp_files(scan_result, [str(source)])
+
+    file_key = str(source.resolve())
+    assert "_config" not in scan_result.connection_sources.get(file_key, {})
+    reported_variables = {
+        entry["variable_name"]
+        for entry in scan_result.unresolved_connections.get(file_key, [])
+    }
+    assert "_config" not in reported_variables
+
+
+def test_project_scanner_drops_a_non_database_receiver_reached_through_member_access(
+    tmp_path: Path,
+):
+    """一個複合運算式（`model.QryCond`）當接收者，宣告型別要問的是運算式
+    最左邊那個識別字（`model`），不是整串運算式逐字比對——逐字比對永遠找
+    不到宣告，這種形狀就會全部漏網。對著一份真的 IQCS 掃描快取
+    （`data/scan_cache/d817e29ab991764b.pkl`）量過：270 個
+    `unresolved_connections` 噪音裡，這個形狀（`receiver.Member`，
+    receiver 是本檔案裡宣告得到的欄位/參數）佔了多數，值得直接寫成一個
+    測試，不只是靠 IConfiguration 那個裸變數的例子帶過（ticket 01）。
+    """
+    (tmp_path / "App.csproj").write_text(
+        '<Project ToolsVersion="15.0"></Project>', encoding="utf-8"
+    )
+    (tmp_path / "appsettings.json").write_text(
+        json.dumps(
+            {"ConnectionStrings": {"Payroll": "Server=srvA;Database=PayrollDb"}},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "Program.cs").write_text(
+        _composition_root(("PayrollContext", "Payroll")), encoding="utf-8"
+    )
+    source = _write_source(
+        tmp_path / "Controllers" / "QryController.cs",
+        "using System.Data.SqlClient;\n"
+        "public class QryController {\n"
+        "    private readonly QryModel model;\n"
+        "    public void Run() {\n"
+        '        SqlCommand command = new SqlCommand("sp_qry", model.QryCond);\n'
+        "        command.ExecuteNonQuery();\n"
+        "    }\n"
+        "}\n",
+    )
+
+    scanner = ProjectScanner(project_root=str(tmp_path), project_name="App")
+    scan_result = ProjectScanResult(
+        project_root=str(tmp_path), project_name="App", scan_time=datetime.now()
+    )
+    scan_result = scanner.refresh_csharp_files(scan_result, [str(source)])
+
+    file_key = str(source.resolve())
+    assert "model.QryCond" not in scan_result.connection_sources.get(file_key, {})
+    reported_variables = {
+        entry["variable_name"]
+        for entry in scan_result.unresolved_connections.get(file_key, [])
+    }
+    assert "model.QryCond" not in reported_variables
+
+
+def test_project_scanner_keeps_reporting_a_database_shaped_receiver_that_fails_resolution(
+    tmp_path: Path,
+):
+    """一個接收者的宣告型別長得像資料庫內容型別（結尾是 `Context`），但那個
+    型別沒在組合根註冊——這個接收者本來就該留在候選裡，繼續產生它現有的
+    unresolved_connections 理由。新的過濾只擋掉沒有資料庫訊號的宣告型別，不
+    是把候選收得更窄（ticket 01）。同樣端到端走一次真正的 SqlCommand
+    invocation，不手動塞 db_invocations。
+    """
+    (tmp_path / "App.csproj").write_text(
+        '<Project ToolsVersion="15.0"></Project>', encoding="utf-8"
+    )
+    (tmp_path / "appsettings.json").write_text(
+        json.dumps(
+            {"ConnectionStrings": {"Payroll": "Server=srvA;Database=PayrollDb"}},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "Program.cs").write_text(
+        _composition_root(("PayrollContext", "Payroll")), encoding="utf-8"
+    )
+    source = _write_source(
+        tmp_path / "Services" / "LedgerService.cs",
+        "using System.Data.SqlClient;\n"
+        "public class LedgerService {\n"
+        "    private readonly LedgerContext _ledger;\n"
+        "    public void Run() {\n"
+        '        SqlCommand command = new SqlCommand("sp_ledger", _ledger);\n'
+        "        command.ExecuteNonQuery();\n"
+        "    }\n"
+        "}\n",
+    )
+
+    scanner = ProjectScanner(project_root=str(tmp_path), project_name="App")
+    scan_result = ProjectScanResult(
+        project_root=str(tmp_path), project_name="App", scan_time=datetime.now()
+    )
+    scan_result = scanner.refresh_csharp_files(scan_result, [str(source)])
+
+    file_key = str(source.resolve())
+    assert "_ledger" not in scan_result.connection_sources.get(file_key, {})
+    reasons = {
+        entry["variable_name"]: entry["reason"]
+        for entry in scan_result.unresolved_connections[file_key]
+    }
+    assert reasons["_ledger"] == CONTEXT_TYPE_NOT_REGISTERED

@@ -453,6 +453,67 @@ class DBConnectionTracker:
     # 接收者有沒有被叫用過」，不是「這個名字長得像不像資料庫內容型別」。
     _ANY_CONTEXT_DECLARATION = r'\b(\w+Context)\s+(@?\w+)\s*(?=[;,)={])'
 
+    # 「這個接收者的宣告型別長得像不像一個資料庫連線」——四條餵
+    # connection_sources 的路徑（Context Connection Registration、
+    # Field-Held Connection、以及 _extract_sqlconnection_declarations 裡
+    # Field-Held Connection 的兩個手足）都在問這同一個問題，只是各自用不同
+    # 的字面比對：Context 家族認的是型別名字以 Context 結尾（就是上面的
+    # _ANY_CONTEXT_DECLARATION）；SqlConnection 家族認的是型別名字就是
+    # SqlConnection。候選蒐集步驟（ticket 01）借用同一個形狀，先把一個宣告
+    # 型別跟資料庫毫無關係的接收者濾掉，不另外列一張排除清單——那張清單只會
+    # 跟這裡的四條路徑各自漂開。
+    DATABASE_RECEIVER_TYPE_SHAPE = r'(?:SqlConnection|\w+Context)'
+
+    @classmethod
+    def declared_type_carries_database_signal(cls, declared_type: str) -> bool:
+        """一個宣告型別，長得像不像這四條路徑會接受的資料庫接收者？"""
+        return re.fullmatch(cls.DATABASE_RECEIVER_TYPE_SHAPE, declared_type) is not None
+
+    # 一個接收者運算式最左邊那個識別字——raw Database Invocation 的
+    # connection_expression 常常不是一個裸變數，而是一個成員存取鏈
+    # （`model.QryCond`、`dt.Columns`、`this._config`）。宣告型別問的永遠是
+    # 「這個運算式從哪個變數開始」，不是整串運算式本身逐字比對——後者對任何
+    # 帶點號的運算式都注定找不到宣告。開頭的 `this.` 只是同一個接收者的另一
+    # 種寫法，跳過它取後面那個識別字。
+    _RECEIVER_BASE_IDENTIFIER = re.compile(r'^\s*(?:this\s*\.\s*)?(@?\w+)')
+
+    @classmethod
+    def _receiver_base_identifier(cls, expression: str) -> Optional[str]:
+        match = cls._RECEIVER_BASE_IDENTIFIER.match(expression)
+        return match.group(1) if match else None
+
+    @classmethod
+    def declared_type_of(cls, content: str, variable_name: str) -> Optional[str]:
+        """一個變數在檔案裡的宣告型別；找不到宣告就回傳 None。
+
+        不限型別名字的形狀——這裡要回答的是「這個變數宣告成什麼型別」，形
+        狀比對留給 declared_type_carries_database_signal 去做。型別與變數名
+        之間容許泛型引數、陣列括號、nullable 的 `?`（`IDictionary<string,
+        string> attributes`、`string? _foo`、`object[] items`），因為這裡
+        要找的是宣告讀不讀得到，不是宣告寫得多簡單。
+        """
+        base = cls._receiver_base_identifier(variable_name)
+        if base is None:
+            return None
+        pattern = (
+            r'\b(\w+)(?:\?|<[^<>]*>|\[\])*\s+' + re.escape(base) + r'\s*(?=[;,)={])'
+        )
+        match = re.search(pattern, content)
+        return match.group(1) if match else None
+
+    @classmethod
+    def is_plausible_connection_receiver(cls, content: str, variable_name: str) -> bool:
+        """這個變數值不值得留在候選裡，繼續往下問「這次呼叫解析得出連線嗎」？
+
+        在檔案裡完全找不到宣告時不濾掉它——找不到宣告是另一個缺口
+        （RECEIVER_DECLARATION_UNRESOLVED 已經在管），不是這裡要濾掉的噪音；
+        這裡濾掉的只是「宣告讀得到，型別跟資料庫毫無關係」這一種情況。
+        """
+        declared_type = cls.declared_type_of(content, variable_name)
+        if declared_type is None:
+            return True
+        return cls.declared_type_carries_database_signal(declared_type)
+
     def _report_unresolved_context_receivers(
         self, content: str, scope: ProjectConnectionScope
     ) -> None:

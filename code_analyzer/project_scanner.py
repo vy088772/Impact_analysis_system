@@ -511,7 +511,7 @@ class ProjectScanner:
             scope if scope is not None else self.connection_resolver
         )
         tracker.invoked_connection_expressions = self._invoked_connection_expressions(
-            file_key
+            file_path, file_key
         )
 
         result = self.csharp_parser.parse_file(file_path)
@@ -529,13 +529,23 @@ class ProjectScanner:
         self._record_connection_observations()
         return result
 
-    def _invoked_connection_expressions(self, file_key: str) -> Set[str]:
+    def _invoked_connection_expressions(self, file_path: str, file_key: str) -> Set[str]:
         """一個檔案裡，被一次真的 Database Invocation 引用過的連線運算式。
 
         這個集合已經在 db_invocations[file_key] 上，因為 host 的原始事實在
         呼叫 `_parse_csharp_file` 之前就寫進去了。回傳給
         `DBConnectionTracker`，讓「這個接收者的型別沒註冊」這個理由只問曾經
         真的發生過呼叫的接收者，不是這個檔案裡任何一個宣告（ticket 17）。
+
+        一個接收者在成為候選之前，先問它的宣告型別跟資料庫有沒有關係
+        （ticket 01）：raw Database Invocations 不分接收者的宣告型別，全部
+        收進來——`IConfiguration` 欄位、`HttpResponse` 成員、log/email 服務
+        呼叫，一樣會被收進來，因為 host 那一層只看呼叫的形狀，不看接收者是
+        什麼。這裡用 DBConnectionTracker.is_plausible_connection_receiver
+        擋掉宣告型別跟資料庫毫無關係的接收者，用的是 connection_sources 那
+        四條路徑本來就要求的同一個形狀，不是另外列一張排除清單。找不到宣告
+        的接收者不擋——那是 RECEIVER_DECLARATION_UNRESOLVED 的缺口，不是這
+        裡要濾掉的噪音。
         """
         records = self.scan_result.db_invocations.get(file_key) or []
         expressions: Set[str] = set()
@@ -545,7 +555,29 @@ class ProjectScanner:
             )
             if expression and str(expression).strip():
                 expressions.add(str(expression).strip())
-        return expressions
+        if not expressions:
+            return expressions
+
+        content = self._read_source_for_receiver_filtering(file_path)
+        if content is None:
+            return expressions
+        return {
+            expression
+            for expression in expressions
+            if DBConnectionTracker.is_plausible_connection_receiver(content, expression)
+        }
+
+    @staticmethod
+    def _read_source_for_receiver_filtering(file_path: str) -> Optional[str]:
+        """讀出一個檔案的原始碼，供接收者型別過濾使用；讀不到就回傳 None。
+
+        讀不到時不擋任何候選——I/O 失敗不該讓一個原本會回報的連線悄悄消
+        失，寧可維持過濾之前的行為。
+        """
+        try:
+            return decode_source_bytes(Path(file_path).read_bytes())
+        except OSError:
+            return None
 
     def _record_connection_observations(self) -> None:
         """把目前已建立的每一個 scope 觀察到的環境改寫併進掃描結果。

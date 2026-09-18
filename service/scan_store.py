@@ -151,7 +151,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # spec.md`）：DisplayNameFor/LabelFor 貢獻 label、DisplayFor 貢獻 value、
 # TextBoxFor/TextAreaFor 貢獻 input，HiddenFor 不貢獻。舊快取的 razor_results
 # 之 ui_fields 對這些 Helper 一律是空清單，必須重新掃描才會補上。
-_CACHE_VERSION = 37
+# v38：`ProjectScanner._invoked_connection_expressions()` 現在依接收者的宣告
+# 型別過濾候選（見 `.scratch/unresolved-connections-require-a-database-
+# receiver-type/issues/01-...md`）：宣告型別跟資料庫毫無關係的接收者不再進
+# unresolved_connections。舊快取的 unresolved_connections 仍帶著這些噪音，
+# 必須重新掃描才會濾掉。
+_CACHE_VERSION = 38
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
