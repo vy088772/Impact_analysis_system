@@ -299,55 +299,6 @@ class SQLAnalyzer:
         self.cursor.execute(query, schema)
         return [row.ROUTINE_NAME for row in self.cursor.fetchall()]
 
-    def get_all_dependencies(self, schema: str = 'dbo') -> Dict[str, Dict[str, List[str]]]:
-        """
-        一次查出整個 schema 內所有物件（SP/View/Function）的原生依賴關係
-        （取代 _quick_extract_tables 的 regex 猜測），使用 SQL Server 中繼資料
-        `sys.sql_expression_dependencies`（一次查整個資料庫，效能佳，不需要
-        逐物件呼叫），同時建立正向（depends_on：這個物件依賴誰）與反向
-        （depended_by：誰依賴這個物件）兩種索引，供上下游影響分析使用。
-
-        已知限制（SQL Server 本身的限制，非查詢方式問題）：
-        - 動態 SQL（EXEC(@sql)）組出來的引用一律看不到。
-        - 跨資料庫依賴的 referenced_id 可能是 NULL（無法解析），這裡會被
-          WHERE referenced_id IS NOT NULL 排除，不會出現在結果中。
-
-        回傳: { "usp_SO_Qry": {"depends_on": ["Customers","SOrder",...],
-                               "depended_by": [...]}, ... }
-        （key 為 schema 下該物件自己的名稱，不含 schema 前綴）
-        """
-        query = """
-        SELECT
-            OBJECT_NAME(referencing_id) AS referencing_name,
-            COALESCE(referenced_schema_name, ?) AS referenced_schema,
-            referenced_entity_name
-        FROM sys.sql_expression_dependencies AS d
-        JOIN sys.objects AS o ON d.referencing_id = o.object_id
-        WHERE SCHEMA_NAME(o.schema_id) = ?
-          AND referenced_id IS NOT NULL
-          AND referenced_entity_name IS NOT NULL
-        """
-        self.cursor.execute(query, schema, schema)
-        rows = self.cursor.fetchall()
-
-        dependencies: Dict[str, Dict[str, List[str]]] = {}
-
-        def _ensure(name: str) -> Dict[str, List[str]]:
-            return dependencies.setdefault(name, {"depends_on": [], "depended_by": []})
-
-        for row in rows:
-            referencing_name, referenced_schema, referenced_name = row[0], row[1], row[2]
-            if not referencing_name or not referenced_name:
-                continue
-            src = _ensure(referencing_name)
-            if referenced_name not in src["depends_on"]:
-                src["depends_on"].append(referenced_name)
-            dst = _ensure(referenced_name)
-            if referencing_name not in dst["depended_by"]:
-                dst["depended_by"].append(referencing_name)
-
-        return dependencies
-
     def _get_native_referenced_tables(self, proc_name: str, schema: str = 'dbo') -> Set[str]:
         """
         單一物件的原生依賴查詢（給 quick_analyze_sp 即時分析單一 SP 用），

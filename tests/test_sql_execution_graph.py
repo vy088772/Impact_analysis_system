@@ -61,7 +61,6 @@ def test_dump_all_sql_objects_keeps_sp_helpers_on_sql_analyzer() -> None:
     analyzer.get_all_views = lambda schema: []
     analyzer.get_all_functions = lambda schema: []
     analyzer.get_all_tables = lambda schema: []
-    analyzer.get_all_dependencies = lambda schema: {}
 
     data = analyzer.dump_all_sql_objects("dbo")
 
