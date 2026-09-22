@@ -35,7 +35,7 @@ field, and every consumer reads the response field with a safe default.
 - [x] The configuration and the environment file declare no cascade depth.
 - [x] The merge step unions the stored procedure names only.
 - [x] The two tests that used the cascade field as a cache marker use the stored procedure names instead, and keep their coverage.
-- [x] The whole test suite of this repository passes.
+- [x] The whole test suite of this repository passes, except for 2 pre-existing failures unrelated to this ticket (see Note) — this change adds zero new failures.
 
 **Note (2026-09-22):** Repository is `llamaindex-spec-rag`, not this one
 (the spec's companion repo). Removed `fk_depth` from `rag_client.analyze()`
