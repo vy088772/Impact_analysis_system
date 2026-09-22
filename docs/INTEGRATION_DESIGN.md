@@ -41,7 +41,7 @@
 | 4. 業務邏輯（找規格書） | RAG 查詢（既有） | spec-rag | 既有 |
 | 1.5 萃取程式名稱 | `impact_orch/program_extractor.py` | spec-rag | **新增** |
 | 2. 程式碼掃描 | `code_analyzer/*` | Impact 服務 | 既有 + 補調用鏈 |
-| 3. 資料庫結構 | `sql_analyzer.py` + FK 擴充 | Impact 服務 | 既有 + 補 FK |
+| 3. 資料庫結構 | `sql_analyzer.py` | Impact 服務 | 既有 |
 | — HTTP 介面 | `service/api.py`（FastAPI） | Impact 服務 | **新增** |
 | 5. 收集 + 準備 Prompt | `impact_orch/context_builder.py` | spec-rag | **新增** |
 | 6. AI 分析推理 | `impact_orch/ai_reasoner.py`（重用 RAG 的 LLM） | spec-rag | **新增** |
@@ -78,7 +78,7 @@
 │        │   ┌── Impact_analysis_system（.venv #2，純分析服務）─▼┐ │
 │        │   │ ③a system → Azure 專案映射 → azure_fetcher clone │ │
 │        │   │ ③b smart_file_finder 依程式名定位檔案            │ │
-│        │   │ ③c csharp/sql 分析 + 調用鏈 + FK + 片段          │ │
+│        │   │ ③c csharp/sql 分析 + 調用鏈 + 片段              │ │
 │        └───◄ JSON AnalyzeResponse ─────────────────────────────┘ │
 │  ④ context_builder → 業務說明 + 程式碼分析                       │
 │  ⑤ ai_reasoner → LLM（gpt-5.4）→ 整合答案/影響/風險/建議          │
@@ -104,7 +104,7 @@ AnalyzeResponse {                            # Impact 服務回傳（純靜態�
         methods[],                           # 類別/方法
         sql_queries[],
         stored_procedures[],                 # 呼叫的 SP
-        tables[],                            # 讀寫的 Table（含 FK 連動）
+        tables[],                            # 讀寫的 Table
         call_chains[],                       # 調用鏈
         code_snippets[]                      # 相關程式碼片段
     }
@@ -138,7 +138,6 @@ Impact_analysis_system/            【.venv #2】純靜態分析服務（不含 
 │   ├── scan_store.py                # ProjectScanResult 持久化快取（data/scan_cache）
 │   ├── snippet_extractor.py         # 依方法位置擷取完整方法本體
 │   ├── call_chain_builder.py        # 程式內部方法呼叫鏈
-│   ├── fk_resolver.py               # FK 連動資料表（sys.foreign_keys，盡力而為）
 │   └── sp_fetcher.py                # 連資料庫擷取 SP 完整定義（盡力而為）
 ├── code_analyzer/                  # （現有解析器彙；sql_analyzer 由 sp_fetcher 重用）
 ├── config/settings.py              # 【擴充】SERVICE_HOST/PORT、AZURE_CLONE_ROOT、SCAN_CACHE_ROOT
@@ -192,8 +191,7 @@ Content-Type: application/json
   "program_names": ["Sub_DeliveryDetail.aspx", "OrderService.cs"],
   "include_snippets": true,        # 是否回傳程式碼片段
   "include_sp_defs": false,        # 是否連資料庫回傳 SP 完整定義（需 DB）
-  "fk_depth": 1,                   # FK 連動追蹤層數
-  "database": "",                  # FK 查詢 / SP 擷取用資料庫簡稱（留空用預設）
+  "database": "",                  # SP 擷取用資料庫簡稱（留空用預設）
   "refresh": false                 # true → git pull + 重新解析，覆寫快取
 }
 
@@ -207,7 +205,6 @@ Content-Type: application/json
       "methods": [{"name": "btnSave_Click", "class": "..."}],
       "stored_procedures": ["usp_PUR_OrderCompliance"],
       "tables": ["PUR_Order", "PUR_OrderDetail"],
-      "related_tables": ["PUR_OrderHistory"],   # FK 連動的相關資料表
       "call_chains": [["btnSave_Click", "Save", "usp_PUR_OrderCompliance"]],
       "code_snippets": [{"file": "...", "label": "X.btnSave_Click", "lines": "120-156", "text": "..."}],
       "sp_definitions": [{"name": "...", "exists": true, "parameters": [], "tables": [], "complexity": "簡單", "definition": "..."}]
@@ -254,7 +251,7 @@ def analyze(program_names: list[str], system: str, source: dict) -> dict:
         f"{cfg.IMPACT_SERVICE_URL}/analyze",
         json={"system": system, "source": source,
               "program_names": program_names,
-              "include_snippets": True, "fk_depth": 1},
+              "include_snippets": True},
         timeout=120,   # 首次需 clone Azure repo，預留較長
     )
     r.raise_for_status()
@@ -278,14 +275,13 @@ class AnalyzeRequest(BaseModel):
     source: AzureSource               # spec-rag 由 catalog 解析後帶入
     program_names: list[str]
     include_snippets: bool = True
-    fk_depth: int = 1
 
 class ProgramAnalysis(BaseModel):
     file: str
     framework: str
     methods: list[dict]
     stored_procedures: list[str]
-    tables: list[str]                 # 含 FK 連動
+    tables: list[str]
     call_chains: list[list[str]]
     code_snippets: list[dict]
 
@@ -322,13 +318,12 @@ Impact 服務收到程式名清單後，針對這些程式做正向 + 反向追�
 ```
 程式名 → 定位檔案（smart_file_finder）→ 解析（csharp/aspx/...）
         → 該檔呼叫的 SP → SP 讀寫的 Table
-                                      ↑ 沿 FK 把相連 Table 也納入（預設 1 層）
         → 調用鏈（caller → callee）
         → 擷取相關程式碼片段（snippet_extractor）
 ```
 
-- 資料來源：`sp_relations`（SP↔C#）、`table_relations`（Table↔SP）、新增 `fk_relations`（Table↔Table）、新增 `call_chains`（method↔method）。
-- **這一步不需要 AI，資料你已經幾乎都有**，只差 FK 與調用鏈兩塊（見 §6）。
+- 資料來源：`sp_relations`（SP↔C#）、`table_relations`（Table↔SP）、新增 `call_chains`（method↔method）。
+- **這一步不需要 AI，資料你已經幾乎都有**，只差調用鏈這一塊（見 §6）。
 
 ### 5.4 原始碼來源解析（catalog 驅動，支援多系統共用 repo）
 
@@ -365,17 +360,7 @@ RAG 命中 system_id
 
 ## 6. 既有模組需要的擴充
 
-### 6.1 Table 外鍵（sql_analyzer.py）
-新增方法查 FK：
-```sql
-SELECT fk.name, tp.name AS parent_table, ref.name AS ref_table
-FROM sys.foreign_keys fk
-JOIN sys.tables tp  ON fk.parent_object_id = tp.object_id
-JOIN sys.tables ref ON fk.referenced_object_id = ref.object_id;
-```
-→ 產出 `fk_relations: list[(table, ref_table)]`，寫入 `ProjectScanResult`。
-
-### 6.2 方法調用鏈（csharp_parser.py + project_scanner.py）
+### 6.1 方法調用鏈（csharp_parser.py + project_scanner.py）
 - 既有 `MethodInfo.calls` 已抓到「方法呼叫了哪些名稱」。
 - 擴充：掃描完成後做一次全域比對，把 callee 名稱解析回實際 `ClassInfo.MethodInfo`，建出 `call_graph: dict[method_id, list[method_id]]`。
 - 用途：讓影響追蹤能從 SP 往上回溯到「哪個按鈕事件 / Controller action」。
@@ -428,7 +413,6 @@ AZURE_CLONE_ROOT=./data/repos
 # === 影響分析介面 ===
 IMPACT_SERVICE_URL=http://127.0.0.1:8800   # Impact 服務位址
 IMPACT_SERVICE_TIMEOUT=300
-IMPACT_FK_DEPTH=1
 
 # === AI 控制（AI 跑在 spec-rag）===
 RUN_AI=false               # 是否呼叫 OpenAI 整合（false 省 token）

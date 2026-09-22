@@ -21,7 +21,7 @@
 - **智慧搜尋**：依名稱關鍵字搜尋所有相關格式檔案（aspx/cs/cshtml/vue/controller/service），並列出其呼叫的 SP 與資料表
 - **報告產生**：輸出含 Chart.js 圖表的互動式 HTML 報告，以及 JSON / Excel 格式的 SP 分析結果
 - **Azure DevOps 整合**：以 PAT 認證自動 `git clone` / `git pull` 目標儲存庫（shallow clone），PAT 在輸出中自動遮蓋
-- **HTTP 影響分析服務**：以 FastAPI 提供 `/analyze`、`/refresh` 端點，依程式名回傳方法、SP、資料表、FK 連動、呼叫鏈與程式碼片段；可選連資料庫回傳 **SP 完整定義**；原始碼一律 clone 進 `data/`，解析結果持久化快取，更新指令才重新解析
+- **HTTP 影響分析服務**：以 FastAPI 提供 `/analyze`、`/refresh` 端點，依程式名回傳方法、SP、資料表、呼叫鏈與程式碼片段；可選連資料庫回傳 **SP 完整定義**；原始碼一律 clone 進 `data/`，解析結果持久化快取，更新指令才重新解析
 
 ## 系統需求
 
@@ -173,7 +173,6 @@ Impact_analysis_system/
 │   ├── scan_store.py          # 掃描結果持久化快取（data/scan_cache）
 │   ├── snippet_extractor.py   # 依方法位置擷取程式碼片段
 │   ├── call_chain_builder.py  # 程式內部方法呼叫鏈
-│   ├── fk_resolver.py         # FK 連動資料表解析（盡力而為）
 │   └── sp_fetcher.py          # 連資料庫擷取 SP 完整定義（盡力而為）
 ├── tests/                     # 測試腳本
 ├── data/                      # 服務用資料
