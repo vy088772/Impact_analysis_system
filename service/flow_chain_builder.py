@@ -3,7 +3,7 @@
 變更影響「關係鏈」建構（無 AI）。
 
 把既有的靜態分析關聯（方法呼叫鏈、C#到SP關聯、C#到資料表關聯、View 層控制項
-事件、SP 內部巢狀呼叫、SP 引用資料表、FK 連動表）串成結構化的候選鏈，交給
+事件、SP 內部巢狀呼叫、SP 引用資料表）串成結構化的候選鏈，交給
 呼叫端（spec-rag 的 mode 3 agent）自行判斷哪一條鏈才是使用者實際要問的那個——
 這裡只負責把鏈算出來，不做任何「這條鏈跟問題相不相關」的判斷。
 
@@ -11,7 +11,7 @@
   - forward（build_forward_chain）：從指定的錨點方法（通常是 spec-rag 端依
     UI 動作用語意檢索，從 ui_fields 的 events 挑出的候選 handler 方法名稱）出發，
     走方法呼叫鏈，再到直接呼叫的 SP，再遞迴展開 SP 內部呼叫的其他 SP，最後彙整
-    各層 SP 引用的資料表（含 FK 連動表）；同時也會補上可達方法「自己方法體內裸
+    各層 SP 引用的資料表；同時也會補上可達方法「自己方法體內裸
     SQL 字串」引用的資料表（`inline_sql_tables`，見 _inline_sql_tables），涵蓋
     完全沒呼叫 SP、只靠內嵌 SQL 查表的方法（例如只是組 DropDownList 選項的
     BindXxx 方法）。
@@ -43,7 +43,6 @@ from .graph_queries import query_table_accesses
 from .execution_path_builder import build_execution_paths
 from .sp_fetcher import fetch_sp_definitions
 from .sp_call_fetcher import fetch_called_sp_names
-from .fk_resolver import resolve_fk_related
 
 _MAX_SP_DEPTH_HARD_CAP = 5  # 無論呼叫端傳入多大，都不超過這個層數，避免巨大 SP 網絡失控展開
 
@@ -234,7 +233,6 @@ def build_forward_chain(
     db_server: Optional[str] = None,
     db_name: Optional[str] = None,
     max_sp_depth: int = 2,
-    fk_depth: int = 1,
     graph: Optional[Mapping[str, object]] = None,
     invocations: Iterable[DbInvocation] = (),
 ) -> Optional[dict]:
@@ -319,16 +317,6 @@ def build_forward_chain(
     inline_tables = _inline_sql_tables(matched_files, reachable_methods)
     all_tables.update(inline_tables)
 
-    related_tables: List[str] = []
-    if fk_depth > 0 and all_tables:
-        related_tables = resolve_fk_related(
-            sorted(all_tables),
-            database_alias=database_alias,
-            depth=fk_depth,
-            db_server=db_server,
-            db_name=db_name,
-        )
-
     return {
         "anchor_method": anchor_method,
         "method_path": method_path,
@@ -341,7 +329,6 @@ def build_forward_chain(
         "unresolved_paths": unresolved_paths,
         "tables": sorted(all_tables),
         "inline_sql_tables": sorted(inline_tables),
-        "related_tables_fk": related_tables,
     }
 
 

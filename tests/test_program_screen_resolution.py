@@ -194,7 +194,6 @@ def _analyze(
             program_names=list(program_names),
             include_snippets=False,
             include_view_layer=include_view_layer,
-            fk_depth=0,
         )
     )
 

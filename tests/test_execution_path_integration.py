@@ -165,7 +165,6 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
             database="OrdersDb",
             program_names=["OrderPage"],
             include_snippets=False,
-            fk_depth=0,
         )
     )
 
@@ -257,7 +256,6 @@ def test_analyze_keeps_source_wrapper_method_flow_in_execution_path(monkeypatch,
             database="OrdersDb",
             program_names=["OrderPage"],
             include_snippets=False,
-            fk_depth=0,
         )
     )
 
@@ -560,7 +558,6 @@ def test_forward_chain_without_graph_keeps_inline_sql_but_ignores_legacy_sp_rela
         [legacy_relation],
         tmp_path,
         "SaveData",
-        fk_depth=0,
         graph=None,
         invocations=[],
     )
@@ -769,7 +766,6 @@ def test_analyze_can_disable_execution_paths(monkeypatch, tmp_path: Path) -> Non
             program_names=["OrderPage"],
             include_execution_paths=False,
             include_snippets=False,
-            fk_depth=0,
         )
     )
 

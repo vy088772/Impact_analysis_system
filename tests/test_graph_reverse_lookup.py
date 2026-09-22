@@ -426,7 +426,6 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
             database="OrdersDb",
             program_names=["DirectPage"],
             include_snippets=False,
-            fk_depth=0,
             wrapper_contract="sqlobject",
         )
     )
@@ -687,7 +686,6 @@ def test_analyze_keeps_likely_invocation_diagnostic_out_of_formal_counts(monkeyp
             database="OrdersDb",
             program_names=["DirectPage"],
             include_snippets=False,
-            fk_depth=0,
         )
     )
 
@@ -724,7 +722,6 @@ def test_analyze_without_database_keeps_source_facts_without_formal_relationship
         AnalyzeRequest(
             program_names=["DirectPage"],
             include_snippets=False,
-            fk_depth=0,
         )
     )
 

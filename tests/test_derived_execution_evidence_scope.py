@@ -46,7 +46,6 @@ def test_fields_outside_the_scope_do_not_change_it() -> None:
             question="which programs touch ETON.ManifestNew?",
             include_snippets=False,
             include_sp_defs=True,
-            fk_depth=2,
             expand_depth=1,
             refresh=True,
             max_paths=5,

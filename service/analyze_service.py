@@ -58,7 +58,6 @@ from .schemas import (
 )
 from .snippet_extractor import extract_snippets
 from .call_chain_builder import build_call_chains
-from .fk_resolver import resolve_fk_related
 from .sp_fetcher import fetch_sp_definitions
 from .view_fetcher import fetch_view_definitions
 from .udf_fetcher import fetch_udf_definitions
@@ -2479,17 +2478,6 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 chain for chain in call_chains if resolution.owns_method(chain[0])
             ]
 
-            # FK 連動資料表（S3，盡力而為：無資料庫則為空）
-            related_tables: List[str] = []
-            if req.fk_depth > 0 and table_names:
-                related_tables = resolve_fk_related(
-                    table_names,
-                    database_alias=req.database or None,
-                    depth=req.fk_depth,
-                    db_server=req.db_server or None,
-                    db_name=req.db_name or None,
-                )
-
             # SP 完整定義（選用，需 DB 連線；讓 AI 看得到 SP 實際邏輯）
             sp_definitions: List[Dict] = []
             if req.include_sp_defs and sp_names:
@@ -2608,7 +2596,6 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                     methods=methods,
                     stored_procedures=sp_names,
                     tables=table_names,
-                    related_tables=related_tables,
                     call_chains=call_chains,
                     code_snippets=code_snippets,
                     sp_definitions=sp_definitions,
@@ -3238,7 +3225,6 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
         db_server=db_server,
         db_name=db_name,
         max_sp_depth=req.max_sp_depth,
-        fk_depth=req.fk_depth,
         graph=execution_graph,
         invocations=rated_invocations,
     )

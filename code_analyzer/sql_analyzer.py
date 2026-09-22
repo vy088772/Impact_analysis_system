@@ -431,11 +431,9 @@ class SQLAnalyzer:
     def get_primary_key_columns(self, table_name: str, schema: str = 'dbo') -> List[str]:
         """取得資料表的主鍵欄位名稱清單（依組成順序）。
 
-        供「命名慣例推論關聯」使用（見 service/fk_resolver.py）：資料庫沒有
-        建立實際 FK 約束時，改用「某表的主鍵欄位名稱，剛好也出現在其他表當
-        欄位名」這種命名慣例，推論兩表可能相關（例如 Customer 表主鍵
-        CustomerCode，Order 表也有 CustomerCode 欄位）。純靜態 Schema 查詢，
-        不需要額外連線（跟其他 dump_all_sql_objects 內的查詢共用同一次連線）。
+        原供已移除的「命名慣例推論關聯」功能（曾在 service/fk_resolver.py）使用；
+        該功能已移除，此處保留欄位收集本身。純靜態 Schema 查詢，不需要額外連線
+        （跟其他 dump_all_sql_objects 內的查詢共用同一次連線）。
         """
         query = """
         SELECT kcu.COLUMN_NAME

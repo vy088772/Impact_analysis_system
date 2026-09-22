@@ -37,7 +37,7 @@ from config.settings import settings
 from .graph_queries import _normalize_table as normalize_table_name
 
 # 快取格式版本：dump_all_sql_objects() 回傳結構若變動則遞增，讓舊快取自動失效
-# v2：tables[].primary_keys（供 fk_resolver.py 的 PK 命名慣例推論關聯使用）
+# v2：tables[].primary_keys（原供已移除的 fk_resolver.py 之 PK 命名慣例推論關聯使用）
 # v3/v4：新增又退場的 dependencies/write_dependencies 欄位，見 ADR-0031。
 # v5：新增 sql_execution_graph（ScriptDom AST 產生的 typed operation nodes 與
 #     reads/writes/contains relationships），舊 cache 必須重新 refresh。

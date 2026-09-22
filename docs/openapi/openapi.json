@@ -29,11 +29,6 @@
             "title": "Expand Max Programs",
             "type": "integer"
           },
-          "fk_depth": {
-            "default": 1,
-            "title": "Fk Depth",
-            "type": "integer"
-          },
           "include_execution_paths": {
             "default": true,
             "title": "Include Execution Paths",
@@ -455,11 +450,6 @@
             "default": "forward",
             "title": "Direction",
             "type": "string"
-          },
-          "fk_depth": {
-            "default": 1,
-            "title": "Fk Depth",
-            "type": "integer"
           },
           "max_sp_depth": {
             "default": 2,
@@ -1096,13 +1086,6 @@
               "type": "object"
             },
             "title": "Related Programs",
-            "type": "array"
-          },
-          "related_tables": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Related Tables",
             "type": "array"
           },
           "shared_component_contributions": {

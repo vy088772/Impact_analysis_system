@@ -191,7 +191,6 @@ def _analyze(
             database=database,
             program_names=list(program_names),
             include_snippets=False,
-            fk_depth=0,
         )
     )
 

@@ -37,7 +37,6 @@ class AnalyzeRequest(BaseModel):
     program_names: List[str]                 # 要分析的程式名清單
     include_snippets: bool = True            # 是否回傳程式碼片段（S2b 實作）
     include_sp_defs: bool = False            # 是否連資料庫擷取 SP 完整定義（需 DB 連線）
-    fk_depth: int = 1                        # FK 連動追蹤層數（S3 實作）
     expand_depth: int = 0                    # 跨程式呼叫參照展開層數（0=不展開，向下相容）
     expand_max_programs: int = 10            # 展開時每支程式最多帶入幾個相關程式
     database: str = ""                        # 資料庫簡稱／快取鍵（通常是 spec-rag 的 system_id；留空則跳過 DB 相關功能）
@@ -154,7 +153,6 @@ class ProgramAnalysis(BaseModel):
     methods: List[Dict] = Field(default_factory=list)
     stored_procedures: List[str] = Field(default_factory=list)
     tables: List[str] = Field(default_factory=list)
-    related_tables: List[str] = Field(default_factory=list)  # FK 連動的相關資料表（S3）
     call_chains: List[List[str]] = Field(default_factory=list)
     code_snippets: List[CodeSnippet] = Field(default_factory=list)
     sp_definitions: List[Dict] = Field(default_factory=list)  # SP 完整定義（include_sp_defs=True 時）
@@ -601,7 +599,6 @@ class FlowChainRequest(BaseModel):
     db_server: str = ""                       # 資料庫主機位址（與 db_name 需同時提供）
     db_name: str = ""                         # 實際資料庫名稱
     max_sp_depth: int = 2                     # forward 用：SP 巢狀展開層數上限
-    fk_depth: int = 1                         # forward 用：FK 連動追蹤層數
     cache_only: bool = True                   # True → 系統未 clone/分析過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再組鏈
 
