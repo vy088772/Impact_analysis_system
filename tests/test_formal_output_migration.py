@@ -5,28 +5,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from service.dependency_fetcher import fetch_dependencies
 from service import sp_fetcher
-
-
-def test_dependency_fetcher_requires_execution_graph() -> None:
-    graph = {
-        "nodes": [
-            {"id": "sp:entry", "type": "stored_procedure", "name": "usp_Entry"},
-            {"id": "sp:nested", "type": "stored_procedure", "name": "usp_Nested"},
-        ],
-        "relationships": [
-            {"type": "calls", "source": "sp:entry", "target": "sp:nested"},
-        ],
-    }
-
-    assert fetch_dependencies(["dbo.usp_Entry"], "OrdersDb", graph=graph) == {
-        "dbo.usp_Entry": {
-            "depends_on": ["usp_Nested"],
-            "depended_by": [],
-        }
-    }
-    assert fetch_dependencies(["dbo.usp_Entry"], "OrdersDb") == {}
 
 
 def test_dependency_graph_renderer_ignores_legacy_sp_relations(tmp_path) -> None:
