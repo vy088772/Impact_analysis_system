@@ -265,12 +265,6 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
                 ],
                 "functions": [],
                 "tables": [{"name": "SOrder", "columns": []}],
-                "dependencies": {
-                    "legacy": {"depends_on": ["old"], "depended_by": []}
-                },
-                "write_dependencies": {
-                    "usp_SaveOrder": {"writes_tables": ["dbo.SOrder"]}
-                },
             }
 
     with CacheRoot():
@@ -284,8 +278,19 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
                 server=TEST_SERVER,
                 db_name="TestDb",
             )
-            assert "dependencies" not in data
-            assert "write_dependencies" not in data
+            # ADR-0031：舊有 dependencies/write_dependencies 欄位名稱不能出現在
+            # persisted payload 裡這件事，改由這條 shape 斷言把關（原本靠已刪除
+            # 的 scrubber `_without_legacy_dependency_fields()` 擋下）；日後若有
+            # payload producer 重新長出這兩個舊欄位名稱，這裡就會失敗。
+            assert set(data.keys()) == {
+                "database",
+                "schema",
+                "procedures",
+                "views",
+                "functions",
+                "tables",
+                "sql_execution_graph",
+            }
             graph = data["sql_execution_graph"]
             assert_relationships_resolve_to_known_nodes(graph)
             nodes_by_id = {node["id"]: node for node in graph["nodes"]}
@@ -321,8 +326,7 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             reloaded = sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER)
             assert reloaded is not None
             assert reloaded["sql_execution_graph"] == graph
-            assert "dependencies" not in reloaded
-            assert "write_dependencies" not in reloaded
+            assert set(reloaded.keys()) == set(data.keys())
         finally:
             sql_analyzer.SQLAnalyzer = original_analyzer
 

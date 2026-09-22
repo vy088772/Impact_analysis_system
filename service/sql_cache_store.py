@@ -38,13 +38,7 @@ from .graph_queries import _normalize_table as normalize_table_name
 
 # 快取格式版本：dump_all_sql_objects() 回傳結構若變動則遞增，讓舊快取自動失效
 # v2：tables[].primary_keys（供 fk_resolver.py 的 PK 命名慣例推論關聯使用）
-# v3：新增 dependencies 欄位（sys.sql_expression_dependencies 原生依賴關係，
-#     {name: {"depends_on":[...], "depended_by":[...]}}），取代 quick_analyze_sp
-#     內原本純 regex 猜測資料表的做法（原生依賴優先，regex 僅作 fallback）
-# v4：新增 write_dependencies 欄位（sys.dm_sql_referenced_entities 逐 SP 讀寫資訊，
-#     {sp_name: {"writes_tables":[...], "reads_tables":[...], "writes_columns":{...}}}），
-#     供 find_by_table() 分辨「這支 SP 到底是讀還是寫這張表」（原生依讀寫優先，
-#     regex presence 比對僅作 fallback）
+# v3/v4：新增又退場的 dependencies/write_dependencies 欄位，見 ADR-0031。
 # v5：新增 sql_execution_graph（ScriptDom AST 產生的 typed operation nodes 與
 #     reads/writes/contains relationships），舊 cache 必須重新 refresh。
 # v6：sql_execution_graph 增加 database identity，供跨資料庫 Execution Path join 驗證。
@@ -349,13 +343,6 @@ def _is_valid_cache(data: object, identity: CacheIdentity) -> bool:
     return _same_scope(graph.get("database"), identity.database)
 
 
-def _without_legacy_dependency_fields(data: Dict) -> Dict:
-    sanitized = dict(data)
-    sanitized.pop("dependencies", None)
-    sanitized.pop("write_dependencies", None)
-    return sanitized
-
-
 def has_cache(database: str, schema: str = "dbo", server: str = "") -> bool:
     """這個 Database 有沒有建檔：完全由對應的快取檔在不在磁碟上決定。"""
     return load_cached(database, schema, server=server) is not None
@@ -650,7 +637,6 @@ def get_or_dump(
     from .sql_execution_graph import build_sql_execution_graph
 
     identity = CacheIdentity.of(server, db, schema)
-    data = _without_legacy_dependency_fields(data)
     data["sql_execution_graph"] = build_sql_execution_graph(
         data,
         progress_callback=progress_callback,
