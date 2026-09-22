@@ -46,10 +46,45 @@ the function is now gone.
 Remove the FK cascade table from the orchestrator. The record states that the
 resolver is gone. It must not land before that is true.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] ADR-0031 exists in the decision record directory, and it is written in English.
-- [ ] The record states the decision and every measurement listed above.
-- [ ] The record names design decision 9 as the decision it supersedes.
-- [ ] The record notes that ADR-0011 now cites a function that no longer exists.
-- [ ] ADR-0011 is unchanged.
+- [x] ADR-0032 exists in the decision record directory, and it is written in English.
+- [x] The record states the decision and every measurement listed above.
+- [x] The record names design decision 9 as the decision it supersedes.
+- [x] The record notes that ADR-0011 now cites a function that no longer exists.
+- [x] ADR-0011 is unchanged.
+
+**Note (2026-09-22):** Ticket 01's note flagged that `docs/adr/` already has
+an `0031-retire-the-legacy-dependency-dictionary-pipeline.md`, so this ADR
+is `0032-remove-the-fk-cascade-table-feature.md`, not 0031. Verified the
+collision directly with `ls docs/adr/` before writing — 0031 through 0031
+were all taken, 0032 was free. Every checklist item and the ticket title
+say "ADR-0031"; the new file uses the next free number instead, since the
+number in a filename must be unique.
+
+Traced "the spec" the ticket points to for measurements to
+`.scratch/remove-fk-cascade-tables/spec.md`, which names the actual
+database and table names behind each figure (PUR database; `Customers`,
+`Quotation`, `Vendors`, `PQRMaster`, `BudgetHeader` tables). The ADR uses
+those names rather than the ticket's anonymized phrasing ("a master
+table", "two detail tables"), since a maintainer judging this decision
+later needs the concrete tables, not a category.
+
+Traced "design decision 9" and "the S3 milestone table" to
+`Impact_analysis_system/docs/INTEGRATION_DESIGN.md`: decision 9 is item 9
+in §10 ("已確認決策" / "confirmed decisions"), reading "FK 連動深度：預設 1
+層" ("FK cascade depth: default 1 level"); the S3 row is in §9's stage
+table, naming `fk_resolver.py`. The ADR cites both by section and quotes
+the Chinese decision 9 line with an English gloss. Neither file was
+touched — ticket 04 owns document updates, and the spec is explicit that
+both stay unchanged as historical records.
+
+Confirmed the ADR-0011 citation claim directly: `docs/adr/0011-remove-live-query-fallbacks.md`'s
+Decision section names `resolve_fk_related()`; `service/fk_resolver.py`
+(ticket 01's removal) no longer exists in this repository. Did not edit
+ADR-0011 — the new ADR's Consequences section carries the note that
+ADR-0011's citation is now stale, per the ticket's instruction that
+ADR-0011 keeps its original text.
+
+Both blocking tickets (01, 02) were already `done` before this ticket
+started, so the resolver module is confirmed gone in both repositories.
