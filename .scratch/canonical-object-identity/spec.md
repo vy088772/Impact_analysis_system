@@ -1787,7 +1787,10 @@ into Seam 2. The rule moves out of the query and into a filter over the returned
 rows, so Seam 2 tests an outcome and not a string. The finding said three of
 the four schemas cannot appear. That was wrong for `guest`: a user can create
 objects in `guest`, and the catalog views list them. Two of the four cannot
-appear.
+appear. We verified this on SQL Server 2019 (15.0.4153.1). A user with ALTER
+permission on the `guest` schema created a table in `guest`.
+`INFORMATION_SCHEMA.TABLES` listed the table. A create in `sys` or in
+`INFORMATION_SCHEMA` failed with error 2760.
 
 The findings below still block this spec. One of them is new, and the review
 that produced the others did not raise it.
