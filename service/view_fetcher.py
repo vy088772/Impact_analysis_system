@@ -28,13 +28,14 @@ def _from_cache(
     database_alias: Optional[str],
     max_def_chars: int,
     db_server: Optional[str] = None,
-) -> tuple[List[dict], List[str]]:
+) -> List[dict]:
+    """回傳 table_names 中是快取 View 的定義清單；不是 View 的名稱直接略過。"""
     if not database_alias:
-        return [], []  # 無資料庫可查，視為「無法判斷」，不當作快取缺漏去即時連線（避免誤連）
+        return []  # 無資料庫可查，視為「無法判斷」，不當作快取缺漏去即時連線（避免誤連）
 
     cached = load_cached(database_alias, server=db_server or "")
     if not cached:
-        return [], []
+        return []
 
     view_names = {_normalize(v["name"]) for v in cached.get("views", [])}
     lookup = {_normalize(v["name"]): v for v in cached.get("views", [])}
@@ -52,7 +53,7 @@ def _from_cache(
             "definition": definition[:max_def_chars],
             "truncated": len(definition) > max_def_chars,
         })
-    return found, []
+    return found
 
 
 def fetch_view_definitions(
@@ -71,5 +72,5 @@ def fetch_view_definitions(
     """
     if not table_names:
         return []
-    found, _ = _from_cache(table_names, database_alias, max_def_chars, db_server)
+    found = _from_cache(table_names, database_alias, max_def_chars, db_server)
     return found
