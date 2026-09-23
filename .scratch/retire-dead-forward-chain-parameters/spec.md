@@ -51,7 +51,7 @@ A good test here proves that the forward chain returns the same data for the sam
 
 - **`build_forward_chain()` direct tests** (`tests/test_execution_path_integration.py`, the two forward-chain tests) are the seam. They pass `sp_relations` and `root` positionally today. Change only their call arguments: remove the `[]` / `[legacy_relation]` argument and the `tmp_path` argument. Do not change any assertion. This is different from the previous cleanup, which kept all tests unmodified. Here the tests call the changed signature, so the call must change.
 - The test `test_forward_chain_without_graph_keeps_inline_sql_but_ignores_legacy_sp_relation` builds a `legacy_relation` value only to pass it as `sp_relations`. After the change, a caller cannot pass a legacy SP relation at all. The signature now guarantees "ignores legacy SP relation", so the test no longer proves it. Delete the `legacy_relation` value. Rename the test to `test_forward_chain_without_graph_keeps_inline_sql`. Do not change any assertion. Keep the `CSharpSPRelation` import, because another test in the file uses it.
-- **The forward branch of `analyze_service.flow_chain()`** has no test today. All existing `flow_chain()` tests use `direction="backward"`. This ticket does not add one. Instead, run mypy on the changed files. The mypy error set must contain no new error compared to the commit before this ticket. mypy reports an unexpected keyword argument, which is the only failure this call-site edit can cause.
+- **The forward branch of `analyze_service.flow_chain()`** has no test today. All existing `flow_chain()` tests use `direction="backward"`. This spec does not add one. Instead, run mypy on the changed files. The mypy error set must contain no new error compared to the commit before the change. mypy reports an unexpected keyword argument, which is the only failure this call-site edit can cause.
 - No new test. The `sp_call_fetcher` module has no test to delete.
 
 ## Out of Scope
@@ -62,6 +62,6 @@ A good test here proves that the forward chain returns the same data for the sam
 
 ## Further Notes
 
-The forward branch of `analyze_service.flow_chain()` has no test coverage today. This is a pre-existing gap. This ticket relies on mypy for its call-site edit and does not close the gap. This note keeps the gap visible.
+The forward branch of `analyze_service.flow_chain()` has no test coverage today. This is a pre-existing gap. This spec relies on mypy for its call-site edit and does not close the gap. This note keeps the gap visible.
 
 This spec comes from a grilling session after the code review of `.scratch/remove-unused-fetcher-parameters/`. That review found three unread parameters in `build_forward_chain()`. A check of the function body found six.
