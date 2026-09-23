@@ -1,6 +1,6 @@
 # Remove Unused Parameters in sp_fetcher and view_fetcher
 
-Status: ready-for-agent
+Status: done
 
 ## Problem Statement
 
