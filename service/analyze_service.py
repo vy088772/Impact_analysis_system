@@ -2485,7 +2485,6 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                     sp_names,
                     database_alias=req.database or None,
                     db_server=req.db_server or None,
-                    db_name=req.db_name or None,
                 )
 
             # SQL View 完整定義（選用）：table_names 裡如果其實是 View（而非一般資料表），

@@ -192,7 +192,6 @@ def _expand_sp_chain(
             [name],
             database_alias=database_alias,
             db_server=db_server,
-            db_name=db_name,
         )
         info = defs[0] if defs else {"name": name, "exists": False, "definition": "", "tables": []}
         definition = info.get("definition", "") or ""

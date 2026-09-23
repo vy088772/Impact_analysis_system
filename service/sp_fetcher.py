@@ -123,14 +123,13 @@ def fetch_sp_definitions(
     database_alias: Optional[str] = None,
     max_def_chars: int = 8000,
     db_server: Optional[str] = None,
-    db_name: Optional[str] = None,
 ) -> List[dict]:
     """回傳每個 SP 的定義摘要清單。
 
     每筆：{name, exists, parameters, tables, complexity, definition, truncated}
     只讀本機 SQL 快取；快取版的 tables 來自 SQL Execution Graph。快取沒有的
     名稱直接略過，不即時連線補查（見 docs/adr/0011-remove-live-query-fallbacks.md）。
-    無資料庫或無快取時回傳空清單。db_name 參數保留供呼叫端相容，本函式不使用它。
+    無資料庫或無快取時回傳空清單。
     """
     if not sp_names:
         return []
