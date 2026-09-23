@@ -16,6 +16,12 @@ Two other specs delete code that this spec would otherwise merge. Both are
 - `retire-legacy-dependency-dictionary` deletes the dependency fetcher module.
   That module holds a second implementation. This spec no longer names it.
 
+A third precondition sits in `llamaindex-spec-rag`. The
+`database-invocation-identity-is-the-call-site` spec makes the Database
+Invocation merge key on the call site. The merge then compares no SQL object
+name, and that spec deletes the merge module's name normalizer. This spec no
+longer names it. Issue 4 waits for that spec.
+
 The merge issue of this spec checks both preconditions. It confirms that
 neither module file exists before any merge starts. The test-fixture issue runs
 before it. That issue touches no module either precondition spec deletes, so it
@@ -48,17 +54,24 @@ reach it. The refresh asks SQL Server for one schema at a time and defaults to
 neither. The analyst gets an empty answer and no warning that the question was
 never asked.
 
-Two sites discard the schema during extraction, not during comparison. The
-regex table reader in the SQL analyzer and the table-name cleaner in the C#
-parser both cut the name down before anything stores it. A schema that those
-two sites drop is unrecoverable. No later module can put it back.
+Three sites discard the schema during extraction, not during comparison. The
+native dependency query and the regex table reader in the SQL analyzer, and the
+table reader in the C# parser, all cut the name down before anything stores it.
+A schema that those three sites drop is unrecoverable. No later module can put
+it back.
 
-The rule that produces the key has no module. Twenty-three sites re-derive it
-across the two repositories. They disagree in three ways. Nine sites fold case
+The three sites return a set of strings. A string can carry a schema, but it
+can also lose one, and nothing in its type shows which. The C# parser shows the
+worst case. Its patterns capture two parts at most, so `PUR.dbo.Users` reads as
+`PUR` and `DBO`. A filter then removes `DBO` as a schema name, and the whole
+reference disappears.
+
+The rule that produces the key has no module. Twenty-two sites re-derive it
+across the two repositories. They disagree in three ways. Eight sites fold case
 with `lower` and the rest use `casefold`. Six sites strip brackets at the edges
 only, and the rest remove every bracket. Two sites are whole schema-aware
 splitters with the same contract and different cleaners. A change to bracket
-handling therefore needs twenty-three edits, and no single place proves it.
+handling therefore needs twenty-two edits, and no single place proves it.
 
 ## Solution
 
@@ -100,7 +113,7 @@ removes. Both catalogs then answer under one written rule, and a match whose
 schema nobody proved is reported with an **Unproven Schema** mark rather than
 dropped.
 
-The work runs in three steps. Step 1 merges twenty-three sites into one module
+The work runs in three steps. Step 1 merges twenty-two sites into one module
 and changes one behaviour. Step 2a changes the write side and produces a cache
 that carries schemas. Step 2b changes the read side and surfaces them.
 
@@ -122,7 +135,7 @@ its first file, and after that issue it runs to the end.
 5. As an analyst, I want a search by bare name to return every schema that holds that name, so that I can see the ambiguity instead of receiving one arbitrary answer.
 6. As an analyst, I want an Execution Path whose schema is unproven to be reported and marked, so that I judge it myself rather than lose it.
 7. As an analyst, I want a target whose schema is unproven to produce one Execution Path, and its table match to carry an Unproven Schema mark, so that one unknown fact never becomes several facts of which at most one is true.
-8. As an analyst, I want the regex table reader to keep the schema it reads, so that a schema is not lost before any comparison can use it.
+8. As an analyst, I want each extraction site to return the Canonical Object Identity value, not a string, so that a lost schema is not representable before any comparison can use it.
 9. As an analyst, I want Step 1 to change one stated behaviour and no other, so that a refactor of this size is separable from a change of meaning.
 10. As an analyst, I want the bracket form `[db].[schema].[table]` treated exactly like `db.schema.table`, so that the written style of a name never changes the answer.
 11. As an analyst, I want a name that states no schema to stay unproven rather than be labelled `dbo`, so that a wrong schema is never presented as a fact.
@@ -172,7 +185,7 @@ its first file, and after that issue it runs to the end.
 55. As a reviewer, I want both catalogs to obey one written lookup rule instead of sharing a module, so that the rule is checkable without a dependency between them.
 56. As a reviewer, I want Unproven Schema to be one term in the glossary, so that the Execution Path mark and the catalog reason use the same word.
 57. As a maintainer, I want the module testable with strings alone, so that a test of the rule builds no graph and opens no cache.
-58. As a maintainer, I want the twenty-three sites listed by module, so that the merge is checkable rather than approximate.
+58. As a maintainer, I want the twenty-two sites listed by module, so that the merge is checkable rather than approximate.
 59. As a maintainer, I want the two deleted modules confirmed absent before the merge starts, so that I do not merge a rule into code another spec is removing.
 60. As a maintainer, I want the normalizers for paths, program names, servers, and contracts left alone, so that the merge does not swallow unrelated concepts.
 61. As a maintainer, I want Step 2 split into a write side and a read side, so that an empty result in Step 2b is traceable to one of the two.
@@ -272,6 +285,23 @@ its first file, and after that issue it runs to the end.
 145. As a maintainer, I want a test for a Database name that holds `__`, so that a change in the number of filename parts cannot mis-split that name in silence.
 146. As a maintainer, I want the meta file and the Object Location Index to lose their `schema` field in the identity commit, so that no reader compares a field the identity no longer holds.
 147. As a maintainer, I want tests that describe two caches for one Database deleted with the identity commit, so that no test asserts a state the cache format cannot produce.
+148. As a reviewer, I want a caller that needs a string to call the bare-key or full-key function by name, so that a dropped schema is a decision at a named call and not a defect in a container.
+149. As an analyst, I want the native dependency query to select the schema, the database, and the server, so that the main source of referenced tables keeps what SQL Server already knows.
+150. As an analyst, I want the C# parser to keep a three-part reference, so that `PUR.dbo.Users` in inline SQL is reported instead of removed as a schema name.
+151. As a reviewer, I want the C# parser to keep the written case of a name, so that a report shows the name as the source code writes it.
+152. As a reviewer, I want the Canonical Object Identity value to carry a server field that no key reads, so that a four-part name keeps its server on the Python side as it does in the analyzer.
+153. As a reviewer, I want Step 1 to change the container type and no displayed string, so that the type change is separable from the extraction fix in Step 2a.
+154. As an analyst, I want an inline C# SQL table to obey the table match rule, so that `dbo.AVM` does not match `COMMON.AVM` when my question states no Database.
+155. As an analyst, I want an inline C# SQL table that states no Database to take the Database of its connection, so that the fill follows the language rule and not the question.
+156. As a maintainer, I want the Scan Record to hold the value itself, so that no reader of a table relation splits a string to recover a schema.
+157. As a maintainer, I want the evaluation repository to read the new table relation in the same deployment, so that its routing expectations do not lose every write table in silence.
+158. As a maintainer, I want one frozen value to name every field of an Execution Path identity, so that one place answers what identifies a path.
+159. As a reviewer, I want a test that states four fixed `path_id` values before Step 1 starts, so that no later commit changes a `path_id` in silence.
+160. As a maintainer, I want the Path Identity value as the first commit of issue 7, so that the golden test proves that the refactor changes no `path_id`.
+161. As a reviewer, I want the Path Identity value to hold no candidate schema field, so that ADR-0035 stays the one rule for an unproven schema.
+162. As a reviewer, I want one fixed input of the golden test to hold a bracketed name, so that the one bracket rule of Step 1 cannot change a `path_id` in silence.
+163. As a reviewer, I want the shared case list to state the schema and the bracket handling of a procedure name, so that the Step 1 merge cannot change a `path_id` input in silence.
+164. As a caller, I want two stored-procedure chain entries with two schemas to stay two facts in the consumer's deduplication, so that the consumer counts the same facts as the producer.
 
 ## Implementation Decisions
 
@@ -280,7 +310,7 @@ its first file, and after that issue it runs to the end.
 Sixteen sites in this repository's static analyzer default a schema argument or
 field to `dbo`. No caller states that default; the code states it for them.
 
-This is a different defect from the twenty-three sites the new module absorbs.
+This is a different defect from the twenty-two sites the new module absorbs.
 Those sites re-derive a comparison key. These sixteen sites pass a schema
 straight into a SQL query, or hold it as a stored field.
 
@@ -351,11 +381,14 @@ caller a future edit misses, raises `TypeError` instead of reading `dbo`.
 - The module imports nothing from this project. The nearest existing home, the
   graph query module, transitively pulls in the C# analysis gateway. A string
   rule must not drag a whole analysis stack into four cache fetchers.
-- The module exports a frozen value type with three fields: database, schema,
-  and bare name. An empty field means "not stated", never "default".
+- The module exports a frozen value type with four fields: server, database,
+  schema, and bare name. An empty field means "not stated", never "default".
+- No key reads the server field. The field exists so that a four-part name keeps
+  its server on the Python side, as the analyzer host keeps it under story 79.
+  Out of Scope already states that no lookup consumes a linked server yet.
 - The module exports a parse function, a bare-key function, and a full-key
-  function. The bare key is today's behaviour exactly. The full key composes all
-  three parts.
+  function. The bare key is today's behaviour exactly. The full key composes the
+  database, the schema, and the bare name.
 - A full key always holds three segments. An empty part stays an empty segment,
   and the separator stays. The name `Orders` therefore produces `..orders`. A
   full key that dropped its empty segments would equal the bare key, and the two
@@ -369,7 +402,7 @@ caller a future edit misses, raises `TypeError` instead of reading `dbo`.
 
 ### Which sites the module absorbs
 
-Twenty-three sites. Nineteen sit in this repository and four sit in
+Twenty-two sites. Nineteen sit in this repository and three sit in
 `llamaindex-spec-rag`.
 
 This repository:
@@ -390,22 +423,75 @@ This repository:
 - The C# parser's table-name cleaner. It is an extraction site, and it drops the
   schema before anything stores the name.
 - The SQL analyzer's regex table reader. It is the second extraction site, and
-  it drops the schema the same way.
+  it drops the schema the same way. "The extraction sites" names a third
+  extraction site that is not in this count, because it re-derives no key.
 
 `llamaindex-spec-rag`:
 
 - The evaluation repository's object-key function.
-- The analysis merge module's SQL object name normalizer. This one drives
-  Database Invocation identity, so it is the copy that merges a qualified name
-  with a bare one. It calls the bare-key function, and it keeps that merge. The
-  C# side writes no schema, so the merge states a fact about the caller rather
-  than a defect.
 - The context builder's stored-procedure name core.
 - The path selection module's object leaf.
+
+The analysis merge module's name normalizer is not in this count. The third
+precondition deletes it, because the Database Invocation merge then keys on the
+call site and compares no SQL object name.
 
 Two modules change their imports but keep their own logic. The SQL cache store
 today imports a private name across a module boundary. The migration report
 composes two of the stored-procedure-side functions.
+
+### Two sites that keep the schema
+
+Two more sites in `llamaindex-spec-rag` key on the stored-procedure chain of a
+match. The module does not absorb them, and they are not in the count of
+twenty-two.
+
+- The reverse-lookup deduplication in the RAG client. It merges the matches of
+  each cache into one response.
+- The cross-system evidence identity. It groups the matches of each System.
+
+Each site folds the case of each chain entry and keeps the whole entry. So
+`dbo.spFoo` and `spFoo` are two identities, and `COMMON.spFoo` and `dbo.spFoo`
+are two identities.
+
+This behaviour is correct, and it stays. Two schemas name two objects, so two
+chain entries with two schemas are two facts. Neither site calls the bare-key
+function. A change that makes either site call it is a defect, because it
+merges two facts into one.
+
+Today these two sites disagree with the Database Invocation merge. That merge
+discards the schema of the first chain entry, so it treats `dbo.spFoo` and
+`spFoo` as one identity. No answer shows the disagreement, because the producer
+writes `dbo.` on every chain entry today. The third precondition deletes that
+merge normalizer. After it, no site in `llamaindex-spec-rag` compares a chain
+entry by its bare name.
+
+The producer and these two sites must count the same facts:
+
+- The producer deduplicates a table match by the ADR-0016 identity. That
+  identity holds the chain as the producer writes it, with each schema.
+- The `path_id` holds the module identifier, and each module identifier holds
+  the schema of its node. Two procedures in two schemas therefore produce two
+  `path_id` values and two records. The two sites keep both records.
+- The architecture review found one producer step that merged such a pair, as
+  its finding B2. A target with an empty schema produced one Execution Path per
+  candidate schema, and the candidate paths shared one `path_id`. The ADR-0016
+  deduplication then kept one path, and the two sites never received the others.
+- ADR-0035 removes that step. One target produces one Execution Path, and an
+  unproven schema marks it. So no producer step merges two schemas, and the
+  producer and the two sites count the same facts.
+
+A later change that merges two schemas on one side only breaks this agreement.
+Such a change must change both sides in one issue.
+
+Both sites fold case with `lower`, not `casefold`. The Step 1 case change does
+not reach them, because they are not in the count of twenty-two. The two
+functions differ only on characters outside ASCII, as "The behaviour change in
+Step 1" states.
+
+The grounding module's normalizer also discards the schema. Out of Scope keeps
+it where it is, because it mixes program file names with SQL object names. It
+counts no facts. It only checks that a name in an answer exists.
 
 ### What each call site holds
 
@@ -455,9 +541,78 @@ Both serve path evidence.
   would be false evidence. The graph builder's function-reference resolution
   obeys the same rules, in the same commits.
 
+### The extraction sites
+
+Three sites read a table name from source text or from SQL Server. Each one
+returns a set of Canonical Object Identity values, not a set of strings. A
+caller that needs a string calls the bare-key function, the full-key function,
+or the case-preserving variant. A caller can still discard the schema, but only
+at a call that names the function which discards it.
+
+Story 67 already argues this for the object listing: "a qualified string can
+carry a schema, but every reader must then split it again". The same argument
+applies to the three extraction sites.
+
+- The native dependency query in the SQL analyzer. It is the main source of the
+  referenced tables of one stored procedure. Today it selects the bare name
+  only.
+- The regex table reader in the SQL analyzer. It runs only when the native query
+  returns nothing.
+- The table reader in the C# parser, with its table-name cleaner. Its output
+  becomes the table of each C# table relation.
+
+The native query is not one of the twenty-two sites. It re-derives no key. It
+selects a column, so the site count does not change.
+
+Step 1 changes the container type at all three sites and changes no string. The
+native query and the regex reader keep what they read today, and each value
+holds an empty schema where the string held none. Each place that turns a value
+back into a string uses the case-preserving variant, so every displayed name
+stays the same. Those places are the stored-procedure summary's dictionary
+form, the terminal output, the spreadsheet export, and the table name of a C#
+table relation. A comment at each place names Step 2a as the step that removes
+it.
+
+Step 2a fixes the extraction itself. This is a behaviour change, so it does not
+join Step 1.
+
+- The native query also selects the referenced schema, database, and server.
+- The C# parser stops converting the SQL text to upper case. Its patterns
+  capture a name of up to four parts and pass the whole name to the parse
+  function. The parse function decides which part is the schema.
+- A set of values compares the parts as written. After the parser keeps the
+  written case, `Orders` and `ORDERS` in one statement are two values. A report
+  then shows one extra entry. No comparison changes, because every comparison
+  uses a folded key. This follows the analyzer host, which also compares the
+  parts as written and prefers an extra entry to a lost one.
+- The C# parser deletes its filter that removes `DBO`, `SYS`, and
+  `INFORMATION_SCHEMA`. That filter exists because the patterns captured a
+  schema as a table name. That capture no longer occurs. The filter removes
+  every three-part reference today, and after the fix it would remove only a
+  real table with one of those names.
+- Each C# table relation holds the value in a field named `table`. The field
+  named `table_name` is removed. The name `database` is not used, because a
+  relation already holds a `database` field with a different meaning: the
+  Database of the C# connection.
+- The Scan Record holds each relation as it is. The scan cache version rises, so
+  every Scan Record on disk is rejected until the next scan.
+- Four readers of a relation's table change in the same commit. The two readers
+  that build the shared-component table list call the case-preserving variant.
+  The two inline C# SQL comparisons, in the analysis service and in the flow
+  chain builder, call the bare-key function until Step 2b. Neither change
+  alters an answer.
+- The evaluation repository reads the Scan Record with a restricted unpickler.
+  That unpickler admits classes under `code_analyzer` and a short list of
+  built-in types, and nothing else. The module sits at the top level of this
+  repository, so the unpickler must admit it. The routing-expectations reader
+  also reads `table_name` and splits it on a dot. It reads the bare name from the
+  value instead. Issue 6 carries both changes, and issues 5 and 6 deploy
+  together. Without both, the evaluation repository cannot read any Scan Record,
+  or it loses every write table without an error.
+
 ### The behaviour change in Step 1
 
-Nine sites fold case with `lower` today and the rest use `casefold`. The merge
+Eight sites fold case with `lower` today and the rest use `casefold`. The merge
 moves every site to `casefold`. The two differ only on characters outside ASCII.
 No name in the five current caches contains such a character, so no answer
 changes in practice.
@@ -751,6 +906,11 @@ a bare name inside a list of strings.
 - The reader drops its textual fallback. Every caller passes a real object-name
   fragment, so an unexpected shape returns four empty parts instead of a name
   split on dots.
+- The name reader's exclusion compares the bare name only. The code today also
+  compares a composed `schema.name`. The exclusion set holds only
+  common-table-expression names, and T-SQL cannot qualify one. That second
+  comparison never matches, so the analyzer commit deletes it. No analyzer
+  output changes.
 - An unrecognised module reports an empty schema. The host states `dbo` nowhere.
 - The analysed module's own identity keeps three fields and gains no database. A
   module cannot name the Database that holds it, so the read side fills that
@@ -941,6 +1101,57 @@ Today it cuts both names down to the bare name, so `dbo.AVM` matches
   deduplication, the merge in `llamaindex-spec-rag`, and `/path_evidence`.
   ADR-0035 records the decision.
 
+An inline C# SQL table obeys the same rule. `/find_by_table` compares it before
+it reads the graph, and the flow chain builder compares it the same way. The
+comparison runs even when the request states no Database, so for that request
+it is the only source of an answer.
+
+- The table part of the relation gives the schema and the bare name.
+- A relation that states no Database takes the Database of its C# connection.
+  That is the language rule: inline SQL runs against the Database that its
+  connection opens. The request's Database is not used, because the request can
+  state none, and a program can open a connection to another Database.
+- When the parser cannot resolve the connection, the Database part stays empty.
+  The match then compares the schema and the bare name only, and it is still a
+  match. That over-reports, which ADR-0012 prefers to an under-report.
+- A target with an empty schema falls back to the bare key and carries the
+  `unproven_schema` value, as for an Execution Path.
+- The record gains `stated_database` when the relation states a Database other
+  than that of its connection.
+- The record's `table` field carries the name as the source code writes it.
+
+### The Path Identity value
+
+The Path Identity value is a frozen value that names every field of an Execution
+Path identity. Today one private function assembles eleven strings into the
+`path_id` hash. Its two callers pass four arguments, so no caller can name the
+fields.
+
+- The value holds nine fields: the Database, the source span, the entry method,
+  the procedure schema, the procedure name, the source snapshot hash, the module
+  chain, the operation identifier, and the conditions.
+- The source span is one nested frozen value. It holds the file path, the start
+  offset, and the end offset.
+- The module chain and the conditions are tuples of strings.
+- The value holds normalized values. Its constructors normalize the Database,
+  the procedure schema, and the procedure name through the Canonical Object
+  Identity module. Step 1 removes the builder's own three normalizers, so the
+  value adds no second rule. Two values that name one path are therefore equal.
+- One constructor builds the identity of a resolved path. The other constructor
+  builds the identity of an unresolved path. The second constructor owns the
+  operation identifier that names the reason, and it owns the module fallback.
+- One property on the value returns the `path_id`. The property flattens the
+  source span into three strings. It joins the module chain with `|` and the
+  conditions with `\x1e`.
+- The field order, the separators, and the hash length do not change. No
+  `path_id` changes.
+- The private function that assembled the eleven strings is removed.
+- The value holds no candidate schema field. ADR-0035 rejects that field as its
+  first rejected alternative.
+- A field that joins the identity later changes every `path_id`. That change
+  needs its own ADR, because three sites read `path_id` as the identity of one
+  path.
+
 ### The index states its own format version
 
 The index borrows the SQL cache format version today. Step 2b changes the index
@@ -1009,7 +1220,7 @@ promises to prevent.
 
 - `llamaindex-spec-rag` gets its own module, not a shared package. The module
   mirrors this repository's: the same value type, the same parse function, and
-  the same two key functions. Its four call sites all use it.
+  the same two key functions. Its three call sites all use it.
 - That module sits in the orchestration package. The evaluation code already
   imports that package from six files, so the fourth call site needs no new
   top-level package.
@@ -1193,13 +1404,23 @@ repository it changes.
    2a. This repository already applies all four server rules, so both lists pass
    here.
 
-   This issue also lands in two commits. The first commit removes the `dbo`
-   default from the sixteen static-analyzer sites listed under "The `dbo`
-   default in the static analyzer". It changes no answer. The second commit
-   does the nineteen-site merge and the `casefold` change.
-4. Step 1 in `llamaindex-spec-rag`. Four sites, the mirror module, the shared
+   This issue lands in three commits. The first commit adds only the golden
+   test under "The Path Identity value, over the execution path builder". A
+   golden test is a test that states the exact output for a fixed input. This
+   one passes on the code before the commit, and it changes no answer.
+
+   The second commit removes the `dbo` default from the sixteen static-analyzer
+   sites listed under "The `dbo` default in the static analyzer". It changes no
+   answer. The third commit does the nineteen-site merge and the `casefold` change. It also changes the
+   container type at the three extraction sites, under "The extraction sites",
+   and it changes no displayed string.
+4. Step 1 in `llamaindex-spec-rag`. Three sites, the mirror module, the shared
    fixture's second reader, the server rule, and the second cache-directory
    reader.
+
+   This issue is blocked by the `database-invocation-identity-is-the-call-site`
+   spec, the third precondition. Without it, this issue edits a normalizer that
+   the precondition deletes.
 
    That reader answers nothing wrong today: a downstream type guard discards the
    files it wrongly admits. It joins this issue because this issue is the
@@ -1210,13 +1431,20 @@ repository it changes.
    repository's server rule lacks the `tcp:` prefix rule and the `,port` suffix
    rule, and this issue adds both. The same issue deletes the test that compared
    a computed filename against a file on disk.
+
+   This issue changes neither site under "Two sites that keep the schema". It
+   adds one test for each site. Each test gives two matches that differ only
+   in the schema of one chain entry, and it expects two identities. One test
+   pair uses `dbo.spFoo` and `spFoo`. The other uses `COMMON.spFoo` and
+   `dbo.spFoo`.
 5. Step 2a in this repository. The object listing, the per-object fetches, the
-   identity, the filename, the refresh, the analyzer host, the format version,
+   identity, the filename, the refresh, the analyzer host, the extraction sites,
+   the format version,
    the SP Catalog, and the advanced manual example that sends the removed request
    field. The catalog belongs here because it reads the cache-wide
    schema field this issue deletes.
 
-   This issue lands in three commits. The analyzer commit changes the host, the
+   This issue lands in four commits. The analyzer commit changes the host, the
    JSON contract version, the graph payload, the graph format version, and the
    repair tool. It also fills an unstated schema with `dbo` at each call site,
    under "The Execution Graph payload". It also changes the graph object lookup
@@ -1248,20 +1476,40 @@ repository it changes.
    loading. The identity commit stops them loading, and only an operator refresh
    returns them.
 
+   The extraction commit changes the three extraction sites under "The
+   extraction sites": the native query, the C# parser's patterns and filter, the
+   `table` field of a C# table relation, its four readers, and the scan cache
+   version. It lands after the analyzer commit and before the listing commit.
+   The scan cache version rejects every Scan Record on disk, and the next scan
+   rebuilds each one.
+
    The analyzer commit stands alone. It reaches no SQL Server, it needs nothing
-   from the other two, and it can deploy before them. Shipped beside the identity
-   commit it stays correct, but the repair tool then has nothing to do: those
-   five caches are already invalid for the identity reason, and their
+   from the other three, and it can deploy before them. Shipped beside the
+   identity commit it stays correct, but the repair tool then has nothing to do:
+   those five caches are already invalid for the identity reason, and their
    replacements are born with the new graph shape.
+
+   The extraction commit also stands alone. It reaches no SQL Server either, but
+   it must deploy with issue 6.
 6. Step 2a in `llamaindex-spec-rag`. The removed request field, the refresh CLI,
    the regenerated routing expectations, and this repository's reader of the
-   two-part `sql_cache_identity` case list.
+   two-part `sql_cache_identity` case list. It also carries the two Scan Record
+   changes under "The extraction sites": the restricted unpickler admits the
+   Canonical Object Identity module, and the routing-expectations reader reads
+   the bare name from a relation's `table` field.
 7. Step 2b in this repository. The index buckets, the index's own format
    version, the located-database shape, the table match rule, the two full-key
    fields on an Execution Path, the Unproven Schema mark, the bare-key fallback
-   of the graph object lookup, every written sentence
-   that describes the index, and the advanced manual sentence about the stripped
-   `dbo.` prefix.
+   of the graph object lookup, the inline C# SQL match in the analysis service
+   and in the flow chain builder, every written sentence
+   that describes the index, the advanced manual sentence about the stripped
+   `dbo.` prefix, and the Path Identity value.
+
+   The Path Identity value lands first, in its own commit. That commit changes
+   no `path_id` and no answer. The golden test from issue 3 passes on the code
+   before the commit and on the code after it, with no edit to the test. The
+   test then guards every later commit of this issue, because story 93 keeps the
+   `path_id` formula unchanged.
 
    The format version lands in the same commit as the buckets. The constant and
    the shape it guards enter version control together.
@@ -1276,8 +1524,12 @@ repository it changes.
    run is what returns the pruning. It reads the caches already on disk and
    reaches no SQL Server, so it is not the operator action under Preconditions.
 8. The documents. The three new ADRs, the amendment note on ADR-0012, the
-   `CONTEXT.md` entries that no single behaviour change owns, and the cache store
-   docstring about collapsed schemas. The Object Location Index entry is not
+   `CONTEXT.md` entries that no single behaviour change owns, the cache store
+   docstring about collapsed schemas, and one sentence in the Database
+   Invocation entry. That sentence states that one entry method through one call
+   site is one Database Invocation, whichever SQL cache reports it. The third
+   precondition decides that rule, and this issue writes it, because the
+   precondition changes only `llamaindex-spec-rag`. The Object Location Index entry is not
    here; issue 7 carries it.
 
 Issues 5 and 6 deploy together. Issue 7 is blocked by the operator action named
@@ -1289,7 +1541,11 @@ A good test here states an externally visible outcome. It gives a name in and
 reads an answer out. It does not assert which function produced the key, how
 many buckets the index has, or what a private helper returned.
 
-Four seams. Three already exist. The SQL Cache Identity work adds none.
+One exception exists. The Path Identity value is the interface that states what
+identifies an Execution Path, so a test states its fields directly.
+
+Five seams. Three already exist, and Seam 4 and Seam 5 are new. The SQL Cache
+Identity work adds none.
 
 The `dbo` default removal needs no seam and no new test. An omitted schema
 argument now raises `TypeError` at the call site. That is a Python
@@ -1388,6 +1644,33 @@ group. What the four buckets answer stays under Seam 1.
 - That case builds its starting index the way the group above builds one: the
   writer writes a real index, and the case then edits the file. No test states an
   index payload by hand.
+
+### The Path Identity value, over the execution path builder
+
+The Path Identity value adds no seam. Its prior art is the execution path
+builder test file, which already asserts path identity through the builder's
+public function.
+
+- A golden test states the exact `path_id` for four fixed inputs: one resolved
+  path, one unresolved path, one path with conditions, and one path whose
+  procedure schema and procedure name hold brackets.
+- The golden test is the first commit of issue 3, alone. It passes on the code
+  before that commit.
+- Every later commit keeps the golden test green with no edit to the test. The
+  commit of issue 7 that adds the Path Identity value is one of them.
+- The golden test builds each Database Invocation by hand. It guards the
+  `path_id` formula inside the builder, and not the inputs of that formula.
+- The `dbo` default removal in issue 3 touches the SQL analyzer only. It changes
+  no input of a `path_id`.
+- In Step 1, only one change reaches an input of a `path_id`. The merge moves the
+  C# analysis gateway's procedure name and procedure schema functions into the
+  Canonical Object Identity module. Seam 4 guards that merge.
+- The golden test stays after issue 7. A later change that alters a `path_id`
+  fails it, and that failure asks for the ADR that such a change needs.
+- The other cases build a Path Identity value through its constructors and state
+  its fields. Two inputs that differ only in letter case give equal values.
+- No case compares a hash except the golden test. No case calls a private
+  helper.
 
 ### One test fixture module
 
@@ -1541,6 +1824,17 @@ and reads the records back.
 | 7 | A relationship that states no database, to `dbo.Users` | `Response.dbo.Users` | One record, with no `stated_database`. |
 | 8 | One View that reads `AVM`, and one that reads `dbo.AVM` | `COMMON.AVM` | One record for the first View, with the mark. No record for the second. |
 
+The inline C# SQL match takes four cases. Each one writes one Scan Record with
+one C# table relation, asks `/find_by_table` with no Database, and reads the
+records back.
+
+| # | The relation holds | Its connection | The caller asks | The answer |
+|---|---|---|---|---|
+| 1 | `COMMON.AVM` | `Response` | `dbo.AVM` | No record. |
+| 2 | `AVM`, with no schema | `Response` | `COMMON.AVM` | One record, with `unproven_schema`. |
+| 3 | `PUR.dbo.Users` | `Response` | `Response.dbo.Users` | No record. |
+| 4 | `dbo.Users` | Unresolved | `Response.dbo.Users` | One record, with no `stated_database`. |
+
 No case calls the table match function directly. Its keys are the internal
 detail this section rules out asserting.
 
@@ -1590,6 +1884,12 @@ This seam covers: the listing runs one query, that query selects a schema, and
 it applies no schema filter. It also covers the grouping, because one row set
 must produce four kinds in the payload.
 
+This seam also covers the two extraction sites in the SQL analyzer. The fake
+cursor returns a native dependency row for `PUR.dbo.Users`, and the referenced
+tables hold one value with that database, schema, and name. A second case
+returns no native row and a definition that reads `COMMON.AVM`. The regex
+reader then runs, and the value holds the schema `COMMON`.
+
 The excluded-schema rule sits in the listing method, as a filter over the
 returned rows. This seam therefore tests the rule as an outcome. The fake cursor
 returns rows in `dbo`, `guest`, `db_owner`, `DB_Reports`, and `dbXyz`. The
@@ -1611,6 +1911,13 @@ states a database and skips the schema, which is the case that produced the
 `WorkTable` and `Common` nodes. It covers the bracket form of each, and it
 covers a function-call reference.
 
+This seam also covers the common-table-expression exclusion. One statement
+defines a common table expression `X` and reads `dbo.X`. The test asserts that
+the host drops `dbo.X`. This case lands in the analyzer commit, and it proves
+that deleting the composed comparison changes no output. It also pins the defect
+that Out of Scope records. A later fix fails this case first, and that failure
+tells the fixer to correct Out of Scope.
+
 This seam also asserts that the two contract version constants agree. The host
 reports its version, and the test compares that number against the Python
 client's constant. A commit that raises one constant and not the other then
@@ -1627,10 +1934,10 @@ onboarding. A maintainer who raises the constant reads the host's test file.
 
 ### Seam 4 — the Canonical Object Identity module over strings
 
-The one new seam. It is justified twice.
+A new seam. It is justified twice.
 
 First, Step 1's contract is that one behaviour changes and no other. Seam 1 can
-only see final answers; it cannot show that twenty-three sites converged on one
+only see final answers; it cannot show that twenty-two sites converged on one
 rule. Only a test at the rule itself can.
 
 Second, the cross-repository agreement carries a case list for this rule. The
@@ -1638,13 +1945,38 @@ fixture's `object_names` list is this seam's case list. Without this seam that
 list has nowhere to live.
 
 This test passes strings in and reads strings out. It builds no graph and opens
-no cache. The mirror module in `llamaindex-spec-rag` gets the same seam over the
-same fixture file.
+no cache. The mirror module in `llamaindex-spec-rag` gets the same seam over
+the same fixture file.
+
+Two cases cover the server field. The parse of `srv.PUR.dbo.Users` holds the
+server `srv`. The full key of that name holds three segments and no server.
+
+Two cases cover a procedure name, because a procedure name is an input of the
+`path_id`. The parse of `usp_Load` holds an empty schema, its bare key is
+`usp_load`, and its full key is `..usp_load`. The parse of `[COMMON].[usp_Load]`
+holds no bracket, its bare key is `usp_load`, and its full key is
+`.common.usp_load`. Both cases sit in the shared `object_names` list, so the
+mirror module in `llamaindex-spec-rag` must also pass them in issue 4.
 
 The fixture's `sql_cache_identity` list adds no seam. Each repository already
 holds a test file for that rule, and both files read the list. This repository
 uses its cache store test file. `llamaindex-spec-rag` uses its cache identity
 test file, which loses its disk comparison in the same change.
+
+### Seam 5 — the C# parser over a source file
+
+A new seam. Prior art is the display-attribute test file, which writes a C#
+source file to a temporary directory and parses it.
+
+This seam covers the C# extraction site. One source file holds inline SQL that
+reads `PUR.dbo.Users`, `[COMMON].[AVM]`, and `Orders`. The parsed query holds
+three values. The first keeps its database and schema. The second keeps its
+schema. The third keeps an empty schema. Each value keeps the written case.
+
+This seam lands in two parts. Step 1 adds the case with the current output,
+which holds `AVM` and `ORDERS` and no `Users`. The extraction commit changes the
+expected values. The change of expected values is the proof of the behaviour
+change.
 
 ## Out of Scope
 
@@ -1685,10 +2017,10 @@ test file, which loses its disk comparison in the same change.
 - The unqualified function-call rule stays. A function call that states no
   target is still not recorded, and that rule is what keeps built-in functions
   out of the graph. It is not a default-schema defect.
-- The common-table-expression exclusion keeps comparing the bare name only. A
-  reference that states a schema is still dropped when its bare name matches a
-  common table expression in the same statement. This spec records that and does
-  not fix it early, because one step carries one behaviour change.
+- The common-table-expression exclusion keeps its current behaviour. The host
+  drops a reference when its bare name matches a common table expression in the
+  same statement, even when the reference states a schema. This spec records
+  that and does not fix it early, because one step carries one behaviour change.
 - The referenced node keeps its two-part identity. Two Databases that hold one
   bare name still share one node. Step 2b separates them in the full keys of an
   Execution Path, which read the database from each relationship. The node
@@ -1697,7 +2029,12 @@ test file, which loses its disk comparison in the same change.
   why.
 - The `path_id` formula does not change. The ADR-0016 deduplication key and the
   merge key in `llamaindex-spec-rag` do not change.
+- The Path Identity value gains no candidate schema field. ADR-0035 rejects
+  that field.
 - The `reads` and `writes` strings on an Execution Path keep their shape.
+- The table-name strings in an API response keep their shape. The shared
+  component table list and the terminal output show the name as the source
+  code writes it. A caller that needs the parts reads the full-key fields.
 - The local wrapper functions inside the test files stay. A wrapper that names
   one file's intent, and holds no payload key, is that file's vocabulary rather
   than a copy of the payload shape.
@@ -1792,28 +2129,26 @@ permission on the `guest` schema created a table in `guest`.
 `INFORMATION_SCHEMA.TABLES` listed the table. A create in `sys` or in
 `INFORMATION_SCHEMA` failed with error 2760.
 
+The common-table-expression exclusion finding is decided and no longer listed.
+It is written into "The analyzer host", into Seam 3, and into Out of Scope. The
+composed comparison can never match, because the exclusion set holds only
+common-table-expression names. The analyzer commit deletes it, and no output
+changes.
+
+The Database Invocation merge finding is decided and no longer listed. It is
+written into Preconditions, into "Which sites the module absorbs", into "The
+behaviour change in Step 1", into issue 4, and into issue 8.
+
+The stored-procedure chain finding is decided and no longer listed. It is
+written into "Two sites that keep the schema", into story 164, and into issue 4.
+The two sites keep the schema, and no issue changes them. The producer and the
+two sites count the same facts, because ADR-0035 removed the one producer step
+that merged two schemas. The grounding module's normalizer stays under Out of
+Scope, and the census does not add it.
+
 The findings below still block this spec. One of them is new, and the review
 that produced the others did not raise it.
 
-- **The Database Invocation merge re-merges what Step 2b separates.** The
-  analysis merge module's normalizer deliberately joins a qualified name to a
-  bare one, and this spec keeps that merge on the ground that the C# side writes
-  no schema. Story 12 contradicts that ground, and the merge's own fallback reads
-  the first entry of the stored-procedure chain, which is always written as
-  `schema.name`. After Step 2b, two procedures whose schemas differ merge into one identity. ADR-0035 does not change this finding: a procedure node comes from the listing and carries its own schema, so the merge collapses two proven schemas.
-  The two-bucket rule this spec already writes for the two catalogs is the fix:
-  merge a name that states no schema, and never merge two names that state
-  different ones.
-- **The host's common-table-expression exclusion compares both forms.** Out of
-  Scope states it compares the bare name only. It compares the bare name and a
-  composed `schema.name`. The behaviour holds, because T-SQL cannot qualify a
-  common table expression, but the note is half true of the code.
-- **Two more sites in `llamaindex-spec-rag` key on a stored-procedure chain.**
-  The reverse-lookup dedup and the cross-system evidence identity lowercase each
-  chain entry and keep the schema, so they treat a qualified name and a bare one
-  as two identities while the merge treats them as one. They are the right
-  behaviour and should stay; the census of four sites should say so, and should
-  add the grounding module's normalizer as a fifth.
 - **The Candidate Database Set intersects on a case-sensitive Database name.**
   Its key normalizes the server and only strips the Database name. Step 2b adds a
   field naming a Database that a full key states, and that name's case is
@@ -1893,3 +2228,80 @@ because each function reference becomes an object there. It gave that lookup the
 two-bucket rule at Step 2b, and it ruled that a function reference that states
 another Database matches no local node. It added three path evidence cases to
 Seam 1. It decided none of the other findings.
+
+A ninth interview settled the extraction-site finding. The spec fixed the two
+extraction sites and kept the string container that made the loss possible. The
+interview gave all three extraction sites the value type, and it added the
+native dependency query as the third. It gave the value type a server field
+that no key reads. It put the container change in Step 1 and the extraction fix
+in a fourth commit of issue 5. It carried the value into the Scan Record, and it
+gave issue 6 the two readers in `llamaindex-spec-rag` that the change breaks. It
+put the inline C# SQL match under the table match rule in Step 2b, and it filled
+an unstated Database from the C# connection. It ruled that a set of values
+compares the parts as written. It added story 148 to story 157,
+rewrote story 8, and added Seam 5. The seventh interview's rule that each
+commit of issue 5 leaves the suite green now covers four commits.
+
+A tenth interview answered a design proposal. The proposal put the eleven
+strings of the `path_id` formula into one frozen value. It also added a candidate
+schema field to that value. The interview kept the value and removed the
+candidate schema field. ADR-0035 already rejects that field, and the proposal
+gave no new evidence against ADR-0035.
+
+The proposal also gave ADR-0010 of `llamaindex-spec-rag` as a reason to deploy
+the change together. That ADR locks the confirmed systems and programs after the
+first agent round. It does not lock a `path_id`.
+
+The interview first made the value a separate refactor issue outside this spec.
+A later decision reversed that and put the value in issue 7 as its first commit.
+The interview added story 158 to story 161, "The Path Identity value", and its
+testing section. It decided none of the other findings.
+
+That choice made the refactor wait for the operator action and for the Step 2a
+gate, because both block issue 7. It also made the golden test arrive after Step
+1. Step 1 merges the builder's three normalizers and makes one bracket rule, so
+a `path_id` could change there with no test to catch it.
+
+A third decision therefore split the golden test from the value. The golden test
+is now the first commit of issue 3, alone, and it holds a fourth input with a
+bracketed name. It could not join issue 1, because issue 1 compares two suite
+runs by test identifier, and a new test breaks that comparison. The value stays
+in issue 7. This decision added story 162.
+
+A later interview examined one more gap. It first said that the `dbo` default
+removal in issue 3 could change a `path_id` input. That was wrong. The sixteen
+sites sit in the SQL analyzer, and the C# analysis gateway gives the procedure
+schema, with no `dbo` default. The one real input change in Step 1 is the merge
+of the gateway's two procedure functions. Seam 4 now guards it with two cases,
+and the interview added story 163.
+
+A review of these changes added two rules. A test states the fields of the Path
+Identity value directly, as the one exception to the Testing Decisions rule. A
+field that joins the identity later needs its own ADR, because three sites read
+`path_id` as the identity of one path.
+
+An eleventh interview settled the Database Invocation merge finding. The finding
+was right that the merge collapses two schemas. Its ground was wrong in the other
+direction too: this spec said the C# side writes no schema, but the C# side
+writes it in a separate `procedure_schema` field. The defect exists today, and
+not only after Step 2b.
+
+The interview found that the schema is not the discriminator. The merge identity
+holds no call site, so two call sites that name one procedure also collapse. The
+two-bucket rule could not fix that. It is a lookup rule, and as a grouping rule
+it is not transitive.
+
+The interview keyed the merge on the entry method and the call site. It put that
+change in a separate spec in `llamaindex-spec-rag`, named it the third
+precondition, and made issue 4 wait for it. It removed the merge normalizer from
+the census, so the census holds twenty-two sites, and eight of them fold case
+with `lower`. It gave the glossary sentence to issue 8. It decided none of the
+other findings.
+
+A review decision settled the stored-procedure chain finding. It kept the two
+sites in `llamaindex-spec-rag` that key on the whole chain entry, and it wrote
+down why, so that no later change merges them into the bare key. It checked the
+producer side against the same rule. The review's finding B2 had merged two
+schemas in the producer, and ADR-0035 had already removed that step. The
+decision added "Two sites that keep the schema", story 164, and two tests to
+issue 4. It decided none of the other findings.
