@@ -11,7 +11,7 @@ import tools.discover_external_wrappers as discovery
 from code_analyzer.csharp_analysis_gateway import project_wrapper_evidence
 from service import analyze_service
 from service import scan_store
-from tests.sql_cache_fixtures import cache_payload
+from tests.sql_cache_fixtures import cache_payload, one_server_holds_every_database
 
 
 def _record(**overrides: object) -> dict:
@@ -276,10 +276,11 @@ def test_report_evidence_and_provenance_match_refresh_reconciliation(
     )
     monkeypatch.setattr(discovery.scan_store, "has_cache", lambda root: True)
     monkeypatch.setattr(discovery.scan_store, "get_or_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload(
+        lambda identity: cache_payload(
             "OrdersDb", procedures=["dbo.usp_SO_Delete"]
         ),
     )
@@ -326,11 +327,14 @@ def test_refresh_reconciliation_checks_a_calls_own_database_not_the_system_id(
         connection_sources={str(source_file.resolve()): {"conn": "PUR"}},
     )
 
-    def fake_load_cached(database, schema, server=""):
-        if database != "PUR":
+    def fake_load_cached(identity):
+        if identity.database != "PUR":
             return None
         return cache_payload("PUR", procedures=["dbo.usp_SO_Delete"])
 
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database
+    )
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", fake_load_cached)
 
     refresh = analyze_service.reconcile_refresh_wrappers(
@@ -376,6 +380,7 @@ def test_refresh_reconciliation_with_no_database_touches_no_sql_cache(
     def fail_if_touched(*args, **kwargs):
         raise AssertionError("empty database must not read any SQL cache")
 
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", fail_if_touched)
 
     refresh = analyze_service.reconcile_refresh_wrappers(
@@ -427,10 +432,11 @@ def test_refresh_reconciliation_drops_reviewed_exclusions_from_totals_and_detail
             {"receiver_type": "", "method_name": "Add", "reason": "framework_method_not_sqlfunc"},
         ),
     )
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload(
+        lambda identity: cache_payload(
             "OrdersDb", procedures=["dbo.usp_SO_Delete"]
         ),
     )

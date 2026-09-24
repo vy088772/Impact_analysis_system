@@ -21,7 +21,11 @@ from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, Framew
 from service import analyze_service
 from service.schemas import FindByTableRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
-from tests.sql_cache_fixtures import cache_payload, execution_graph
+from tests.sql_cache_fixtures import (
+    cache_payload,
+    execution_graph,
+    one_server_holds_every_database,
+)
 
 
 def _graph() -> dict:
@@ -150,13 +154,18 @@ def _wire(
     monkeypatch.setattr(analyze_service, "cached_commit", lambda root: scan_commit)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
+        "find_cache_identity",
+        one_server_holds_every_database,
+    )
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": sql_payload,
+        lambda identity: sql_payload,
     )
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "cached_saved_at",
-        lambda database, schema="dbo", server="": sql_cache_saved_at,
+        lambda identity: sql_cache_saved_at,
     )
 
 
@@ -370,10 +379,15 @@ def test_a_changed_repository_scan_causes_a_fresh_path_build(monkeypatch, tmp_pa
         monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_ats.pop(0))
         monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
         monkeypatch.setattr(
-            analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": sql_payload
+            analyze_service.sql_cache_store,
+            "find_cache_identity",
+            one_server_holds_every_database,
         )
         monkeypatch.setattr(
-            analyze_service.sql_cache_store, "cached_saved_at", lambda database, schema="dbo", server="": "sql-cache-v1"
+            analyze_service.sql_cache_store, "load_cached", lambda identity: sql_payload
+        )
+        monkeypatch.setattr(
+            analyze_service.sql_cache_store, "cached_saved_at", lambda identity: "sql-cache-v1"
         )
         rating_calls = _count_real_rating_derivations(monkeypatch)
         path_calls = _count_real_path_builds(monkeypatch)

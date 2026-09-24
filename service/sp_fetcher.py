@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from .sql_cache_store import load_cached
+from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
 from code_analyzer.sql_analyzer import estimate_complexity_from_definition
 
 
@@ -89,7 +89,12 @@ def _from_cache(
     if not database_alias:
         return [], sp_names
 
-    cached = load_cached(database_alias, server=db_server or "")
+    identity = (
+        CacheIdentity.of(db_server, database_alias, "dbo")
+        if db_server
+        else find_cache_identity(database_alias, "dbo")
+    )
+    cached = load_cached(identity) if isinstance(identity, CacheIdentity) else None
     if not cached:
         return [], sp_names
 

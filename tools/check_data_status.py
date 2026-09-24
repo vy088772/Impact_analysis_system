@@ -104,7 +104,7 @@ def _sql_status(database: dict) -> str:
         return f"{NA} 未設定DB"
     # 快取鍵是 (server, database, schema)，不是 system_id：同一個資料庫被幾套系統
     # 參照都只掃描一次，這裡照樣用資料庫本身的身分去查有沒有建檔。
-    has_cache = sql_cache_store.has_cache(name, "dbo", server=server)
+    has_cache = sql_cache_store.has_cache(sql_cache_store.CacheIdentity.of(server, name, "dbo"))
     return f"{OK} 已更新" if has_cache else f"{NO} 未更新"
 
 

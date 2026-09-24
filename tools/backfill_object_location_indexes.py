@@ -35,18 +35,17 @@ def backfill_cache_row(
         "schema": row.schema,
     }
 
-    try:
-        identity = sql_cache_store.CacheIdentity.of(row.server, row.database, row.schema)
-    except ValueError as exc:
+    identity = row.identity
+    if identity is None:
+        # 檔名不是任何 SQL Cache Identity 會寫出的名字（見 list_cache_files()）。
         entry["action"] = "bad_identity"
-        entry["error"] = str(exc)
         return entry
 
     # load_cached() 套用跟 find_by_sp/find_by_table 完全相同的有效性判斷（meta
     # 版本、sql_execution_graph 版本、database/schema 是否相符）——backfill 出來的
     # 索引才會跟正式查詢路徑「看到同一份快取」，不會有索引說「有」但正式查詢其實
     # 連這份快取都不採信的落差。這個函式本身不連線 SQL Server、只讀磁碟。
-    data = sql_cache_store.load_cached(identity.database, identity.schema, server=identity.server)
+    data = sql_cache_store.load_cached(identity)
     if data is None:
         entry["action"] = "invalid_cache"
         return entry

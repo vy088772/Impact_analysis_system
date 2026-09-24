@@ -30,7 +30,7 @@ from service import analyze_service
 from service import derived_execution_evidence_store as store
 from service.schemas import FindBySPRequest, FindByTableRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
-from tests.sql_cache_fixtures import cache_payload, execution_graph
+from tests.sql_cache_fixtures import cache_payload, execution_graph, one_server_holds_every_database
 
 
 def _graph(*procedure_names: str) -> dict:
@@ -102,15 +102,16 @@ def _wire(
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_at)
     monkeypatch.setattr(analyze_service, "cached_commit", lambda root: scan_commit)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": sql_payload,
+        lambda identity: sql_payload,
     )
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "cached_saved_at",
-        lambda database, schema="dbo", server="": sql_cache_saved_at,
+        lambda identity: sql_cache_saved_at,
     )
 
 
@@ -230,10 +231,11 @@ def test_a_scope_evicted_from_memory_is_served_from_disk(monkeypatch, tmp_path: 
             cache_only=False,
             refresh=False,
         )
+        monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
         monkeypatch.setattr(
             analyze_service.sql_cache_store,
             "load_cached",
-            lambda database, schema, server="": cache_payload(database, graph=_graph("usp_Alpha", "usp_Other")),
+            lambda identity: cache_payload(identity.database, graph=_graph("usp_Alpha", "usp_Other")),
         )
         analyze_service.find_by_sp(other_request)
         first_scope = analyze_service.DerivedExecutionEvidenceScope.of(_sp_request(), [tmp_path])
@@ -392,9 +394,10 @@ def test_a_changed_repository_scan_causes_a_derivation_and_replaces_the_file(mon
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
         monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_ats.pop(0))
         monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
-        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": sql_payload)
+        monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: sql_payload)
         monkeypatch.setattr(
-            analyze_service.sql_cache_store, "cached_saved_at", lambda database, schema="dbo", server="": "sql-cache-v1"
+            analyze_service.sql_cache_store, "cached_saved_at", lambda identity: "sql-cache-v1"
         )
         calls = _count_real_rating_derivations(monkeypatch)
         root = Path(analyze_service.settings.DERIVED_EXECUTION_EVIDENCE_STORE_ROOT)
@@ -426,11 +429,12 @@ def test_a_changed_sql_cache_causes_a_derivation(monkeypatch, tmp_path: Path) ->
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
         monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
         monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
-        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": payloads[0])
+        monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: payloads[0])
         monkeypatch.setattr(
             analyze_service.sql_cache_store,
             "cached_saved_at",
-            lambda database, schema="dbo", server="": sql_cache_saved_ats[0],
+            lambda identity: sql_cache_saved_ats[0],
         )
         calls = _count_real_rating_derivations(monkeypatch)
 

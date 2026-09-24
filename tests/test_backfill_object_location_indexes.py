@@ -139,7 +139,7 @@ def test_deleting_a_backfilled_index_by_hand_falls_back_to_reading_the_cache_in_
 
         assert sql_cache_store.load_object_location_index(identity) is None
         # The cache itself is untouched by the index having existed and then been removed.
-        assert sql_cache_store.load_cached("PUR", "dbo", server="vmsystest07") is not None
+        assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "PUR", "dbo")) is not None
 
 
 def test_backfill_cache_row_skips_a_row_whose_identity_cannot_be_constructed() -> None:

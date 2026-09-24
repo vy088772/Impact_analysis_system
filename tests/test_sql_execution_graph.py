@@ -79,7 +79,7 @@ def test_sql_cache_rejects_graphless_payload() -> None:
             cache_payload("TestDb"),
         )
 
-        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
+        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")) is None
 
 
 def test_sql_cache_rejects_database_mismatch_from_memory_and_disk() -> None:
@@ -90,12 +90,12 @@ def test_sql_cache_rejects_database_mismatch_from_memory_and_disk() -> None:
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(cache_root, "TestDb", mismatched_payload)
 
-        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
+        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")) is None
 
         sql_cache_store._mem_cache[
-            sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo").key
+            sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")
         ] = mismatched_payload
-        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
+        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")) is None
 
 
 def test_sql_cache_rejects_stale_payload_version() -> None:
@@ -110,7 +110,7 @@ def test_sql_cache_rejects_stale_payload_version() -> None:
             cache_version=sql_cache_store._SQL_CACHE_VERSION - 1,
         )
 
-        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
+        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")) is None
 
 
 def test_sql_cache_rejects_stale_graph_version() -> None:
@@ -133,7 +133,7 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
             ),
         )
 
-        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
+        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")) is None
 
 
 def test_sql_host_emits_typed_operations_with_module_and_source_evidence() -> None:
@@ -250,11 +250,9 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
         sql_analyzer.SQLAnalyzer = FakeSqlAnalyzer
         try:
             data = sql_cache_store.get_or_dump(
-                "TestDb",
-                schema="dbo",
+                sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo"),
+                connection_server=TEST_SERVER,
                 refresh=True,
-                server=TEST_SERVER,
-                db_name="TestDb",
             )
             # ADR-0031：舊有 dependencies/write_dependencies 欄位名稱不能出現在
             # persisted payload 裡這件事，改由這條 shape 斷言把關（原本靠已刪除
@@ -301,7 +299,7 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             )
 
             sql_cache_store._mem_cache.clear()
-            reloaded = sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER)
+            reloaded = sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo"))
             assert reloaded is not None
             assert reloaded["sql_execution_graph"] == graph
             assert set(reloaded.keys()) == set(data.keys())

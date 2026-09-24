@@ -24,7 +24,7 @@ from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, Framew
 from service import analyze_service
 from service.schemas import FindBySPRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
-from tests.sql_cache_fixtures import cache_payload, execution_graph
+from tests.sql_cache_fixtures import cache_payload, execution_graph, one_server_holds_every_database
 
 
 def _graph() -> dict:
@@ -91,15 +91,16 @@ def _wire(monkeypatch, scan: ProjectScanResult, tmp_path: Path) -> None:
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
     monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": sql_payload,
+        lambda identity: sql_payload,
     )
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "cached_saved_at",
-        lambda database, schema="dbo", server="": "sql-cache-v1",
+        lambda identity: "sql-cache-v1",
     )
 
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
-from .sql_cache_store import load_cached
+from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
 
 
 def _normalize(name: str) -> str:
@@ -50,7 +50,12 @@ def fetch_udf_definitions(
     if not sql_texts or not database_alias:
         return []
 
-    cached = load_cached(database_alias, server=db_server or "")
+    identity = (
+        CacheIdentity.of(db_server, database_alias, "dbo")
+        if db_server
+        else find_cache_identity(database_alias, "dbo")
+    )
+    cached = load_cached(identity) if isinstance(identity, CacheIdentity) else None
     if not cached:
         return []
 

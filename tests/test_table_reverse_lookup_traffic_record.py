@@ -18,7 +18,11 @@ from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, Framew
 from service import analyze_service
 from service.schemas import FindByTableRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
-from tests.sql_cache_fixtures import cache_payload, execution_graph
+from tests.sql_cache_fixtures import (
+    cache_payload,
+    execution_graph,
+    one_server_holds_every_database,
+)
 
 
 def _file(root: Path) -> FileAnalysisResult:
@@ -98,8 +102,13 @@ def test_two_systems_asking_about_one_table_stay_distinguishable(monkeypatch, tm
     empty_graph = execution_graph("")
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
+        "find_cache_identity",
+        one_server_holds_every_database,
+    )
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload(database, graph=empty_graph),
+        lambda identity: cache_payload(identity.database, graph=empty_graph),
     )
 
     with RatedInvocationsRetention():

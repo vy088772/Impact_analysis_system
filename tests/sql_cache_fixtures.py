@@ -47,6 +47,16 @@ class CacheRoot:
         self._tmp.cleanup()
 
 
+def one_server_holds_every_database(database: str, schema: str) -> CacheIdentity:
+    """Stand in for ``sql_cache_store.find_cache_identity()`` beside a stubbed reader.
+
+    A test that replaces the cache reader has no cache files on disk, so the
+    real lookup finds no server. This stand-in names one server for every
+    Database, and the stubbed reader then answers for it.
+    """
+    return CacheIdentity.of("vmsystest07", database, schema)
+
+
 # A written object name, alone or with the other fields of its entry
 # (``definition``, ``parameters``, ``columns``, ``primary_keys``).
 SqlObjects = Union[Iterable[str], Mapping[str, Mapping[str, Any]]]
@@ -272,34 +282,9 @@ def write_cache(
     (cache_root / identity.filename).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    sql_cache_store.write_meta(identity, _SAVED_AT)
     meta_path = cache_root / identity.meta_filename
-    sql_cache_store.write_meta(meta_path, identity, _SAVED_AT)
     if cache_version is not None:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         meta["cache_version"] = cache_version
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def write_legacy_cache(cache_root: Path, key: str, payload: dict) -> None:
-    """Write one cache file pair under a key that no SQL Cache Identity produces.
-
-    A cache written before the server part existed has such a key, and its meta
-    file carries no ``server``. The tests of the store's rejection and of the
-    key migration need that cache on purpose, so it has its own helper.
-    """
-    (cache_root / f"{key}.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (cache_root / f"{key}.meta.json").write_text(
-        json.dumps(
-            {
-                "cache_version": sql_cache_store._SQL_CACHE_VERSION,
-                "database": payload["database"],
-                "schema": payload["schema"],
-                "saved_at": _SAVED_AT,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )

@@ -22,7 +22,7 @@ from code_analyzer.project_scanner import ProjectScanResult
 from code_analyzer.razor_parser import RazorParser
 from service import analyze_service
 from service.schemas import AnalyzeRequest
-from tests.sql_cache_fixtures import cache_with_procedures
+from tests.sql_cache_fixtures import cache_with_procedures, one_server_holds_every_database
 
 
 def _write(root: Path, relative: str, text: str) -> Path:
@@ -161,10 +161,11 @@ def _analyze(
 ):
     monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [root])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda r, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda db, schema, server="": cache_with_procedures(*procedures),
+        lambda identity: cache_with_procedures(*procedures),
     )
     return analyze_service.analyze(
         AnalyzeRequest(

@@ -21,7 +21,11 @@ from code_analyzer.project_scanner import ProjectScanResult
 from service import analyze_service
 from service.schemas import FindBySPRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
-from tests.sql_cache_fixtures import cache_payload, execution_graph
+from tests.sql_cache_fixtures import (
+    cache_payload,
+    execution_graph,
+    one_server_holds_every_database,
+)
 
 
 def _graph(*procedure_names: str) -> dict:
@@ -115,13 +119,18 @@ def _wire(
     monkeypatch.setattr(analyze_service, "cached_commit", lambda root: scan_commit)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
+        "find_cache_identity",
+        one_server_holds_every_database,
+    )
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": sql_payload,
+        lambda identity: sql_payload,
     )
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "cached_saved_at",
-        lambda database, schema="dbo", server="": sql_cache_saved_at,
+        lambda identity: sql_cache_saved_at,
     )
 
 
@@ -259,9 +268,14 @@ def test_a_changed_repository_scan_causes_a_fresh_derivation(monkeypatch, tmp_pa
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
         monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_ats.pop(0))
         monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
-        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": sql_payload)
         monkeypatch.setattr(
-            analyze_service.sql_cache_store, "cached_saved_at", lambda database, schema="dbo", server="": "sql-cache-v1"
+            analyze_service.sql_cache_store,
+            "find_cache_identity",
+            one_server_holds_every_database,
+        )
+        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: sql_payload)
+        monkeypatch.setattr(
+            analyze_service.sql_cache_store, "cached_saved_at", lambda identity: "sql-cache-v1"
         )
         calls = _count_real_derivations(monkeypatch)
 
@@ -288,11 +302,16 @@ def test_a_changed_sql_cache_causes_a_fresh_derivation(monkeypatch, tmp_path: Pa
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
         monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
         monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
-        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": payloads[0])
+        monkeypatch.setattr(
+            analyze_service.sql_cache_store,
+            "find_cache_identity",
+            one_server_holds_every_database,
+        )
+        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: payloads[0])
         monkeypatch.setattr(
             analyze_service.sql_cache_store,
             "cached_saved_at",
-            lambda database, schema="dbo", server="": sql_cache_saved_ats[0],
+            lambda identity: sql_cache_saved_ats[0],
         )
         calls = _count_real_derivations(monkeypatch)
 
@@ -340,8 +359,13 @@ def test_dropping_and_rereading_an_unchanged_sql_cache_does_not_rederive(
         # same object back), same content and same recorded save time every time.
         monkeypatch.setattr(
             analyze_service.sql_cache_store,
+            "find_cache_identity",
+            one_server_holds_every_database,
+        )
+        monkeypatch.setattr(
+            analyze_service.sql_cache_store,
             "load_cached",
-            lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
+            lambda identity: cache_payload("OrdersDb", graph=graph),
         )
         calls = _count_real_derivations(monkeypatch)
 

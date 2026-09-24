@@ -6,7 +6,7 @@ import json
 from types import SimpleNamespace
 
 from service import sp_fetcher
-from tests.sql_cache_fixtures import cache_payload
+from tests.sql_cache_fixtures import cache_payload, one_server_holds_every_database
 
 
 def test_dependency_graph_renderer_ignores_legacy_sp_relations(tmp_path) -> None:
@@ -83,11 +83,12 @@ def test_sp_fetcher_uses_graph_lineage_and_keeps_dynamic_sql_unresolved(monkeypa
             {"type": "contains", "source": "sp:dynamic", "target": "op:dynamic"},
         ],
     }
+    monkeypatch.setattr(sp_fetcher, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         sp_fetcher,
         "load_cached",
-        lambda database, schema="dbo", server="": cache_payload(
-            database, schema=schema, procedures=procedures, graph=graph
+        lambda identity: cache_payload(
+            identity.database, schema=identity.schema, procedures=procedures, graph=graph
         ),
     )
 

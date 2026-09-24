@@ -922,11 +922,15 @@ def _execution_sql_context(
     cache files happen to sit in the cache directory.
     """
     database_alias = str(database_alias or "").strip()
-    cached = (
-        sql_cache_store.load_cached(database_alias, "dbo", server=str(db_server or ""))
-        if database_alias
-        else None
-    )
+    cached = None
+    if database_alias:
+        identity = (
+            sql_cache_store.CacheIdentity.of(db_server, database_alias, "dbo")
+            if db_server
+            else sql_cache_store.find_cache_identity(database_alias, "dbo")
+        )
+        if isinstance(identity, sql_cache_store.CacheIdentity):
+            cached = sql_cache_store.load_cached(identity)
     graph = dict((cached or {}).get("sql_execution_graph") or {})
     graph_database = str(
         graph.get("database")
@@ -978,7 +982,16 @@ def _require_sql_execution_graph(database: str, db_server: str = "") -> Tuple[Di
         raise ValueError(
             "database 不可為空；Gateway path analysis 需要指定 SQL execution graph cache。"
         )
-    cached = sql_cache_store.load_cached(database, "dbo", server=str(db_server or ""))
+    identity = (
+        sql_cache_store.CacheIdentity.of(db_server, database, "dbo")
+        if db_server
+        else sql_cache_store.find_cache_identity(database, "dbo")
+    )
+    cached = (
+        sql_cache_store.load_cached(identity)
+        if isinstance(identity, sql_cache_store.CacheIdentity)
+        else None
+    )
     graph = (cached or {}).get("sql_execution_graph") if cached else None
     if not cached or not graph:
         raise SqlExecutionGraphRequiredError(
@@ -1383,16 +1396,21 @@ def _rated_invocations_validity_stamp(
     scans: Iterable[ProjectScanResult],
 ) -> _RatedInvocationsValidityStamp:
     """Take a fresh reading of every input `_rated_execution_invocations` depends on."""
+    identity = None
+    if scope.database:
+        identity = (
+            sql_cache_store.CacheIdentity.of(scope.db_server, scope.database, "dbo")
+            if scope.db_server
+            else sql_cache_store.find_cache_identity(scope.database, "dbo")
+        )
     sql_cache = (
-        sql_cache_store.load_cached(scope.database, "dbo", server=scope.db_server)
-        if scope.database
+        sql_cache_store.load_cached(identity)
+        if isinstance(identity, sql_cache_store.CacheIdentity)
         else None
     )
     sql_cache_freshness = (
-        _freshness_or_sentinel(
-            sql_cache_store.cached_saved_at(scope.database, "dbo", server=scope.db_server)
-        )
-        if sql_cache is not None
+        _freshness_or_sentinel(sql_cache_store.cached_saved_at(identity))
+        if sql_cache is not None and isinstance(identity, sql_cache_store.CacheIdentity)
         else None
     )
     external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
@@ -2762,7 +2780,7 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
             "請提供 system_id 並先執行 refresh_sql_cli。"
         )
     # FindBySPRequest 沒有 db_server 欄位，這裡只能給 database；
-    # sql_cache_store.resolve_server() 會從磁碟回推唯一一份同名快取。
+    # sql_cache_store.find_cache_identity() 會從磁碟找唯一一份同名快取。
     _cached, _graph = _require_sql_execution_graph(req.database)
     scope = DerivedExecutionEvidenceScope.of(req, roots)
     rated_invocations, _ = _rated_execution_invocations_for_scope(
@@ -3098,14 +3116,13 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
     indexes_consulted = 0
 
     for row in sql_cache_store.list_caches():
-        try:
-            identity = sql_cache_store.CacheIdentity.of(row.server, row.database, row.schema)
-        except ValueError:
-            # A file whose name doesn't fit the {server}__{database}__{schema}
-            # shape (see list_caches()'s own docstring): no identity to report
-            # a caller could match against a Declared Database Dependency, so
-            # it is neither counted nor listed — not a cache this endpoint can
-            # answer for, in either direction.
+        identity = row.identity
+        if identity is None:
+            # A file whose name no SQL Cache Identity writes (see
+            # list_cache_files()): no identity to report a caller could match
+            # against a Declared Database Dependency, so it is neither counted
+            # nor listed — not a cache this endpoint can answer for, in either
+            # direction.
             continue
         indexes_consulted += 1
         key = (identity.server, identity.database)
@@ -3379,7 +3396,7 @@ def reconcile_refresh_wrappers(
     else:
         normalized_contract = explicit_contract
     # refresh 流程只知道 database 名稱（沒有請求帶 db_server 進來），
-    # 由 sql_cache_store.resolve_server() 回推。
+    # 由 sql_cache_store.find_cache_identity() 從磁碟找。
     #
     # `database` here is frequently a system id (a whole-system /refresh's
     # `req.system`, e.g. "Y-Docs_TTPUR"), not any one real SQL database --
@@ -4249,20 +4266,18 @@ def refresh_sql_source(
 
     database：顯示／工單用簡稱，不參與快取鍵計算。
     server/db_name：實際連線目標，也是快取鍵的兩個組成，由呼叫端（catalog）提供；缺一時
-    get_or_dump()→SQLAnalyzer 會直接報錯，不嘗試連線。
+    CacheIdentity.of() 會直接報錯，不嘗試連線。
     user_id/password：這台伺服器的掃描帳密覆寫，兩者都有值才生效（ADR-0010）。
 
     回傳 {database, db_schema, procedures, views, functions, tables} 數量摘要；
     SQL Execution Graph 會與 object definitions 一起落地到 SQL cache。
     """
-    from .sql_cache_store import get_or_dump
+    from .sql_cache_store import CacheIdentity, get_or_dump
 
     data = get_or_dump(
-        database,
-        schema=schema,
+        CacheIdentity.of(server, db_name, schema),
+        connection_server=server,
         refresh=True,
-        server=server,
-        db_name=db_name,
         user_id=user_id,
         password=password,
         progress_callback=progress_callback,

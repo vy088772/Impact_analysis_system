@@ -24,7 +24,7 @@ from code_analyzer.external_wrapper_contracts import (  # noqa: E402
     versioned_contract_from_proposal,
 )
 from code_analyzer.project_scanner import ProjectScanResult  # noqa: E402
-from tests.sql_cache_fixtures import cache_payload  # noqa: E402
+from tests.sql_cache_fixtures import cache_payload, one_server_holds_every_database  # noqa: E402
 
 
 def test_incomplete_proposal_is_rejected_without_writing_configuration(tmp_path) -> None:
@@ -248,10 +248,11 @@ def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, 
             AssertionError("contract-only acceptance must not rescan C#")
         ),
     )
+    monkeypatch.setattr(contract_acceptance_module.analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         contract_acceptance_module.analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload(
+        lambda identity: cache_payload(
             "OrdersDb", procedures=["dbo.usp_SaveOrder"]
         ),
     )
@@ -321,6 +322,7 @@ def test_registry_only_acceptance_keeps_database_evidence_unresolved(monkeypatch
             AssertionError("registry-only acceptance must not rescan C#")
         ),
     )
+    monkeypatch.setattr(contract_acceptance_module.analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         contract_acceptance_module.analyze_service.sql_cache_store,
         "load_cached",

@@ -11,6 +11,7 @@ from service import analyze_service
 from service.schemas import AnalyzeRequest, FindBySPRequest, FindByTableRequest, FlowChainRequest
 from service.sql_execution_graph import build_sql_execution_graph
 from tests.sql_cache_fixtures import (
+    one_server_holds_every_database,
     analyzer_operation,
     cache_payload,
     case_variant_table_write_data,
@@ -292,10 +293,11 @@ def test_find_by_table_reports_writes_regardless_of_stored_procedure_case(
     graph = build_sql_execution_graph(case_variant_table_write_data())
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
+        lambda identity: cache_payload("OrdersDb", graph=graph),
     )
 
     response = analyze_service.find_by_table(
@@ -331,10 +333,11 @@ def test_find_by_table_keeps_a_real_write_behind_a_case_variant_temp_table_read(
     graph = build_sql_execution_graph(case_variant_temp_table_write_data())
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
+        lambda identity: cache_payload("OrdersDb", graph=graph),
     )
 
     response = analyze_service.find_by_table(
@@ -355,10 +358,11 @@ def test_find_by_table_write_only_uses_graph_writers(monkeypatch, tmp_path: Path
     scan = _scan(tmp_path)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
+        lambda identity: cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.find_by_table(
@@ -399,10 +403,11 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
     monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload(
+        lambda identity: cache_payload(
             "OrdersDb",
             procedures=["dbo.usp_Direct", "dbo.usp_Entry", "dbo.usp_Nested"],
             graph=_graph(),
@@ -511,10 +516,11 @@ def test_find_by_sp_accepts_schema_qualified_name(monkeypatch, tmp_path: Path) -
     scan = _scan(tmp_path)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
+        lambda identity: cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.find_by_sp(
@@ -536,10 +542,11 @@ def test_find_by_sp_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_pat
     scan.connection_sources.pop(str((tmp_path / "DirectPage.cs").resolve()))
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
+        lambda identity: cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.find_by_sp(
@@ -566,10 +573,11 @@ def test_backward_flow_preserves_graph_path_and_ui_anchor(monkeypatch, tmp_path:
     scan = _scan(tmp_path)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
+        lambda identity: cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.flow_chain(
@@ -605,10 +613,11 @@ def test_find_by_table_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_
     scan.connection_sources.pop(str((tmp_path / "DirectPage.cs").resolve()))
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
+        lambda identity: cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.find_by_table(
@@ -634,10 +643,11 @@ def test_backward_flow_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_
     scan.connection_sources.pop(str((tmp_path / "DirectPage.cs").resolve()))
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
+        lambda identity: cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.flow_chain(
@@ -663,10 +673,11 @@ def test_analyze_keeps_likely_invocation_diagnostic_out_of_formal_counts(monkeyp
     scan.connection_sources.pop(str((tmp_path / "DirectPage.cs").resolve()))
     monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
+        lambda identity: cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.analyze(
@@ -758,10 +769,11 @@ END;
     )
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
+        lambda identity: cache_payload("OrdersDb", graph=graph),
     )
 
     touches = analyze_service.find_by_table(
@@ -826,10 +838,11 @@ def test_find_by_table_reports_one_record_per_stored_procedure_reaching_the_tabl
     )
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
+        lambda identity: cache_payload("OrdersDb", graph=graph),
     )
 
     response = analyze_service.find_by_table(
@@ -878,10 +891,11 @@ def test_find_by_table_reports_a_read_and_a_write_from_the_same_program(
     )
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
+        lambda identity: cache_payload("OrdersDb", graph=graph),
     )
 
     response = analyze_service.find_by_table(
@@ -982,10 +996,11 @@ def test_find_by_table_reports_a_proven_read_beside_an_unproven_write_from_the_s
     )
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
+        lambda identity: cache_payload("OrdersDb", graph=graph),
     )
 
     all_access = analyze_service.find_by_table(
@@ -1064,10 +1079,11 @@ def test_find_by_table_collapses_two_identical_execution_paths_into_one_record(
     )
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
+        lambda identity: cache_payload("OrdersDb", graph=graph),
     )
 
     response = analyze_service.find_by_table(

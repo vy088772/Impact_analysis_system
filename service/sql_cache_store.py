@@ -14,7 +14,10 @@ SQL 物件（預存程序/View/使用者定義函數/資料表 Schema）的本�
 快取鍵是 (server, database, schema) 這組正規化三元組，與 system_id 無關
 （見 docs/adr/0009-sql-cache-identity-decoupled-from-system.md）：同一個
 Database 被幾套 System 參照、或不屬於任何 System，都只掃描與快取一次。
-這組三元組在模組內一律以 CacheIdentity 型別、一種參數順序傳遞。
+模組的每個公開函式都收 CacheIdentity 這一個值，不收零散的 database/schema/
+server 參數；只知道 database 名稱的呼叫端先用 find_cache_identity() 從磁碟找。
+CacheIdentity 擁有它的三個檔名（資料檔、Scan Record、Object Location Index），
+「目錄裡哪些檔案是快取」只由 list_cache_files() 回答。
 「這個 Database 有沒有建檔」完全由對應的快取檔在不在磁碟上決定，沒有其他名單。
 """
 from __future__ import annotations
@@ -25,7 +28,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 from code_analyzer.csharp_analysis_gateway import normalize_procedure_name
 from config.settings import settings
@@ -65,7 +68,7 @@ _SQL_CACHE_VERSION = 10
 #
 # 型別標註不加引號：本檔已在最上方 `from __future__ import annotations`，
 # 所有標註本來就延遲求值，手動加引號只是多餘。
-_mem_cache: OrderedDict[str, Dict] = OrderedDict()
+_mem_cache: OrderedDict[CacheIdentity, Dict] = OrderedDict()
 
 
 def _evict_for_new_mem_cache_key(identity: CacheIdentity) -> None:
@@ -74,35 +77,33 @@ def _evict_for_new_mem_cache_key(identity: CacheIdentity) -> None:
     identity 已經在記憶體快取裡時不做事——覆寫既有項目的內容從不會讓快取變大，
     自然不需要淘汰誰。只透過 _retain_in_mem_cache() 呼叫。
 
-    收 CacheIdentity 而不是裸字串鍵，跟 CacheIdentity 文件說的「模組內所有需要
-    這組三元組的函式都收這一個值」一致，淘汰訊息才印得出 server/database/schema
-    三個欄位，而不是一段不易讀的快取鍵字串。
+    記憶體快取以 CacheIdentity 為鍵，淘汰訊息直接讀被淘汰那一筆的欄位，
+    不必把快取鍵字串拆回去。
     """
-    if identity.key in _mem_cache:
+    if identity in _mem_cache:
         return
     limit = max(1, int(settings.SQL_CACHE_MEMORY_RETENTION_LIMIT))
     if len(_mem_cache) < limit:
         return
-    evicted_key, _ = _mem_cache.popitem(last=False)
-    evicted_server, evicted_database, evicted_schema = _parse_key(evicted_key)
+    evicted, _ = _mem_cache.popitem(last=False)
     print(
         "⚠️  SQL 快取記憶體保留已達上限"
         f"（limit={limit}），淘汰最久未使用的資料庫："
-        f"evicted server={evicted_server!r} database={evicted_database!r} schema={evicted_schema!r} / "
+        f"evicted server={evicted.server!r} database={evicted.database!r} schema={evicted.schema!r} / "
         f"new server={identity.server!r} database={identity.database!r} schema={identity.schema!r}"
     )
 
 
 def _retain_in_mem_cache(identity: CacheIdentity, data: Dict) -> None:
-    """把 data 以 identity 的快取鍵寫入記憶體快取，並移到最新位置。
+    """把 data 以 identity 為鍵寫入記憶體快取，並移到最新位置。
 
     先淘汰、後寫入：淘汰時看到的是「加入 identity 之前」的快取內容，identity
     本身若已在快取裡，_evict_for_new_mem_cache_key() 會判斷成不需要淘汰。跟
     analyze_service._evict_then_retain() 同一種先後順序。
     """
     _evict_for_new_mem_cache_key(identity)
-    _mem_cache[identity.key] = data
-    _mem_cache.move_to_end(identity.key)
+    _mem_cache[identity] = data
+    _mem_cache.move_to_end(identity)
 
 
 # 內部 SQL Server 主機都在這個網域底下；短主機名補上這個尾綴即得完整位址。
@@ -122,15 +123,6 @@ def _safe_name(text: str) -> str:
 
 def _key_of(*parts: str) -> str:
     return _KEY_SEPARATOR.join(_safe_name(part) for part in parts)
-
-
-def _parse_key(stem: str) -> tuple[str, str, str]:
-    """記憶體快取淘汰訊息用：把一個快取鍵拆回 (server, database, schema)。"""
-    parts = stem.split(_KEY_SEPARATOR)
-    if len(parts) >= 3:
-        return parts[0], _KEY_SEPARATOR.join(parts[1:-1]), parts[-1]
-    padded = (parts + ["", "", ""])[:3]
-    return padded[0], padded[1], padded[2]
 
 
 def normalize_server(server: str) -> str:
@@ -159,10 +151,12 @@ def normalize_server(server: str) -> str:
 class CacheIdentity:
     """一份 SQL 快取的身分：正規化過的 (server, database, schema) 三元組。
 
-    模組內所有需要這組三元組的函式都收這一個值、用這一個順序；快取鍵與檔名
-    都由它算出來，不再由呼叫端各自拼。用 of() 建立，不要直接呼叫建構式——
-    of() 才會正規化 server、並檢查 server 與 database 都有值（schema 可省略，
-    空字串等同 _safe_name() 的 "default"）。
+    模組內所有需要這組三元組的函式都收這一個值、用這一個順序；快取鍵與它的
+    三個檔名都由它算出來，from_key() 是檔名主幹的反操作，就放在 key 旁邊。
+    用 of() 建立，不要直接呼叫建構式——of() 才會正規化 server、並檢查 server
+    與 database 都有值。of() 是純函式，從不讀磁碟；只知道 database 的呼叫端改用
+    find_cache_identity()。schema 沒有預設值，呼叫端必須明說（空字串等同
+    _safe_name() 的 "default"）。
     """
 
     server: str
@@ -170,7 +164,7 @@ class CacheIdentity:
     schema: str
 
     @classmethod
-    def of(cls, server: str, database: str, schema: str = "dbo") -> "CacheIdentity":
+    def of(cls, server: str, database: str, schema: str) -> "CacheIdentity":
         normalized_server = normalize_server(server)
         database = str(database or "").strip()
         schema = str(schema or "").strip()
@@ -272,38 +266,56 @@ def _same_file_part(actual: str, expected: str) -> bool:
     return _safe_name(actual).casefold() == _safe_name(expected).casefold()
 
 
-def resolve_server(database: str, schema: str = "dbo") -> str:
-    """呼叫端只知道 database 名稱時，從磁碟上唯一一份快取回推它的 server。
+@dataclass(frozen=True)
+class AmbiguousServer:
+    """find_cache_identity() 的一種結果：同名 database 在多台 server 上都有快取。
 
-    找不到、或同名 database 在多台 server 上都有快取（無法判斷是哪一台）時回傳
-    空字串——寧可查無快取，也不猜錯資料庫。
+    無法判斷是哪一台，呼叫端應視為查無快取——寧可查無快取，也不猜錯資料庫。
+    servers 依字母排序，列出每一台持有這個 database 的 server。
+    """
+
+    database: str
+    schema: str
+    servers: tuple[str, ...]
+
+
+def find_cache_identity(
+    database: str, schema: str
+) -> Union[CacheIdentity, AmbiguousServer, None]:
+    """呼叫端只知道 database 名稱時，從磁碟上唯一一份快取找出它的身分。
+
+    會讀快取目錄，所以跟純函式 CacheIdentity.of() 分開命名。沒有任何快取以這個
+    database 命名時回傳 None；同名 database 在多台 server 上都有快取時回傳
+    AmbiguousServer。比對的是目錄列舉每一列身分的 Database 欄位，從不自己組
+    檔名尾綴。
 
     結構上沒有 server 可帶的呼叫端有三個：/find_by_sp 與 /find_by_table
     （FindBySPRequest/FindByTableRequest 沒有 db_server 欄位），以及 refresh 流程的
     analyze_service.reconcile_refresh_wrappers()（含 tools/discover_external_wrappers.py）。
-    /analyze、/path_evidence、/flow_chain 會把請求的 db_server 一路帶到這裡，
-    指名讀哪一台；那些請求沒填 db_server 時同樣落到這條回推。
+    /analyze、/path_evidence、/flow_chain 會把請求的 db_server 一路帶到讀取端，
+    指名讀哪一台；那些請求沒填 db_server 時同樣改走這裡。
     """
     database = str(database or "").strip()
     if not database:
-        return ""
-    servers = sorted(
-        {
-            row.identity.server
-            for row in list_cache_files()
-            if row.identity is not None
-            and _same_file_part(row.identity.database, database)
-            and _same_file_part(row.identity.schema, schema)
-        }
-    )
-    if len(servers) != 1:
-        if servers:
-            print(
-                f"⚠️  {database}.{schema} 在多台 server 上都有 SQL 快取（{', '.join(servers)}）；"
-                f"請指定 server。"
-            )
-        return ""
-    return servers[0]
+        return None
+    identities = {
+        row.identity.server: row.identity
+        for row in list_cache_files()
+        if row.identity is not None
+        and _same_file_part(row.identity.database, database)
+        and _same_file_part(row.identity.schema, schema)
+    }
+    if not identities:
+        return None
+    if len(identities) > 1:
+        servers = tuple(sorted(identities))
+        print(
+            f"⚠️  {database}.{schema} 在多台 server 上都有 SQL 快取（{', '.join(servers)}）；"
+            f"請指定 server。"
+        )
+        return AmbiguousServer(database=database, schema=schema, servers=servers)
+    (identity,) = identities.values()
+    return identity
 
 
 @dataclass(frozen=True)
@@ -405,24 +417,20 @@ def _is_valid_cache(data: object, identity: CacheIdentity) -> bool:
     return _same_scope(graph.get("database"), identity.database)
 
 
-def has_cache(database: str, schema: str = "dbo", server: str = "") -> bool:
+def has_cache(identity: CacheIdentity) -> bool:
     """這個 Database 有沒有建檔：完全由對應的快取檔在不在磁碟上決定。"""
-    return load_cached(database, schema, server=server) is not None
+    return load_cached(identity) is not None
 
 
-def cached_saved_at(database: str, schema: str = "dbo", server: str = "") -> Optional[str]:
-    """讀取這個 (server, database, schema) 目前磁碟上 SQL 快取記錄的 saved_at。
+def cached_saved_at(identity: CacheIdentity) -> Optional[str]:
+    """讀取這份 SQL 快取目前磁碟上 meta 檔記錄的 saved_at。
 
-    與 load_cached() 收同一組參數、套用同一套 server 回推規則（server 省略時
-    由 resolve_server() 從磁碟回推），但只讀 meta 檔的 saved_at 一個欄位，不驗
+    與 load_cached() 收同一個身分，但只讀 meta 檔的 saved_at 一個欄位，不驗
     證/載入完整快取內容、不連線、不觸發任何 dump。供只需要「這份快取自上次
     derive 後有沒有變」信號的呼叫端使用（見 analyze_service 的 validity
     stamp），取代原本比對 Python 物件身分的做法。
     """
-    resolved_server = normalize_server(server) or resolve_server(database, schema)
-    if not resolved_server:
-        return None
-    _, meta_path = _paths(CacheIdentity.of(resolved_server, database, schema))
+    _, meta_path = _paths(identity)
     if not meta_path.exists():
         return None
     try:
@@ -442,13 +450,14 @@ def _meta_payload(identity: CacheIdentity, saved_at: str) -> Dict[str, object]:
     }
 
 
-def write_meta(meta_path: Path, identity: CacheIdentity, saved_at: str) -> None:
-    """把 meta 檔寫到指定路徑。meta 格式只在這裡定義一次。
+def write_meta(identity: CacheIdentity, saved_at: str) -> None:
+    """把 identity 的 meta 檔寫到它自己的路徑。meta 格式只在這裡定義一次。
 
-    _save() 與一次性搬移工具（tools/migrate_sql_cache_keys.py）共用這一個出口。
-    saved_at 照傳照寫、不補值：搬移不是重新掃描，不該冒出一個沒發生過的掃描時間。
+    路徑由 identity 決定，寫到哪裡跟記錄的身分不可能對不上。_save() 與測試的
+    快取 fixture 共用這一個出口。saved_at 照傳照寫、不補值。
     """
-    Path(meta_path).write_text(
+    _, meta_path = _paths(identity)
+    meta_path.write_text(
         json.dumps(_meta_payload(identity, saved_at), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -598,12 +607,12 @@ def _load(identity: CacheIdentity) -> Optional[Dict]:
 
 
 def _save(identity: CacheIdentity, data: Dict) -> None:
-    data_path, meta_path = _paths(identity)
+    data_path, _meta_path = _paths(identity)
     try:
         data_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        write_meta(meta_path, identity, time.strftime("%Y-%m-%d %H:%M:%S"))
+        write_meta(identity, time.strftime("%Y-%m-%d %H:%M:%S"))
     except Exception as exc:  # 寫檔失敗不致命
         print(f"⚠️  SQL 快取寫出失敗（非致命）：{exc}")
         return
@@ -616,22 +625,14 @@ def _save(identity: CacheIdentity, data: Dict) -> None:
         print(f"⚠️  Object Location Index 寫出失敗（非致命）：{exc}")
 
 
-def load_cached(database: str, schema: str = "dbo", server: str = "") -> Optional[Dict]:
-    """單純讀取本機快取（不連線、不 dump）；查詢時的快速路徑用這個。
-
-    server 省略時由 resolve_server() 從磁碟回推；同名 database 分屬多台 server
-    而無法判斷時視為查無快取。
-    """
-    server = normalize_server(server) or resolve_server(database, schema)
-    if not server:
-        return None
-    identity = CacheIdentity.of(server, database, schema)
-    if identity.key in _mem_cache:
-        cached = _mem_cache[identity.key]
-        if _is_valid_cache(cached, identity):
-            _mem_cache.move_to_end(identity.key)
-            return cached
-        _mem_cache.pop(identity.key, None)
+def load_cached(identity: CacheIdentity) -> Optional[Dict]:
+    """單純讀取本機快取（不連線、不 dump）；查詢時的快速路徑用這個。"""
+    retained = _mem_cache.get(identity)
+    if retained is not None:
+        if _is_valid_cache(retained, identity):
+            _mem_cache.move_to_end(identity)
+            return retained
+        _mem_cache.pop(identity, None)
     cached = _load(identity)
     if cached is not None:
         _retain_in_mem_cache(identity, cached)
@@ -639,38 +640,33 @@ def load_cached(database: str, schema: str = "dbo", server: str = "") -> Optiona
 
 
 def get_or_dump(
-    database: str,
-    schema: str = "dbo",
+    identity: CacheIdentity,
+    *,
+    connection_server: str,
     refresh: bool = False,
-    server: str = "",
-    db_name: str = "",
     user_id: str = "",
     password: str = "",
     progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> Dict:
     """
     取得（或建立）SQL 物件快取：優先用記憶體/磁碟快取；refresh=True 則強制重新
-    連線 SQL Server 撈取整庫定義並覆寫快取。
+    連線 SQL Server 撈取 identity 指名的整庫定義並覆寫快取。
 
-    server/db_name：實際連線目標，同時也是快取鍵的兩個組成（第三個是 schema），
-    由呼叫端如 spec-rag 的 catalog 逐資料庫提供，兩者皆必填。db_name 為空即
-    直接報錯，不猜資料庫名稱；缺 server 則由 SQLAnalyzer 報錯、不嘗試連線
-    （見 config.settings.build_database_config）。
+    identity：這份快取的身分，由呼叫端如 spec-rag 的 catalog 逐資料庫提供。
 
-    database：顯示用簡稱；不參與快取鍵計算。
+    connection_server：實際連線位址，照呼叫端給的原樣交給 SQLAnalyzer。它跟
+    identity.server 不同——正規化會丟掉具名執行個體尾綴（`host\\instance`），
+    快取鍵不分執行個體，連線卻一定要連到那個執行個體。缺值時由 SQLAnalyzer
+    報錯、不嘗試連線（見 config.settings.build_database_config）。
 
     user_id/password：這一台伺服器的掃描帳密覆寫，兩者都有值才生效；缺一即沿用
     .env 的全域 DB_AUTH_MODE 身分（見 docs/adr/0010-scan-identity-independent-of-app-credentials.md）。
     掃描用的連線身分永遠不從被掃應用程式的 Web.config 推導。
     """
-    db = str(db_name or "").strip()
-    if not db:
-        raise ValueError(
-            f"get_or_dump() 需要 db_name（實際資料庫名稱）；database={database!r} 只是顯示用簡稱。"
-        )
-
+    db = identity.database
+    schema = identity.schema
     if not refresh:
-        cached = load_cached(db, schema, server=server)
+        cached = load_cached(identity)
         if cached is not None:
             print(f"⚡ 使用 SQL 快取：{db}.{schema}")
             return cached
@@ -680,7 +676,7 @@ def get_or_dump(
     from code_analyzer.sql_analyzer import SQLAnalyzer
 
     analyzer = SQLAnalyzer(
-        db, server=server, database_name=db, user_id=user_id, password=password
+        db, server=connection_server, database_name=db, user_id=user_id, password=password
     )
     if not analyzer.connect():
         raise RuntimeError(f"無法連線資料庫：{db}")
@@ -698,7 +694,6 @@ def get_or_dump(
 
     from .sql_execution_graph import build_sql_execution_graph
 
-    identity = CacheIdentity.of(server, db, schema)
     data["sql_execution_graph"] = build_sql_execution_graph(
         data,
         progress_callback=progress_callback,

@@ -15,7 +15,7 @@ from service import flow_chain_builder
 from service import scan_store
 from service.schemas import AnalyzeRequest
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
-from tests.sql_cache_fixtures import cache_payload, execution_graph
+from tests.sql_cache_fixtures import cache_payload, execution_graph, one_server_holds_every_database
 
 
 def _cached_sql_graph() -> dict:
@@ -150,10 +150,11 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
 
     monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": _cached_sql_graph(),
+        lambda identity: _cached_sql_graph(),
     )
 
     response = analyze_service.analyze(
@@ -241,10 +242,11 @@ def test_analyze_keeps_source_wrapper_method_flow_in_execution_path(monkeypatch,
 
     monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": _cached_sql_graph(),
+        lambda identity: _cached_sql_graph(),
     )
 
     response = analyze_service.analyze(
@@ -318,7 +320,8 @@ def test_analyze_keeps_missing_graph_target_as_unresolved(monkeypatch, tmp_path:
         },
         connection_sources={str(source_file.resolve()): {"conn": "PUR"}},
     )
-    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": None)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: None)
 
     paths, compact_payload = analyze_service._build_program_execution_paths(
         AnalyzeRequest(program_names=["OrderPage"], include_snippets=False),
@@ -380,7 +383,8 @@ def _captured_question_reaching_ranking(monkeypatch, tmp_path: Path, *, question
     """跑一次 `_build_program_execution_paths()`，回傳它實際傳給
     `build_compact_execution_path_payload()` 的 `question` 值。"""
     scan, file_result = _single_invocation_scan(tmp_path)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": None)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: None)
 
     captured: dict = {}
     original_payload = analyze_service.build_compact_execution_path_payload
@@ -426,10 +430,11 @@ def test_analyze_passes_request_max_paths_into_compact_path_builder(
     monkeypatch, tmp_path: Path
 ) -> None:
     scan, file_result = _single_invocation_scan(tmp_path)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": None,
+        lambda identity: None,
     )
 
     captured: dict = {}
@@ -606,7 +611,8 @@ def test_analyze_keeps_multiple_connection_labels_database_scoped(monkeypatch, t
             }
         },
     )
-    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": _cached_sql_graph())
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: _cached_sql_graph())
 
     paths, _ = analyze_service._build_program_execution_paths(
         AnalyzeRequest(database="OrdersDb", program_names=["OrderPage"], include_snippets=False),
@@ -659,10 +665,11 @@ def test_analyze_catalog_preserves_schema_qualified_procedure(monkeypatch, tmp_p
         },
         connection_sources={str(source_file.resolve()): {"conn": "OrdersDb"}},
     )
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": _cached_schema_sql_graph(),
+        lambda identity: _cached_schema_sql_graph(),
     )
 
     paths, _ = analyze_service._build_program_execution_paths(

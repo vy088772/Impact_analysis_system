@@ -88,11 +88,11 @@ def test_repaired_cache_is_accepted_by_the_normal_load_path() -> None:
 
     with CacheRoot() as cache_root:
         _write_stale_fixture(cache_root)
-        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
+        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")) is None
 
         repair_all_caches(host=host, project_root=PROJECT_ROOT)
 
-        assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is not None
+        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")) is not None
 
 
 def test_repair_only_touches_the_graph_field() -> None:

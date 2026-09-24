@@ -21,9 +21,7 @@ from tests.sql_cache_fixtures import (
     cache_payload,
     execution_graph,
     write_cache,
-    write_legacy_cache,
 )
-from tools.migrate_sql_cache_keys import LEGACY_CACHE_SCOPES, Scope, migrate_cache_keys
 
 
 def _payload(database: str, graph_nodes: tuple = (), **objects: object) -> dict:
@@ -113,36 +111,29 @@ def test_a_cache_identity_names_its_own_files() -> None:
     assert identity.meta_filename == "vmsystest07.topmost.com.tw__STC__dbo.meta.json"
 
 
-def test_a_cache_identity_defaults_to_the_dbo_schema() -> None:
-    assert (
-        CacheIdentity.of("vmsystest07.topmost.com.tw", "PUR").filename
-        == "vmsystest07.topmost.com.tw__PUR__dbo.json"
-    )
-
-
 def test_one_shared_database_has_one_key_regardless_of_which_system_asks() -> None:
     """SysErrorRecord is referenced by many systems; its cache key must not vary."""
     assert (
-        CacheIdentity.of("vmsystest07", "SysErrorRecord").key
-        == CacheIdentity.of("VMSYSTEST07.topmost.com.tw\\pdcs", "SysErrorRecord").key
+        CacheIdentity.of("vmsystest07", "SysErrorRecord", "dbo").key
+        == CacheIdentity.of("VMSYSTEST07.topmost.com.tw\\pdcs", "SysErrorRecord", "dbo").key
     )
 
 
 def test_same_database_name_on_two_servers_gets_two_keys() -> None:
     assert (
-        CacheIdentity.of("vmsystest07", "PUR").key
-        != CacheIdentity.of("vmsystest08", "PUR").key
+        CacheIdentity.of("vmsystest07", "PUR", "dbo").key
+        != CacheIdentity.of("vmsystest08", "PUR", "dbo").key
     )
 
 
 def test_a_cache_identity_rejects_an_unknown_server() -> None:
     with pytest.raises(ValueError):
-        CacheIdentity.of("", "PUR")
+        CacheIdentity.of("", "PUR", "dbo")
 
 
 def test_a_cache_identity_rejects_an_unknown_database() -> None:
     with pytest.raises(ValueError):
-        CacheIdentity.of("vmsystest07", "")
+        CacheIdentity.of("vmsystest07", "", "dbo")
 
 
 def test_the_reverse_parse_reads_a_three_part_stem_back_into_its_identity() -> None:
@@ -195,8 +186,10 @@ def test_the_server_is_found_for_a_database_name_that_holds_the_separator() -> N
             _payload("Y__Docs"),
         )
 
-        assert sql_cache_store.resolve_server("Y__Docs", "dbo") == "vmsystest07.topmost.com.tw"
-        assert sql_cache_store.load_cached("Y__Docs", "dbo")["database"] == "Y__Docs"
+        identity = sql_cache_store.find_cache_identity("Y__Docs", "dbo")
+
+        assert identity == CacheIdentity.of("vmsystest07", "Y__Docs", "dbo")
+        assert sql_cache_store.load_cached(identity)["database"] == "Y__Docs"
 
 
 # ------------------------------------------------------- catalog membership
@@ -204,7 +197,7 @@ def test_the_server_is_found_for_a_database_name_that_holds_the_separator() -> N
 
 def test_a_database_is_cataloged_exactly_when_its_cache_file_exists() -> None:
     with CacheRoot() as cache_root:
-        assert sql_cache_store.has_cache("SysErrorRecord", "dbo", server="vmsystest07") is False
+        assert sql_cache_store.has_cache(CacheIdentity.of("vmsystest07", "SysErrorRecord", "dbo")) is False
 
         write_cache(
             cache_root,
@@ -212,7 +205,7 @@ def test_a_database_is_cataloged_exactly_when_its_cache_file_exists() -> None:
             _payload("SysErrorRecord"),
         )
 
-        assert sql_cache_store.has_cache("SysErrorRecord", "dbo", server="vmsystest07") is True
+        assert sql_cache_store.has_cache(CacheIdentity.of("vmsystest07", "SysErrorRecord", "dbo")) is True
 
 
 def test_a_cache_written_for_one_server_is_not_found_under_another() -> None:
@@ -221,7 +214,7 @@ def test_a_cache_written_for_one_server_is_not_found_under_another() -> None:
             cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
-        assert sql_cache_store.load_cached("PUR", "dbo", server="vmsystest08") is None
+        assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest08", "PUR", "dbo")) is None
 
 
 def test_a_caller_without_a_server_resolves_the_only_cache_for_that_database() -> None:
@@ -230,7 +223,10 @@ def test_a_caller_without_a_server_resolves_the_only_cache_for_that_database() -
             cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
-        cached = sql_cache_store.load_cached("PUR", "dbo")
+        identity = sql_cache_store.find_cache_identity("PUR", "dbo")
+
+        assert identity == CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        cached = sql_cache_store.load_cached(identity)
 
         assert cached is not None
         assert cached["database"] == "PUR"
@@ -245,7 +241,20 @@ def test_a_caller_without_a_server_refuses_an_ambiguous_database_name() -> None:
             cache_root, CacheIdentity.of("vmsystest08", "PUR", "dbo"), _payload("PUR")
         )
 
-        assert sql_cache_store.load_cached("PUR", "dbo") is None
+        assert sql_cache_store.find_cache_identity("PUR", "dbo") == sql_cache_store.AmbiguousServer(
+            database="PUR",
+            schema="dbo",
+            servers=("vmsystest07.topmost.com.tw", "vmsystest08.topmost.com.tw"),
+        )
+
+
+def test_a_caller_without_a_server_finds_nothing_when_no_cache_names_the_database() -> None:
+    with CacheRoot() as cache_root:
+        write_cache(
+            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+        )
+
+        assert sql_cache_store.find_cache_identity("STC", "dbo") is None
 
 
 def test_a_system_id_is_not_a_cache_key() -> None:
@@ -255,7 +264,7 @@ def test_a_system_id_is_not_a_cache_key() -> None:
             cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
-        assert sql_cache_store.load_cached("Y-Docs_TTPUR", "dbo", server="vmsystest07") is None
+        assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Y-Docs_TTPUR", "dbo")) is None
 
 
 # --------------------------------------------------------- freshness (ticket 05)
@@ -267,7 +276,7 @@ def test_cached_saved_at_reads_the_recorded_save_time() -> None:
             cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
-        assert sql_cache_store.cached_saved_at("PUR", "dbo", server="vmsystest07") == "2026-08-04 13:29:13"
+        assert sql_cache_store.cached_saved_at(CacheIdentity.of("vmsystest07", "PUR", "dbo")) == "2026-08-04 13:29:13"
 
 
 def test_cached_saved_at_resolves_the_server_the_same_way_load_cached_does() -> None:
@@ -277,153 +286,15 @@ def test_cached_saved_at_resolves_the_server_the_same_way_load_cached_does() -> 
             cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
-        assert sql_cache_store.cached_saved_at("PUR", "dbo") == "2026-08-04 13:29:13"
+        identity = sql_cache_store.find_cache_identity("PUR", "dbo")
+
+        assert isinstance(identity, CacheIdentity)
+        assert sql_cache_store.cached_saved_at(identity) == "2026-08-04 13:29:13"
 
 
 def test_cached_saved_at_is_none_when_nothing_is_cached() -> None:
     with CacheRoot():
-        assert sql_cache_store.cached_saved_at("NoSuchDb", "dbo", server="vmsystest07") is None
-
-
-# ---------------------------------------------------------------- migration
-
-
-def test_migration_renames_a_legacy_cache_file_to_the_new_key() -> None:
-    with CacheRoot() as cache_root:
-        write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
-
-        migrate_cache_keys(cache_root, [Scope("STC__dbo", "vmsystest07", "STC", "dbo")])
-
-        assert (cache_root / "vmsystest07.topmost.com.tw__STC__dbo.json").exists()
-        assert (cache_root / "vmsystest07.topmost.com.tw__STC__dbo.meta.json").exists()
-        assert not (cache_root / "STC__dbo.json").exists()
-        assert not (cache_root / "STC__dbo.meta.json").exists()
-
-
-def test_a_migrated_cache_reads_back_identically_under_its_new_name() -> None:
-    """Smoke test: rename only — the parsed payload must not change."""
-    with CacheRoot() as cache_root:
-        before = _payload("STC")
-        write_legacy_cache(cache_root, "STC__dbo", before)
-
-        migrate_cache_keys(cache_root, [Scope("STC__dbo", "vmsystest07", "STC", "dbo")])
-
-        after = sql_cache_store.load_cached("STC", "dbo", server="vmsystest07")
-        assert after == before
-
-
-def test_migration_corrects_a_payload_whose_identity_was_a_system_id() -> None:
-    """Y-Docs_TTPUR__dbo holds database PUR; only the identity fields may change."""
-    with CacheRoot() as cache_root:
-        before = _payload("Y-Docs_TTPUR")
-        write_legacy_cache(cache_root, "Y-Docs_TTPUR__dbo", before)
-
-        migrate_cache_keys(cache_root, [Scope("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
-
-        after = sql_cache_store.load_cached("PUR", "dbo", server="vmsystest07")
-        assert after is not None
-        assert after["database"] == "PUR"
-        assert after["sql_execution_graph"]["database"] == "PUR"
-        assert after == _payload("PUR")
-
-
-def test_migration_does_not_rescan_the_procedure_definitions() -> None:
-    with CacheRoot() as cache_root:
-        before = _payload("Y-Docs_TTPUR")
-        write_legacy_cache(cache_root, "Y-Docs_TTPUR__dbo", before)
-
-        migrate_cache_keys(cache_root, [Scope("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
-
-        after = json.loads(
-            (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.json").read_text(encoding="utf-8")
-        )
-        assert after["procedures"] == before["procedures"]
-
-
-def test_migration_touches_only_the_identity_bytes() -> None:
-    """No re-scan means no rewrite: even the line endings must survive."""
-    with CacheRoot() as cache_root:
-        before = _payload("Y-Docs_TTPUR")
-        raw = (
-            json.dumps(before, ensure_ascii=False, indent=2)
-            .replace("\n", "\r\n")
-            .encode("utf-8")
-        )
-        (cache_root / "Y-Docs_TTPUR__dbo.json").write_bytes(raw)
-        (cache_root / "Y-Docs_TTPUR__dbo.meta.json").write_text(
-            json.dumps(
-                {
-                    "cache_version": sql_cache_store._SQL_CACHE_VERSION,
-                    "database": "Y-Docs_TTPUR",
-                    "schema": "dbo",
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-
-        migrate_cache_keys(cache_root, [Scope("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
-
-        after = (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.json").read_bytes()
-        assert after == raw.replace(b'"database": "Y-Docs_TTPUR"', b'"database": "PUR"')
-
-
-def test_migration_is_idempotent() -> None:
-    with CacheRoot() as cache_root:
-        write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
-        scopes = [Scope("STC__dbo", "vmsystest07", "STC", "dbo")]
-
-        first = migrate_cache_keys(cache_root, scopes)
-        second = migrate_cache_keys(cache_root, scopes)
-
-        assert [entry["action"] for entry in first] == ["migrated"]
-        assert [entry["action"] for entry in second] == ["missing"]
-        assert sql_cache_store.load_cached("STC", "dbo", server="vmsystest07") is not None
-
-
-def test_migration_dry_run_changes_nothing() -> None:
-    with CacheRoot() as cache_root:
-        write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
-
-        migrate_cache_keys(
-            cache_root,
-            [Scope("STC__dbo", "vmsystest07", "STC", "dbo")],
-            dry_run=True,
-        )
-
-        assert (cache_root / "STC__dbo.json").exists()
-        assert not (cache_root / "vmsystest07.topmost.com.tw__STC__dbo.json").exists()
-
-
-def test_the_shipped_migration_scopes_cover_both_existing_cache_files() -> None:
-    assert LEGACY_CACHE_SCOPES == [
-        ("STC__dbo", "vmsystest07", "STC", "dbo"),
-        ("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo"),
-    ]
-
-
-def test_the_migration_writes_the_meta_the_store_itself_would_write() -> None:
-    """The meta format lives in sql_cache_store; the migration must not fork it."""
-    with CacheRoot() as cache_root:
-        write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
-
-        migrate_cache_keys(cache_root, [Scope("STC__dbo", "vmsystest07", "STC", "dbo")])
-
-        identity = CacheIdentity.of("vmsystest07", "STC", "dbo")
-        migrated = json.loads(
-            (cache_root / identity.meta_filename).read_text(encoding="utf-8")
-        )
-        sql_cache_store._save(CacheIdentity.of("vmsystest08", "STC", "dbo"), _payload("STC"))
-        saved = json.loads(
-            (cache_root / CacheIdentity.of("vmsystest08", "STC", "dbo").meta_filename)
-            .read_text(encoding="utf-8")
-        )
-
-        assert migrated.keys() == saved.keys()
-        assert migrated["cache_version"] == saved["cache_version"]
-        assert migrated["server"] == "vmsystest07.topmost.com.tw"
-        # A rename is not a re-scan: the legacy scan time survives untouched.
-        assert migrated["saved_at"] == "2026-08-04 13:29:13"
+        assert sql_cache_store.cached_saved_at(CacheIdentity.of("vmsystest07", "NoSuchDb", "dbo")) is None
 
 
 # ---------------------------------------------------------------- get_or_dump
@@ -432,7 +303,9 @@ def test_the_migration_writes_the_meta_the_store_itself_would_write() -> None:
 def test_get_or_dump_refuses_to_key_a_cache_by_the_display_alias() -> None:
     """database is a display label; without db_name there is no cache identity."""
     with pytest.raises(ValueError):
-        sql_cache_store.get_or_dump("Y-Docs_TTPUR", server="vmsystest07")
+        sql_cache_store.get_or_dump(
+            CacheIdentity.of("vmsystest07", "", "dbo"), connection_server="vmsystest07"
+        )
 
 
 # -------------------------------------------------------------- list_caches
@@ -809,7 +682,7 @@ def test_the_memory_cache_retains_no_more_databases_than_its_bound(monkeypatch) 
             write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
 
         for name in ("Db1", "Db2", "Db3"):
-            assert sql_cache_store.load_cached(name, "dbo", server="vmsystest07") is not None
+            assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", name, "dbo")) is not None
 
         assert len(sql_cache_store._mem_cache) == 2
 
@@ -822,19 +695,19 @@ def test_exceeding_the_bound_evicts_the_least_recently_used_database_and_records
         for name in ("Db1", "Db2"):
             write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
 
-        sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
-        sql_cache_store.load_cached("Db2", "dbo", server="vmsystest07")
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db2", "dbo"))
         capsys.readouterr()  # discard output from the first two, unbounded, insertions
 
         write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db3", "dbo"), _payload("Db3"))
-        sql_cache_store.load_cached("Db3", "dbo", server="vmsystest07")
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db3", "dbo"))
 
-        db1_key = CacheIdentity.of("vmsystest07", "Db1", "dbo").key
-        db2_key = CacheIdentity.of("vmsystest07", "Db2", "dbo").key
-        db3_key = CacheIdentity.of("vmsystest07", "Db3", "dbo").key
-        assert db1_key not in sql_cache_store._mem_cache
-        assert db2_key in sql_cache_store._mem_cache
-        assert db3_key in sql_cache_store._mem_cache
+        db1 = CacheIdentity.of("vmsystest07", "Db1", "dbo")
+        db2 = CacheIdentity.of("vmsystest07", "Db2", "dbo")
+        db3 = CacheIdentity.of("vmsystest07", "Db3", "dbo")
+        assert db1 not in sql_cache_store._mem_cache
+        assert db2 in sql_cache_store._mem_cache
+        assert db3 in sql_cache_store._mem_cache
 
         printed = capsys.readouterr().out
         assert "已達上限" in printed
@@ -851,20 +724,20 @@ def test_a_served_database_survives_more_new_arrivals_than_the_bound(monkeypatch
         for name in ("Db1", "Db2", "Db3", "Db4"):
             write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
 
-        sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
-        sql_cache_store.load_cached("Db2", "dbo", server="vmsystest07")
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db2", "dbo"))
 
-        sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
-        sql_cache_store.load_cached("Db3", "dbo", server="vmsystest07")
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db3", "dbo"))
 
-        sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
-        sql_cache_store.load_cached("Db4", "dbo", server="vmsystest07")
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db4", "dbo"))
 
         retained = sql_cache_store._mem_cache
-        assert CacheIdentity.of("vmsystest07", "Db1", "dbo").key in retained
-        assert CacheIdentity.of("vmsystest07", "Db2", "dbo").key not in retained
-        assert CacheIdentity.of("vmsystest07", "Db3", "dbo").key not in retained
-        assert CacheIdentity.of("vmsystest07", "Db4", "dbo").key in retained
+        assert CacheIdentity.of("vmsystest07", "Db1", "dbo") in retained
+        assert CacheIdentity.of("vmsystest07", "Db2", "dbo") not in retained
+        assert CacheIdentity.of("vmsystest07", "Db3", "dbo") not in retained
+        assert CacheIdentity.of("vmsystest07", "Db4", "dbo") in retained
 
 
 def test_a_database_evicted_from_memory_is_read_from_disk_again_with_the_same_content(
@@ -875,12 +748,12 @@ def test_a_database_evicted_from_memory_is_read_from_disk_again_with_the_same_co
         write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db1", "dbo"), _payload("Db1"))
         write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db2", "dbo"), _payload("Db2"))
 
-        first = sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
-        sql_cache_store.load_cached("Db2", "dbo", server="vmsystest07")  # evicts Db1 from memory
-        db1_key = CacheIdentity.of("vmsystest07", "Db1", "dbo").key
-        assert db1_key not in sql_cache_store._mem_cache  # sanity: really evicted
+        first = sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db2", "dbo"))  # evicts Db1 from memory
+        db1 = CacheIdentity.of("vmsystest07", "Db1", "dbo")
+        assert db1 not in sql_cache_store._mem_cache  # sanity: really evicted
 
-        reloaded = sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
+        reloaded = sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
 
         assert reloaded is not None
         assert reloaded == first
@@ -894,4 +767,4 @@ def test_eviction_never_changes_which_databases_answer_a_read(monkeypatch) -> No
             write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
 
         for name in ("Db1", "Db2", "Db3"):
-            assert sql_cache_store.load_cached(name, "dbo", server="vmsystest07")["database"] == name
+            assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", name, "dbo"))["database"] == name

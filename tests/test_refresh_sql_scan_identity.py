@@ -69,10 +69,11 @@ def test_get_or_dump_hands_the_override_to_the_analyzer(monkeypatch) -> None:
 
     try:
         sql_cache_store.get_or_dump(
-            "SysErrorRecord",
+            sql_cache_store.CacheIdentity.of(
+                "vmsystest07.topmost.com.tw", "SysErrorRecord", "dbo"
+            ),
+            connection_server="vmsystest07.topmost.com.tw",
             refresh=True,
-            server="vmsystest07.topmost.com.tw",
-            db_name="SysErrorRecord",
             user_id="ScanUser",
             password="secret",
         )

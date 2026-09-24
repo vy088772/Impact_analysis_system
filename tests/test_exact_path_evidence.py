@@ -30,7 +30,7 @@ from service.schemas import (
     SPMatchProgram,
     TableMatchProgram,
 )
-from tests.sql_cache_fixtures import analyzer_operation, cache_payload, execution_graph
+from tests.sql_cache_fixtures import analyzer_operation, cache_payload, execution_graph, one_server_holds_every_database
 
 
 _SAVE_ORDER_PROCEDURE = {
@@ -205,10 +205,11 @@ def test_path_evidence_returns_only_selected_branch_and_source_methods(monkeypat
     scan, cached, path_id = _cached_path_fixture(tmp_path)
     monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cached,
+        lambda identity: cached,
     )
 
     evidence = analyze_service.get_path_evidence(
@@ -330,10 +331,11 @@ def test_multi_root_path_evidence_uses_repo_relative_source_snapshot(
         lambda root, refresh=False: scan if root == child_root else sibling_scan,
     )
     monkeypatch.setattr(analyze_service, "repo_dir", lambda project, repo: tmp_path)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cached,
+        lambda identity: cached,
     )
 
     evidence = analyze_service.get_path_evidence(
@@ -354,10 +356,11 @@ def test_path_evidence_rejects_stale_source_snapshot(monkeypatch, tmp_path: Path
     scan.source_snapshots.clear()
     monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cached,
+        lambda identity: cached,
     )
 
     with pytest.raises(analyze_service.PathEvidenceError) as error:
@@ -390,10 +393,11 @@ def test_path_evidence_rejects_drifted_sql_definition_offset(monkeypatch, tmp_pa
     }
     monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cached,
+        lambda identity: cached,
     )
 
     with pytest.raises(analyze_service.PathEvidenceError) as error:
@@ -425,10 +429,11 @@ def test_path_evidence_accepts_matching_sql_definition_offset(monkeypatch, tmp_p
     }
     monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cached,
+        lambda identity: cached,
     )
 
     evidence = analyze_service.get_path_evidence(
@@ -446,10 +451,11 @@ def test_path_evidence_rejects_unknown_path_id(monkeypatch, tmp_path: Path) -> N
     scan, cached, _ = _cached_path_fixture(tmp_path)
     monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cached,
+        lambda identity: cached,
     )
 
     with pytest.raises(analyze_service.PathEvidenceError) as error:
