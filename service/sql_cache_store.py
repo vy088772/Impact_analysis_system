@@ -287,7 +287,8 @@ def find_cache_identity(
     會讀快取目錄，所以跟純函式 CacheIdentity.of() 分開命名。沒有任何快取以這個
     database 命名時回傳 None；同名 database 在多台 server 上都有快取時回傳
     AmbiguousServer。比對的是目錄列舉每一列身分的 Database 欄位，從不自己組
-    檔名尾綴。
+    檔名尾綴。檔名裡的 Database 是 _safe_name() 過的片段，所以只取它的 server，
+    回傳的身分仍用呼叫端給的 database 與 schema——跟快取內容記錄的名字一致。
 
     結構上沒有 server 可帶的呼叫端有三個：/find_by_sp 與 /find_by_table
     （FindBySPRequest/FindByTableRequest 沒有 db_server 欄位），以及 refresh 流程的
@@ -298,24 +299,26 @@ def find_cache_identity(
     database = str(database or "").strip()
     if not database:
         return None
-    identities = {
-        row.identity.server: row.identity
-        for row in list_cache_files()
-        if row.identity is not None
-        and _same_file_part(row.identity.database, database)
-        and _same_file_part(row.identity.schema, schema)
-    }
-    if not identities:
+    servers = tuple(
+        sorted(
+            {
+                row.identity.server
+                for row in list_cache_files()
+                if row.identity is not None
+                and _same_file_part(row.identity.database, database)
+                and _same_file_part(row.identity.schema, schema)
+            }
+        )
+    )
+    if not servers:
         return None
-    if len(identities) > 1:
-        servers = tuple(sorted(identities))
+    if len(servers) > 1:
         print(
             f"⚠️  {database}.{schema} 在多台 server 上都有 SQL 快取（{', '.join(servers)}）；"
             f"請指定 server。"
         )
         return AmbiguousServer(database=database, schema=schema, servers=servers)
-    (identity,) = identities.values()
-    return identity
+    return CacheIdentity.of(servers[0], database, schema)
 
 
 @dataclass(frozen=True)
@@ -324,8 +327,8 @@ class ScanRecordListing:
 
     server/database/schema 不正規化也不驗證，純粹反映磁碟上讀到的內容，連身分
     不完整的異常檔案都要能被列出（規格要求「never omitted from listing」）。
-    identity 是檔名命名的 CacheIdentity；檔名不是任何身分會寫出的名字時為 None，
-    這時 database 帶著檔名主幹，讓操作者看得到這個認不得的檔案。
+    檔名不是任何身分會寫出的名字時，database 帶著檔名主幹、server 與 schema
+    為空，讓操作者看得到這個認不得的檔案。
     scanned_at 為 None 代表 Scan Record 缺失或無法讀取，不是「從未掃描」與
     「讀不到」的混淆表達——呼叫端據此決定要不要顯示「never scanned」。
     """
@@ -334,7 +337,6 @@ class ScanRecordListing:
     database: str
     schema: str
     scanned_at: Optional[str]
-    identity: Optional[CacheIdentity] = None
 
 
 def list_caches() -> List[ScanRecordListing]:
@@ -380,11 +382,7 @@ def list_caches() -> List[ScanRecordListing]:
 
         rows.append(
             ScanRecordListing(
-                server=server,
-                database=database,
-                schema=schema,
-                scanned_at=scanned_at,
-                identity=identity,
+                server=server, database=database, schema=schema, scanned_at=scanned_at
             )
         )
     rows.sort(key=lambda row: (row.server, row.database, row.schema))

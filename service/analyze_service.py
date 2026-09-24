@@ -3116,13 +3116,14 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
     indexes_consulted = 0
 
     for row in sql_cache_store.list_caches():
-        identity = row.identity
-        if identity is None:
-            # A file whose name no SQL Cache Identity writes (see
-            # list_cache_files()): no identity to report a caller could match
-            # against a Declared Database Dependency, so it is neither counted
-            # nor listed — not a cache this endpoint can answer for, in either
-            # direction.
+        try:
+            identity = sql_cache_store.CacheIdentity.of(row.server, row.database, row.schema)
+        except ValueError:
+            # A file whose name no SQL Cache Identity writes, and whose Scan
+            # Record names no server (see list_caches()): no identity to report
+            # a caller could match against a Declared Database Dependency, so
+            # it is neither counted nor listed — not a cache this endpoint can
+            # answer for, in either direction.
             continue
         indexes_consulted += 1
         key = (identity.server, identity.database)

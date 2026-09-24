@@ -35,10 +35,11 @@ def backfill_cache_row(
         "schema": row.schema,
     }
 
-    identity = row.identity
-    if identity is None:
-        # 檔名不是任何 SQL Cache Identity 會寫出的名字（見 list_cache_files()）。
+    try:
+        identity = sql_cache_store.CacheIdentity.of(row.server, row.database, row.schema)
+    except ValueError as exc:
         entry["action"] = "bad_identity"
+        entry["error"] = str(exc)
         return entry
 
     # load_cached() 套用跟 find_by_sp/find_by_table 完全相同的有效性判斷（meta

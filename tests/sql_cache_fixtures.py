@@ -279,6 +279,9 @@ def write_cache(
     stays defined in one place. ``cache_version`` replaces the version in that
     file, for a test that needs a cache from another format version.
     """
+    # The meta writer writes under settings.SQL_CACHE_ROOT, so both files land
+    # in one directory only when cache_root is that root (a CacheRoot gives it).
+    assert Path(cache_root) == Path(settings.SQL_CACHE_ROOT), "write_cache needs a CacheRoot"
     (cache_root / identity.filename).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )

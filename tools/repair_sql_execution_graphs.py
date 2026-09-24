@@ -102,7 +102,7 @@ def repair_all_caches(
 
     哪些檔案是快取只問 sql_cache_store.list_cache_files()，這裡不留自己的副檔名
     清單——自己留一份時漏了 .index.json，索引檔排在資料檔前面又不是快取格式，
-    第一個檔案就讓整批搬移中斷。檔名認不得身分的檔案回報後略過；認得身分、
+    第一個檔案就讓整批修復中斷。檔名認不得身分的檔案回報後略過；認得身分、
     重建卻失敗的檔案是缺陷，照樣讓整批中斷。
     """
     project_root = project_root or PROJECT_ROOT

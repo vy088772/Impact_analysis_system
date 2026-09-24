@@ -248,6 +248,19 @@ def test_a_caller_without_a_server_refuses_an_ambiguous_database_name() -> None:
         )
 
 
+def test_a_caller_without_a_server_reads_a_database_whose_name_the_filename_rewrites() -> None:
+    """The filename holds a safe-named Database; the read still names the real one."""
+    with CacheRoot() as cache_root:
+        write_cache(
+            cache_root, CacheIdentity.of("vmsystest07", "Y Docs", "dbo"), _payload("Y Docs")
+        )
+
+        identity = sql_cache_store.find_cache_identity("Y Docs", "dbo")
+
+        assert identity == CacheIdentity.of("vmsystest07", "Y Docs", "dbo")
+        assert sql_cache_store.load_cached(identity)["database"] == "Y Docs"
+
+
 def test_a_caller_without_a_server_finds_nothing_when_no_cache_names_the_database() -> None:
     with CacheRoot() as cache_root:
         write_cache(
