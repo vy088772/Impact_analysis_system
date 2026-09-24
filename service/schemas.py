@@ -598,7 +598,6 @@ class FlowChainRequest(BaseModel):
     database: str = ""                        # 資料庫簡稱／快取鍵（通常是 spec-rag 的 system_id）
     db_server: str = ""                       # 資料庫主機位址（與 db_name 需同時提供）
     db_name: str = ""                         # 實際資料庫名稱
-    max_sp_depth: int = 2                     # forward 用：SP 巢狀展開層數上限
     cache_only: bool = True                   # True → 系統未 clone/分析過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再組鏈
 

@@ -451,11 +451,6 @@
             "title": "Direction",
             "type": "string"
           },
-          "max_sp_depth": {
-            "default": 2,
-            "title": "Max Sp Depth",
-            "type": "integer"
-          },
           "program_name": {
             "default": "",
             "title": "Program Name",
