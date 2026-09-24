@@ -83,6 +83,7 @@ temporary cache root" in the spec.
     stay as they were for such names.
   - `write_cache` asserts that its `cache_root` is the settings root, because
     the meta writer now writes there.
-- Open point for the user: `get_or_dump` keeps a separate `connection_server`.
-  Nothing checks that it normalizes to `identity.server`. The only caller
-  (`refresh_sql_source`) builds both from one `server` value.
+- Decision (user, 2026-09-24): `get_or_dump` keeps a separate
+  `connection_server`, and no check compares it with `identity.server`. The only
+  caller (`refresh_sql_source`) builds both from one `server` value, so the two
+  cannot disagree today.
