@@ -3162,8 +3162,6 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
 
     database_alias = req.database or None
-    db_server = req.db_server or None
-    db_name = req.db_name or None
     scope = DerivedExecutionEvidenceScope.of(req, roots)
 
     if req.direction == "backward":
@@ -3217,13 +3215,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
 
     forward = flow_chain_builder.build_forward_chain(
         matched_files,
-        [],
-        root,
         req.anchor_method,
-        database_alias=database_alias,
-        db_server=db_server,
-        db_name=db_name,
-        max_sp_depth=req.max_sp_depth,
         graph=execution_graph,
         invocations=rated_invocations,
     )

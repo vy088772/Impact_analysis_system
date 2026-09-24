@@ -507,8 +507,6 @@ def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_pat
 
     response = flow_chain_builder.build_forward_chain(
         [file_result],
-        [],
-        tmp_path,
         "SaveData",
         graph=graph,
         invocations=[invocation],
@@ -519,7 +517,7 @@ def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_pat
     assert response["diagnostics"][0]["sp_chain"] == ["dbo.usp_Dynamic"]
 
 
-def test_forward_chain_without_graph_keeps_inline_sql_but_ignores_legacy_sp_relation(
+def test_forward_chain_without_graph_keeps_inline_sql(
     tmp_path: Path,
 ) -> None:
     source_file = tmp_path / "OrderPage.cs"
@@ -543,20 +541,9 @@ def test_forward_chain_without_graph_keeps_inline_sql_but_ignores_legacy_sp_rela
             )
         ],
     )
-    legacy_relation = CSharpSPRelation(
-        csharp_file=str(source_file),
-        class_name="OrderPage",
-        method_name="SaveData",
-        line_number=1,
-        sp_name="usp_LegacyOnly",
-        sp_database="OrdersDb",
-        connection_variable="conn",
-    )
 
     response = flow_chain_builder.build_forward_chain(
         [file_result],
-        [legacy_relation],
-        tmp_path,
         "SaveData",
         graph=None,
         invocations=[],

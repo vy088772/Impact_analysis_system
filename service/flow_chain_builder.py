@@ -10,9 +10,9 @@
 兩種方向：
   - forward（build_forward_chain）：從指定的錨點方法（通常是 spec-rag 端依
     UI 動作用語意檢索，從 ui_fields 的 events 挑出的候選 handler 方法名稱）出發，
-    走方法呼叫鏈，再依 SQL Execution Graph 的 sp_chain 列出 SP（含巢狀呼叫），
-    最後彙整這些 SP 引用的資料表；同時也會補上可達方法「自己方法體內裸 SQL
-    字串」引用的資料表（`inline_sql_tables`，見 _inline_sql_tables），涵蓋
+    走方法呼叫鏈，再到直接呼叫的 SP，再遞迴展開 SP 內部呼叫的其他 SP，最後彙整
+    各層 SP 引用的資料表；同時也會補上可達方法「自己方法體內裸
+    SQL 字串」引用的資料表（`inline_sql_tables`，見 _inline_sql_tables），涵蓋
     完全沒呼叫 SP、只靠內嵌 SQL 查表的方法（例如只是組 DropDownList 選項的
     BindXxx 方法）。
   - backward（build_backward_chains）：從指定的資料表（可選：欄位名稱）出發，
@@ -23,6 +23,9 @@
   - 欄位（column）層級的比對是「SP 定義文字裡有沒有出現這個欄位名稱字串」的
     近似值（文字比對），不是解析 SQL 語法樹後的結構化保證，可能有誤判
     （欄位名稱剛好也是變數名或其他表的欄位名）。
+  - SP 呼叫 SP（sp_call_fetcher）、SP 引用資料表（sql_analyzer 的
+    extract_tables_from_definition）都只讀本機 SQL 快取，快取不存在時該層
+    直接留空，不觸發即時資料庫連線（與這個專案其餘「盡力而為」的設計一致）。
   - UI 控制項事件反查是用「同目錄同檔名，.aspx.cs 對應 .aspx」的 WebForms
     命名慣例配對 code-behind 與 aspx 檔案，非 WebForms 專案（無對應 .aspx）
     這段會自然找不到、留空，不影響其餘鏈的建構。
@@ -38,6 +41,10 @@ from code_analyzer.models import FileAnalysisResult
 from code_analyzer.sql_analyzer import extract_tables_from_definition
 from .graph_queries import query_table_accesses
 from .execution_path_builder import build_execution_paths
+from .sp_fetcher import fetch_sp_definitions
+from .sp_call_fetcher import fetch_called_sp_names
+
+_MAX_SP_DEPTH_HARD_CAP = 5  # 無論呼叫端傳入多大，都不超過這個層數，避免巨大 SP 網絡失控展開
 
 
 def _normalize_name(name: str) -> str:
@@ -147,15 +154,78 @@ def _reachable_from(start: str, adj: Dict[str, List[str]], max_depth: int = 8) -
     return path, visited
 
 
+def _expand_sp_chain(
+    root_sp_name: str,
+    database_alias: Optional[str],
+    db_server: Optional[str],
+    db_name: Optional[str],
+    max_depth: int,
+    max_def_chars: int = 8000,
+) -> List[dict]:
+    """從一支 SP 出發，遞迴展開巢狀 EXEC 呼叫，回傳扁平清單（每筆含 called_by/depth，
+    與這個專案既有的 related_programs 扁平加 depth 慣例一致）。每筆內容：
+      - name：SP 名稱
+      - exists：資料庫/快取中是否真的找得到這支 SP 的定義
+      - tables：這支 SP 自己引用的資料表（純字串分析，見 extract_tables_from_definition）
+      - called_by：呼叫它的上一層 SP 名稱（root 本身為空字串）
+      - depth：巢狀層數（root 為 0）
+
+    找不到定義（快取沒有、也連不到即時 DB）的 SP 仍會出現一筆，tables 為空、
+    exists=False，讓呼叫端知道「這條鏈斷在這裡」，不是完全沒有這支 SP。
+    """
+    max_depth = min(max_depth, _MAX_SP_DEPTH_HARD_CAP)
+    result: List[dict] = []
+    if not root_sp_name:
+        return result
+
+    visited: Set[str] = set()
+    queue: List[Tuple[str, str, int]] = [(root_sp_name, "", 0)]
+
+    while queue:
+        name, called_by, depth = queue.pop(0)
+        key = _normalize_name(name)
+        if not key or key in visited:
+            continue
+        visited.add(key)
+
+        defs = fetch_sp_definitions(
+            [name],
+            database_alias=database_alias,
+            db_server=db_server,
+        )
+        info = defs[0] if defs else {"name": name, "exists": False, "definition": "", "tables": []}
+        definition = info.get("definition", "") or ""
+        tables = info.get("tables", []) or (
+            sorted(extract_tables_from_definition(definition)) if definition else []
+        )
+
+        result.append({
+            "name": name,
+            "exists": bool(info.get("exists", False)),
+            "tables": tables,
+            "called_by": called_by,
+            "depth": depth,
+        })
+
+        if depth >= max_depth or not definition:
+            continue
+
+        nested = fetch_called_sp_names(
+            definition,
+            database_alias=database_alias,
+            exclude_name=name,
+            db_server=db_server,
+        )
+        for nested_name in nested:
+            if _normalize_name(nested_name) not in visited:
+                queue.append((nested_name, name, depth + 1))
+
+    return result
+
+
 def build_forward_chain(
     matched_files: List[FileAnalysisResult],
-    sp_relations: List,
-    root: Path,
     anchor_method: str,
-    database_alias: Optional[str] = None,
-    db_server: Optional[str] = None,
-    db_name: Optional[str] = None,
-    max_sp_depth: int = 2,
     graph: Optional[Mapping[str, object]] = None,
     invocations: Iterable[DbInvocation] = (),
 ) -> Optional[dict]:
@@ -164,9 +234,6 @@ def build_forward_chain(
     anchor_method：通常由 spec-rag 端依使用者問題的 UI 動作描述，用語意檢索從
     ui_fields 的 events 挑出的候選 handler 方法名稱（見這個模組頂部說明）；這裡
     只管照著這個名稱組鏈，不判斷這個名稱選得準不準。
-
-    sp_relations：保留這個參數是為了相容舊呼叫端，但正式 SP chain 不再從
-    legacy relations 推導；沒有 graph 時只回傳 source-only method/inline SQL facts。
 
     回傳 None 代表在 matched_files 裡完全找不到這個方法名稱（呼叫端應視為此
     錨點無效，換下一個候選）。
