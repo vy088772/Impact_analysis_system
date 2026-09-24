@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-from canonical_object_identity import parse
+from canonical_object_identity import ObjectName, parse, part_key
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 
 
@@ -25,7 +25,14 @@ from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 # relationship targets that name no node in the same graph -- a dangling id
 # unresolves every proven fact in its Execution Path. Bumped once for the
 # whole effort, not once per ticket.
-GRAPH_VERSION = 4
+# v5: each analyzer reference on an operation node is an object with four
+# parts (server, database, schema, name), and each reads, writes, and calls
+# relationship records the database and server its reference stated
+# (canonical-object-identity, Step 2a). This version rises whenever the graph
+# payload shape changes: an operator reads this shape from disk until Step 2b.
+# tools/repair_sql_execution_graphs.py rebuilds a v4 graph from the cache's
+# own definitions; nothing rebuilds one on the load path.
+GRAPH_VERSION = 5
 _MODULE_COLLECTIONS = (
     ("procedures", "stored_procedure"),
     ("views", "view"),
@@ -119,7 +126,7 @@ def build_sql_execution_graph(
                         object_schema,
                         name,
                         module_id,
-                        schema,
+                        str(data.get("database") or ""),
                         len(definition),
                     )
                 _report_progress(progress_callback, "graph", index, len(module_specs), name)
@@ -156,25 +163,32 @@ def _expand_temp_table_lineage(
         return str(node_by_id.get(node_id, {}).get("name") or "").startswith("#")
 
     def resolve_base_targets(
-        table_id: str,
+        read_relationship: dict[str, Any],
         visited: frozenset[str] = frozenset(),
-    ) -> set[str]:
+    ) -> set[tuple[str, str, str]]:
+        """Return each base table id behind one read, with the server and database that read stated."""
+        table_id = str(read_relationship.get("target") or "")
         if not is_temp_table(table_id):
-            return {table_id}
+            return {
+                (
+                    table_id,
+                    str(read_relationship.get("server") or ""),
+                    str(read_relationship.get("database") or ""),
+                )
+            }
         if table_id in visited or len(visited) >= max_depth:
             return set()
-        base_targets: set[str] = set()
+        base_targets: set[tuple[str, str, str]] = set()
         next_visited = visited | {table_id}
         for writer_id in sorted(set(writers_by_table.get(table_id, []))):
-            for read_relationship in sorted(
+            for writer_read in sorted(
                 reads_by_operation.get(writer_id, []),
                 key=lambda item: str(item.get("target") or ""),
             ):
-                source_id = str(read_relationship.get("target") or "")
-                base_targets.update(resolve_base_targets(source_id, next_visited))
+                base_targets.update(resolve_base_targets(writer_read, next_visited))
         return base_targets
 
-    derived: list[tuple[str, str, dict[str, Any], list[str], list[str]]] = []
+    derived: list[tuple[str, str, ObjectName, dict[str, Any], list[str], list[str]]] = []
     for relationship in list(relationships):
         if relationship.get("type") != "reads":
             continue
@@ -182,18 +196,19 @@ def _expand_temp_table_lineage(
         temp_id = str(relationship.get("target") or "")
         if not is_temp_table(temp_id):
             continue
-        for base_id in sorted(resolve_base_targets(temp_id)):
+        for base_id, server, database in sorted(resolve_base_targets(relationship)):
             derived.append(
                 (
                     source_id,
                     base_id,
+                    ObjectName(server=server, database=database, schema="", name=""),
                     dict(relationship.get("source_location") or {}),
                     list(relationship.get("branch_path") or []),
                     [temp_id],
                 )
             )
 
-    for source_id, target_id, source_location, branch_path, lineage in derived:
+    for source_id, target_id, stated, source_location, branch_path, lineage in derived:
         _add_relationship(
             relationships,
             "reads",
@@ -203,6 +218,7 @@ def _expand_temp_table_lineage(
             branch_path,
             conditions=branch_path,
             identity_suffix=f"lineage:{lineage[0]}",
+            stated=stated,
         )
         relationships[-1]["lineage"] = lineage
 
@@ -231,7 +247,7 @@ def _add_operation(
     module_schema: str,
     module_name: str,
     module_id: str,
-    default_schema: str,
+    cache_database: str,
     module_definition_length: int,
 ) -> None:
     module = {
@@ -254,9 +270,9 @@ def _add_operation(
     if operation_type == "CALL":
         call_conditions = list(operation.get("conditions") or branch_path)
         for call_target in operation.get("call_targets", []) or []:
-            target = parse(str(call_target or ""))
-            # A call target that states no schema takes the cache-wide schema. Step 2b removes this default.
-            target_schema, target_name = target.schema or default_schema, target.name
+            target = _reference(call_target)
+            # A call target that states no schema reads as dbo here. Step 2b removes this default.
+            target_schema, target_name = target.schema or "dbo", target.name
             if not target_name:
                 continue
             _add_relationship(
@@ -268,6 +284,7 @@ def _add_operation(
                 branch_path,
                 conditions=call_conditions,
                 identity_suffix=str(sequence),
+                stated=target,
             )
         return
 
@@ -304,13 +321,9 @@ def _add_operation(
         )
         return
 
-    for table_name in operation.get("read_tables", []) or []:
-        target_id = _ensure_referenced_node(
-            nodes,
-            node_by_key,
-            table_name,
-            default_schema,
-        )
+    for read_table in operation.get("read_tables", []) or []:
+        reference = _reference(read_table)
+        target_id = _ensure_referenced_node(nodes, node_by_key, reference)
         _add_relationship(
             relationships,
             "reads",
@@ -319,6 +332,7 @@ def _add_operation(
             source,
             branch_path,
             columns=list(operation.get("read_columns", []) or []),
+            stated=reference,
         )
         if target_id.split(":", 1)[0] in {"view", "function"}:
             _add_relationship(
@@ -331,13 +345,9 @@ def _add_operation(
                 conditions=list(operation.get("conditions") or branch_path),
             )
 
-    for table_name in operation.get("write_tables", []) or []:
-        target_id = _ensure_referenced_node(
-            nodes,
-            node_by_key,
-            table_name,
-            default_schema,
-        )
+    for write_table in operation.get("write_tables", []) or []:
+        reference = _reference(write_table)
+        target_id = _ensure_referenced_node(nodes, node_by_key, reference)
         _add_relationship(
             relationships,
             "writes",
@@ -346,14 +356,15 @@ def _add_operation(
             source,
             branch_path,
             columns=list(operation.get("written_columns", []) or []),
+            stated=reference,
         )
 
-    for function_name in operation.get("function_references", []) or []:
+    for function_reference in operation.get("function_references", []) or []:
         target_id = _known_object_node_id(
             node_by_key,
             "function",
-            function_name,
-            default_schema,
+            _reference(function_reference),
+            cache_database,
         )
         if target_id:
             _add_relationship(
@@ -367,15 +378,25 @@ def _add_operation(
             )
 
 
+def _reference(entry: dict[str, Any]) -> ObjectName:
+    """Read one analyzer reference; the host always reports all four parts."""
+    return ObjectName(
+        server=str(entry.get("server") or ""),
+        database=str(entry.get("database") or ""),
+        schema=str(entry.get("schema") or ""),
+        name=str(entry.get("name") or ""),
+    )
+
+
 def _ensure_referenced_node(
     nodes: list[dict[str, Any]],
     node_by_key: dict[tuple[str, str, str], dict[str, Any]],
-    object_name: str,
-    default_schema: str,
+    reference: ObjectName,
 ) -> str:
-    reference = parse(str(object_name or ""))
-    # A reference that states no schema takes the cache-wide schema. Step 2b removes this default.
-    object_schema, name = reference.schema or default_schema, reference.name
+    # A reference that states no schema reads as dbo here. Step 2b removes this default.
+    # The node takes no database: node identity is type, schema, and name, and the
+    # relationship records the database its reference stated.
+    object_schema, name = reference.schema or "dbo", reference.name
     view_key = _node_key("view", object_schema, name)
     function_key = _node_key("function", object_schema, name)
     if view_key in node_by_key:
@@ -396,12 +417,15 @@ def _ensure_referenced_node(
 def _known_object_node_id(
     node_by_key: dict[tuple[str, str, str], dict[str, Any]],
     object_type: str,
-    object_name: str,
-    default_schema: str,
+    reference: ObjectName,
+    cache_database: str,
 ) -> str:
-    reference = parse(str(object_name or ""))
-    # A reference that states no schema takes the cache-wide schema. Step 2b removes this default.
-    object_schema, name = reference.schema or default_schema, reference.name
+    # A reference to another Database matches no node: this cache holds no
+    # definition of that object, so a local node would be false evidence.
+    if reference.database and part_key(reference.database) != part_key(cache_database):
+        return ""
+    # A reference that states no schema reads as dbo here. Step 2b removes this default.
+    object_schema, name = reference.schema or "dbo", reference.name
     node = node_by_key.get(_node_key(object_type, object_schema, name))
     return str(node.get("id")) if node else ""
 
@@ -417,10 +441,14 @@ def _add_relationship(
     conditions: list[str] | None = None,
     confidence: str = "proven",
     identity_suffix: str = "",
+    stated: ObjectName | None = None,
 ) -> None:
     relationship_id = f"{relationship_type}:{source_id}:{target_id}"
     if identity_suffix:
         relationship_id = f"{relationship_id}:{identity_suffix}"
+    # Two references that name one node from two Databases are two relationships.
+    if stated is not None and (stated.server or stated.database):
+        relationship_id = f"{relationship_id}@{stated.server}.{stated.database}"
     relationship = {
         "id": relationship_id,
         "type": relationship_type,
@@ -434,6 +462,12 @@ def _add_relationship(
         relationship["columns"] = columns
     if conditions:
         relationship["conditions"] = conditions
+    # The database is recorded as stated. The read side, which knows the SQL
+    # Cache Identity, reads an unstated database as the cache's own Database.
+    if stated is not None and stated.database:
+        relationship["database"] = stated.database
+    if stated is not None and stated.server:
+        relationship["server"] = stated.server
     relationships.append(relationship)
 
 

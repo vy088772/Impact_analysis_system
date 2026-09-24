@@ -14,7 +14,7 @@ from typing import Any, Callable
 from .decompilation_cache import DecompilationAttemptCache
 
 
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 3
 _MAX_HOST_COMMAND_CHARS = 24_000
 # Every host invocation re-parses every `.cs` file under the given source roots as analysis
 # context before it looks at a single --input file, so that context cost is paid once per

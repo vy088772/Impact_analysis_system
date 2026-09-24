@@ -12,6 +12,7 @@ on disk under a SQL Cache Identity.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import tempfile
@@ -154,9 +155,9 @@ def analyzer_operation(
 ) -> dict:
     """Build one SQL operation in the shape the StaticAnalyzerHost reports.
 
-    Each object reference is a written name, such as ``dbo.SOrder``, and the
-    operation carries it as written. Step 2a's analyzer commit changes each
-    reference to four named parts, and it changes this helper alone.
+    Each object reference is a written name, such as ``dbo.SOrder``. The
+    operation carries it as four named parts, as the host reports it: an
+    unstated part is an empty string, never ``dbo``.
 
     ``fields`` adds the fields a caller places beside the operation, such as
     ``source``, ``module``, or a graph node's ``id``.
@@ -167,15 +168,22 @@ def analyzer_operation(
         "branch_path": list(branch_path),
         "conditions": list(conditions),
         "where": where,
-        "read_tables": list(reads),
-        "write_tables": list(writes),
+        "read_tables": _references(reads),
+        "write_tables": _references(writes),
         "read_columns": list(read_columns),
         "written_columns": list(written_columns),
-        "function_references": list(functions),
-        "call_targets": list(calls),
+        "function_references": _references(functions),
+        "call_targets": _references(calls),
         "dynamic_sql": dynamic_sql,
         **fields,
     }
+
+
+def _references(written_names: Iterable[str]) -> list[dict[str, str]]:
+    return [
+        dataclasses.asdict(canonical_object_identity.parse(written_name))
+        for written_name in written_names
+    ]
 
 
 def cache_with_procedures(*procedures: str) -> dict:

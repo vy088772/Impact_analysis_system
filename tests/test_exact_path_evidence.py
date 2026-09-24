@@ -30,7 +30,17 @@ from service.schemas import (
     SPMatchProgram,
     TableMatchProgram,
 )
-from tests.sql_cache_fixtures import analyzer_operation, cache_payload, execution_graph, one_server_holds_every_database
+from canonical_object_identity import parse
+from service.sql_cache_store import CacheIdentity
+from service.sql_execution_graph import build_sql_execution_graph
+from tests.sql_cache_fixtures import (
+    CacheRoot,
+    analyzer_operation,
+    cache_payload,
+    execution_graph,
+    one_server_holds_every_database,
+    write_cache,
+)
 
 
 _SAVE_ORDER_PROCEDURE = {
@@ -634,3 +644,139 @@ def test_wrapper_evidence_bag_schemas_drop_evidence_alias_keep_evidence_status()
     for model in (PathEvidenceResponse, SPMatchProgram, TableMatchProgram):
         assert "evidence" not in model.model_fields
         assert "evidence_status" in model.model_fields
+
+
+def _function_path_fixture(
+    tmp_path: Path, cache_root: Path, *, procedure: str, call: str, functions: list[str]
+) -> tuple[ProjectScanResult, str]:
+    """Write one `Response` cache on disk and one scan whose method calls `procedure`.
+
+    The procedure's one operation calls the function `call`. The real graph
+    builder analyses each definition, so the function reference that reaches
+    the evidence is the one the analyzer host reports.
+    """
+    procedure_name = parse(procedure)
+
+    def response_cache(graph: dict | None = None) -> dict:
+        return cache_payload(
+            "Response",
+            procedures={
+                procedure: {
+                    "definition": f"CREATE PROCEDURE {procedure} AS SELECT {call}(Id) FROM dbo.Rates;",
+                }
+            },
+            functions={
+                function: {"definition": f"CREATE FUNCTION {function}(@Id int) RETURNS int AS BEGIN RETURN @Id END"}
+                for function in functions
+            },
+            tables=["dbo.Rates"],
+            graph=graph,
+        )
+
+    graph = build_sql_execution_graph(response_cache())
+    payload = response_cache(graph)
+    write_cache(cache_root, CacheIdentity.of("vmsystest07", "Response", "dbo"), payload)
+
+    source_file = tmp_path / "RatePage.cs"
+    content = "class RatePage\n{\n    public void Load()\n    {\n        Run();\n    }\n}\n"
+    source_file.write_text(content, encoding="utf-8")
+    method_start = content.index("    public void Load()")
+    scan = ProjectScanResult(
+        project_root=str(tmp_path),
+        project_name="rates",
+        scan_time=datetime.now(),
+        csharp_results=[
+            FileAnalysisResult(
+                file_path=str(source_file),
+                file_type=FileType.CSHARP,
+                framework=FrameworkType.WEBFORMS,
+                classes=[
+                    ClassInfo(
+                        name="RatePage",
+                        namespace="",
+                        file_path=str(source_file),
+                        methods=[MethodInfo(name="Load", access_modifier="public", return_type="void")],
+                    )
+                ],
+            )
+        ],
+        source_snapshots={
+            "RatePage.cs": SourceSnapshot(
+                relative_path="RatePage.cs",
+                content_hash="snapshot-hash",
+                content=content,
+                method_spans=[
+                    MethodSourceSpan(
+                        class_name="RatePage",
+                        method_name="Load",
+                        start_offset=method_start,
+                        end_offset=content.index("\n}", method_start),
+                    )
+                ],
+            )
+        },
+        db_invocations={
+            str(source_file.resolve()): [
+                {
+                    "class_name": "RatePage",
+                    "method_name": "Load",
+                    "command_text_kind": "literal",
+                    "command_text": procedure,
+                    "command_type_stored_procedure": True,
+                    "terminal_sink": "ExecuteNonQuery",
+                    "connection_expression": "conn",
+                    "start_offset": 0,
+                    "end_offset": 10,
+                }
+            ]
+        },
+        connection_sources={str(source_file.resolve()): {"conn": "Response"}},
+    )
+    invocation = DbInvocation(
+        class_name="RatePage",
+        method_name="Load",
+        database="Response",
+        procedure_name=procedure_name.name.casefold(),
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("RatePage.cs", 0, 10),
+        procedure_schema=procedure_name.schema.casefold(),
+        method_chain=("Load",),
+        source_snapshot_hash="snapshot-hash",
+    )
+    path_id = build_execution_paths([invocation], graph)[0]["path_id"]
+    return scan, path_id
+
+
+@pytest.mark.parametrize(
+    ("procedure", "call", "functions", "expected_functions"),
+    [
+        # Case 1: a path through COMMON.usp_Load, whose operation calls COMMON.fn_Rate().
+        ("COMMON.usp_Load", "COMMON.fn_Rate", ["COMMON.fn_Rate"], ["COMMON.fn_Rate"]),
+        # Case 2: the cache holds a local dbo.fn_Rate, and the operation calls
+        # PUR.dbo.fn_Rate(). The local definition is not the called object.
+        ("dbo.usp_Load", "PUR.dbo.fn_Rate", ["dbo.fn_Rate"], []),
+    ],
+    ids=["schema-qualified-call", "another-database-call"],
+)
+def test_path_evidence_holds_the_function_its_operation_calls(
+    monkeypatch,
+    tmp_path: Path,
+    procedure: str,
+    call: str,
+    functions: list[str],
+    expected_functions: list[str],
+) -> None:
+    """Seam 1 path evidence cases 1 and 2 (canonical-object-identity, Step 2a)."""
+    with CacheRoot() as cache_root:
+        scan, path_id = _function_path_fixture(
+            tmp_path, cache_root, procedure=procedure, call=call, functions=functions
+        )
+        monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
+        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+
+        evidence = analyze_service.get_path_evidence(
+            PathEvidenceRequest(path_id=path_id, database="Response", program_names=["RatePage"])
+        )
+
+    assert [item["name"] for item in evidence.stored_procedures] == [procedure]
+    assert [item["name"] for item in evidence.functions] == expected_functions

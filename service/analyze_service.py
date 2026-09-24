@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Opt
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
-from canonical_object_identity import bare_key, parse
+from canonical_object_identity import bare_key, parse, part_key
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
@@ -2061,8 +2061,11 @@ def _materialize_path_evidence(
             if target_node and target_node.get("type") in {"view", "function"}:
                 referenced_object_ids.add(target_id)
 
-        for function_name in operation.get("function_references", []) or []:
-            target_id = _find_graph_object_id(nodes, "function", str(function_name))
+        cache_database = str(cached.get("database") or graph.get("database") or "")
+        for function_reference in operation.get("function_references", []) or []:
+            target_id = _find_graph_object_id(
+                nodes, "function", function_reference, cache_database
+            )
             if target_id:
                 referenced_object_ids.add(target_id)
 
@@ -2240,12 +2243,18 @@ def _cached_sql_object(cached: Mapping[str, object], node: Mapping[str, object])
 def _find_graph_object_id(
     nodes: Mapping[str, Mapping[str, object]],
     object_type: str,
-    object_name: str,
+    reference: Mapping[str, object],
+    cache_database: str,
 ) -> str:
-    object_ref = parse(object_name)
+    """Find the node one analyzer reference names; the reference holds four parts."""
+    # A reference to another Database matches no node: this cache holds no
+    # definition of that object, so a local definition would be false evidence.
+    database = str(reference.get("database") or "")
+    if database and part_key(database) != part_key(cache_database):
+        return ""
     # A reference that states no schema reads as dbo here. Step 2b removes this default.
-    schema = object_ref.schema or "dbo"
-    name = object_ref.name
+    schema = str(reference.get("schema") or "") or "dbo"
+    name = str(reference.get("name") or "")
     for node_id, node in nodes.items():
         if (
             node.get("type") == object_type

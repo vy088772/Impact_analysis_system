@@ -64,7 +64,15 @@ def _sample_cache_files() -> dict:
     identity = CacheIdentity.of("sqlsrv01", "SampleDb", "dbo")
     procedure_id = "stored_procedure:dbo.usp_Load"
     operation_id = f"dml_operation:{procedure_id}:1"
-    source = {"source_path": procedure_id, "module_id": procedure_id, "module_definition_length": 58}
+    definition = (
+        "CREATE PROCEDURE dbo.usp_Load AS UPDATE o SET Status = 1 "
+        "FROM dbo.Orders o JOIN LNK.PUR.dbo.Customers c ON c.Id = o.CustomerId"
+    )
+    source = {
+        "source_path": procedure_id,
+        "module_id": procedure_id,
+        "module_definition_length": len(definition),
+    }
     graph = execution_graph(
         "SampleDb",
         nodes=[
@@ -72,9 +80,12 @@ def _sample_cache_files() -> dict:
             {"id": "view:dbo.vw_Orders", "type": "view", "schema": "dbo", "name": "vw_Orders"},
             {"id": "function:dbo.fn_Rate", "type": "function", "schema": "dbo", "name": "fn_Rate"},
             {"id": "table:dbo.Orders", "type": "table", "schema": "dbo", "name": "Orders"},
+            {"id": "table:dbo.Customers", "type": "table", "schema": "dbo", "name": "Customers"},
             analyzer_operation(
                 "UPDATE",
+                reads=["LNK.PUR.dbo.Customers"],
                 writes=["dbo.Orders"],
+                read_columns=["Id", "CustomerId"],
                 written_columns=["Status"],
                 id=operation_id,
                 type="dml_operation",
@@ -103,13 +114,27 @@ def _sample_cache_files() -> dict:
                 "source_location": source,
                 "columns": ["Status"],
             },
+            {
+                # A relationship records the database and server its reference
+                # stated; the node it targets records neither.
+                "id": f"reads:{operation_id}:table:dbo.Customers@LNK.PUR",
+                "type": "reads",
+                "source": operation_id,
+                "target": "table:dbo.Customers",
+                "confidence": "proven",
+                "branch_path": [],
+                "source_location": source,
+                "columns": ["Id", "CustomerId"],
+                "database": "PUR",
+                "server": "LNK",
+            },
         ],
     )
     payload = cache_payload(
         "SampleDb",
         procedures={
             "dbo.usp_Load": {
-                "definition": "CREATE PROCEDURE dbo.usp_Load AS UPDATE dbo.Orders SET Status = 1",
+                "definition": definition,
                 "parameters": [],
             }
         },

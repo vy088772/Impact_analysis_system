@@ -45,9 +45,9 @@ END;
         "CALL",
         "DYNAMIC_SQL",
     ]
-    assert operations[0]["call_targets"] == ["dbo.usp_Child"]
+    assert operations[0]["call_targets"] == [{"server": "", "database": "", "schema": "dbo", "name": "usp_Child"}]
     assert operations[0]["branch_path"] == ["IF @Mode = 1"]
-    assert operations[1]["call_targets"] == ["dbo.usp_Other"]
+    assert operations[1]["call_targets"] == [{"server": "", "database": "", "schema": "dbo", "name": "usp_Other"}]
     assert operations[1]["branch_path"] == ["ELSE (NOT (@Mode = 1))"]
     assert operations[2]["dynamic_sql"] is True
     assert operations[2]["call_targets"] == []
@@ -103,7 +103,9 @@ END;
 
         result = host.analyze_sql(source_path)
 
-    assert result["operations"][0]["function_references"] == ["dbo.fn_NormalizeOrder"]
+    assert result["operations"][0]["function_references"] == [
+        {"server": "", "database": "", "schema": "dbo", "name": "fn_NormalizeOrder"}
+    ]
 
 
 def test_sql_graph_expands_nested_calls_and_keeps_dynamic_sql_unresolved() -> None:

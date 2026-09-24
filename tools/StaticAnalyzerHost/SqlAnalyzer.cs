@@ -34,7 +34,7 @@ internal sealed class SqlOperationExtractor
     {
         var module = FindModule(root) ?? new SqlModuleIdentity(
             "unknown",
-            "dbo",
+            "",
             Path.GetFileNameWithoutExtension(_sourcePath));
         var candidates = new List<SqlOperationCandidate>();
         Visit(root, module, new List<string>(), candidates);
@@ -123,11 +123,11 @@ internal sealed class SqlOperationExtractor
             "DeleteStatement" => "DELETE",
             _ => "UNKNOWN",
         };
-        var readTables = new List<string>();
-        var writeTables = new List<string>();
+        var readTables = new List<SqlObjectReference>();
+        var writeTables = new List<SqlObjectReference>();
         var readColumns = new List<string>();
         var writtenColumns = new List<string>();
-        var functionReferences = new List<string>();
+        var functionReferences = new List<SqlObjectReference>();
         string? where = null;
 
         switch (operationType)
@@ -227,7 +227,7 @@ internal sealed class SqlOperationExtractor
     {
         var specification = GetFragmentProperty(fragment, "ExecuteSpecification");
         var executableEntity = GetFragmentProperty(specification, "ExecutableEntity");
-        var callTargets = new List<string>();
+        var callTargets = new List<SqlObjectReference>();
         if (executableEntity is not null)
         {
             var procedureReferenceName = GetFragmentProperty(executableEntity, "ProcedureReference");
@@ -242,8 +242,8 @@ internal sealed class SqlOperationExtractor
             dynamicSql ? "DYNAMIC_SQL" : "CALL",
             new List<string>(branchPath),
             null,
-            new List<string>(),
-            new List<string>(),
+            new List<SqlObjectReference>(),
+            new List<SqlObjectReference>(),
             new List<string>(),
             new List<string>(),
             callTargets,
@@ -273,8 +273,9 @@ internal sealed class SqlOperationExtractor
             "function" => GetFragmentProperty(moduleFragment, "Name"),
             _ => null,
         };
-        var (schema, name) = ReadObjectName(nameFragment);
-        return new SqlModuleIdentity(moduleType, schema, name);
+        // A module cannot name the Database that holds it, so its identity keeps no database.
+        var moduleName = ReadObjectName(nameFragment);
+        return new SqlModuleIdentity(moduleType, moduleName.Schema, moduleName.Name);
     }
 
     private static bool IsModule(TSqlFragment fragment)
@@ -299,7 +300,7 @@ internal sealed class SqlOperationExtractor
         }
     }
 
-    private void CollectReferences(object? value, ICollection<string> references)
+    private void CollectReferences(object? value, ICollection<SqlObjectReference> references)
     {
         if (value is not TSqlFragment fragment)
             return;
@@ -339,7 +340,7 @@ internal sealed class SqlOperationExtractor
         }
     }
 
-    private void CollectFunctionReferences(object? value, ICollection<string> references)
+    private void CollectFunctionReferences(object? value, ICollection<SqlObjectReference> references)
     {
         foreach (var fragment in Fragments(value))
         {
@@ -349,10 +350,15 @@ internal sealed class SqlOperationExtractor
                     continue;
                 var functionName = ReadIdentifierText(GetPropertyValue(child, "FunctionName"));
                 var callTarget = GetFragmentProperty(child, "CallTarget");
-                var targetName = ReadLastIdentifier(GetPropertyValue(callTarget, "MultiPartIdentifier"));
-                if (functionName.Length == 0 || targetName.Length == 0)
+                var identifiers = GetPropertyValue(GetPropertyValue(callTarget, "MultiPartIdentifier"), "Identifiers") as IEnumerable;
+                var targetParts = identifiers is null
+                    ? new List<string>()
+                    : identifiers.Cast<object?>().Select(ReadIdentifierText).ToList();
+                if (functionName.Length == 0 || targetParts.All(part => part.Length == 0))
                     continue;
-                AddUnique(references, $"{targetName}.{functionName}");
+                // The call target's identifiers fill server, database, and schema from the right.
+                string PartFromRight(int offset) => targetParts.Count >= offset ? targetParts[^offset] : "";
+                AddUnique(references, new SqlObjectReference(PartFromRight(3), PartFromRight(2), PartFromRight(1), functionName));
             }
         }
     }
@@ -382,43 +388,28 @@ internal sealed class SqlOperationExtractor
         return searchCondition is null ? null : Text(searchCondition);
     }
 
-    private void AddObjectName(object? value, ICollection<string> target, ISet<string>? excluded = null)
+    private void AddObjectName(object? value, ICollection<SqlObjectReference> target, ISet<string>? excluded = null)
     {
         if (value is TSqlFragment fragment && fragment.GetType().Name is "NamedTableReference" or "SchemaObjectFunctionTableReference")
             value = GetFragmentProperty(fragment, "SchemaObject");
-        var (schema, name) = ReadObjectName(value);
-        if (name.Length == 0 || name.StartsWith("@", StringComparison.Ordinal))
+        var reference = ReadObjectName(value);
+        if (reference.Name.Length == 0 || reference.Name.StartsWith("@", StringComparison.Ordinal))
             return;
-        var fullName = $"{schema}.{name}";
-        if (excluded?.Contains(name) == true || excluded?.Contains(fullName) == true)
+        // The excluded names are common-table-expression names, and T-SQL cannot qualify one,
+        // so only the bare name can match.
+        if (excluded?.Contains(reference.Name) == true)
             return;
-        AddUnique(target, fullName);
+        AddUnique(target, reference);
     }
 
-    private static (string Schema, string Name) ReadObjectName(object? value)
-    {
-        if (value is null)
-            return ("dbo", "");
-
-        var identifiers = GetPropertyValue(value, "Identifiers") as IEnumerable;
-        var names = identifiers is null
-            ? new List<string>()
-            : identifiers.Cast<object?>().Select(ReadIdentifierText).Where(name => name.Length > 0).ToList();
-        if (names.Count == 0)
-        {
-            var text = ReadIdentifierText(value);
-            names = text.Length == 0
-                ? new List<string>()
-                : text.Split('.', StringSplitOptions.RemoveEmptyEntries).Select(CleanIdentifier).ToList();
-        }
-
-        return names.Count switch
-        {
-            0 => ("dbo", ""),
-            1 => ("dbo", names[0]),
-            _ => (names[^2], names[^1]),
-        };
-    }
+    // The named ScriptDom properties tell `database..name` from `schema.name`; the identifier
+    // list omits an unstated part, so its positions cannot. An unstated part stays empty.
+    private static SqlObjectReference ReadObjectName(object? value)
+        => new(
+            ReadIdentifierText(GetPropertyValue(value, "ServerIdentifier")),
+            ReadIdentifierText(GetPropertyValue(value, "DatabaseIdentifier")),
+            ReadIdentifierText(GetPropertyValue(value, "SchemaIdentifier")),
+            ReadIdentifierText(GetPropertyValue(value, "BaseIdentifier")));
 
     private static string ReadLastIdentifier(object? value)
     {
@@ -542,16 +533,22 @@ internal sealed class SqlOperationExtractor
     private static object? GetPropertyValue(object? value, string propertyName)
         => value?.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance)?.GetValue(value);
 
-    private static void RemoveWrittenTables(ICollection<string> reads, IEnumerable<string> writes)
+    private static void RemoveWrittenTables(ICollection<SqlObjectReference> reads, IEnumerable<SqlObjectReference> writes)
     {
-        var written = writes.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var read in reads.Where(read => written.Contains(read)).ToList())
+        var written = writes.ToList();
+        foreach (var read in reads.Where(read => written.Any(write => write.SameParts(read))).ToList())
             reads.Remove(read);
     }
 
     private static void AddUnique(ICollection<string> values, string value)
     {
         if (value.Length > 0 && !values.Contains(value, StringComparer.OrdinalIgnoreCase))
+            values.Add(value);
+    }
+
+    private static void AddUnique(ICollection<SqlObjectReference> values, SqlObjectReference value)
+    {
+        if (!values.Any(existing => existing.SameParts(value)))
             values.Add(value);
     }
 
@@ -566,13 +563,13 @@ internal sealed class SqlOperationCandidate
         string operationType,
         List<string> branchPath,
         string? where,
-        List<string> readTables,
-        List<string> writeTables,
+        List<SqlObjectReference> readTables,
+        List<SqlObjectReference> writeTables,
         List<string> readColumns,
         List<string> writtenColumns,
-        List<string>? callTargets = null,
+        List<SqlObjectReference>? callTargets = null,
         bool dynamicSql = false,
-        List<string>? functionReferences = null)
+        List<SqlObjectReference>? functionReferences = null)
     {
         Fragment = fragment;
         OperationType = operationType;
@@ -582,22 +579,22 @@ internal sealed class SqlOperationCandidate
         WriteTables = writeTables;
         ReadColumns = readColumns;
         WrittenColumns = writtenColumns;
-        CallTargets = callTargets ?? new List<string>();
+        CallTargets = callTargets ?? new List<SqlObjectReference>();
         DynamicSql = dynamicSql;
-        FunctionReferences = functionReferences ?? new List<string>();
+        FunctionReferences = functionReferences ?? new List<SqlObjectReference>();
     }
 
     internal TSqlFragment Fragment { get; }
     private string OperationType { get; }
     private List<string> BranchPath { get; }
     private string? Where { get; }
-    private List<string> ReadTables { get; }
-    private List<string> WriteTables { get; }
+    private List<SqlObjectReference> ReadTables { get; }
+    private List<SqlObjectReference> WriteTables { get; }
     private List<string> ReadColumns { get; }
     private List<string> WrittenColumns { get; }
-    private List<string> CallTargets { get; }
+    private List<SqlObjectReference> CallTargets { get; }
     private bool DynamicSql { get; }
-    private List<string> FunctionReferences { get; }
+    private List<SqlObjectReference> FunctionReferences { get; }
 
     internal SqlOperation ToOperation(
         int sequence,
@@ -631,6 +628,17 @@ internal sealed class SqlOperationCandidate
 internal sealed record SqlAnalysis(List<SqlOperation> Operations, List<SqlParseError> ParseErrors);
 internal sealed record SqlParseError(int Line, string Message);
 internal sealed record SqlModuleIdentity(string Type, string Schema, string Name);
+
+// One object reference as the statement writes it. All four parts are always present, and an
+// unstated part is an empty string: the host reads syntax only, so it never fills one.
+internal sealed record SqlObjectReference(string Server, string Database, string Schema, string Name)
+{
+    internal bool SameParts(SqlObjectReference other)
+        => string.Equals(Server, other.Server, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Database, other.Database, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Schema, other.Schema, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Name, other.Name, StringComparison.OrdinalIgnoreCase);
+}
 internal sealed record SqlSourceLocation(
     string SourcePath,
     int StartLine,
@@ -646,11 +654,11 @@ internal sealed record SqlOperation(
     List<string> BranchPath,
     List<string> Conditions,
     string? Where,
-    List<string> ReadTables,
-    List<string> WriteTables,
+    List<SqlObjectReference> ReadTables,
+    List<SqlObjectReference> WriteTables,
     List<string> ReadColumns,
     List<string> WrittenColumns,
-    List<string> FunctionReferences,
-    List<string> CallTargets,
+    List<SqlObjectReference> FunctionReferences,
+    List<SqlObjectReference> CallTargets,
     bool DynamicSql,
     SqlSourceLocation Source);

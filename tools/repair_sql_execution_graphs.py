@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""一次性搬移：把磁碟上每一份 SQL 快取的 sql_execution_graph 重建成目前版本。
+"""把磁碟上每一份 SQL 快取的 sql_execution_graph 重建成目前版本。
 
-01、02 兩張票只修好「以後怎麼寫」；這支工具修「已經寫壞的」——每份快取檔
+GRAPH_VERSION 每次提高都跑一次：讀取路徑只拒用舊版 Graph，不在查詢時重建。
+v3 修正 offset（下段說明）；v5 讓每個 analyzer 參照保留 server、database、
+schema、名稱四段（canonical-object-identity，Step 2a）。
+
+v3：01、02 兩張票只修好「以後怎麼寫」；這支工具修「已經寫壞的」——每份快取檔
 早在修好之前就已經用會腐蝕 offset 的舊寫法建好了 sql_execution_graph，
 不主動修就會一路帶著錯誤的 offset 留在磁碟上，直到被拒用（graph_version
 不符）或更糟、offset 剛好還落在界內、悄悄切出錯的內容。

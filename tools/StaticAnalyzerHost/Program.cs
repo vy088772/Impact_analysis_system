@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 internal static class Program
 {
-    private const int ContractVersion = 2;
+    private const int ContractVersion = 3;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,

@@ -116,12 +116,12 @@ def test_sql_cache_rejects_stale_payload_version() -> None:
 def test_sql_cache_rejects_stale_graph_version() -> None:
     """A cache built under any earlier graph version must be rejected.
 
-    GRAPH_VERSION is bumped each time a defect can leave the persisted graph
-    itself wrong -- most recently to 4, by the reverse-lookup-drops-proven-
-    writes repair (ticket 01), so a graph holding dangling relationship
-    targets fails this check until it is rebuilt.
+    GRAPH_VERSION rises whenever the graph payload shape changes -- most
+    recently to 5, when each analyzer reference became four named parts
+    (canonical-object-identity, Step 2a), so a graph that holds written-name
+    strings fails this check until it is rebuilt.
     """
-    assert GRAPH_VERSION == 4
+    assert GRAPH_VERSION == 5
 
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(
@@ -183,25 +183,25 @@ END;
         assert operation["source"]["length"] > 0
 
     insert = operations[1]
-    assert insert["write_tables"] == ["dbo.OrderArchive"]
+    assert insert["write_tables"] == [{"server": "", "database": "", "schema": "dbo", "name": "OrderArchive"}]
     assert insert["written_columns"] == ["Id", "OrderNo"]
-    assert insert["read_tables"] == ["dbo.SourceOrder"]
+    assert insert["read_tables"] == [{"server": "", "database": "", "schema": "dbo", "name": "SourceOrder"}]
 
     update = operations[2]
-    assert update["write_tables"] == ["dbo.SOrder"]
+    assert update["write_tables"] == [{"server": "", "database": "", "schema": "dbo", "name": "SOrder"}]
     assert update["written_columns"] == ["OrderNo"]
     assert update["where"] == "Id = @Id"
     assert update["branch_path"] == ["IF @Mode = 1"]
     assert update["conditions"] == ["IF @Mode = 1", "Id = @Id"]
 
     delete = operations[3]
-    assert delete["write_tables"] == ["dbo.SOrder"]
+    assert delete["write_tables"] == [{"server": "", "database": "", "schema": "dbo", "name": "SOrder"}]
     assert delete["where"] == "Id = @Id"
     assert delete["branch_path"] == ["ELSE (NOT (@Mode = 1))"]
 
     select_into = operations[4]
-    assert select_into["write_tables"] == ["dbo.OrderSnapshot"]
-    assert select_into["read_tables"] == ["dbo.SOrder"]
+    assert select_into["write_tables"] == [{"server": "", "database": "", "schema": "dbo", "name": "OrderSnapshot"}]
+    assert select_into["read_tables"] == [{"server": "", "database": "", "schema": "dbo", "name": "SOrder"}]
 
 
 def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
@@ -305,6 +305,99 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             assert set(reloaded.keys()) == set(data.keys())
         finally:
             sql_analyzer.SQLAnalyzer = original_analyzer
+
+
+def test_each_relationship_records_the_database_and_server_its_reference_stated() -> None:
+    """A reads, writes, or calls relationship keeps the parts its reference stated; a node keeps none.
+
+    A reference that states no schema reads as `dbo` at the call site. A
+    function reference to another Database resolves to no local function node.
+    """
+    data = cache_payload(
+        "Response",
+        procedures={
+            "dbo.usp_Load": {
+                "definition": """CREATE PROCEDURE dbo.usp_Load
+AS
+BEGIN
+    INSERT INTO PUR.dbo.Archive (Id)
+        SELECT u.Id FROM LNK.PUR.dbo.Users u JOIN Users l ON l.Id = u.Id JOIN PUR..Orders o ON o.Id = u.Id;
+    EXEC PUR.COMMON.usp_Child;
+    SELECT dbo.fn_Rate(1), response.dbo.fn_Rate(2), PUR.dbo.fn_Rate(3) FROM dbo.Rates;
+END;
+""",
+            },
+            "COMMON.usp_Child": {},
+        },
+        functions={
+            "dbo.fn_Rate": {
+                "definition": "CREATE FUNCTION dbo.fn_Rate(@Id int) RETURNS int AS BEGIN RETURN @Id END",
+            },
+        },
+    )
+
+    graph = build_sql_execution_graph(data)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    stated = {
+        (relationship["type"], relationship["target"], relationship.get("server"), relationship.get("database"))
+        for relationship in graph["relationships"]
+        if relationship["type"] in {"reads", "writes", "calls"}
+    }
+    assert stated == {
+        ("writes", "table:dbo.Archive", None, "PUR"),
+        ("reads", "table:dbo.Users", "LNK", "PUR"),
+        ("reads", "table:dbo.Users", None, None),
+        ("reads", "table:dbo.Orders", None, "PUR"),
+        ("calls", "stored_procedure:COMMON.usp_Child", None, "PUR"),
+        ("reads", "table:dbo.Rates", None, None),
+    }
+    # Two references that name one node from two Databases stay two relationships.
+    relationship_ids = [
+        relationship["id"]
+        for relationship in graph["relationships"]
+        if relationship["type"] in {"reads", "writes", "calls"}
+    ]
+    assert len(relationship_ids) == len(set(relationship_ids))
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    assert set(nodes["table:dbo.Users"]) == {"id", "type", "schema", "name"}
+    uses = [
+        relationship
+        for relationship in graph["relationships"]
+        if relationship["type"] == "uses"
+    ]
+    # dbo.fn_Rate() and response.dbo.fn_Rate() name the local function; PUR.dbo.fn_Rate() does not.
+    assert [relationship["target"] for relationship in uses] == [
+        "function:dbo.fn_Rate",
+        "function:dbo.fn_Rate",
+    ]
+
+
+def test_a_read_through_a_temp_table_keeps_the_database_its_base_read_stated() -> None:
+    """The lineage read to the base table records the database the base read stated."""
+    data = cache_payload(
+        "Response",
+        procedures={
+            "dbo.usp_Stage": {
+                "definition": """CREATE PROCEDURE dbo.usp_Stage
+AS
+BEGIN
+    SELECT Id INTO #Stage FROM PUR.dbo.Users;
+    SELECT Id FROM #Stage;
+END;
+""",
+            },
+        },
+    )
+
+    graph = build_sql_execution_graph(data)
+
+    lineage_reads = [
+        relationship for relationship in graph["relationships"] if relationship.get("lineage")
+    ]
+    assert [(relationship["target"], relationship.get("database")) for relationship in lineage_reads] == [
+        ("table:dbo.Users", "PUR"),
+    ]
 
 
 def _crlf_procedure_definition() -> str:

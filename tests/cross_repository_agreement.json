@@ -119,7 +119,7 @@
         {
           "name": "dbo.usp_Load",
           "schema": "dbo",
-          "definition": "CREATE PROCEDURE dbo.usp_Load AS UPDATE dbo.Orders SET Status = 1",
+          "definition": "CREATE PROCEDURE dbo.usp_Load AS UPDATE o SET Status = 1 FROM dbo.Orders o JOIN LNK.PUR.dbo.Customers c ON c.Id = o.CustomerId",
           "parameters": []
         }
       ],
@@ -157,7 +157,7 @@
         }
       ],
       "sql_execution_graph": {
-        "graph_version": 4,
+        "graph_version": 5,
         "database": "SampleDb",
         "nodes": [
           {
@@ -185,16 +185,37 @@
             "name": "Orders"
           },
           {
+            "id": "table:dbo.Customers",
+            "type": "table",
+            "schema": "dbo",
+            "name": "Customers"
+          },
+          {
             "operation_type": "UPDATE",
             "sequence": 1,
             "branch_path": [],
             "conditions": [],
             "where": null,
-            "read_tables": [],
-            "write_tables": [
-              "dbo.Orders"
+            "read_tables": [
+              {
+                "server": "LNK",
+                "database": "PUR",
+                "schema": "dbo",
+                "name": "Customers"
+              }
             ],
-            "read_columns": [],
+            "write_tables": [
+              {
+                "server": "",
+                "database": "",
+                "schema": "dbo",
+                "name": "Orders"
+              }
+            ],
+            "read_columns": [
+              "Id",
+              "CustomerId"
+            ],
             "written_columns": [
               "Status"
             ],
@@ -212,7 +233,7 @@
             "source": {
               "source_path": "stored_procedure:dbo.usp_Load",
               "module_id": "stored_procedure:dbo.usp_Load",
-              "module_definition_length": 58
+              "module_definition_length": 126
             }
           }
         ],
@@ -227,7 +248,7 @@
             "source_location": {
               "source_path": "stored_procedure:dbo.usp_Load",
               "module_id": "stored_procedure:dbo.usp_Load",
-              "module_definition_length": 58
+              "module_definition_length": 126
             }
           },
           {
@@ -240,11 +261,30 @@
             "source_location": {
               "source_path": "stored_procedure:dbo.usp_Load",
               "module_id": "stored_procedure:dbo.usp_Load",
-              "module_definition_length": 58
+              "module_definition_length": 126
             },
             "columns": [
               "Status"
             ]
+          },
+          {
+            "id": "reads:dml_operation:stored_procedure:dbo.usp_Load:1:table:dbo.Customers@LNK.PUR",
+            "type": "reads",
+            "source": "dml_operation:stored_procedure:dbo.usp_Load:1",
+            "target": "table:dbo.Customers",
+            "confidence": "proven",
+            "branch_path": [],
+            "source_location": {
+              "source_path": "stored_procedure:dbo.usp_Load",
+              "module_id": "stored_procedure:dbo.usp_Load",
+              "module_definition_length": 126
+            },
+            "columns": [
+              "Id",
+              "CustomerId"
+            ],
+            "database": "PUR",
+            "server": "LNK"
           }
         ],
         "parse_errors": []
