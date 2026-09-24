@@ -24,19 +24,16 @@ from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, Framew
 from service import analyze_service
 from service.schemas import FindBySPRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
-from tests.sql_cache_fixtures import cache_payload
+from tests.sql_cache_fixtures import cache_payload, execution_graph
 
 
 def _graph() -> dict:
-    return {
-        "graph_version": 2,
-        "database": "OrdersDb",
-        "nodes": [
+    return execution_graph(
+        "OrdersDb",
+        nodes=[
             {"id": "stored_procedure:dbo.usp_Alpha", "type": "stored_procedure", "schema": "dbo", "name": "usp_Alpha"},
         ],
-        "relationships": [],
-        "parse_errors": [],
-    }
+    )
 
 
 def _file(root: Path) -> FileAnalysisResult:

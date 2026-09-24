@@ -21,15 +21,14 @@ from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, Framew
 from service import analyze_service
 from service.schemas import FindByTableRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
-from tests.sql_cache_fixtures import cache_payload
+from tests.sql_cache_fixtures import cache_payload, execution_graph
 
 
 def _graph() -> dict:
     """Two stored procedures, each writing a different table."""
-    return {
-        "graph_version": 2,
-        "database": "OrdersDb",
-        "nodes": [
+    return execution_graph(
+        "OrdersDb",
+        nodes=[
             {"id": "stored_procedure:dbo.usp_Alpha", "type": "stored_procedure", "schema": "dbo", "name": "usp_Alpha"},
             {
                 "id": "dml_operation:stored_procedure:dbo.usp_Alpha:1",
@@ -49,7 +48,7 @@ def _graph() -> dict:
             {"id": "table:dbo.TableA", "type": "table", "schema": "dbo", "name": "TableA"},
             {"id": "table:dbo.TableB", "type": "table", "schema": "dbo", "name": "TableB"},
         ],
-        "relationships": [
+        relationships=[
             {
                 "type": "contains",
                 "source": "stored_procedure:dbo.usp_Alpha",
@@ -73,8 +72,7 @@ def _graph() -> dict:
                 "columns": ["Y"],
             },
         ],
-        "parse_errors": [],
-    }
+    )
 
 
 def _file(root: Path, name: str, class_name: str, method_name: str) -> FileAnalysisResult:

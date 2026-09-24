@@ -16,8 +16,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from service import analyze_service, sql_cache_store
 from service.sql_cache_store import CacheIdentity
-from service.sql_execution_graph import GRAPH_VERSION
-from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache, write_legacy_cache
+from tests.sql_cache_fixtures import (
+    CacheRoot,
+    cache_payload,
+    execution_graph,
+    write_cache,
+    write_legacy_cache,
+)
 from tools.migrate_sql_cache_keys import LEGACY_CACHE_SCOPES, Scope, migrate_cache_keys
 
 
@@ -27,13 +32,7 @@ def _payload(database: str, graph_nodes: tuple = (), **objects: object) -> dict:
     )
     return cache_payload(
         database,
-        graph={
-            "graph_version": GRAPH_VERSION,
-            "database": database,
-            "nodes": list(graph_nodes),
-            "relationships": [],
-            "parse_errors": [],
-        },
+        graph=execution_graph(database, nodes=list(graph_nodes)),
         **objects,  # type: ignore[arg-type]
     )
 

@@ -15,17 +15,16 @@ from service import flow_chain_builder
 from service import scan_store
 from service.schemas import AnalyzeRequest
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
-from tests.sql_cache_fixtures import cache_payload
+from tests.sql_cache_fixtures import cache_payload, execution_graph
 
 
 def _cached_sql_graph() -> dict:
     return cache_payload(
         "OrdersDb",
         procedures=["usp_SaveOrder"],
-        graph={
-            "graph_version": 1,
-            "database": "OrdersDb",
-            "nodes": [
+        graph=execution_graph(
+            "OrdersDb",
+            nodes=[
                 {
                     "id": "stored_procedure:dbo.usp_SaveOrder",
                     "type": "stored_procedure",
@@ -48,7 +47,7 @@ def _cached_sql_graph() -> dict:
                     "name": "SOrder",
                 },
             ],
-            "relationships": [
+            relationships=[
                 {
                     "type": "contains",
                     "source": "stored_procedure:dbo.usp_SaveOrder",
@@ -61,8 +60,7 @@ def _cached_sql_graph() -> dict:
                     "columns": ["Status"],
                 },
             ],
-            "parse_errors": [],
-        },
+        ),
     )
 
 
@@ -467,10 +465,9 @@ def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_pat
             )
         ],
     )
-    graph = {
-        "graph_version": 2,
-        "database": "OrdersDb",
-        "nodes": [
+    graph = execution_graph(
+        "OrdersDb",
+        nodes=[
             {
                 "id": "stored_procedure:dbo.usp_Dynamic",
                 "type": "stored_procedure",
@@ -485,15 +482,14 @@ def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_pat
                 "operation_type": "EXECUTE",
             },
         ],
-        "relationships": [
+        relationships=[
             {
                 "type": "contains",
                 "source": "stored_procedure:dbo.usp_Dynamic",
                 "target": "unresolved_dynamic_sql:stored_procedure:dbo.usp_Dynamic:1",
             }
         ],
-        "parse_errors": [],
-    }
+    )
     invocation = DbInvocation(
         class_name="OrderPage",
         method_name="SaveData",

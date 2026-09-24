@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 from service import sql_cache_store
 from service.sql_execution_graph import GRAPH_VERSION
-from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache
+from tests.sql_cache_fixtures import CacheRoot, cache_payload, execution_graph, write_cache
 from tools.repair_sql_execution_graphs import repair_all_caches, repair_cache_file
 
 
@@ -37,13 +37,7 @@ def _stale_payload(database: str = "TestDb", graph_version: int = GRAPH_VERSION 
         # that would be wrong under the old corrupting write path — the
         # repair rebuilds it from the (already-correct) definition text
         # above rather than trusting anything already stored here.
-        graph={
-            "graph_version": graph_version,
-            "database": database,
-            "nodes": [],
-            "relationships": [],
-            "parse_errors": [],
-        },
+        graph=execution_graph(database, graph_version=graph_version),
     )
 
 

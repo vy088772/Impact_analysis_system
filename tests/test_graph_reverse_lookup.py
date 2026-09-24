@@ -14,14 +14,14 @@ from tests.sql_cache_fixtures import (
     cache_payload,
     case_variant_table_write_data,
     case_variant_temp_table_write_data,
+    execution_graph,
 )
 
 
 def _graph() -> dict:
-    return {
-        "graph_version": 2,
-        "database": "OrdersDb",
-        "nodes": [
+    return execution_graph(
+        "OrdersDb",
+        nodes=[
             {
                 "id": "stored_procedure:dbo.usp_Direct",
                 "type": "stored_procedure",
@@ -65,7 +65,7 @@ def _graph() -> dict:
                 "name": "SOrder",
             },
         ],
-        "relationships": [
+        relationships=[
             {
                 "type": "contains",
                 "source": "stored_procedure:dbo.usp_Direct",
@@ -94,8 +94,7 @@ def _graph() -> dict:
                 "columns": ["OrderNo"],
             },
         ],
-        "parse_errors": [],
-    }
+    )
 
 
 def _file(root: Path, name: str, methods: list[MethodInfo]) -> FileAnalysisResult:
@@ -915,10 +914,9 @@ def test_find_by_table_reports_a_proven_read_beside_an_unproven_write_from_the_s
     have won the file's one seat and the proven read from `usp_ReadLedger`
     would have been discarded with it. Both must survive as separate records.
     """
-    graph = {
-        "graph_version": 4,
-        "database": "OrdersDb",
-        "nodes": [
+    graph = execution_graph(
+        "OrdersDb",
+        nodes=[
             {
                 "id": "stored_procedure:dbo.usp_ReadLedger",
                 "type": "stored_procedure",
@@ -947,7 +945,7 @@ def test_find_by_table_reports_a_proven_read_beside_an_unproven_write_from_the_s
             },
             {"id": "table:dbo.Ledger", "type": "table", "schema": "dbo", "name": "Ledger"},
         ],
-        "relationships": [
+        relationships=[
             {
                 "type": "contains",
                 "source": "stored_procedure:dbo.usp_ReadLedger",
@@ -974,8 +972,7 @@ def test_find_by_table_reports_a_proven_read_beside_an_unproven_write_from_the_s
                 "target": "table:dbo.Missing",
             },
         ],
-        "parse_errors": [],
-    }
+    )
     scan = _scan_one_program_multiple_calls(
         tmp_path,
         "LedgerPage.cs",

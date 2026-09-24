@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from code_analyzer.project_scanner import ProjectScanResult
-from code_analyzer.static_analyzer_host import StaticAnalyzerHostError
+from code_analyzer.static_analyzer_host import CONTRACT_VERSION, StaticAnalyzerHostError
 from service import analyze_service
 
 STC_CSPROJ = PROJECT_ROOT / "data" / "repos" / "System_Dept_1" / "STC" / "STC" / "STC.csproj"
@@ -134,7 +134,7 @@ def _patch_host(
             return cls()
 
         def ensure_ready(self) -> dict:
-            return {"contract_version": 2}
+            return {"contract_version": CONTRACT_VERSION}
 
         def decompile_wrapper(
             self, csproj_path: Path, receiver_type: str, *, rerun: bool = False
@@ -453,7 +453,7 @@ def test_rerun_trigger_forwards_through_refresh_source_and_bypasses_cached_failu
             return cls()
 
         def ensure_ready(self) -> dict:
-            return {"contract_version": 2}
+            return {"contract_version": CONTRACT_VERSION}
 
         def decompile_wrapper(
             self, csproj_path: Path, receiver_type: str, *, rerun: bool = False
@@ -617,7 +617,7 @@ def test_decompiler_failed_skips_with_reason(monkeypatch, tmp_path) -> None:
             return cls()
 
         def ensure_ready(self) -> dict:
-            return {"contract_version": 2}
+            return {"contract_version": CONTRACT_VERSION}
 
         def decompile_wrapper(
             self, csproj_path: Path, receiver_type: str, *, rerun: bool = False

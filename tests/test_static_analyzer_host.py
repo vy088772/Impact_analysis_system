@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from code_analyzer.static_analyzer_host import StaticAnalyzerHost
+from code_analyzer.static_analyzer_host import (
+    CONTRACT_VERSION,
+    StaticAnalyzerHost,
+    StaticAnalyzerHostError,
+)
 from config.settings import settings
 from service import scan_store
 
@@ -57,7 +65,7 @@ def test_static_analyzer_host_contract() -> None:
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     assert host.project_path == HOST_PROJECT
     version = host.ensure_ready()
-    assert version["contract_version"] == 2
+    assert version["contract_version"] == CONTRACT_VERSION
     assert set(version["commands"]) == {"csharp", "sql", "decompile-wrapper", "semantic-binding"}
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -67,7 +75,7 @@ def test_static_analyzer_host_contract() -> None:
             encoding="utf-8",
         )
         csharp = host.analyze_csharp(source_path)
-        assert csharp["contract_version"] == 2
+        assert csharp["contract_version"] == CONTRACT_VERSION
         assert csharp["methods"] == [
             {
                 "class_name": "Example",
@@ -78,8 +86,36 @@ def test_static_analyzer_host_contract() -> None:
         ]
 
         sql = host.analyze_sql(source_path)
-        assert sql["contract_version"] == 2
+        assert sql["contract_version"] == CONTRACT_VERSION
         assert sql["operations"] == []
+
+
+def test_a_command_response_from_another_contract_version_is_rejected(tmp_path: Path) -> None:
+    """The client rejects any command response whose contract version is not its own."""
+    host = StaticAnalyzerHost(tmp_path / "StaticAnalyzerHost.csproj")
+    host.dll_path.parent.mkdir(parents=True)
+    host.dll_path.touch()
+    response = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout=json.dumps({"contract_version": CONTRACT_VERSION + 1, "operations": []}),
+        stderr="",
+    )
+
+    with patch("code_analyzer.static_analyzer_host.subprocess.run", return_value=response):
+        with pytest.raises(StaticAnalyzerHostError, match="contract mismatch"):
+            host.analyze_sql(tmp_path / "Example.sql")
+
+
+def test_a_version_report_from_another_contract_version_is_rejected() -> None:
+    """The version check rejects a host that reports another contract version."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+
+    with patch.object(
+        StaticAnalyzerHost, "_run", return_value={"contract_version": CONTRACT_VERSION + 1}
+    ):
+        with pytest.raises(StaticAnalyzerHostError, match="contract mismatch"):
+            host.version()
 
 
 def test_get_or_scan_persists_latest_csharp_source_snapshot() -> None:

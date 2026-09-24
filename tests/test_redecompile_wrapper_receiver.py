@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from code_analyzer.azure_fetcher import AzureFetchError
 from code_analyzer.project_scanner import ProjectScanResult
-from code_analyzer.static_analyzer_host import StaticAnalyzerHostError
+from code_analyzer.static_analyzer_host import CONTRACT_VERSION, StaticAnalyzerHostError
 from service import analyze_service
 
 
@@ -148,7 +148,7 @@ def _patch_host(monkeypatch, responses: list[dict], calls: list[tuple[Path, str,
             return cls()
 
         def ensure_ready(self) -> dict:
-            return {"contract_version": 2}
+            return {"contract_version": CONTRACT_VERSION}
 
         def decompile_wrapper(
             self, csproj_path: Path, receiver_type: str, *, rerun: bool = False

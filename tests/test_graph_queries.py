@@ -9,6 +9,7 @@ from code_analyzer.csharp_analysis_gateway import (
 )
 from service.execution_path_builder import build_execution_paths
 from service.graph_queries import query_table_accesses
+from tests.sql_cache_fixtures import execution_graph
 
 
 def _invocation(method_name: str, procedure_name: str) -> DbInvocation:
@@ -25,10 +26,9 @@ def _invocation(method_name: str, procedure_name: str) -> DbInvocation:
 
 
 def _graph() -> dict:
-    return {
-        "graph_version": 2,
-        "database": "OrdersDb",
-        "nodes": [
+    return execution_graph(
+        "OrdersDb",
+        nodes=[
             {
                 "id": "stored_procedure:dbo.usp_Direct",
                 "type": "stored_procedure",
@@ -108,7 +108,7 @@ def _graph() -> dict:
             },
             {"id": "table:dbo.SOrder", "type": "table", "schema": "dbo", "name": "SOrder"},
         ],
-        "relationships": [
+        relationships=[
             {
                 "type": "contains",
                 "source": "stored_procedure:dbo.usp_Direct",
@@ -162,8 +162,7 @@ def _graph() -> dict:
                 "target": "unresolved_dynamic_sql:stored_procedure:dbo.usp_Dynamic:1",
             },
         ],
-        "parse_errors": [],
-    }
+    )
 
 
 def test_query_table_accesses_returns_only_confirmed_direct_and_nested_writers() -> None:

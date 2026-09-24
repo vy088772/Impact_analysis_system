@@ -14,8 +14,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from service import sql_cache_store
 from service.sql_cache_store import CacheIdentity
-from service.sql_execution_graph import GRAPH_VERSION
-from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache
+
+from tests.sql_cache_fixtures import CacheRoot, cache_payload, execution_graph, write_cache
 from tools.backfill_object_location_indexes import backfill_all_caches, backfill_cache_row
 
 
@@ -24,13 +24,7 @@ def _payload(database: str) -> dict:
         database,
         procedures={"spAddRecordError": {"definition": "CREATE PROCEDURE x AS SELECT 1"}},
         tables={"RecordError": {"columns": []}},
-        graph={
-            "graph_version": GRAPH_VERSION,
-            "database": database,
-            "nodes": [],
-            "relationships": [],
-            "parse_errors": [],
-        },
+        graph=execution_graph(database),
     )
 
 

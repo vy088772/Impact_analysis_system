@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from code_analyzer.static_analyzer_host import StaticAnalyzerHost
+from code_analyzer.static_analyzer_host import CONTRACT_VERSION, StaticAnalyzerHost
 from code_analyzer import sql_analyzer
 from code_analyzer.sql_analyzer import SQLAnalyzer
 from service import sql_cache_store
@@ -19,9 +19,10 @@ from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
 from tests.sql_cache_fixtures import (
     CacheRoot,
     assert_relationships_resolve_to_known_nodes,
-    case_variant_table_write_data,
     cache_payload,
+    case_variant_table_write_data,
     case_variant_temp_table_write_data,
+    execution_graph,
     write_cache,
 )
 
@@ -84,13 +85,7 @@ def test_sql_cache_rejects_graphless_payload() -> None:
 def test_sql_cache_rejects_database_mismatch_from_memory_and_disk() -> None:
     mismatched_payload = cache_payload(
         "OtherDb",
-        graph={
-            "graph_version": GRAPH_VERSION,
-            "database": "OtherDb",
-            "nodes": [],
-            "relationships": [],
-            "parse_errors": [],
-        },
+        graph=execution_graph("OtherDb"),
     )
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(cache_root, "TestDb", mismatched_payload)
@@ -110,13 +105,7 @@ def test_sql_cache_rejects_stale_payload_version() -> None:
             "TestDb",
             cache_payload(
                 "TestDb",
-                graph={
-                    "graph_version": GRAPH_VERSION,
-                    "database": "TestDb",
-                    "nodes": [],
-                    "relationships": [],
-                    "parse_errors": [],
-                },
+                graph=execution_graph("TestDb"),
             ),
             cache_version=sql_cache_store._SQL_CACHE_VERSION - 1,
         )
@@ -140,13 +129,7 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
             "TestDb",
             cache_payload(
                 "TestDb",
-                graph={
-                    "graph_version": GRAPH_VERSION - 1,
-                    "database": "TestDb",
-                    "nodes": [],
-                    "relationships": [],
-                    "parse_errors": [],
-                },
+                graph=execution_graph("TestDb", graph_version=GRAPH_VERSION - 1),
             ),
         )
 
@@ -178,7 +161,7 @@ END;
 
         result = host.analyze_sql(source_path)
 
-    assert result["contract_version"] == 2
+    assert result["contract_version"] == CONTRACT_VERSION
     operations = result["operations"]
     assert [operation["operation_type"] for operation in operations] == [
         "SELECT",

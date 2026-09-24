@@ -30,7 +30,7 @@ from service.schemas import (
     SPMatchProgram,
     TableMatchProgram,
 )
-from tests.sql_cache_fixtures import cache_payload
+from tests.sql_cache_fixtures import cache_payload, execution_graph
 
 
 _SAVE_ORDER_PROCEDURE = {
@@ -85,10 +85,9 @@ def _cached_path_fixture(
         method_chain=("Save",),
         source_snapshot_hash="snapshot-hash",
     )
-    graph = {
-        "graph_version": 2,
-        "database": "OrdersDb",
-        "nodes": [
+    graph = execution_graph(
+        "OrdersDb",
+        nodes=[
             {
                 "id": "stored_procedure:dbo.usp_SaveOrder",
                 "type": "stored_procedure",
@@ -128,7 +127,7 @@ def _cached_path_fixture(
                 "name": "SOrder",
             },
         ],
-        "relationships": [
+        relationships=[
             {
                 "type": "contains",
                 "source": "stored_procedure:dbo.usp_SaveOrder",
@@ -151,8 +150,7 @@ def _cached_path_fixture(
                 "target": "table:dbo.SOrder",
             },
         ],
-        "parse_errors": [],
-    }
+    )
     cached = cache_payload("OrdersDb", procedures=_SAVE_ORDER_PROCEDURE, graph=graph)
     scan = ProjectScanResult(
         project_root=str(tmp_path),

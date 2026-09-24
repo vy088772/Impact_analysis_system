@@ -21,20 +21,17 @@ from code_analyzer.project_scanner import ProjectScanResult
 from service import analyze_service
 from service.schemas import FindBySPRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
-from tests.sql_cache_fixtures import cache_payload
+from tests.sql_cache_fixtures import cache_payload, execution_graph
 
 
 def _graph(*procedure_names: str) -> dict:
-    return {
-        "graph_version": 2,
-        "database": "OrdersDb",
-        "nodes": [
+    return execution_graph(
+        "OrdersDb",
+        nodes=[
             {"id": f"stored_procedure:dbo.{name}", "type": "stored_procedure", "schema": "dbo", "name": name}
             for name in procedure_names
         ],
-        "relationships": [],
-        "parse_errors": [],
-    }
+    )
 
 
 def _file(root: Path, name: str, class_name: str, method_name: str) -> FileAnalysisResult:

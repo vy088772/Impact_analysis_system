@@ -173,16 +173,13 @@ def cache_with_procedures(*procedures: str) -> dict:
     return cache_payload(
         "OrdersDb",
         procedures=procedures,
-        graph={
-            "graph_version": 1,
-            "database": "OrdersDb",
-            "nodes": [
+        graph=execution_graph(
+            "OrdersDb",
+            nodes=[
                 {"id": f"stored_procedure:dbo.{name}", "type": "stored_procedure", "schema": "dbo", "name": name}
                 for name in procedures
             ],
-            "relationships": [],
-            "parse_errors": [],
-        },
+        ),
     )
 
 

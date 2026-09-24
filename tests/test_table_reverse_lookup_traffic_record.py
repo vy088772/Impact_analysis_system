@@ -18,7 +18,7 @@ from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, Framew
 from service import analyze_service
 from service.schemas import FindByTableRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
-from tests.sql_cache_fixtures import cache_payload
+from tests.sql_cache_fixtures import cache_payload, execution_graph
 
 
 def _file(root: Path) -> FileAnalysisResult:
@@ -95,7 +95,7 @@ def test_two_systems_asking_about_one_table_stay_distinguishable(monkeypatch, tm
     what is under test here is the record, not graph resolution."""
     other_root = tmp_path / "other"
     other_root.mkdir()
-    empty_graph = {"graph_version": 2, "database": "", "nodes": [], "relationships": [], "parse_errors": []}
+    empty_graph = execution_graph("")
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",

@@ -11,8 +11,7 @@ from fastapi import HTTPException
 from service import analyze_service, api, sql_cache_store
 from service.schemas import LocateObjectRequest, LocateObjectResponse
 from service.sql_cache_store import CacheIdentity
-from service.sql_execution_graph import GRAPH_VERSION
-from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache
+from tests.sql_cache_fixtures import CacheRoot, cache_payload, execution_graph, write_cache
 
 
 def _payload(
@@ -23,13 +22,7 @@ def _payload(
         procedures=procedures,
         tables=tables,
         schema=schema,
-        graph={
-            "graph_version": GRAPH_VERSION,
-            "database": database,
-            "nodes": graph_nodes or [],
-            "relationships": [],
-            "parse_errors": [],
-        },
+        graph=execution_graph(database, nodes=graph_nodes or []),
     )
 
 

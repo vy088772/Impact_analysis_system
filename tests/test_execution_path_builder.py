@@ -21,11 +21,12 @@ from service.execution_path_builder import (
     build_execution_paths,
     build_execution_paths_from_raw_invocations,
 )
+from service.sql_execution_graph import GRAPH_VERSION
 
 
 def _graph() -> dict:
     return {
-        "graph_version": 1,
+        "graph_version": GRAPH_VERSION,
         "nodes": [
             {
                 "id": "stored_procedure:dbo.usp_SaveOrder",
@@ -75,7 +76,7 @@ def _graph() -> dict:
 
 def _nested_graph() -> dict:
     return {
-        "graph_version": 1,
+        "graph_version": GRAPH_VERSION,
         "nodes": [
             {
                 "id": "stored_procedure:dbo.usp_SaveOrder",
