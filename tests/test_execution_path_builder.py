@@ -869,3 +869,78 @@ def test_compact_payload_reports_omitted_paths() -> None:
     assert payload["returned_paths"] == 1
     assert payload["omitted_paths"] == 1
     assert len(payload["paths"]) == 1
+
+def _golden_graph() -> dict:
+    nodes: list[dict] = []
+    relationships: list[dict] = []
+    for schema, name, branch_path in (
+        ("dbo", "usp_SaveOrder", []),
+        ("dbo", "usp_Branch", ["IF @Mode = 1"]),
+        ("COMMON", "usp_Load", []),
+    ):
+        module_id = f"stored_procedure:{schema}.{name}"
+        operation_id = f"dml_operation:{module_id}:1"
+        nodes.append({"id": module_id, "type": "stored_procedure", "schema": schema, "name": name})
+        nodes.append(
+            analyzer_operation(
+                "UPDATE",
+                sequence=1,
+                reads=[],
+                writes=[f"{schema}.T"],
+                branch_path=branch_path,
+                conditions=branch_path,
+                id=operation_id,
+                type="dml_operation",
+                module_id=module_id,
+                module={"type": "stored_procedure", "schema": schema, "name": name},
+            )
+        )
+        relationships.append({"type": "contains", "source": module_id, "target": operation_id})
+    return {
+        "graph_version": GRAPH_VERSION,
+        "database": "OrdersDb",
+        "nodes": nodes,
+        "relationships": relationships,
+        "parse_errors": [],
+    }
+
+
+def _golden_invocation(
+    procedure_name: str,
+    procedure_schema: str | None = None,
+    branch_context: tuple[str, ...] = (),
+) -> DbInvocation:
+    return DbInvocation(
+        class_name="OrderPage",
+        method_name="SaveData",
+        database="ORDERSDB",
+        procedure_name=procedure_name,
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("Ship/OrderPage.aspx.cs", 120, 220),
+        procedure_schema=procedure_schema,
+        branch_context=branch_context,
+        source_snapshot_hash="sha256:golden",
+    )
+
+
+def test_path_ids_for_four_fixed_inputs_never_change() -> None:
+    """Golden test: the exact `path_id` of four fixed Database Invocations.
+
+    Three sites read a `path_id` as the identity of one path, so a change to any
+    `path_id` needs its own ADR. This test fails on such a change. Do not edit
+    the expected values to make a refactor pass.
+    """
+    graph = _golden_graph()
+    cases = [
+        (_golden_invocation("usp_SaveOrder"), "P-968eb595d771"),
+        (_golden_invocation("usp_Missing"), "P-576b841482f1"),
+        (_golden_invocation("usp_Branch", branch_context=("IF @Caller = 2",)), "P-287267154cd7"),
+        (_golden_invocation("[COMMON].[usp_Load]", procedure_schema="[COMMON]"), "P-b1ee446ba0ee"),
+    ]
+
+    path_ids = [
+        [path["path_id"] for path in build_execution_paths([invocation], graph)]
+        for invocation, _ in cases
+    ]
+
+    assert path_ids == [[expected] for _, expected in cases]
