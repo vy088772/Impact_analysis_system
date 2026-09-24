@@ -3161,7 +3161,6 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
     root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
 
-    database_alias = req.database or None
     scope = DerivedExecutionEvidenceScope.of(req, roots)
 
     if req.direction == "backward":
@@ -3185,7 +3184,6 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
             root,
             req.table_name,
             column_name=req.column_name or None,
-            database_alias=database_alias,
             graph=execution_graph,
             invocations=rated_invocations,
         )

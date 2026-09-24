@@ -20,9 +20,10 @@
     存取這張表），最後反查哪個 UI 控制項事件會觸發這個方法。
 
 已知限制（誠實標注，不假裝是保證）：
-  - 欄位（column）層級的比對是「SP 定義文字裡有沒有出現這個欄位名稱字串」的
-    近似值（文字比對），不是解析 SQL 語法樹後的結構化保證，可能有誤判
-    （欄位名稱剛好也是變數名或其他表的欄位名）。
+  - 欄位（column）層級的比對是「SQL Execution Graph 路徑中繼資料（written_columns、
+    conditions、reads、writes）裡有沒有出現這個欄位名稱字串」的近似值（文字比對），
+    不是解析 SQL 語法樹後的結構化保證，可能有誤判（欄位名稱剛好也是變數名或
+    其他表的欄位名）。
   - UI 控制項事件反查是用「同目錄同檔名，.aspx.cs 對應 .aspx」的 WebForms
     命名慣例配對 code-behind 與 aspx 檔案，非 WebForms 專案（無對應 .aspx）
     這段會自然找不到、留空，不影響其餘鏈的建構。
@@ -250,27 +251,6 @@ def build_forward_chain(
 # 反向鏈：資料表（可選：欄位）-> SP -> C# 方法 -> UI 控制項事件
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _table_referenced(definition: str, table_name: str) -> bool:
-    tables = extract_tables_from_definition(definition)
-    target = _normalize_name(table_name)
-    return any(_normalize_name(t) == target for t in tables)
-
-
-def _column_referenced(definition: str, column_name: str) -> bool:
-    """欄位層級的近似比對：純文字搜尋，不解析 SQL 語法樹。
-
-    這是刻意的設計取捨，不是偷懶：SP 的 SELECT/WHERE/SET 子句要精準解析出
-    「這裡真的是在動這個欄位」成本很高、也容易因為 T-SQL 語法變化而出錯；
-    改用「欄位名稱字串是否出現在 SP 定義文字裡」這種近似值，呼叫端（AI）在
-    引用這個結果時應明確告知使用者這只是近似比對，不是保證。
-    """
-    import re
-    if not column_name:
-        return True
-    pattern = re.compile(r"\b" + re.escape(column_name) + r"\b", re.IGNORECASE)
-    return bool(pattern.search(definition))
-
-
 def _paired_view_file_names(csharp_file: str) -> Set[str]:
     """WebForms 命名慣例：`Foo.aspx.cs`/`Foo.ascx.cs` 的畫面檔案是同目錄的
     `Foo.aspx`/`Foo.ascx`。回傳期望的畫面檔名（不含目錄，小寫），非
@@ -369,7 +349,6 @@ def build_backward_chains(
     root: Path,
     table_name: str,
     column_name: Optional[str] = None,
-    database_alias: Optional[str] = None,
     graph: Optional[Mapping[str, object]] = None,
     invocations: Iterable[DbInvocation] = (),
 ) -> List[dict]:
@@ -541,7 +520,13 @@ def build_backward_chains(
 
 
 def _graph_access_matches_column(access_record: Mapping[str, object], column_name: str) -> bool:
-    """Apply the existing best-effort column filter to graph path metadata."""
+    """欄位層級的近似比對：在 graph 路徑中繼資料裡做純文字搜尋，不解析 SQL 語法樹。
+
+    這是刻意的設計取捨：SELECT/WHERE/SET 子句要精準解析出「這裡真的是在動這個
+    欄位」成本很高、也容易因為 T-SQL 語法變化而出錯；改用「欄位名稱是否以完整
+    單字出現在路徑中繼資料（written_columns、conditions、reads、writes）裡」這種
+    近似值。呼叫端（AI）在引用這個結果時應明確告知使用者這只是近似比對，不是保證。
+    """
     haystack = " ".join(
         str(value)
         for field in ("written_columns", "conditions", "reads", "writes")
