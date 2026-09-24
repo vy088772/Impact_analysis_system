@@ -11,6 +11,7 @@ import tools.discover_external_wrappers as discovery
 from code_analyzer.csharp_analysis_gateway import project_wrapper_evidence
 from service import analyze_service
 from service import scan_store
+from tests.sql_cache_fixtures import cache_payload
 
 
 def _record(**overrides: object) -> dict:
@@ -278,11 +279,9 @@ def test_report_evidence_and_provenance_match_refresh_reconciliation(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "procedures": [{"name": "dbo.usp_SO_Delete"}],
-        },
+        lambda database, schema, server="": cache_payload(
+            "OrdersDb", procedures=["dbo.usp_SO_Delete"]
+        ),
     )
 
     refresh = analyze_service.reconcile_refresh_wrappers(
@@ -330,11 +329,7 @@ def test_refresh_reconciliation_checks_a_calls_own_database_not_the_system_id(
     def fake_load_cached(database, schema, server=""):
         if database != "PUR":
             return None
-        return {
-            "database": "PUR",
-            "schema": "dbo",
-            "procedures": [{"name": "dbo.usp_SO_Delete"}],
-        }
+        return cache_payload("PUR", procedures=["dbo.usp_SO_Delete"])
 
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", fake_load_cached)
 
@@ -435,11 +430,9 @@ def test_refresh_reconciliation_drops_reviewed_exclusions_from_totals_and_detail
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "procedures": [{"name": "dbo.usp_SO_Delete"}],
-        },
+        lambda database, schema, server="": cache_payload(
+            "OrdersDb", procedures=["dbo.usp_SO_Delete"]
+        ),
     )
 
     refresh = analyze_service.reconcile_refresh_wrappers(

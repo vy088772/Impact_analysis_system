@@ -15,14 +15,14 @@ from service import flow_chain_builder
 from service import scan_store
 from service.schemas import AnalyzeRequest
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
+from tests.sql_cache_fixtures import cache_payload
 
 
 def _cached_sql_graph() -> dict:
-    return {
-        "database": "OrdersDb",
-        "schema": "dbo",
-        "procedures": [{"name": "usp_SaveOrder"}],
-        "sql_execution_graph": {
+    return cache_payload(
+        "OrdersDb",
+        procedures=["usp_SaveOrder"],
+        graph={
             "graph_version": 1,
             "database": "OrdersDb",
             "nodes": [
@@ -63,13 +63,11 @@ def _cached_sql_graph() -> dict:
             ],
             "parse_errors": [],
         },
-    }
+    )
 
 
 def _cached_schema_sql_graph() -> dict:
-    cached = _cached_sql_graph()
-    cached["procedures"] = [{"name": "usp_SaveOrder", "schema": "sales"}]
-    graph = cached["sql_execution_graph"]
+    graph = _cached_sql_graph()["sql_execution_graph"]
     graph["nodes"] = [
         {
             "id": "stored_procedure:sales.usp_SaveOrder",
@@ -106,7 +104,7 @@ def _cached_schema_sql_graph() -> dict:
             "columns": ["Status"],
         },
     ]
-    return cached
+    return cache_payload("OrdersDb", procedures={"usp_SaveOrder": {"schema": "sales"}}, graph=graph)
 
 
 def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: Path) -> None:

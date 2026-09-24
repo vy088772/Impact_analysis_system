@@ -20,6 +20,7 @@ from tests.sql_cache_fixtures import (
     CacheRoot,
     assert_relationships_resolve_to_known_nodes,
     case_variant_table_write_data,
+    cache_payload,
     case_variant_temp_table_write_data,
     write_cache,
 )
@@ -36,7 +37,7 @@ def _write_sql_cache_fixture(
 ) -> None:
     write_cache(
         cache_root,
-        sql_cache_store.CacheIdentity.of(TEST_SERVER, database, "dbo").key,
+        sql_cache_store.CacheIdentity.of(TEST_SERVER, database, "dbo"),
         payload,
         cache_version,
     )
@@ -74,24 +75,23 @@ def test_sql_cache_rejects_graphless_payload() -> None:
         _write_sql_cache_fixture(
             cache_root,
             "TestDb",
-            {"database": "TestDb", "schema": "dbo", "procedures": []},
+            cache_payload("TestDb"),
         )
 
         assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
 
 
 def test_sql_cache_rejects_database_mismatch_from_memory_and_disk() -> None:
-    mismatched_payload = {
-        "database": "OtherDb",
-        "schema": "dbo",
-        "sql_execution_graph": {
+    mismatched_payload = cache_payload(
+        "OtherDb",
+        graph={
             "graph_version": GRAPH_VERSION,
             "database": "OtherDb",
             "nodes": [],
             "relationships": [],
             "parse_errors": [],
         },
-    }
+    )
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(cache_root, "TestDb", mismatched_payload)
 
@@ -108,17 +108,16 @@ def test_sql_cache_rejects_stale_payload_version() -> None:
         _write_sql_cache_fixture(
             cache_root,
             "TestDb",
-            {
-                "database": "TestDb",
-                "schema": "dbo",
-                "sql_execution_graph": {
+            cache_payload(
+                "TestDb",
+                graph={
                     "graph_version": GRAPH_VERSION,
                     "database": "TestDb",
                     "nodes": [],
                     "relationships": [],
                     "parse_errors": [],
                 },
-            },
+            ),
             cache_version=sql_cache_store._SQL_CACHE_VERSION - 1,
         )
 
@@ -139,17 +138,16 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
         _write_sql_cache_fixture(
             cache_root,
             "TestDb",
-            {
-                "database": "TestDb",
-                "schema": "dbo",
-                "sql_execution_graph": {
+            cache_payload(
+                "TestDb",
+                graph={
                     "graph_version": GRAPH_VERSION - 1,
                     "database": "TestDb",
                     "nodes": [],
                     "relationships": [],
                     "parse_errors": [],
                 },
-            },
+            ),
         )
 
         assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
@@ -244,28 +242,25 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             return None
 
         def dump_all_sql_objects(self, schema: str) -> dict:
-            return {
-                "database": self.alias,
-                "schema": schema,
-                "procedures": [
-                    {
-                        "name": "usp_SaveOrder",
+            return cache_payload(
+                self.alias,
+                schema=schema,
+                procedures={
+                    "usp_SaveOrder": {
                         "definition": (
                             "CREATE PROCEDURE dbo.usp_SaveOrder AS "
                             "UPDATE dbo.SOrder SET OrderNo = @OrderNo WHERE Id = @Id;"
                         ),
                         "parameters": [],
                     }
-                ],
-                "views": [
-                    {
-                        "name": "vOrder",
+                },
+                views={
+                    "vOrder": {
                         "definition": "CREATE VIEW dbo.vOrder AS SELECT Id FROM dbo.SOrder;",
                     }
-                ],
-                "functions": [],
-                "tables": [{"name": "SOrder", "columns": []}],
-            }
+                },
+                tables={"SOrder": {"columns": []}},
+            )
 
     with CacheRoot():
         original_analyzer = sql_analyzer.SQLAnalyzer
@@ -347,14 +342,11 @@ def test_graph_offsets_stay_within_definition_length_for_crlf_source() -> None:
     host.ensure_ready()
 
     definition = _crlf_procedure_definition()
-    data = {
-        "database": "TestDb",
-        "schema": "dbo",
-        "procedures": [{"name": "usp_PadDelete", "definition": definition, "parameters": []}],
-        "views": [],
-        "functions": [],
-        "tables": [{"name": "PadTarget", "columns": []}],
-    }
+    data = cache_payload(
+        "TestDb",
+        procedures={"usp_PadDelete": {"definition": definition, "parameters": []}},
+        tables={"PadTarget": {"columns": []}},
+    )
 
     graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
     assert_relationships_resolve_to_known_nodes(graph)

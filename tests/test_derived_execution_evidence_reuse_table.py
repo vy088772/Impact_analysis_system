@@ -21,6 +21,7 @@ from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, Framew
 from service import analyze_service
 from service.schemas import FindByTableRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
+from tests.sql_cache_fixtures import cache_payload
 
 
 def _graph() -> dict:
@@ -144,7 +145,7 @@ def _wire(
     """Same wiring as ticket 04's tests: fixed recorded state across calls, see
     that file's `_wire` docstring for why the freshness reads are stubbed
     explicitly (ticket 05 keys reuse off recorded save time, not identity)."""
-    cache_payload = {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": graph}
+    sql_payload = cache_payload("OrdersDb", graph=graph)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_at)
@@ -152,7 +153,7 @@ def _wire(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload,
+        lambda database, schema, server="": sql_payload,
     )
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
@@ -365,13 +366,13 @@ def test_a_changed_repository_scan_causes_a_fresh_path_build(monkeypatch, tmp_pa
         # A real rescan updates the scan's recorded save time; mirror that
         # instead of relying on `scans.pop(0)` handing back a new object.
         scan_saved_ats = ["scan-v1", "scan-v2"]
-        cache_payload = {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()}
+        sql_payload = cache_payload("OrdersDb", graph=_graph())
         monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
         monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_ats.pop(0))
         monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
         monkeypatch.setattr(
-            analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": cache_payload
+            analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": sql_payload
         )
         monkeypatch.setattr(
             analyze_service.sql_cache_store, "cached_saved_at", lambda database, schema="dbo", server="": "sql-cache-v1"

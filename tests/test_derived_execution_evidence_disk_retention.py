@@ -30,6 +30,7 @@ from service import analyze_service
 from service import derived_execution_evidence_store as store
 from service.schemas import FindBySPRequest, FindByTableRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
+from tests.sql_cache_fixtures import cache_payload
 
 
 def _graph(*procedure_names: str) -> dict:
@@ -99,7 +100,7 @@ def _wire(
     scan_commit: Optional[str] = "commit-v1",
     sql_cache_saved_at: str = "sql-cache-v1",
 ) -> None:
-    cache_payload = {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": graph}
+    sql_payload = cache_payload("OrdersDb", graph=graph)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_at)
@@ -107,7 +108,7 @@ def _wire(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload,
+        lambda database, schema, server="": sql_payload,
     )
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
@@ -235,11 +236,7 @@ def test_a_scope_evicted_from_memory_is_served_from_disk(monkeypatch, tmp_path: 
         monkeypatch.setattr(
             analyze_service.sql_cache_store,
             "load_cached",
-            lambda database, schema, server="": {
-                "database": database,
-                "schema": "dbo",
-                "sql_execution_graph": _graph("usp_Alpha", "usp_Other"),
-            },
+            lambda database, schema, server="": cache_payload(database, graph=_graph("usp_Alpha", "usp_Other")),
         )
         analyze_service.find_by_sp(other_request)
         first_scope = analyze_service.DerivedExecutionEvidenceScope.of(_sp_request(), [tmp_path])
@@ -393,16 +390,12 @@ def test_a_changed_repository_scan_causes_a_derivation_and_replaces_the_file(mon
         second_scan = _scan(tmp_path, alpha_calls="usp_Gamma")
         scans = [first_scan, second_scan]
         scan_saved_ats = ["scan-v1", "scan-v2"]
-        cache_payload = {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "sql_execution_graph": _graph("usp_Alpha", "usp_Gamma"),
-        }
+        sql_payload = cache_payload("OrdersDb", graph=_graph("usp_Alpha", "usp_Gamma"))
         monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
         monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_ats.pop(0))
         monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
-        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": cache_payload)
+        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": sql_payload)
         monkeypatch.setattr(
             analyze_service.sql_cache_store, "cached_saved_at", lambda database, schema="dbo", server="": "sql-cache-v1"
         )
@@ -428,8 +421,8 @@ def test_a_changed_sql_cache_causes_a_derivation(monkeypatch, tmp_path: Path) ->
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
         payloads = [
-            {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph("usp_Alpha")},
-            {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},  # usp_Alpha drops out
+            cache_payload("OrdersDb", graph=_graph("usp_Alpha")),
+            cache_payload("OrdersDb", graph=_graph()),  # usp_Alpha drops out
         ]
         sql_cache_saved_ats = ["sql-cache-v1", "sql-cache-v2"]
         monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])

@@ -168,6 +168,24 @@ def analyzer_operation(
     }
 
 
+def cache_with_procedures(*procedures: str) -> dict:
+    """An ``OrdersDb`` cache whose graph holds one node for each named procedure, in ``dbo``."""
+    return cache_payload(
+        "OrdersDb",
+        procedures=procedures,
+        graph={
+            "graph_version": 1,
+            "database": "OrdersDb",
+            "nodes": [
+                {"id": f"stored_procedure:dbo.{name}", "type": "stored_procedure", "schema": "dbo", "name": name}
+                for name in procedures
+            ],
+            "relationships": [],
+            "parse_errors": [],
+        },
+    )
+
+
 def assert_relationships_resolve_to_known_nodes(graph: dict) -> None:
     """Every relationship target in ``graph`` must name a node the same graph holds.
 
@@ -197,23 +215,17 @@ def case_variant_table_write_data(database: str = "OrdersDb") -> dict:
     reproduce the defect, which only exists in how the builder resolves a
     second, case-different reference to the same object.
     """
-    return {
-        "database": database,
-        "schema": "dbo",
-        "procedures": [
-            {
-                "name": "dbo.usp_WriteUpper",
+    return cache_payload(
+        database,
+        procedures={
+            "dbo.usp_WriteUpper": {
                 "definition": "CREATE PROCEDURE dbo.usp_WriteUpper AS INSERT INTO VQM (Id) VALUES (1);",
             },
-            {
-                "name": "dbo.usp_WriteLower",
+            "dbo.usp_WriteLower": {
                 "definition": "CREATE PROCEDURE dbo.usp_WriteLower AS UPDATE vqm SET Id = 1;",
             },
-        ],
-        "views": [],
-        "functions": [],
-        "tables": [],
-    }
+        },
+    )
 
 
 def case_variant_temp_table_write_data(database: str = "OrdersDb") -> dict:
@@ -227,12 +239,10 @@ def case_variant_temp_table_write_data(database: str = "OrdersDb") -> dict:
     see `case_variant_table_write_data` for why this must go through
     `build_sql_execution_graph()`.
     """
-    return {
-        "database": database,
-        "schema": "dbo",
-        "procedures": [
-            {
-                "name": "dbo.usp_WriteWithTemp",
+    return cache_payload(
+        database,
+        procedures={
+            "dbo.usp_WriteWithTemp": {
                 "definition": """CREATE PROCEDURE dbo.usp_WriteWithTemp
 AS
 BEGIN
@@ -242,11 +252,9 @@ BEGIN
 END;
 """,
             },
-        ],
-        "views": [],
-        "functions": [],
-        "tables": [{"name": "dbo.SourceTable"}, {"name": "dbo.RealTable"}],
-    }
+        },
+        tables=["dbo.SourceTable", "dbo.RealTable"],
+    )
 
 
 _SAVED_AT = "2026-08-04 13:29:13"
@@ -254,7 +262,7 @@ _SAVED_AT = "2026-08-04 13:29:13"
 
 def write_cache(
     cache_root: Path,
-    identity: CacheIdentity | str,
+    identity: CacheIdentity,
     payload: dict,
     cache_version: int | None = None,
 ) -> None:
@@ -264,9 +272,6 @@ def write_cache(
     stays defined in one place. ``cache_version`` replaces the version in that
     file, for a test that needs a cache from another format version.
     """
-    if isinstance(identity, str):  # Until every caller passes an identity.
-        _write_cache_under_key(cache_root, identity, payload, cache_version)
-        return
     (cache_root / identity.filename).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -301,14 +306,3 @@ def write_legacy_cache(cache_root: Path, key: str, payload: dict) -> None:
         ),
         encoding="utf-8",
     )
-
-
-def _write_cache_under_key(
-    cache_root: Path, key: str, payload: dict, cache_version: int | None
-) -> None:
-    write_legacy_cache(cache_root, key, payload)
-    if cache_version is not None:
-        meta_path = cache_root / f"{key}.meta.json"
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        meta["cache_version"] = cache_version
-        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")

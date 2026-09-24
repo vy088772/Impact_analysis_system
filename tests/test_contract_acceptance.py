@@ -24,6 +24,7 @@ from code_analyzer.external_wrapper_contracts import (  # noqa: E402
     versioned_contract_from_proposal,
 )
 from code_analyzer.project_scanner import ProjectScanResult  # noqa: E402
+from tests.sql_cache_fixtures import cache_payload  # noqa: E402
 
 
 def test_incomplete_proposal_is_rejected_without_writing_configuration(tmp_path) -> None:
@@ -250,11 +251,9 @@ def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, 
     monkeypatch.setattr(
         contract_acceptance_module.analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "procedures": [{"name": "dbo.usp_SaveOrder"}],
-        },
+        lambda database, schema, server="": cache_payload(
+            "OrdersDb", procedures=["dbo.usp_SaveOrder"]
+        ),
     )
 
     result = reclassify_cached_scans(

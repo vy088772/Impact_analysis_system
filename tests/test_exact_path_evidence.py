@@ -30,6 +30,18 @@ from service.schemas import (
     SPMatchProgram,
     TableMatchProgram,
 )
+from tests.sql_cache_fixtures import cache_payload
+
+
+_SAVE_ORDER_PROCEDURE = {
+    "dbo.usp_SaveOrder": {
+        "definition": (
+            "CREATE PROCEDURE dbo.usp_SaveOrder AS "
+            "IF @Mode = 1 UPDATE dbo.SOrder SET Status = @Status WHERE Id = @Id; "
+            "ELSE DELETE FROM dbo.SOrder WHERE Id = @Id;"
+        ),
+    }
+}
 
 
 def _cached_path_fixture(
@@ -141,23 +153,7 @@ def _cached_path_fixture(
         ],
         "parse_errors": [],
     }
-    cached = {
-        "database": "OrdersDb",
-        "schema": "dbo",
-        "procedures": [
-            {
-                "name": "dbo.usp_SaveOrder",
-                "definition": (
-                    "CREATE PROCEDURE dbo.usp_SaveOrder AS "
-                    "IF @Mode = 1 UPDATE dbo.SOrder SET Status = @Status WHERE Id = @Id; "
-                    "ELSE DELETE FROM dbo.SOrder WHERE Id = @Id;"
-                ),
-            }
-        ],
-        "views": [],
-        "functions": [],
-        "sql_execution_graph": graph,
-    }
+    cached = cache_payload("OrdersDb", procedures=_SAVE_ORDER_PROCEDURE, graph=graph)
     scan = ProjectScanResult(
         project_root=str(tmp_path),
         project_name="orders",
@@ -497,11 +493,15 @@ def test_path_evidence_materializes_unresolved_cycle_without_terminal_dml(tmp_pa
             },
         ]
     )
-    cached["procedures"].append(
-        {
-            "name": "dbo.usp_WriteAudit",
-            "definition": "CREATE PROCEDURE dbo.usp_WriteAudit AS EXEC dbo.usp_SaveOrder;",
-        }
+    cached = cache_payload(
+        "OrdersDb",
+        procedures={
+            **_SAVE_ORDER_PROCEDURE,
+            "dbo.usp_WriteAudit": {
+                "definition": "CREATE PROCEDURE dbo.usp_WriteAudit AS EXEC dbo.usp_SaveOrder;",
+            },
+        },
+        graph=graph,
     )
     invocation = DbInvocation(
         class_name="OrderPage",

@@ -24,6 +24,7 @@ from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, Framew
 from service import analyze_service
 from service.schemas import FindBySPRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
+from tests.sql_cache_fixtures import cache_payload
 
 
 def _graph() -> dict:
@@ -88,7 +89,7 @@ def _wire(monkeypatch, scan: ProjectScanResult, tmp_path: Path) -> None:
     input's recorded save time, not object identity, so a stub must supply
     those reads explicitly (see tests/test_derived_execution_evidence_reuse.py's
     `_wire` docstring for why leaving them unset would defeat reuse)."""
-    cache_payload = {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()}
+    sql_payload = cache_payload("OrdersDb", graph=_graph())
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
@@ -96,7 +97,7 @@ def _wire(monkeypatch, scan: ProjectScanResult, tmp_path: Path) -> None:
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload,
+        lambda database, schema, server="": sql_payload,
     )
     monkeypatch.setattr(
         analyze_service.sql_cache_store,

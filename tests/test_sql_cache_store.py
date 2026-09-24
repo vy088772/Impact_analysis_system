@@ -17,26 +17,25 @@ if str(PROJECT_ROOT) not in sys.path:
 from service import analyze_service, sql_cache_store
 from service.sql_cache_store import CacheIdentity
 from service.sql_execution_graph import GRAPH_VERSION
-from tests.sql_cache_fixtures import CacheRoot, write_cache
+from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache, write_legacy_cache
 from tools.migrate_sql_cache_keys import LEGACY_CACHE_SCOPES, Scope, migrate_cache_keys
 
 
-def _payload(database: str) -> dict:
-    return {
-        "database": database,
-        "schema": "dbo",
-        "procedures": [{"name": "spAddRecordError", "definition": "CREATE PROCEDURE x AS SELECT 1"}],
-        "views": [],
-        "functions": [],
-        "tables": [],
-        "sql_execution_graph": {
+def _payload(database: str, graph_nodes: tuple = (), **objects: object) -> dict:
+    objects.setdefault(
+        "procedures", {"spAddRecordError": {"definition": "CREATE PROCEDURE x AS SELECT 1"}}
+    )
+    return cache_payload(
+        database,
+        graph={
             "graph_version": GRAPH_VERSION,
             "database": database,
-            "nodes": [],
+            "nodes": list(graph_nodes),
             "relationships": [],
             "parse_errors": [],
         },
-    }
+        **objects,  # type: ignore[arg-type]
+    )
 
 
 # ---------------------------------------------------------------- normalization
@@ -156,7 +155,7 @@ def test_a_database_is_cataloged_exactly_when_its_cache_file_exists() -> None:
 
         write_cache(
             cache_root,
-            "vmsystest07.topmost.com.tw__SysErrorRecord__dbo",
+            CacheIdentity.of("vmsystest07", "SysErrorRecord", "dbo"),
             _payload("SysErrorRecord"),
         )
 
@@ -166,7 +165,7 @@ def test_a_database_is_cataloged_exactly_when_its_cache_file_exists() -> None:
 def test_a_cache_written_for_one_server_is_not_found_under_another() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
         assert sql_cache_store.load_cached("PUR", "dbo", server="vmsystest08") is None
@@ -175,7 +174,7 @@ def test_a_cache_written_for_one_server_is_not_found_under_another() -> None:
 def test_a_caller_without_a_server_resolves_the_only_cache_for_that_database() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
         cached = sql_cache_store.load_cached("PUR", "dbo")
@@ -187,10 +186,10 @@ def test_a_caller_without_a_server_resolves_the_only_cache_for_that_database() -
 def test_a_caller_without_a_server_refuses_an_ambiguous_database_name() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
         write_cache(
-            cache_root, "vmsystest08.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest08", "PUR", "dbo"), _payload("PUR")
         )
 
         assert sql_cache_store.load_cached("PUR", "dbo") is None
@@ -200,7 +199,7 @@ def test_a_system_id_is_not_a_cache_key() -> None:
     """Y-Docs_TTPUR is a system_id; the cached database is named PUR."""
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
         assert sql_cache_store.load_cached("Y-Docs_TTPUR", "dbo", server="vmsystest07") is None
@@ -212,7 +211,7 @@ def test_a_system_id_is_not_a_cache_key() -> None:
 def test_cached_saved_at_reads_the_recorded_save_time() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
         assert sql_cache_store.cached_saved_at("PUR", "dbo", server="vmsystest07") == "2026-08-04 13:29:13"
@@ -222,7 +221,7 @@ def test_cached_saved_at_resolves_the_server_the_same_way_load_cached_does() -> 
     """No server given, exactly one cache on disk -- resolved the same as load_cached()."""
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
         assert sql_cache_store.cached_saved_at("PUR", "dbo") == "2026-08-04 13:29:13"
@@ -238,7 +237,7 @@ def test_cached_saved_at_is_none_when_nothing_is_cached() -> None:
 
 def test_migration_renames_a_legacy_cache_file_to_the_new_key() -> None:
     with CacheRoot() as cache_root:
-        write_cache(cache_root, "STC__dbo", _payload("STC"))
+        write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
 
         migrate_cache_keys(cache_root, [Scope("STC__dbo", "vmsystest07", "STC", "dbo")])
 
@@ -252,7 +251,7 @@ def test_a_migrated_cache_reads_back_identically_under_its_new_name() -> None:
     """Smoke test: rename only — the parsed payload must not change."""
     with CacheRoot() as cache_root:
         before = _payload("STC")
-        write_cache(cache_root, "STC__dbo", before)
+        write_legacy_cache(cache_root, "STC__dbo", before)
 
         migrate_cache_keys(cache_root, [Scope("STC__dbo", "vmsystest07", "STC", "dbo")])
 
@@ -264,7 +263,7 @@ def test_migration_corrects_a_payload_whose_identity_was_a_system_id() -> None:
     """Y-Docs_TTPUR__dbo holds database PUR; only the identity fields may change."""
     with CacheRoot() as cache_root:
         before = _payload("Y-Docs_TTPUR")
-        write_cache(cache_root, "Y-Docs_TTPUR__dbo", before)
+        write_legacy_cache(cache_root, "Y-Docs_TTPUR__dbo", before)
 
         migrate_cache_keys(cache_root, [Scope("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
 
@@ -272,16 +271,13 @@ def test_migration_corrects_a_payload_whose_identity_was_a_system_id() -> None:
         assert after is not None
         assert after["database"] == "PUR"
         assert after["sql_execution_graph"]["database"] == "PUR"
-        expected = dict(before)
-        expected["database"] = "PUR"
-        expected["sql_execution_graph"] = dict(before["sql_execution_graph"], database="PUR")
-        assert after == expected
+        assert after == _payload("PUR")
 
 
 def test_migration_does_not_rescan_the_procedure_definitions() -> None:
     with CacheRoot() as cache_root:
         before = _payload("Y-Docs_TTPUR")
-        write_cache(cache_root, "Y-Docs_TTPUR__dbo", before)
+        write_legacy_cache(cache_root, "Y-Docs_TTPUR__dbo", before)
 
         migrate_cache_keys(cache_root, [Scope("Y-Docs_TTPUR__dbo", "vmsystest07", "PUR", "dbo")])
 
@@ -321,7 +317,7 @@ def test_migration_touches_only_the_identity_bytes() -> None:
 
 def test_migration_is_idempotent() -> None:
     with CacheRoot() as cache_root:
-        write_cache(cache_root, "STC__dbo", _payload("STC"))
+        write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
         scopes = [Scope("STC__dbo", "vmsystest07", "STC", "dbo")]
 
         first = migrate_cache_keys(cache_root, scopes)
@@ -334,7 +330,7 @@ def test_migration_is_idempotent() -> None:
 
 def test_migration_dry_run_changes_nothing() -> None:
     with CacheRoot() as cache_root:
-        write_cache(cache_root, "STC__dbo", _payload("STC"))
+        write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
 
         migrate_cache_keys(
             cache_root,
@@ -356,7 +352,7 @@ def test_the_shipped_migration_scopes_cover_both_existing_cache_files() -> None:
 def test_the_migration_writes_the_meta_the_store_itself_would_write() -> None:
     """The meta format lives in sql_cache_store; the migration must not fork it."""
     with CacheRoot() as cache_root:
-        write_cache(cache_root, "STC__dbo", _payload("STC"))
+        write_legacy_cache(cache_root, "STC__dbo", _payload("STC"))
 
         migrate_cache_keys(cache_root, [Scope("STC__dbo", "vmsystest07", "STC", "dbo")])
 
@@ -392,7 +388,7 @@ def test_get_or_dump_refuses_to_key_a_cache_by_the_display_alias() -> None:
 def test_list_caches_returns_every_cache_with_its_four_fields() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
         rows = sql_cache_store.list_caches()
@@ -407,7 +403,7 @@ def test_list_caches_returns_every_cache_with_its_four_fields() -> None:
 
 def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_missing() -> None:
     with CacheRoot() as cache_root:
-        (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.json").write_text(
+        (cache_root / CacheIdentity.of("vmsystest07", "PUR", "dbo").filename).write_text(
             json.dumps(_payload("PUR"), ensure_ascii=False), encoding="utf-8"
         )
 
@@ -423,9 +419,9 @@ def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_missing()
 def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_unreadable() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
-        (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.meta.json").write_text(
+        (cache_root / CacheIdentity.of("vmsystest07", "PUR", "dbo").meta_filename).write_text(
             "{not valid json", encoding="utf-8"
         )
 
@@ -443,7 +439,7 @@ def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_unreadabl
 def test_list_caches_never_lists_a_scan_record_file_as_a_cache() -> None:
     with CacheRoot() as cache_root:
         # A meta file with no sibling data file must never surface as a row.
-        (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.meta.json").write_text(
+        (cache_root / CacheIdentity.of("vmsystest07", "PUR", "dbo").meta_filename).write_text(
             json.dumps(
                 {
                     "server": "vmsystest07.topmost.com.tw",
@@ -476,13 +472,13 @@ def test_list_caches_never_lists_an_object_location_index_file_as_a_cache() -> N
 def test_list_caches_orders_rows_by_server_then_database_then_schema() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, "vmsystest08.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest08", "PUR", "dbo"), _payload("PUR")
         )
         write_cache(
-            cache_root, "vmsystest07.topmost.com.tw__STC__dbo", _payload("STC")
+            cache_root, CacheIdentity.of("vmsystest07", "STC", "dbo"), _payload("STC")
         )
         write_cache(
-            cache_root, "vmsystest07.topmost.com.tw__PUR__dbo", _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
         )
 
         rows = sql_cache_store.list_caches()
@@ -498,13 +494,14 @@ def test_list_caches_orders_rows_by_server_then_database_then_schema() -> None:
 
 
 def _payload_with_procedure(database: str, procedure: str) -> dict:
-    payload = _payload(database)
-    payload["procedures"] = [{"name": procedure, "definition": "CREATE PROCEDURE x AS SELECT 1"}]
-    payload["sql_execution_graph"]["nodes"] = [
-        {"id": f"stored_procedure:dbo.{procedure}", "type": "stored_procedure",
-         "name": procedure, "schema": "dbo"}
-    ]
-    return payload
+    return _payload(
+        database,
+        procedures={procedure: {"definition": "CREATE PROCEDURE x AS SELECT 1"}},
+        graph_nodes=(
+            {"id": f"stored_procedure:dbo.{procedure}", "type": "stored_procedure",
+             "name": procedure, "schema": "dbo"},
+        ),
+    )
 
 
 def test_the_analyze_read_path_reads_the_server_the_request_named() -> None:
@@ -512,12 +509,12 @@ def test_the_analyze_read_path_reads_the_server_the_request_named() -> None:
     with CacheRoot() as cache_root:
         write_cache(
             cache_root,
-            "vmsystest07.topmost.com.tw__PUR__dbo",
+            CacheIdentity.of("vmsystest07", "PUR", "dbo"),
             _payload_with_procedure("PUR", "spOnSeven"),
         )
         write_cache(
             cache_root,
-            "vmsystest08.topmost.com.tw__PUR__dbo",
+            CacheIdentity.of("vmsystest08", "PUR", "dbo"),
             _payload_with_procedure("PUR", "spOnEight"),
         )
 
@@ -532,12 +529,12 @@ def test_the_analyze_read_path_without_a_server_cannot_pick_between_two() -> Non
     with CacheRoot() as cache_root:
         write_cache(
             cache_root,
-            "vmsystest07.topmost.com.tw__PUR__dbo",
+            CacheIdentity.of("vmsystest07", "PUR", "dbo"),
             _payload_with_procedure("PUR", "spOnSeven"),
         )
         write_cache(
             cache_root,
-            "vmsystest08.topmost.com.tw__PUR__dbo",
+            CacheIdentity.of("vmsystest08", "PUR", "dbo"),
             _payload_with_procedure("PUR", "spOnEight"),
         )
 
@@ -558,15 +555,13 @@ def _payload_with_graph_only_table(database: str) -> dict:
     node the SQL Execution Graph produced from a procedure body. This is the
     fixture the union bucket exists for (ticket 01's proof requirement).
     """
-    payload = _payload(database)
-    payload["procedures"] = [
-        {"name": "spTouchesOrders", "definition": "CREATE PROCEDURE spTouchesOrders AS SELECT 1"}
-    ]
-    payload["tables"] = [{"name": "Customers", "columns": [], "primary_keys": []}]
-    payload["sql_execution_graph"] = {
-        "graph_version": GRAPH_VERSION,
-        "database": database,
-        "nodes": [
+    return _payload(
+        database,
+        procedures={
+            "spTouchesOrders": {"definition": "CREATE PROCEDURE spTouchesOrders AS SELECT 1"}
+        },
+        tables={"Customers": {"columns": [], "primary_keys": []}},
+        graph_nodes=(
             {
                 "id": "stored_procedure:dbo.spTouchesOrders",
                 "type": "stored_procedure",
@@ -574,19 +569,18 @@ def _payload_with_graph_only_table(database: str) -> dict:
                 "name": "spTouchesOrders",
             },
             {"id": "table:dbo.Orders", "type": "table", "schema": "dbo", "name": "Orders"},
-        ],
-        "relationships": [],
-        "parse_errors": [],
-    }
-    return payload
+        ),
+    )
 
 
 def test_the_stored_procedure_bucket_holds_procedures_views_and_functions_normalized() -> None:
     identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
-    data = _payload("PUR")
-    data["procedures"] = [{"name": "[dbo].[spDoThing]", "definition": ""}]
-    data["views"] = [{"name": "vwSomething", "definition": ""}]
-    data["functions"] = [{"name": "ufnCalc", "definition": ""}]
+    data = _payload(
+        "PUR",
+        procedures={"[dbo].[spDoThing]": {"definition": ""}},
+        views={"vwSomething": {"definition": ""}},
+        functions={"ufnCalc": {"definition": ""}},
+    )
 
     index = sql_cache_store.build_object_location_index(identity, data)
 
@@ -595,8 +589,7 @@ def test_the_stored_procedure_bucket_holds_procedures_views_and_functions_normal
 
 def test_the_table_bucket_holds_the_declared_tables_normalized() -> None:
     identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
-    data = _payload("PUR")
-    data["tables"] = [{"name": "Customers", "columns": [], "primary_keys": []}]
+    data = _payload("PUR", tables={"Customers": {"columns": [], "primary_keys": []}})
 
     index = sql_cache_store.build_object_location_index(identity, data)
 
@@ -606,8 +599,7 @@ def test_the_table_bucket_holds_the_declared_tables_normalized() -> None:
 def test_table_name_normalization_drops_the_schema() -> None:
     """dbo.Orders and sales.Orders must collapse to the same key."""
     identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
-    data = _payload("PUR")
-    data["tables"] = [{"name": "sales.Orders", "columns": [], "primary_keys": []}]
+    data = _payload("PUR", tables={"sales.Orders": {"columns": [], "primary_keys": []}})
 
     index = sql_cache_store.build_object_location_index(identity, data)
 
@@ -663,8 +655,7 @@ def test_a_refresh_writes_the_cache_before_the_index() -> None:
 def test_a_fresh_index_round_trips_through_load_object_location_index() -> None:
     with CacheRoot() as cache_root:
         identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
-        data = _payload("PUR")
-        data["procedures"] = [{"name": "spAddRecordError", "definition": ""}]
+        data = _payload("PUR", procedures={"spAddRecordError": {"definition": ""}})
 
         sql_cache_store._save(identity, data)
 
@@ -677,7 +668,7 @@ def test_a_fresh_index_round_trips_through_load_object_location_index() -> None:
 def test_a_missing_index_file_counts_as_absent() -> None:
     with CacheRoot() as cache_root:
         identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
-        write_cache(cache_root, identity.key, _payload("PUR"))
+        write_cache(cache_root, identity, _payload("PUR"))
 
         assert sql_cache_store.load_object_location_index(identity) is None
 
@@ -685,7 +676,7 @@ def test_a_missing_index_file_counts_as_absent() -> None:
 def test_an_unreadable_index_file_counts_as_absent() -> None:
     with CacheRoot() as cache_root:
         identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
-        write_cache(cache_root, identity.key, _payload("PUR"))
+        write_cache(cache_root, identity, _payload("PUR"))
         (cache_root / identity.index_filename).write_text("{not valid json", encoding="utf-8")
 
         assert sql_cache_store.load_object_location_index(identity) is None
@@ -762,7 +753,7 @@ def test_the_memory_cache_retains_no_more_databases_than_its_bound(monkeypatch) 
     with CacheRoot() as cache_root:
         monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 2)
         for name in ("Db1", "Db2", "Db3"):
-            write_cache(cache_root, f"vmsystest07.topmost.com.tw__{name}__dbo", _payload(name))
+            write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
 
         for name in ("Db1", "Db2", "Db3"):
             assert sql_cache_store.load_cached(name, "dbo", server="vmsystest07") is not None
@@ -776,13 +767,13 @@ def test_exceeding_the_bound_evicts_the_least_recently_used_database_and_records
     with CacheRoot() as cache_root:
         monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 2)
         for name in ("Db1", "Db2"):
-            write_cache(cache_root, f"vmsystest07.topmost.com.tw__{name}__dbo", _payload(name))
+            write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
 
         sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
         sql_cache_store.load_cached("Db2", "dbo", server="vmsystest07")
         capsys.readouterr()  # discard output from the first two, unbounded, insertions
 
-        write_cache(cache_root, "vmsystest07.topmost.com.tw__Db3__dbo", _payload("Db3"))
+        write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db3", "dbo"), _payload("Db3"))
         sql_cache_store.load_cached("Db3", "dbo", server="vmsystest07")
 
         db1_key = CacheIdentity.of("vmsystest07", "Db1", "dbo").key
@@ -805,7 +796,7 @@ def test_a_served_database_survives_more_new_arrivals_than_the_bound(monkeypatch
     with CacheRoot() as cache_root:
         monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 2)
         for name in ("Db1", "Db2", "Db3", "Db4"):
-            write_cache(cache_root, f"vmsystest07.topmost.com.tw__{name}__dbo", _payload(name))
+            write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
 
         sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
         sql_cache_store.load_cached("Db2", "dbo", server="vmsystest07")
@@ -828,8 +819,8 @@ def test_a_database_evicted_from_memory_is_read_from_disk_again_with_the_same_co
 ) -> None:
     with CacheRoot() as cache_root:
         monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 1)
-        write_cache(cache_root, "vmsystest07.topmost.com.tw__Db1__dbo", _payload("Db1"))
-        write_cache(cache_root, "vmsystest07.topmost.com.tw__Db2__dbo", _payload("Db2"))
+        write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db1", "dbo"), _payload("Db1"))
+        write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db2", "dbo"), _payload("Db2"))
 
         first = sql_cache_store.load_cached("Db1", "dbo", server="vmsystest07")
         sql_cache_store.load_cached("Db2", "dbo", server="vmsystest07")  # evicts Db1 from memory
@@ -847,7 +838,7 @@ def test_eviction_never_changes_which_databases_answer_a_read(monkeypatch) -> No
     with CacheRoot() as cache_root:
         monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 1)
         for name in ("Db1", "Db2", "Db3"):
-            write_cache(cache_root, f"vmsystest07.topmost.com.tw__{name}__dbo", _payload(name))
+            write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
 
         for name in ("Db1", "Db2", "Db3"):
             assert sql_cache_store.load_cached(name, "dbo", server="vmsystest07")["database"] == name

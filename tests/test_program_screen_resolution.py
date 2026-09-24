@@ -22,6 +22,7 @@ from code_analyzer.project_scanner import ProjectScanResult
 from code_analyzer.razor_parser import RazorParser
 from service import analyze_service
 from service.schemas import AnalyzeRequest
+from tests.sql_cache_fixtures import cache_with_procedures
 
 
 def _write(root: Path, relative: str, text: str) -> Path:
@@ -134,29 +135,6 @@ def _scan(
     )
 
 
-def _cached_sql_graph(*procedures: str) -> dict:
-    return {
-        "database": "OrdersDb",
-        "schema": "dbo",
-        "procedures": [{"name": name} for name in procedures],
-        "sql_execution_graph": {
-            "graph_version": 1,
-            "database": "OrdersDb",
-            "nodes": [
-                {
-                    "id": f"stored_procedure:dbo.{name}",
-                    "type": "stored_procedure",
-                    "schema": "dbo",
-                    "name": name,
-                }
-                for name in procedures
-            ],
-            "relationships": [],
-            "parse_errors": [],
-        },
-    }
-
-
 def _invocation(class_name: str, method_name: str, procedure: str) -> Dict:
     return {
         "class_name": class_name,
@@ -186,7 +164,7 @@ def _analyze(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda db, schema, server="": _cached_sql_graph(*procedures),
+        lambda db, schema, server="": cache_with_procedures(*procedures),
     )
     return analyze_service.analyze(
         AnalyzeRequest(

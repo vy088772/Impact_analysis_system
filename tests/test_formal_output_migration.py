@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 
 from service import sp_fetcher
+from tests.sql_cache_fixtures import cache_payload
 
 
 def test_dependency_graph_renderer_ignores_legacy_sp_relations(tmp_path) -> None:
@@ -43,10 +44,10 @@ def test_dependency_graph_renderer_ignores_legacy_sp_relations(tmp_path) -> None
 
 
 def test_sp_fetcher_uses_graph_lineage_and_keeps_dynamic_sql_unresolved(monkeypatch) -> None:
-    procedures = [
-        {"name": name, "definition": f"CREATE PROCEDURE dbo.{name} AS SELECT 1;"}
+    procedures = {
+        name: {"definition": f"CREATE PROCEDURE dbo.{name} AS SELECT 1;"}
         for name in ("usp_Direct", "usp_Entry", "usp_ReadModules", "usp_Dynamic")
-    ]
+    }
     graph = {
         "nodes": [
             {"id": "sp:direct", "type": "stored_procedure", "schema": "dbo", "name": "usp_Direct"},
@@ -85,12 +86,9 @@ def test_sp_fetcher_uses_graph_lineage_and_keeps_dynamic_sql_unresolved(monkeypa
     monkeypatch.setattr(
         sp_fetcher,
         "load_cached",
-        lambda database, schema="dbo", server="": {
-            "database": database,
-            "schema": schema,
-            "procedures": procedures,
-            "sql_execution_graph": graph,
-        },
+        lambda database, schema="dbo", server="": cache_payload(
+            database, schema=schema, procedures=procedures, graph=graph
+        ),
     )
 
     results = sp_fetcher.fetch_sp_definitions(

@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from service import sp_fetcher
+from tests.sql_cache_fixtures import cache_payload
 
 
 class _ConnectionAttempted(AssertionError):
@@ -39,17 +40,15 @@ def _forbid_live_connection(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _cache_with_one_procedure() -> dict:
-    return {
-        "database": "OrdersDb",
-        "schema": "dbo",
-        "procedures": [
-            {
-                "name": "usp_Known",
+    return cache_payload(
+        "OrdersDb",
+        procedures={
+            "usp_Known": {
                 "definition": "CREATE PROCEDURE usp_Known AS SELECT 1",
                 "parameters": [{"name": "@id", "type": "int"}],
             }
-        ],
-        "sql_execution_graph": {
+        },
+        graph={
             "nodes": [
                 {"id": "sp:known", "type": "stored_procedure", "name": "usp_Known"},
                 {"id": "table:orders", "type": "table", "name": "Orders", "schema": "dbo"},
@@ -58,7 +57,7 @@ def _cache_with_one_procedure() -> dict:
                 {"type": "reads", "source": "sp:known", "target": "table:orders"},
             ],
         },
-    }
+    )
 
 
 def test_missing_name_returns_no_definition_and_opens_no_connection(monkeypatch: pytest.MonkeyPatch) -> None:

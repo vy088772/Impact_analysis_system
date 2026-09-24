@@ -12,27 +12,25 @@ from service import analyze_service, api, sql_cache_store
 from service.schemas import LocateObjectRequest, LocateObjectResponse
 from service.sql_cache_store import CacheIdentity
 from service.sql_execution_graph import GRAPH_VERSION
-from tests.sql_cache_fixtures import CacheRoot, write_cache
+from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache
 
 
 def _payload(
-    database: str, procedures=None, tables=None, graph_nodes=None, schema: str = "dbo"
+    database: str, procedures=(), tables=(), graph_nodes=None, schema: str = "dbo"
 ) -> dict:
-    return {
-        "database": database,
-        "schema": schema,
-        "procedures": procedures or [],
-        "views": [],
-        "functions": [],
-        "tables": tables or [],
-        "sql_execution_graph": {
+    return cache_payload(
+        database,
+        procedures=procedures,
+        tables=tables,
+        schema=schema,
+        graph={
             "graph_version": GRAPH_VERSION,
             "database": database,
             "nodes": graph_nodes or [],
             "relationships": [],
             "parse_errors": [],
         },
-    }
+    )
 
 
 # ------------------------------------------------------------- analyze_service seam
@@ -43,7 +41,7 @@ def test_a_matching_fresh_index_reports_the_database_as_matched() -> None:
         identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
         sql_cache_store._save(
             identity,
-            _payload("PUR", procedures=[{"name": "dbo.spAddRecordError", "definition": ""}]),
+            _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
         )
 
         response = analyze_service.locate_object(
@@ -62,7 +60,7 @@ def test_a_fresh_index_that_does_not_hold_the_name_prunes_the_database_from_both
         identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
         sql_cache_store._save(
             identity,
-            _payload("PUR", procedures=[{"name": "dbo.spSomethingElse", "definition": ""}]),
+            _payload("PUR", procedures={"dbo.spSomethingElse": {"definition": ""}}),
         )
 
         response = analyze_service.locate_object(
@@ -77,7 +75,7 @@ def test_a_fresh_index_that_does_not_hold_the_name_prunes_the_database_from_both
 def test_a_missing_index_file_puts_the_database_in_unindexed() -> None:
     with CacheRoot() as cache_root:
         identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
-        write_cache(cache_root, identity.key, _payload("PUR"))  # no .index.json written
+        write_cache(cache_root, identity, _payload("PUR"))  # no .index.json written
 
         response = analyze_service.locate_object(
             LocateObjectRequest(object_name="spAddRecordError", kind="sp")
@@ -95,7 +93,7 @@ def test_a_stale_index_puts_the_database_in_unindexed() -> None:
         identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
         sql_cache_store._save(
             identity,
-            _payload("PUR", procedures=[{"name": "dbo.spAddRecordError", "definition": ""}]),
+            _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
         )
         old = time.time() - 1000
         os.utime(cache_root / identity.index_filename, (old, old))
@@ -117,13 +115,13 @@ def test_the_reply_answers_for_every_cache_on_disk_in_one_call() -> None:
         missing_index = CacheIdentity.of("vmsystest09", "ETON", "dbo")
         sql_cache_store._save(
             matching,
-            _payload("PUR", procedures=[{"name": "dbo.spAddRecordError", "definition": ""}]),
+            _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
         )
         sql_cache_store._save(
             pruned,
-            _payload("STC", procedures=[{"name": "dbo.spSomethingElse", "definition": ""}]),
+            _payload("STC", procedures={"dbo.spSomethingElse": {"definition": ""}}),
         )
-        write_cache(cache_root, missing_index.key, _payload("ETON"))
+        write_cache(cache_root, missing_index, _payload("ETON"))
 
         response = analyze_service.locate_object(
             LocateObjectRequest(object_name="spAddRecordError", kind="sp")
@@ -142,7 +140,7 @@ def test_table_kind_normalizes_and_matches_the_table_bucket() -> None:
     with CacheRoot():
         identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
         sql_cache_store._save(
-            identity, _payload("PUR", tables=[{"name": "sales.Orders", "columns": [], "primary_keys": []}])
+            identity, _payload("PUR", tables={"sales.Orders": {"columns": [], "primary_keys": []}})
         )
 
         response = analyze_service.locate_object(
@@ -162,8 +160,8 @@ def test_table_kind_finds_a_table_reached_only_inside_a_stored_procedure_body() 
             identity,
             _payload(
                 "PUR",
-                procedures=[{"name": "spTouchesOrders", "definition": ""}],
-                tables=[{"name": "Customers", "columns": [], "primary_keys": []}],
+                procedures={"spTouchesOrders": {"definition": ""}},
+                tables={"Customers": {"columns": [], "primary_keys": []}},
                 graph_nodes=[
                     {"id": "table:dbo.Orders", "type": "table", "schema": "dbo", "name": "Orders"},
                 ],
@@ -184,10 +182,10 @@ def test_two_schemas_of_one_database_never_land_in_both_lists() -> None:
         matching = CacheIdentity.of("vmsystest07", "PUR", "dbo")
         sql_cache_store._save(
             matching,
-            _payload("PUR", procedures=[{"name": "dbo.spAddRecordError", "definition": ""}]),
+            _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
         )
         unindexed = CacheIdentity.of("vmsystest07", "PUR", "sales")
-        write_cache(cache_root, unindexed.key, _payload("PUR", schema="sales"))
+        write_cache(cache_root, unindexed, _payload("PUR", schema="sales"))
 
         response = analyze_service.locate_object(
             LocateObjectRequest(object_name="spAddRecordError", kind="sp")
@@ -208,7 +206,7 @@ def test_two_schemas_that_both_hold_the_name_report_the_database_once() -> None:
                 identity,
                 _payload(
                     "PUR",
-                    procedures=[{"name": f"{schema}.spAddRecordError", "definition": ""}],
+                    procedures={f"{schema}.spAddRecordError": {"definition": ""}},
                     schema=schema,
                 ),
             )
@@ -228,7 +226,7 @@ def test_two_schemas_that_are_both_unindexed_report_the_database_once() -> None:
     with CacheRoot() as cache_root:
         for schema in ("dbo", "sales"):
             identity = CacheIdentity.of("vmsystest07", "PUR", schema)
-            write_cache(cache_root, identity.key, _payload("PUR", schema=schema))
+            write_cache(cache_root, identity, _payload("PUR", schema=schema))
 
         response = analyze_service.locate_object(
             LocateObjectRequest(object_name="spAddRecordError", kind="sp")
@@ -251,7 +249,7 @@ def test_kind_matching_is_case_insensitive() -> None:
         identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
         sql_cache_store._save(
             identity,
-            _payload("PUR", procedures=[{"name": "dbo.spAddRecordError", "definition": ""}]),
+            _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
         )
 
         response = analyze_service.locate_object(
@@ -271,7 +269,7 @@ def test_a_file_with_an_incomplete_cache_identity_is_tolerated_not_a_crash() -> 
         matching = CacheIdentity.of("vmsystest07", "PUR", "dbo")
         sql_cache_store._save(
             matching,
-            _payload("PUR", procedures=[{"name": "dbo.spAddRecordError", "definition": ""}]),
+            _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
         )
         (cache_root / "stray.json").write_text("{}", encoding="utf-8")  # no server/database in the name
 
@@ -291,7 +289,7 @@ def test_the_endpoint_never_opens_a_sql_cache(monkeypatch) -> None:
         identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
         sql_cache_store._save(
             identity,
-            _payload("PUR", procedures=[{"name": "dbo.spAddRecordError", "definition": ""}]),
+            _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
         )
 
         def _fail(*args, **kwargs):

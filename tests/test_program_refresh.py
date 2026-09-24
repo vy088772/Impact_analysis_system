@@ -22,6 +22,7 @@ from code_analyzer.webconfig_connection_resolver import WebConfigConnections
 from service import analyze_service
 from service import scan_store
 from service.schemas import RefreshResponse
+from tests.sql_cache_fixtures import cache_payload
 
 
 def test_refresh_source_delegates_program_scope_without_full_rescan(monkeypatch, tmp_path) -> None:
@@ -1381,11 +1382,9 @@ def test_refresh_reconciliation_uses_database_scoped_sp_catalog(monkeypatch, tmp
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "procedures": [{"name": "dbo.usp_SaveOrder"}],
-        },
+        lambda database, schema, server="": cache_payload(
+            "OrdersDb", procedures=["dbo.usp_SaveOrder"]
+        ),
     )
 
     result = analyze_service.refresh_source(

@@ -11,6 +11,7 @@ from service import analyze_service
 from service.schemas import AnalyzeRequest, FindBySPRequest, FindByTableRequest, FlowChainRequest
 from service.sql_execution_graph import build_sql_execution_graph
 from tests.sql_cache_fixtures import (
+    cache_payload,
     case_variant_table_write_data,
     case_variant_temp_table_write_data,
 )
@@ -294,11 +295,7 @@ def test_find_by_table_reports_writes_regardless_of_stored_procedure_case(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "sql_execution_graph": graph,
-        },
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
     )
 
     response = analyze_service.find_by_table(
@@ -337,11 +334,7 @@ def test_find_by_table_keeps_a_real_write_behind_a_case_variant_temp_table_read(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "sql_execution_graph": graph,
-        },
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
     )
 
     response = analyze_service.find_by_table(
@@ -365,7 +358,7 @@ def test_find_by_table_write_only_uses_graph_writers(monkeypatch, tmp_path: Path
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.find_by_table(
@@ -409,16 +402,11 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "procedures": [
-                {"name": "dbo.usp_Direct"},
-                {"name": "dbo.usp_Entry"},
-                {"name": "dbo.usp_Nested"},
-            ],
-            "sql_execution_graph": _graph(),
-        },
+        lambda database, schema, server="": cache_payload(
+            "OrdersDb",
+            procedures=["dbo.usp_Direct", "dbo.usp_Entry", "dbo.usp_Nested"],
+            graph=_graph(),
+        ),
     )
 
     analyze_response = analyze_service.analyze(
@@ -526,7 +514,7 @@ def test_find_by_sp_accepts_schema_qualified_name(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.find_by_sp(
@@ -551,7 +539,7 @@ def test_find_by_sp_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_pat
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.find_by_sp(
@@ -581,7 +569,7 @@ def test_backward_flow_preserves_graph_path_and_ui_anchor(monkeypatch, tmp_path:
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.flow_chain(
@@ -620,7 +608,7 @@ def test_find_by_table_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.find_by_table(
@@ -649,7 +637,7 @@ def test_backward_flow_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.flow_chain(
@@ -678,7 +666,7 @@ def test_analyze_keeps_likely_invocation_diagnostic_out_of_formal_counts(monkeyp
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph()},
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=_graph()),
     )
 
     response = analyze_service.analyze(
@@ -750,12 +738,10 @@ def test_find_by_table_reports_unresolved_dynamic_sql_and_write_only_excludes_it
     mutation: `write_only=True` must still exclude it, and must say so via
     `excluded_count` instead of silently returning a shorter list.
     """
-    data = {
-        "database": "OrdersDb",
-        "schema": "dbo",
-        "procedures": [
-            {
-                "name": "dbo.usp_Dynamic",
+    data = cache_payload(
+        "OrdersDb",
+        procedures={
+            "dbo.usp_Dynamic": {
                 "definition": """CREATE PROCEDURE dbo.usp_Dynamic
 AS
 BEGIN
@@ -763,11 +749,8 @@ BEGIN
 END;
 """,
             },
-        ],
-        "views": [],
-        "functions": [],
-        "tables": [],
-    }
+        },
+    )
     graph = build_sql_execution_graph(data)
     scan = _scan_with_calls(
         tmp_path,
@@ -778,11 +761,7 @@ END;
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "sql_execution_graph": graph,
-        },
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
     )
 
     touches = analyze_service.find_by_table(
@@ -826,23 +805,18 @@ def test_find_by_table_reports_one_record_per_stored_procedure_reaching_the_tabl
     two different stored procedures reported only one of them, and the
     response did not say which, or that there were two.
     """
-    data = {
-        "database": "OrdersDb",
-        "schema": "dbo",
-        "procedures": [
-            {
-                "name": "dbo.usp_WriteA",
+    data = cache_payload(
+        "OrdersDb",
+        procedures={
+            "dbo.usp_WriteA": {
                 "definition": "CREATE PROCEDURE dbo.usp_WriteA AS INSERT INTO dbo.Ledger (Id) VALUES (1);",
             },
-            {
-                "name": "dbo.usp_WriteB",
+            "dbo.usp_WriteB": {
                 "definition": "CREATE PROCEDURE dbo.usp_WriteB AS UPDATE dbo.Ledger SET Id = 1;",
             },
-        ],
-        "views": [],
-        "functions": [],
-        "tables": [{"name": "dbo.Ledger"}],
-    }
+        },
+        tables=["dbo.Ledger"],
+    )
     graph = build_sql_execution_graph(data)
     scan = _scan_one_program_multiple_calls(
         tmp_path,
@@ -855,11 +829,7 @@ def test_find_by_table_reports_one_record_per_stored_procedure_reaching_the_tabl
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "sql_execution_graph": graph,
-        },
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
     )
 
     response = analyze_service.find_by_table(
@@ -887,23 +857,18 @@ def test_find_by_table_reports_a_read_and_a_write_from_the_same_program(
     through another. Both facts must survive -- the old file-keyed dedup kept
     only the write.
     """
-    data = {
-        "database": "OrdersDb",
-        "schema": "dbo",
-        "procedures": [
-            {
-                "name": "dbo.usp_ReadLedger",
+    data = cache_payload(
+        "OrdersDb",
+        procedures={
+            "dbo.usp_ReadLedger": {
                 "definition": "CREATE PROCEDURE dbo.usp_ReadLedger AS SELECT Id FROM dbo.Ledger;",
             },
-            {
-                "name": "dbo.usp_WriteLedger",
+            "dbo.usp_WriteLedger": {
                 "definition": "CREATE PROCEDURE dbo.usp_WriteLedger AS UPDATE dbo.Ledger SET Id = 1;",
             },
-        ],
-        "views": [],
-        "functions": [],
-        "tables": [{"name": "dbo.Ledger"}],
-    }
+        },
+        tables=["dbo.Ledger"],
+    )
     graph = build_sql_execution_graph(data)
     scan = _scan_one_program_multiple_calls(
         tmp_path,
@@ -916,11 +881,7 @@ def test_find_by_table_reports_a_read_and_a_write_from_the_same_program(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "sql_execution_graph": graph,
-        },
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
     )
 
     response = analyze_service.find_by_table(
@@ -1026,11 +987,7 @@ def test_find_by_table_reports_a_proven_read_beside_an_unproven_write_from_the_s
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "sql_execution_graph": graph,
-        },
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
     )
 
     all_access = analyze_service.find_by_table(
@@ -1074,19 +1031,15 @@ def test_find_by_table_collapses_two_identical_execution_paths_into_one_record(
     is not two facts. Both raw invocations here share every field, including
     the source span, so they produce the same `path_id`.
     """
-    data = {
-        "database": "OrdersDb",
-        "schema": "dbo",
-        "procedures": [
-            {
-                "name": "dbo.usp_WriteLedger",
+    data = cache_payload(
+        "OrdersDb",
+        procedures={
+            "dbo.usp_WriteLedger": {
                 "definition": "CREATE PROCEDURE dbo.usp_WriteLedger AS UPDATE dbo.Ledger SET Id = 1;",
             },
-        ],
-        "views": [],
-        "functions": [],
-        "tables": [{"name": "dbo.Ledger"}],
-    }
+        },
+        tables=["dbo.Ledger"],
+    )
     graph = build_sql_execution_graph(data)
     file_path = tmp_path / "LedgerPage.cs"
     duplicate_call = {
@@ -1116,11 +1069,7 @@ def test_find_by_table_collapses_two_identical_execution_paths_into_one_record(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "sql_execution_graph": graph,
-        },
+        lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
     )
 
     response = analyze_service.find_by_table(

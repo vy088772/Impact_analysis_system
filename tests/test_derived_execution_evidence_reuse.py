@@ -21,6 +21,7 @@ from code_analyzer.project_scanner import ProjectScanResult
 from service import analyze_service
 from service.schemas import FindBySPRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
+from tests.sql_cache_fixtures import cache_payload
 
 
 def _graph(*procedure_names: str) -> dict:
@@ -110,7 +111,7 @@ def _wire(
     itself -- that would force a fresh derivation on every request, defeating
     reuse for a reason unrelated to whatever a test is isolating.
     """
-    cache_payload = {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": graph}
+    sql_payload = cache_payload("OrdersDb", graph=graph)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_at)
@@ -118,7 +119,7 @@ def _wire(
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda database, schema, server="": cache_payload,
+        lambda database, schema, server="": sql_payload,
     )
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
@@ -256,16 +257,12 @@ def test_a_changed_repository_scan_causes_a_fresh_derivation(monkeypatch, tmp_pa
         # that instead of relying on `scans.pop(0)` handing back a new object,
         # since ticket 05 no longer keys freshness off object identity.
         scan_saved_ats = ["scan-v1", "scan-v2"]
-        cache_payload = {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "sql_execution_graph": _graph("usp_Alpha", "usp_Beta", "usp_Gamma"),
-        }
+        sql_payload = cache_payload("OrdersDb", graph=_graph("usp_Alpha", "usp_Beta", "usp_Gamma"))
         monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
         monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_ats.pop(0))
         monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
-        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": cache_payload)
+        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda database, schema, server="": sql_payload)
         monkeypatch.setattr(
             analyze_service.sql_cache_store, "cached_saved_at", lambda database, schema="dbo", server="": "sql-cache-v1"
         )
@@ -283,8 +280,8 @@ def test_a_changed_sql_cache_causes_a_fresh_derivation(monkeypatch, tmp_path: Pa
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
         payloads = [
-            {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph("usp_Alpha", "usp_Beta")},
-            {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": _graph("usp_Beta")},  # usp_Alpha drops out
+            cache_payload("OrdersDb", graph=_graph("usp_Alpha", "usp_Beta")),
+            cache_payload("OrdersDb", graph=_graph("usp_Beta")),  # usp_Alpha drops out
         ]
         # A real SQL cache refresh updates its recorded save time; this stub
         # mirrors that instead of relying on a swapped-in dict's object
@@ -347,7 +344,7 @@ def test_dropping_and_rereading_an_unchanged_sql_cache_does_not_rederive(
         monkeypatch.setattr(
             analyze_service.sql_cache_store,
             "load_cached",
-            lambda database, schema, server="": {"database": "OrdersDb", "schema": "dbo", "sql_execution_graph": graph},
+            lambda database, schema, server="": cache_payload("OrdersDb", graph=graph),
         )
         calls = _count_real_derivations(monkeypatch)
 

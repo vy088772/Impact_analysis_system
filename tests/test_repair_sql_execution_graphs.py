@@ -13,14 +13,14 @@ if str(PROJECT_ROOT) not in sys.path:
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 from service import sql_cache_store
 from service.sql_execution_graph import GRAPH_VERSION
-from tests.sql_cache_fixtures import CacheRoot, write_cache
+from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache
 from tools.repair_sql_execution_graphs import repair_all_caches, repair_cache_file
 
 
 TEST_SERVER = "vmsystest07"
 
 
-def _stale_payload(database: str = "TestDb") -> dict:
+def _stale_payload(database: str = "TestDb", graph_version: int = GRAPH_VERSION - 1) -> dict:
     definition = (
         "CREATE PROCEDURE dbo.usp_RepairMe AS\n"
         "BEGIN\n"
@@ -29,33 +29,28 @@ def _stale_payload(database: str = "TestDb") -> dict:
         "    EXEC(@sql);\n"
         "END;\n"
     )
-    return {
-        "database": database,
-        "schema": "dbo",
-        "procedures": [
-            {"name": "usp_RepairMe", "definition": definition, "parameters": []}
-        ],
-        "views": [],
-        "functions": [],
-        "tables": [{"name": "RepairTarget", "columns": []}],
+    return cache_payload(
+        database,
+        procedures={"usp_RepairMe": {"definition": definition, "parameters": []}},
+        tables={"RepairTarget": {"columns": []}},
         # A graph built under the old (pre-repair) version, with an offset
         # that would be wrong under the old corrupting write path — the
         # repair rebuilds it from the (already-correct) definition text
         # above rather than trusting anything already stored here.
-        "sql_execution_graph": {
-            "graph_version": GRAPH_VERSION - 1,
+        graph={
+            "graph_version": graph_version,
             "database": database,
             "nodes": [],
             "relationships": [],
             "parse_errors": [],
         },
-    }
+    )
 
 
 def _write_stale_fixture(cache_root: Path, database: str = "TestDb") -> Path:
-    key = sql_cache_store.CacheIdentity.of(TEST_SERVER, database, "dbo").key
-    write_cache(cache_root, key, _stale_payload(database))
-    return cache_root / f"{key}.json"
+    identity = sql_cache_store.CacheIdentity.of(TEST_SERVER, database, "dbo")
+    write_cache(cache_root, identity, _stale_payload(database))
+    return cache_root / identity.filename
 
 
 def test_repair_rebuilds_a_stale_cache_to_the_current_graph_version() -> None:
@@ -172,11 +167,10 @@ def test_repair_cache_file_skips_an_already_current_cache() -> None:
     host.ensure_ready()
 
     with CacheRoot() as cache_root:
-        payload = _stale_payload()
-        payload["sql_execution_graph"]["graph_version"] = GRAPH_VERSION
-        key = sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo").key
-        write_cache(cache_root, key, payload)
-        data_path = cache_root / f"{key}.json"
+        payload = _stale_payload(graph_version=GRAPH_VERSION)
+        identity = sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")
+        write_cache(cache_root, identity, payload)
+        data_path = cache_root / identity.filename
         raw_before = data_path.read_bytes()
 
         entry = repair_cache_file(data_path, host, PROJECT_ROOT)

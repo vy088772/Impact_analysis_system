@@ -13,7 +13,7 @@ from code_analyzer.csharp_analysis_gateway import (
 )
 from service.execution_path_builder import build_execution_paths
 from service.sql_execution_graph import build_sql_execution_graph
-from tests.sql_cache_fixtures import assert_relationships_resolve_to_known_nodes
+from tests.sql_cache_fixtures import assert_relationships_resolve_to_known_nodes, cache_payload
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -107,12 +107,10 @@ END;
 
 
 def test_sql_graph_expands_nested_calls_and_keeps_dynamic_sql_unresolved() -> None:
-    data = {
-        "database": "OrdersDb",
-        "schema": "dbo",
-        "procedures": [
-            {
-                "name": "dbo.usp_Parent",
+    data = cache_payload(
+        "OrdersDb",
+        procedures={
+            "dbo.usp_Parent": {
                 "definition": """CREATE PROCEDURE dbo.usp_Parent
 AS
 BEGIN
@@ -124,8 +122,7 @@ BEGIN
 END;
 """,
             },
-            {
-                "name": "dbo.usp_Child",
+            "dbo.usp_Child": {
                 "definition": """CREATE PROCEDURE dbo.usp_Child
 AS
 BEGIN
@@ -136,11 +133,9 @@ BEGIN
 END;
 """,
             },
-        ],
-        "views": [],
-        "functions": [],
-        "tables": [{"name": "dbo.OrderItem"}],
-    }
+        },
+        tables=["dbo.OrderItem"],
+    )
 
     graph = build_sql_execution_graph(data)
     assert_relationships_resolve_to_known_nodes(graph)
@@ -173,12 +168,10 @@ END;
 
 def test_execution_paths_expand_nested_sql_calls_into_branch_specific_terminals() -> None:
     graph = build_sql_execution_graph(
-        {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "procedures": [
-                {
-                    "name": "dbo.usp_Parent",
+        cache_payload(
+            "OrdersDb",
+            procedures={
+                "dbo.usp_Parent": {
                     "definition": """CREATE PROCEDURE dbo.usp_Parent
 AS
 BEGIN
@@ -190,8 +183,7 @@ BEGIN
 END;
 """,
                 },
-                {
-                    "name": "dbo.usp_Child",
+                "dbo.usp_Child": {
                     "definition": """CREATE PROCEDURE dbo.usp_Child
 AS
 BEGIN
@@ -202,11 +194,9 @@ BEGIN
 END;
 """,
                 },
-            ],
-            "views": [],
-            "functions": [],
-            "tables": [{"name": "dbo.OrderItem"}],
-        }
+            },
+            tables=["dbo.OrderItem"],
+        )
     )
     assert_relationships_resolve_to_known_nodes(graph)
     invocation = DbInvocation(
@@ -245,12 +235,10 @@ END;
 
 def test_sql_graph_preserves_cte_temp_lineage_and_typed_view_function_usage() -> None:
     graph = build_sql_execution_graph(
-        {
-            "database": "OrdersDb",
-            "schema": "dbo",
-            "procedures": [
-                {
-                    "name": "dbo.usp_Lineage",
+        cache_payload(
+            "OrdersDb",
+            procedures={
+                "dbo.usp_Lineage": {
                     "definition": """CREATE PROCEDURE dbo.usp_Lineage
 AS
 BEGIN
@@ -263,22 +251,20 @@ BEGIN
     SELECT Id FROM dbo.fn_OrderItems();
 END;
 """,
-                }
-            ],
-            "views": [
-                {
-                    "name": "dbo.vOrder",
+                },
+            },
+            views={
+                "dbo.vOrder": {
                     "definition": "CREATE VIEW dbo.vOrder AS SELECT Id FROM dbo.OrderItem;",
-                }
-            ],
-            "functions": [
-                {
-                    "name": "dbo.fn_OrderItems",
+                },
+            },
+            functions={
+                "dbo.fn_OrderItems": {
                     "definition": "CREATE FUNCTION dbo.fn_OrderItems() RETURNS TABLE AS RETURN (SELECT Id FROM dbo.OrderItem);",
-                }
-            ],
-            "tables": [{"name": "dbo.OrderItem"}],
-        }
+                },
+            },
+            tables=["dbo.OrderItem"],
+        )
     )
 
     assert_relationships_resolve_to_known_nodes(graph)
