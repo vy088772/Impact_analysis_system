@@ -1,0 +1,76 @@
+{
+  "object_names": [
+    {
+      "input": "Orders",
+      "database": "",
+      "schema": "",
+      "name": "Orders",
+      "bare_key": "orders",
+      "full_key": "..orders"
+    },
+    {
+      "input": "dbo.Orders",
+      "database": "",
+      "schema": "dbo",
+      "name": "Orders",
+      "bare_key": "orders",
+      "full_key": ".dbo.orders"
+    },
+    {
+      "input": "PUR.dbo.Orders",
+      "database": "PUR",
+      "schema": "dbo",
+      "name": "Orders",
+      "bare_key": "orders",
+      "full_key": "pur.dbo.orders"
+    },
+    {
+      "input": "[PUR].[dbo].[Orders]",
+      "database": "PUR",
+      "schema": "dbo",
+      "name": "Orders",
+      "bare_key": "orders",
+      "full_key": "pur.dbo.orders"
+    },
+    {
+      "input": "PUR..Orders",
+      "database": "PUR",
+      "schema": "",
+      "name": "Orders",
+      "bare_key": "orders",
+      "full_key": "pur..orders"
+    },
+    {
+      "input": "srv.PUR.dbo.Users",
+      "database": "PUR",
+      "schema": "dbo",
+      "name": "Users",
+      "bare_key": "users",
+      "full_key": "pur.dbo.users"
+    },
+    {
+      "input": " [Sales] . [Straße] ",
+      "database": "",
+      "schema": "Sales",
+      "name": "Straße",
+      "bare_key": "strasse",
+      "full_key": ".sales.strasse"
+    },
+    {
+      "input": "usp_Load",
+      "database": "",
+      "schema": "",
+      "name": "usp_Load",
+      "bare_key": "usp_load",
+      "full_key": "..usp_load"
+    },
+    {
+      "input": "[COMMON].[usp_Load]",
+      "database": "",
+      "schema": "COMMON",
+      "name": "usp_Load",
+      "bare_key": "usp_load",
+      "full_key": ".common.usp_load"
+    }
+  ]
+}
