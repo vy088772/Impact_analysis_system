@@ -145,6 +145,60 @@ def test_a_cache_identity_rejects_an_unknown_database() -> None:
         CacheIdentity.of("vmsystest07", "")
 
 
+def test_the_reverse_parse_reads_a_three_part_stem_back_into_its_identity() -> None:
+    assert CacheIdentity.from_key("vmsystest07.topmost.com.tw__PUR__dbo") == CacheIdentity(
+        "vmsystest07.topmost.com.tw", "PUR", "dbo"
+    )
+
+
+def test_the_reverse_parse_returns_nothing_for_a_stem_that_names_no_identity() -> None:
+    assert CacheIdentity.from_key("stray") is None
+    assert CacheIdentity.from_key("STC__dbo") is None
+    assert CacheIdentity.from_key("__PUR__dbo") is None
+
+
+# ------------------------------------------------------- the directory listing
+
+
+def test_the_directory_listing_returns_the_data_file_alone_beside_its_siblings() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        sql_cache_store._save(identity, _payload("PUR"))
+        assert (cache_root / identity.meta_filename).exists()  # sanity: all three files
+        assert (cache_root / identity.index_filename).exists()
+
+        rows = sql_cache_store.list_cache_files()
+
+        assert [(row.data_path.name, row.identity) for row in rows] == [
+            ("vmsystest07.topmost.com.tw__PUR__dbo.json", identity)
+        ]
+
+
+def test_the_directory_listing_returns_an_empty_identity_for_a_file_that_names_none() -> None:
+    with CacheRoot() as cache_root:
+        (cache_root / "stray.json").write_text("{}", encoding="utf-8")
+        (cache_root / "vmsystest07__PUR__dbo.json").write_text("{}", encoding="utf-8")
+
+        rows = sql_cache_store.list_cache_files()
+
+        assert [(row.data_path.name, row.identity) for row in rows] == [
+            ("stray.json", None),
+            ("vmsystest07__PUR__dbo.json", None),
+        ]
+
+
+def test_the_server_is_found_for_a_database_name_that_holds_the_separator() -> None:
+    with CacheRoot() as cache_root:
+        write_cache(
+            cache_root,
+            CacheIdentity.of("vmsystest07", "Y__Docs", "dbo"),
+            _payload("Y__Docs"),
+        )
+
+        assert sql_cache_store.resolve_server("Y__Docs", "dbo") == "vmsystest07.topmost.com.tw"
+        assert sql_cache_store.load_cached("Y__Docs", "dbo")["database"] == "Y__Docs"
+
+
 # ------------------------------------------------------- catalog membership
 
 

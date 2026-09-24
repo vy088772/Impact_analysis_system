@@ -125,13 +125,7 @@ def _key_of(*parts: str) -> str:
 
 
 def _parse_key(stem: str) -> tuple[str, str, str]:
-    """_key_of() 的反操作：把一個快取檔名（去掉副檔名後）拆回 (server, database, schema)。
-
-    快取檔名的形狀只在 _key_of() 這一處定義；這裡是它唯一的反解出口，供
-    list_caches() 在 meta 檔缺失/無法讀取、需要從檔名反推身分時使用，避免
-    這條反解邏輯散落、各自重寫一份。server 一律在最前、schema 一律在最後，
-    中間全部併回 database——database 本身含 `__` 時也能正確反解。
-    """
+    """記憶體快取淘汰訊息用：把一個快取鍵拆回 (server, database, schema)。"""
     parts = stem.split(_KEY_SEPARATOR)
     if len(parts) >= 3:
         return parts[0], _KEY_SEPARATOR.join(parts[1:-1]), parts[-1]
@@ -186,6 +180,22 @@ class CacheIdentity:
             )
         return cls(normalized_server, database, schema)
 
+    @classmethod
+    def from_key(cls, stem: str) -> Optional["CacheIdentity"]:
+        """key 的反操作：把一個快取檔名（去掉副檔名後）拆回它命名的身分。
+
+        server 一律在最前、schema 一律在最後，中間全部併回 database——database
+        本身含 `__` 時也能正確反解。拆不出三段、或拆出來的 server/database 建不出
+        身分時回傳 None：寧可說「這個檔名不是快取」，也不回報一個殘缺的身分。
+        """
+        parts = stem.split(_KEY_SEPARATOR)
+        if len(parts) < 3:
+            return None
+        try:
+            return cls.of(parts[0], _KEY_SEPARATOR.join(parts[1:-1]), parts[-1])
+        except ValueError:
+            return None
+
     @property
     def key(self) -> str:
         return _key_of(self.server, self.database, self.schema)
@@ -218,6 +228,50 @@ def _index_path(identity: CacheIdentity) -> Path:
     return _cache_root() / identity.index_filename
 
 
+@dataclass(frozen=True)
+class CacheFile:
+    """list_cache_files() 的一列：一個候選快取資料檔，以及命名它的身分。
+
+    identity 為 None 代表檔名不是任何身分會寫出的名字（例如手動放進來的檔案、
+    或舊格式的快取鍵）。要修檔的呼叫端與要列清單的呼叫端差別只在拿到這一列
+    之後怎麼處理，判斷「哪些檔案是快取」這件事只在 list_cache_files() 做一次。
+    """
+
+    data_path: Path
+    identity: Optional[CacheIdentity]
+
+
+def list_cache_files() -> List[CacheFile]:
+    """列出快取目錄裡每一個候選資料檔；本模組讀取快取目錄的唯一出口。
+
+    Scan Record（.meta.json）與 Object Location Index（.index.json）也以 .json
+    結尾，這裡排除它們，不產生任何一列。其餘每個 .json 檔都產生一列：身分用
+    來回比對決定——從檔名拆出身分、由那個身分組回它自己的資料檔名，兩者相同
+    才算這個身分命名的檔案。來回比對本身擋不掉 sibling 檔（索引檔的檔名會拆成
+    schema 以 `.index` 結尾的身分，而那個身分又剛好組回索引檔的檔名），所以
+    副檔名排除必須留在這裡。依檔名排序回傳。
+    """
+    rows: List[CacheFile] = []
+    for data_path in sorted(_cache_root().glob(f"*{_DATA_SUFFIX}")):
+        name = data_path.name
+        if name.endswith(_META_SUFFIX) or name.endswith(_INDEX_SUFFIX):
+            continue
+        identity = CacheIdentity.from_key(name[: -len(_DATA_SUFFIX)])
+        if identity is not None and identity.filename != name:
+            identity = None
+        rows.append(CacheFile(data_path=data_path, identity=identity))
+    return rows
+
+
+def _same_file_part(actual: str, expected: str) -> bool:
+    """快取檔名的一段是否等於呼叫端給的名字：比的是安全化後的檔名片段，不分大小寫。
+
+    檔名反解出來的是 _safe_name() 之後的片段，所以呼叫端的名字也先安全化再比；
+    不分大小寫則跟快取所在的 Windows 檔案系統、以及 _load() 的 _same_scope() 一致。
+    """
+    return _safe_name(actual).casefold() == _safe_name(expected).casefold()
+
+
 def resolve_server(database: str, schema: str = "dbo") -> str:
     """呼叫端只知道 database 名稱時，從磁碟上唯一一份快取回推它的 server。
 
@@ -233,12 +287,13 @@ def resolve_server(database: str, schema: str = "dbo") -> str:
     database = str(database or "").strip()
     if not database:
         return ""
-    suffix = f"{_KEY_SEPARATOR}{_key_of(database, schema)}{_DATA_SUFFIX}"
     servers = sorted(
         {
-            path.name[: -len(suffix)]
-            for path in _cache_root().glob(f"*{suffix}")
-            if not path.name.endswith(_META_SUFFIX) and len(path.name) > len(suffix)
+            row.identity.server
+            for row in list_cache_files()
+            if row.identity is not None
+            and _same_file_part(row.identity.database, database)
+            and _same_file_part(row.identity.schema, schema)
         }
     )
     if len(servers) != 1:
@@ -255,8 +310,10 @@ def resolve_server(database: str, schema: str = "dbo") -> str:
 class ScanRecordListing:
     """list_caches() 的一列：一份 SQL 快取的身分與 Scan Record（掃描時間）。
 
-    與 CacheIdentity 不同——這裡不正規化也不驗證，純粹反映磁碟上讀到的內容，
-    連身分不完整的異常檔案都要能被列出（規格要求「never omitted from listing」）。
+    server/database/schema 不正規化也不驗證，純粹反映磁碟上讀到的內容，連身分
+    不完整的異常檔案都要能被列出（規格要求「never omitted from listing」）。
+    identity 是檔名命名的 CacheIdentity；檔名不是任何身分會寫出的名字時為 None，
+    這時 database 帶著檔名主幹，讓操作者看得到這個認不得的檔案。
     scanned_at 為 None 代表 Scan Record 缺失或無法讀取，不是「從未掃描」與
     「讀不到」的混淆表達——呼叫端據此決定要不要顯示「never scanned」。
     """
@@ -265,39 +322,38 @@ class ScanRecordListing:
     database: str
     schema: str
     scanned_at: Optional[str]
+    identity: Optional[CacheIdentity] = None
 
 
 def list_caches() -> List[ScanRecordListing]:
     """列出磁碟上每一份 SQL 快取的 (server, database, schema) 與 Scan Record。
 
     純目錄列舉，不連線 SQL Server、不觸發掃描、不修改任何快取檔案；供
-    GET /scan_records 這個唯讀端點使用。判準與 has_cache() 完全一致：資料檔
-    （.json，非 .meta.json）存在即列出。Database Registry 完全不參與判斷——
-    一份用 --server/--database 直接掃描、Registry 裡沒登記的快取，一樣會出現
-    在這份清單裡。
+    GET /scan_records 這個唯讀端點使用。哪些檔案是快取由 list_cache_files()
+    決定，這裡不另外過濾副檔名。Database Registry 完全不參與判斷——一份用
+    --server/--database 直接掃描、Registry 裡沒登記的快取，一樣會出現在這份
+    清單裡；檔名認不得身分的檔案也照樣列出，database 欄位放檔名主幹。
 
     每一列的 scan 時間來自同目錄下的 sibling meta 檔（.meta.json）；meta 檔
     缺失或無法解析時該列仍然列出，scanned_at 回 None，而不是整列被跳過。
-    身分欄位優先採 meta 檔內容（較不受檔名安全化規則影響），meta 讀不到或某
-    欄位缺漏時才退回從檔名反推。
+    身分欄位優先採 meta 檔內容，而且照寫照收、不經過 CacheIdentity.of()——
+    手動改壞的 Scan Record 只該讓這一列看起來怪，不該讓整個端點失敗；meta
+    讀不到或某欄位缺漏時才退回檔名。
 
     回傳依 (server, database, schema) 排序，讓同一份清單在多次呼叫間穩定
     （不受掃描先後影響）。
     """
-    root = _cache_root()
     rows: List[ScanRecordListing] = []
-    for data_path in root.glob(f"*{_DATA_SUFFIX}"):
-        name = data_path.name
-        # Both the Scan Record (.meta.json) and the Object Location Index
-        # (.index.json) end in ".json" too, so the glob above matches them —
-        # only the bare data file is a cache.
-        if name.endswith(_META_SUFFIX) or name.endswith(_INDEX_SUFFIX):
-            continue
-        stem = name[: -len(_DATA_SUFFIX)]
-        server, database, schema = _parse_key(stem)
+    for cache_file in list_cache_files():
+        identity = cache_file.identity
+        stem = cache_file.data_path.name[: -len(_DATA_SUFFIX)]
+        if identity is not None:
+            server, database, schema = identity.server, identity.database, identity.schema
+        else:
+            server, database, schema = "", stem, ""
 
         scanned_at: Optional[str] = None
-        meta_path = data_path.with_name(f"{stem}{_META_SUFFIX}")
+        meta_path = cache_file.data_path.with_name(f"{stem}{_META_SUFFIX}")
         try:
             info = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
@@ -311,7 +367,13 @@ def list_caches() -> List[ScanRecordListing]:
                 scanned_at = str(saved_at)
 
         rows.append(
-            ScanRecordListing(server=server, database=database, schema=schema, scanned_at=scanned_at)
+            ScanRecordListing(
+                server=server,
+                database=database,
+                schema=schema,
+                scanned_at=scanned_at,
+                identity=identity,
+            )
         )
     rows.sort(key=lambda row: (row.server, row.database, row.schema))
     return rows

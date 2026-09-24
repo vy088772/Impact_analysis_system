@@ -54,7 +54,7 @@ def test_repair_rebuilds_a_stale_cache_to_the_current_graph_version() -> None:
     with CacheRoot() as cache_root:
         data_path = _write_stale_fixture(cache_root)
 
-        results = repair_all_caches(cache_root, host=host, project_root=PROJECT_ROOT)
+        results = repair_all_caches(host=host, project_root=PROJECT_ROOT)
 
         assert [entry["action"] for entry in results] == ["repaired"]
         assert results[0]["old_graph_version"] == GRAPH_VERSION - 1
@@ -90,7 +90,7 @@ def test_repaired_cache_is_accepted_by_the_normal_load_path() -> None:
         _write_stale_fixture(cache_root)
         assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is None
 
-        repair_all_caches(cache_root, host=host, project_root=PROJECT_ROOT)
+        repair_all_caches(host=host, project_root=PROJECT_ROOT)
 
         assert sql_cache_store.load_cached("TestDb", "dbo", server=TEST_SERVER) is not None
 
@@ -103,7 +103,7 @@ def test_repair_only_touches_the_graph_field() -> None:
         data_path = _write_stale_fixture(cache_root)
         before = json.loads(data_path.read_text(encoding="utf-8"))
 
-        repair_all_caches(cache_root, host=host, project_root=PROJECT_ROOT)
+        repair_all_caches(host=host, project_root=PROJECT_ROOT)
 
         after_bytes = data_path.read_bytes()
         after = json.loads(after_bytes.decode("utf-8"))
@@ -135,7 +135,7 @@ def test_repair_dry_run_changes_nothing_on_disk() -> None:
         raw_before = data_path.read_bytes()
 
         results = repair_all_caches(
-            cache_root, host=host, project_root=PROJECT_ROOT, dry_run=True
+            host=host, project_root=PROJECT_ROOT, dry_run=True
         )
 
         assert [entry["action"] for entry in results] == ["would_repair"]
@@ -149,11 +149,50 @@ def test_repair_is_idempotent_once_a_cache_is_current() -> None:
     with CacheRoot() as cache_root:
         _write_stale_fixture(cache_root)
 
-        first = repair_all_caches(cache_root, host=host, project_root=PROJECT_ROOT)
-        second = repair_all_caches(cache_root, host=host, project_root=PROJECT_ROOT)
+        first = repair_all_caches(host=host, project_root=PROJECT_ROOT)
+        second = repair_all_caches(host=host, project_root=PROJECT_ROOT)
 
         assert [entry["action"] for entry in first] == ["repaired"]
         assert [entry["action"] for entry in second] == ["already_current"]
+
+
+def test_repair_runs_to_the_end_beside_an_object_location_index() -> None:
+    """The index sorts before its data file, and its table entries are strings."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with CacheRoot() as cache_root:
+        identity = sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")
+        payload = _stale_payload()
+        write_cache(cache_root, identity, payload)
+        sql_cache_store.write_object_location_index(
+            identity, sql_cache_store.build_object_location_index(identity, payload)
+        )
+        index_path = cache_root / identity.index_filename
+        index_before = index_path.read_bytes()
+
+        results = repair_all_caches(host=host, project_root=PROJECT_ROOT)
+
+        assert [(Path(entry["path"]).name, entry["action"]) for entry in results] == [
+            ("vmsystest07.topmost.com.tw__TestDb__dbo.json", "repaired")
+        ]
+        assert index_path.read_bytes() == index_before
+
+
+def test_repair_reports_and_skips_a_file_that_names_no_identity() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with CacheRoot() as cache_root:
+        (cache_root / "stray.json").write_text("{}", encoding="utf-8")
+        data_path = _write_stale_fixture(cache_root)
+
+        results = repair_all_caches(host=host, project_root=PROJECT_ROOT)
+
+        assert [(Path(entry["path"]).name, entry["action"]) for entry in results] == [
+            ("stray.json", "bad_identity"),
+            (data_path.name, "repaired"),
+        ]
 
 
 def test_repair_cache_file_skips_an_already_current_cache() -> None:

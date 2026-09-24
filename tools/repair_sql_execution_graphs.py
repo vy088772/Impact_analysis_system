@@ -27,10 +27,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost  # noqa: E402
+from service import sql_cache_store  # noqa: E402
 from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph  # noqa: E402
-
-_DATA_SUFFIX = ".json"
-_META_SUFFIX = ".meta.json"
 
 
 def _existing_graph_version(payload: object) -> Optional[int]:
@@ -83,7 +81,7 @@ def repair_cache_file(
     payload["sql_execution_graph"] = build_sql_execution_graph(
         payload, host=host, project_root=project_root
     )
-    # 整份重新 json.dumps() 而不像 migrate_sql_cache_keys.py 那樣定點取代位元組：
+    # 整份重新 json.dumps() 而不定點取代位元組：
     # 這裡換的是一個巢狀 JSON 物件（graph），不是單一純量值，定點取代等於要自己
     # 重寫一個 JSON 解析器去找對應的大括號，脆弱得不划算。之所以其餘欄位仍然
     # 「等同於原封不動」，是因為磁碟上每一份快取本來就只由 sql_cache_store._save()
@@ -96,22 +94,34 @@ def repair_cache_file(
 
 
 def repair_all_caches(
-    cache_root: Path,
     host: Optional[StaticAnalyzerHost] = None,
     project_root: Optional[Path] = None,
     dry_run: bool = False,
 ) -> List[Dict[str, Any]]:
-    """修好 cache_root 底下每一份 SQL 快取；回傳每一筆的處理結果。"""
-    cache_root = Path(cache_root)
+    """修好目前快取根目錄底下每一份 SQL 快取；回傳每一筆的處理結果。
+
+    哪些檔案是快取只問 sql_cache_store.list_cache_files()，這裡不留自己的副檔名
+    清單——自己留一份時漏了 .index.json，索引檔排在資料檔前面又不是快取格式，
+    第一個檔案就讓整批搬移中斷。檔名認不得身分的檔案回報後略過；認得身分、
+    重建卻失敗的檔案是缺陷，照樣讓整批中斷。
+    """
     project_root = project_root or PROJECT_ROOT
     host = host or StaticAnalyzerHost.for_project(project_root)
     host.ensure_ready()
 
     results: List[Dict[str, Any]] = []
-    for data_path in sorted(cache_root.glob(f"*{_DATA_SUFFIX}")):
-        if data_path.name.endswith(_META_SUFFIX):
+    for cache_file in sql_cache_store.list_cache_files():
+        if cache_file.identity is None:
+            results.append(
+                {
+                    "path": str(cache_file.data_path),
+                    "action": "bad_identity",
+                    "old_graph_version": None,
+                    "new_graph_version": GRAPH_VERSION,
+                }
+            )
             continue
-        results.append(repair_cache_file(data_path, host, project_root, dry_run))
+        results.append(repair_cache_file(cache_file.data_path, host, project_root, dry_run))
     return results
 
 
@@ -129,14 +139,17 @@ def main() -> None:
 
     from config.settings import settings
 
-    cache_root = Path(args.cache_root or settings.SQL_CACHE_ROOT)
-    results = repair_all_caches(cache_root, dry_run=args.dry_run)
+    if args.cache_root:
+        settings.SQL_CACHE_ROOT = args.cache_root
+
+    results = repair_all_caches(dry_run=args.dry_run)
     labels = {
         "repaired": "✅ 已修好",
         "would_repair": "🔎 將修好",
         "already_current": "⏭️  已是目前版本，略過",
         "unreadable": "⚠️  讀取失敗",
         "not_a_cache": "⚠️  非快取格式，略過",
+        "bad_identity": "⚠️  身分無法辨識，略過",
     }
     for entry in results:
         action = str(entry["action"])
