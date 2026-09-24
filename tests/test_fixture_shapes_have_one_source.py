@@ -123,14 +123,14 @@ def violations(source: str, file_name: str) -> dict[str, list[int]]:
 
 def _test_files() -> list[Path]:
     own_file = Path(__file__).resolve()
-    return sorted(path for path in TEST_DIRECTORY.glob("*.py") if path.resolve() != own_file)
+    return sorted(path for path in TEST_DIRECTORY.rglob("*.py") if path.resolve() != own_file)
 
 
 def _breaks_of(rule: str) -> list[str]:
     breaks = []
     for path in _test_files():
         for line in violations(path.read_text(encoding="utf-8"), path.name)[rule]:
-            breaks.append(f"{path.name}:{line}")
+            breaks.append(f"{path.relative_to(TEST_DIRECTORY)}:{line}")
     return breaks
 
 

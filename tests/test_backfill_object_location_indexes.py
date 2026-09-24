@@ -14,7 +14,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from service import sql_cache_store
 from service.sql_cache_store import CacheIdentity
-
 from tests.sql_cache_fixtures import CacheRoot, cache_payload, execution_graph, write_cache
 from tools.backfill_object_location_indexes import backfill_all_caches, backfill_cache_row
 
