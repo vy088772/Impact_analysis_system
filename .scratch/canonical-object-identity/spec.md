@@ -1912,8 +1912,9 @@ states a database and skips the schema, which is the case that produced the
 covers a function-call reference.
 
 This seam also covers the common-table-expression exclusion. One statement
-defines a common table expression `X` and reads `dbo.X`. The test asserts that
-the host drops `dbo.X`. This case lands in the analyzer commit, and it proves
+defines two common table expressions, `X` and `Y`. The body of `Y` reads
+`dbo.X`, and the main query reads `Y`. The test asserts that the host drops
+`dbo.X` and keeps `Y` as a table read. This case lands in the analyzer commit, and it proves
 that deleting the composed comparison changes no output. It also pins the defect
 that Out of Scope records. A later fix fails this case first, and that failure
 tells the fixer to correct Out of Scope.
@@ -2018,9 +2019,22 @@ change.
   target is still not recorded, and that rule is what keeps built-in functions
   out of the graph. It is not a default-schema defect.
 - The common-table-expression exclusion keeps its current behaviour. The host
-  drops a reference when its bare name matches a common table expression in the
-  same statement, even when the reference states a schema. This spec records
-  that and does not fix it early, because one step carries one behaviour change.
+  reads only the names of the common table expressions inside the fragment it
+  walks. One statement's common-table-expression bodies are one fragment, and
+  its main query is another. So a read inside one body is dropped when its bare
+  name matches another common table expression of that statement, even when the
+  read states a schema. A read of a common table expression in the main query
+  stays a table read, and it creates a table node that no Database holds. In
+  the five caches of 2026-09-24, only PUR holds such nodes: 22 of them, with 193
+  direct reads in 114 modules. This spec records both and does not fix them
+  early, because one step carries one behaviour change. The spec
+  `analyzer-resolves-dml-targets` owns them. Ticket 06 found this: an earlier
+  draft of this bullet said the exclusion covered the whole statement.
+- The host records the alias of an `UPDATE` or `DELETE` target as the written
+  table, for example `A` in `UPDATE A ... FROM Annual AS A`. The real table
+  stays a read. This loses a write, and ADR-0012 prefers an over-reported write
+  to a lost one. This spec does not fix it, for the same reason. The spec
+  `analyzer-resolves-dml-targets` owns it and states the measurement.
 - The referenced node keeps its two-part identity. Two Databases that hold one
   bare name still share one node. Step 2b separates them in the full keys of an
   Execution Path, which read the database from each relationship. The node
