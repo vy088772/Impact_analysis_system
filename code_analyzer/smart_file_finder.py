@@ -10,6 +10,8 @@ from typing import List, Dict, Set, Optional
 from dataclasses import dataclass, field
 import fnmatch
 
+from canonical_object_identity import bare_name
+
 
 @dataclass
 class FileSearchResult:
@@ -372,7 +374,7 @@ class SmartFileFinder:
             if all_sql_queries:
                 unique_tables = set()
                 for sql_query in all_sql_queries:
-                    unique_tables.update(sql_query.tables)
+                    unique_tables.update(bare_name(table) for table in sql_query.tables)
                 
                 if unique_tables:
                     print(f"\n📊 涉及的資料表 ({len(unique_tables)}):")

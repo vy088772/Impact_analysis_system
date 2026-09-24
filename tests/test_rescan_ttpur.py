@@ -2,6 +2,7 @@
 import sys
 sys.path.insert(0, 'D:\\pratice\\Python\\Impact_analysis_system')
 
+from canonical_object_identity import bare_name
 from code_analyzer.project_scanner import ProjectScanner
 from code_analyzer.report_generator import HTMLReportGenerator
 from pathlib import Path
@@ -37,12 +38,12 @@ try:
     
     print(f"\ndefault.aspx.cs 的資料表關聯 ({len(default_tables)} 個):")
     for rel in default_tables:
-        print(f"  - {rel.table_name:20s} | 資料庫: {rel.database:10s} | {rel.access_type}")
+        print(f"  - {bare_name(rel.table):20s} | 資料庫: {rel.database:10s} | {rel.access_type}")
     
     # 檢查是否還有 DBO 作為資料表
     dbo_tables = [
         rel for rel in result.table_relations 
-        if rel.table_name.upper() == 'DBO'
+        if bare_name(rel.table).upper() == 'DBO'
     ]
     
     print(f"\n檢查 DBO 是否還被識別為資料表:")
@@ -62,7 +63,7 @@ try:
     print(f"\n資料庫來源為 'unknown' 的資料表 ({len(unknown_tables)} 個):")
     if unknown_tables:
         for rel in unknown_tables[:5]:
-            print(f"  - {rel.table_name:20s} | 檔案: {Path(rel.csharp_file).name:25s} | SQL: {rel.sql_preview[:40]}...")
+            print(f"  - {bare_name(rel.table):20s} | 檔案: {Path(rel.csharp_file).name:25s} | SQL: {rel.sql_preview[:40]}...")
     else:
         print("  ✅ 所有資料表都已識別資料庫")
     

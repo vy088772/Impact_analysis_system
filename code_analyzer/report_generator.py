@@ -10,6 +10,8 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from collections import Counter
 
+from canonical_object_identity import bare_name
+
 from .project_scanner import ProjectScanResult, CSharpSPRelation, CSharpTableRelation
 
 
@@ -675,12 +677,13 @@ class HTMLReportGenerator:
         table_groups = {}
         
         for rel in self.scan_result.table_relations:
-            key = (rel.database, rel.table_name)
+            table_name = bare_name(rel.table)
+            key = (rel.database, table_name)
             
             if key not in table_groups:
                 table_groups[key] = {
                     'database': rel.database,
-                    'name': rel.table_name,
+                    'name': table_name,
                     'access_count': 0,
                     'access_types': set(),
                     'files': set()

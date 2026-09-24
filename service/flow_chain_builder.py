@@ -34,7 +34,7 @@ from pathlib import Path
 import re
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-from canonical_object_identity import bare_key
+from canonical_object_identity import bare_key, bare_name
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 from code_analyzer.models import FileAnalysisResult
 from code_analyzer.sql_analyzer import extract_tables_from_definition
@@ -104,7 +104,7 @@ def _inline_sql_tables(matched_files: List[FileAnalysisResult], reachable_method
                 if m.name not in reachable_methods or not m.sql_queries:
                     continue
                 for sql_text in m.sql_queries:
-                    tables.update(extract_tables_from_definition(sql_text))
+                    tables.update(bare_name(table) for table in extract_tables_from_definition(sql_text))
     return tables
 
 
@@ -500,7 +500,8 @@ def build_backward_chains(
     # stored-procedure relationships and is never used to reconstruct SQL calls.
     table_norm = bare_key(table_name)
     for rel in scan.table_relations:
-        if bare_key(rel.table_name) != table_norm:
+        # Step 2b matches by the table match rule and the Database of the connection.
+        if bare_key(rel.table) != table_norm:
             continue
         add_chain(
             rel.csharp_file,

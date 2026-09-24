@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from canonical_object_identity import parse
 from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, FrameworkType, MethodInfo
 from service import analyze_service
@@ -348,7 +349,7 @@ def test_embedded_sql_and_graph_derived_preference_rule_is_unchanged(monkeypatch
                 class_name="AlphaPage",
                 method_name="SaveAlpha",
                 line_number=1,
-                table_name="TableA",
+                table=parse("TableA"),
                 database="OrdersDb",
                 access_type="READ",
             )

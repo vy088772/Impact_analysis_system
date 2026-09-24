@@ -7,7 +7,7 @@ import re
 from typing import List, NamedTuple, Optional, Set, Tuple, Dict
 from pathlib import Path
 from datetime import datetime
-from canonical_object_identity import ObjectName, bare_name
+from canonical_object_identity import ObjectName, bare_name, parse
 from config.sp_detector_config import SPDetectionConfig
 from .db_connection_tracker import DBConnectionTracker
 from .models import (
@@ -622,8 +622,7 @@ class CSharpParser:
             query_type = self._determine_sql_type(sql_text)
             
             if query_type != SQLQueryType.UNKNOWN:
-                # 存進 SQLQuery 前轉回字串，C# Scan Result 的內容不變；Step 2a 改存值本身。
-                tables = {bare_name(table) for table in self._extract_tables_from_sql(sql_text)}
+                tables = self._extract_tables_from_sql(sql_text)
                 is_parameterized = '@' in sql_text or '{' in sql_text
                 has_join = 'JOIN' in sql_text.upper()
                 has_subquery = sql_text.upper().count('SELECT') > 1
@@ -672,8 +671,7 @@ class CSharpParser:
                 seen_queries.add(sql_text)
                 
                 line_num = content[:match.start()].count('\n') + 1
-                # 存進 SQLQuery 前轉回字串，C# Scan Result 的內容不變；Step 2a 改存值本身。
-                tables = {bare_name(table) for table in self._extract_tables_from_sql(sql_text)}
+                tables = self._extract_tables_from_sql(sql_text)
                 is_parameterized = '@' in sql_text or '{' in sql_text
                 has_join = 'JOIN' in sql_text.upper()
                 has_subquery = sql_text.count('SELECT') > 1
@@ -713,8 +711,7 @@ class CSharpParser:
             query_type = self._determine_sql_type(sql_text)
             
             if query_type != SQLQueryType.UNKNOWN:
-                # 存進 SQLQuery 前轉回字串，C# Scan Result 的內容不變；Step 2a 改存值本身。
-                tables = {bare_name(table) for table in self._extract_tables_from_sql(sql_text)}
+                tables = self._extract_tables_from_sql(sql_text)
                 is_parameterized = '@' in sql_text or '{' in sql_text
                 has_join = 'JOIN' in sql_text.upper()
                 has_subquery = sql_text.upper().count('SELECT') > 1
@@ -863,109 +860,28 @@ class CSharpParser:
         else:
             return SQLQueryType.UNKNOWN
     
-    def _extract_tables_from_sql(self, sql: str) -> Set[ObjectName]:
-        """從 SQL 提取資料表名稱（增強版）"""
-        tables: Set[ObjectName] = set()
-        
-        # 清理 SQL
-        sql_clean = sql.upper()
-        
-        # FROM 子句（支援多種格式）
-        # FROM TableName
-        # FROM [TableName]
-        # FROM dbo.TableName
-        # FROM [dbo].[TableName]
-        from_patterns = [
-            r'FROM\s+\[?(\w+)\]?\.\[?(\w+)\]?',  # schema.table（優先匹配）
-            r'FROM\s+\[?(\w+)\]?(?:\s+(?:AS\s+)?\w+|\s+|$)',  # table [as alias]，但排除後面有. 的情況
-        ]
-        
-        for pattern in from_patterns:
-            matches = re.findall(pattern, sql_clean)
-            for match in matches:
-                if isinstance(match, tuple):
-                    # schema.table 格式，取 table
-                    table_name = match[1] if len(match) > 1 and match[1] else match[0]
-                else:
-                    table_name = match
-                
-                table = self._clean_table_name(table_name)
-                # 過濾掉常見的 schema 名稱
-                if len(table.name) > 1 and table.name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
-                    tables.add(table)
-        
-        # JOIN 子句
-        join_patterns = [
-            r'JOIN\s+\[?(\w+)\]?\.\[?(\w+)\]?',  # schema.table（優先匹配）
-            r'JOIN\s+\[?(\w+)\]?(?:\s+(?:AS\s+)?\w+|\s+|$)',  # table [as alias]
-        ]
-        
-        for pattern in join_patterns:
-            matches = re.findall(pattern, sql_clean)
-            for match in matches:
-                if isinstance(match, tuple):
-                    table_name = match[1] if len(match) > 1 and match[1] else match[0]
-                else:
-                    table_name = match
-                
-                table = self._clean_table_name(table_name)
-                # 過濾掉常見的 schema 名稱
-                if len(table.name) > 1 and table.name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
-                    tables.add(table)
-        
-        # INSERT INTO（支援 schema.table 格式）
-        insert_patterns = [
-            r'INSERT\s+INTO\s+\[?(\w+)\]?\.\[?(\w+)\]?',  # schema.table
-            r'INSERT\s+INTO\s+\[?(\w+)\]?'                 # table
-        ]
-        for pattern in insert_patterns:
-            insert_matches = re.findall(pattern, sql_clean)
-            for match in insert_matches:
-                if isinstance(match, tuple):
-                    table_name = match[1] if len(match) > 1 and match[1] else match[0]
-                else:
-                    table_name = match
-                table = self._clean_table_name(table_name)
-                if len(table.name) > 1 and table.name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
-                    tables.add(table)
-        
-        # UPDATE（支援 schema.table 格式）
-        update_patterns = [
-            r'UPDATE\s+\[?(\w+)\]?\.\[?(\w+)\]?',  # schema.table
-            r'UPDATE\s+\[?(\w+)\]?'                 # table
-        ]
-        for pattern in update_patterns:
-            update_matches = re.findall(pattern, sql_clean)
-            for match in update_matches:
-                if isinstance(match, tuple):
-                    table_name = match[1] if len(match) > 1 and match[1] else match[0]
-                else:
-                    table_name = match
-                table = self._clean_table_name(table_name)
-                if len(table.name) > 1 and table.name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
-                    tables.add(table)
-        
-        # DELETE FROM（支援 schema.table 格式）
-        delete_patterns = [
-            r'DELETE\s+FROM\s+\[?(\w+)\]?\.\[?(\w+)\]?',  # schema.table
-            r'DELETE\s+FROM\s+\[?(\w+)\]?'                 # table
-        ]
-        for pattern in delete_patterns:
-            delete_matches = re.findall(pattern, sql_clean)
-            for match in delete_matches:
-                if isinstance(match, tuple):
-                    table_name = match[1] if len(match) > 1 and match[1] else match[0]
-                else:
-                    table_name = match
-                table = self._clean_table_name(table_name)
-                if len(table.name) > 1 and table.name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
-                    tables.add(table)
-        
-        return tables
+    # 一段名稱：`[任意字元]` 或 `\w+`。一個物件名稱最多四段（server.database.schema.name），
+    # 中間可以留空（`PUR..Users`）；整個名稱交給 parse() 決定哪一段是 schema。
+    # 名稱後面接 `(` 的是函式（OPENQUERY、OPENJSON 等），不是資料表。
+    _TABLE_NAME_PART = r'(?:\[[^\]]+\]|\w+)'
+    _TABLE_NAME = rf'({_TABLE_NAME_PART}(?:\.{_TABLE_NAME_PART}?){{0,3}})(?![\w.])(?!\s*\()'
+    _TABLE_PATTERNS = [
+        rf'\bFROM\s+{_TABLE_NAME}',
+        rf'\bJOIN\s+{_TABLE_NAME}',
+        rf'\bINSERT\s+INTO\s+{_TABLE_NAME}',
+        rf'\bUPDATE\s+{_TABLE_NAME}',
+        rf'\bDELETE\s+FROM\s+{_TABLE_NAME}',
+    ]
 
-    def _clean_table_name(self, table: str) -> ObjectName:
-        """清理資料表名稱：只留表格名稱，schema 留空（Step 2a 改為保留整個名稱）。"""
-        return ObjectName(server="", database="", schema="", name=bare_name(table))
+    def _extract_tables_from_sql(self, sql: str) -> Set[ObjectName]:
+        """從 SQL 提取資料表名稱：保留寫出來的每一段與大小寫。"""
+        tables: Set[ObjectName] = set()
+        for pattern in self._TABLE_PATTERNS:
+            for written in re.findall(pattern, sql, re.IGNORECASE):
+                table = parse(written)
+                if len(table.name) > 1:
+                    tables.add(table)
+        return tables
     
     
     def _extract_stored_procedure_calls(self, content: str, lines: List[str]) -> List[StoredProcedureCall]:
@@ -1853,7 +1769,7 @@ namespace MyApp.Controllers
     for i, sql in enumerate(result.sql_queries, 1):
         print(f"\n  {i}. {sql.query_type.value}")
         print(f"     位置: {sql.location}")
-        print(f"     資料表: {', '.join(sql.tables)}")
+        print(f"     資料表: {', '.join(sorted(bare_name(table) for table in sql.tables))}")
         print(f"     資料庫來源: {sql.database_source}")
         print(f"     參數化: {sql.is_parameterized}")
         print(f"     內容: {sql.query_text[:60]}...")

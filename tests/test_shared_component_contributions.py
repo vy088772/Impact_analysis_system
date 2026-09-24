@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Mapping, Sequence
 
+from canonical_object_identity import parse
 from code_analyzer.models import (
     ClassInfo,
     FileAnalysisResult,
@@ -371,7 +372,7 @@ def test_a_view_component_reaches_the_screens_tables_too(
                 class_name="MenuViewComponent",
                 method_name="InvokeAsync",
                 line_number=1,
-                table_name="MenuItems",
+                table=parse("MenuItems"),
                 database="OrdersDb",
                 access_type="READ",
             )

@@ -14,6 +14,8 @@ from datetime import datetime
 from tqdm import tqdm
 import json
 
+from canonical_object_identity import ObjectName, bare_name
+
 from .csharp_parser import CSharpParser
 from .aspx_parser import ASPXParser
 from .razor_parser import RazorParser
@@ -88,7 +90,7 @@ class CSharpTableRelation:
     line_number: int
     
     # 資料表資訊
-    table_name: str
+    table: ObjectName
     database: str
     access_type: str  # READ, INSERT, UPDATE, DELETE
     
@@ -104,7 +106,7 @@ class CSharpTableRelation:
                 'line': self.line_number
             },
             'table': {
-                'name': self.table_name,
+                'name': bare_name(self.table),
                 'database': self.database,
                 'access_type': self.access_type
             },
@@ -178,7 +180,7 @@ class ProjectScanResult:
     total_sp_calls: int = 0
     total_sql_queries: int = 0
     unique_sps: Set[str] = field(default_factory=set)
-    unique_tables: Set[str] = field(default_factory=set)
+    unique_tables: Set[ObjectName] = field(default_factory=set)
 
     def record_framework_report(self, report: Dict) -> None:
         """Add/replace one scan root's Framework Label report (ADR-0021).
@@ -329,7 +331,7 @@ class ProjectScanResult:
             for invocation in formal_sp_invocations
             if invocation["procedure_name"]
         }
-        self.unique_tables = set(rel.table_name for rel in self.table_relations)
+        self.unique_tables = set(rel.table for rel in self.table_relations)
 
     def capture_source_snapshot(self, file_path: str, host_result: Dict) -> None:
         """Store one complete, project-relative C# file snapshot for this scan."""
@@ -1192,7 +1194,7 @@ class ProjectScanner:
                     class_name=class_name,
                     method_name=method_name,
                     line_number=sql_query.location.line_number,
-                    table_name=table,
+                    table=table,
                     database=sql_query.database_source or 'unknown',
                     access_type=sql_query.query_type.value,
                     sql_preview=sql_query.query_text[:100]
@@ -1364,16 +1366,16 @@ class ProjectScanner:
                 print(f"   {exists} {db}.{sp_name}{complexity} (呼叫 {len(calls)} 次)")
                 
                 if sp_info and sp_info.referenced_tables:
-                    tables = ", ".join(list(sp_info.referenced_tables)[:3])
+                    tables = ", ".join(bare_name(table) for table in list(sp_info.referenced_tables)[:3])
                     if len(sp_info.referenced_tables) > 3:
                         tables += f" ... (共 {len(sp_info.referenced_tables)} 個)"
                     print(f"      涉及資料表: {tables}")
         
         # 7. 顯示資料表清單
         if all_sql_queries:
-            unique_tables = set()
+            unique_tables: Set[str] = set()
             for sql_query in all_sql_queries:
-                unique_tables.update(sql_query.tables)
+                unique_tables.update(bare_name(table) for table in sql_query.tables)
             
             if unique_tables:
                 print(f"\n📊 涉及的資料表 ({len(unique_tables)}):")
@@ -1561,7 +1563,7 @@ class ProjectScanner:
                         '類別': rel.class_name,
                         '方法': rel.method_name,
                         '行號': rel.line_number,
-                        '資料表': rel.table_name,
+                        '資料表': bare_name(rel.table),
                         '資料庫': rel.database,
                         '操作類型': rel.access_type,
                         'SQL預覽': rel.sql_preview
@@ -1707,7 +1709,7 @@ def main():
                                     print(f"      ✅ 複雜度: {sp_info.estimated_complexity}")
                                     
                                     if sp_info.referenced_tables:
-                                        tables_display = ", ".join(list(sp_info.referenced_tables)[:3])
+                                        tables_display = ", ".join(bare_name(table) for table in list(sp_info.referenced_tables)[:3])
                                         if len(sp_info.referenced_tables) > 3:
                                             tables_display += f" ... 等 {len(sp_info.referenced_tables)} 個"
                                         print(f"      📊 關聯表: {tables_display}")

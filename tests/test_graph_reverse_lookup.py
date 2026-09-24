@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from canonical_object_identity import parse
 from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, FrameworkType, MethodInfo
 from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 from service import analyze_service
@@ -708,7 +709,7 @@ def test_analyze_without_database_keeps_source_facts_without_formal_relationship
             class_name="DirectPage",
             method_name="SaveDirect",
             line_number=12,
-            table_name="dbo.SOrder",
+            table=parse("dbo.SOrder"),
             database="OrdersDb",
             access_type="READ",
             sql_preview="SELECT * FROM dbo.SOrder",
@@ -726,7 +727,7 @@ def test_analyze_without_database_keeps_source_facts_without_formal_relationship
 
     program = response.programs[0]
     assert program.methods == [{"name": "SaveDirect", "class": "DirectPage"}]
-    assert program.tables == ["dbo.SOrder"]
+    assert program.tables == ["SOrder"]
     assert program.stored_procedures == []
     assert program.database_invocations[0]["procedure_name"] == "usp_direct"
     assert program.database_invocations[0]["evidence"] == "unresolved"

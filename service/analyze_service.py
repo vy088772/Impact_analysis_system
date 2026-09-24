@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Opt
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
-from canonical_object_identity import bare_key, parse, part_key
+from canonical_object_identity import bare_key, bare_name, parse, part_key
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
@@ -2384,7 +2384,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 if resolution.owns_file(rel.csharp_file) and resolution.owns_action(
                     rel.csharp_file, rel.method_name
                 ):
-                    _append_once(rel.table_name, table_names)
+                    _append_once(bare_name(rel.table), table_names)
 
             # 共用元件（S.15）：這個畫面渲染的 ViewComponent／partial view，貼上
             # 「來自共用元件」的標籤跟畫面自己的存取分開，不會混進 methods。
@@ -2431,7 +2431,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                             rel.method_name, contribution.entry_method
                         ):
                             continue
-                        _append_once(rel.table_name, table_names, component_table_names)
+                        _append_once(bare_name(rel.table), table_names, component_table_names)
 
                     if not component_invocations and not component_table_names:
                         continue
@@ -2914,7 +2914,8 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     inline_matches_by_file: Dict[str, TableMatchProgram] = {}
     diagnostics: List[Dict] = []
     for rel in scan.table_relations:
-        if bare_key(rel.table_name) != table_norm:
+        # Step 2b matches by the table match rule and the Database of the connection.
+        if bare_key(rel.table) != table_norm:
             continue
         database = str(getattr(rel, "database", "") or "")
         caller_class = str(getattr(rel, "class_name", "") or "")

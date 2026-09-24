@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 
-from canonical_object_identity import ObjectName, bare_name
+from canonical_object_identity import ObjectName, bare_name, parse
 from config.settings import settings, DatabaseConfig
 
 
@@ -36,7 +36,7 @@ class SimplifiedSPInfo:
     definition_length: int = 0
     
     # 簡單分析（原生依賴查詢優先，regex 為 fallback，見 quick_analyze_sp）
-    referenced_tables: Set[str] = field(default_factory=set)
+    referenced_tables: Set[ObjectName] = field(default_factory=set)
     dependency_source: str = "regex"  # "native"（sys.dm_sql_referenced_entities）或 "regex"（fallback）
     has_dynamic_sql: bool = False
     has_temp_tables: bool = False
@@ -57,7 +57,7 @@ class SimplifiedSPInfo:
             'parameters': self.parameters,
             'created_date': self.created_date,
             'modified_date': self.modified_date,
-            'tables': list(self.referenced_tables),
+            'tables': [bare_name(table) for table in self.referenced_tables],
             'dependency_source': self.dependency_source,
             'flags': {
                 'dynamic_sql': self.has_dynamic_sql,
@@ -315,7 +315,11 @@ class SQLAnalyzer:
             full_name = f"{schema}.{clean_name}"
 
         query = """
-        SELECT DISTINCT referenced_entity_name
+        SELECT DISTINCT
+            referenced_server_name,
+            referenced_database_name,
+            referenced_schema_name,
+            referenced_entity_name
         FROM sys.dm_sql_referenced_entities(?, 'OBJECT')
         WHERE referenced_entity_name IS NOT NULL
           AND referenced_minor_name IS NULL
@@ -327,10 +331,16 @@ class SQLAnalyzer:
             return set()
 
         tables: Set[ObjectName] = set()
-        for row in rows:
-            name = row[0]
+        for server, database, schema, name in rows:
             if name:
-                tables.add(ObjectName(server="", database="", schema="", name=name))
+                tables.add(
+                    ObjectName(
+                        server=server or "",
+                        database=database or "",
+                        schema=schema or "",
+                        name=name,
+                    )
+                )
         return tables
 
     def get_sp_write_info(self, proc_name: str, schema: str) -> Dict:
@@ -602,15 +612,12 @@ class SQLAnalyzer:
             # 4. 提取資料表：原生依賴查詢（sys.dm_sql_referenced_entities）優先，
             #    查不到（權限不足/動態SQL導致整包查詢失敗/查得到但結果是空集合）
             #    才 fallback 回 regex 版 _quick_extract_tables
-            #    存進 SimplifiedSPInfo 前轉回字串，C# Scan Result 的內容不變；Step 2a 改存值本身。
             native_tables = self._get_native_referenced_tables(proc_name, schema)
             if native_tables:
-                info.referenced_tables = {bare_name(table) for table in native_tables}
+                info.referenced_tables = native_tables
                 info.dependency_source = "native"
             else:
-                info.referenced_tables = {
-                    bare_name(table) for table in self._quick_extract_tables(info.definition)
-                }
+                info.referenced_tables = self._quick_extract_tables(info.definition)
                 info.dependency_source = "regex"
             
             # 5. 估算複雜度
@@ -790,8 +797,7 @@ class SQLAnalyzer:
                     len(table) > 1 and
                     not table.startswith('(')  # 排除子查詢
                 ):
-                    # 處理 schema.table 格式：只留表格名稱，schema 留空（Step 2a 改為保留 schema）
-                    tables.add(ObjectName(server="", database="", schema="", name=bare_name(table)))
+                    tables.add(parse(table))
         
         return tables
     
@@ -939,7 +945,7 @@ class SQLAnalyzer:
         # 資料表
         if info.referenced_tables:
             print(f"\n📊 涉及的資料表 ({len(info.referenced_tables)}):")
-            for table in sorted(info.referenced_tables):
+            for table in sorted(bare_name(table) for table in info.referenced_tables):
                 print(f"   - {table}")
         
         # 詳細定義
@@ -1065,7 +1071,7 @@ class SQLAnalyzer:
                 '游標': '是' if sp.has_cursor else '否',
                 '建立時間': sp.created_date,
                 '修改時間': sp.modified_date,
-                '涉及資料表': ', '.join(sorted(sp.referenced_tables))
+                '涉及資料表': ', '.join(sorted(bare_name(table) for table in sp.referenced_tables))
             })
         
         df = pd.DataFrame(data)
@@ -1136,13 +1142,12 @@ def estimate_complexity_from_definition(definition: str) -> str:
     info.has_temp_tables = analyzer._detect_temp_tables(definition)
     info.has_cursor = analyzer._detect_cursor(definition)
     info.has_transaction = analyzer._detect_transaction(definition)
-    # 轉回字串，跟 quick_analyze_sp() 存進 SimplifiedSPInfo 的形狀一致；Step 2a 移除。
-    info.referenced_tables = {bare_name(table) for table in analyzer._quick_extract_tables(definition)}
+    info.referenced_tables = analyzer._quick_extract_tables(definition)
 
     return analyzer._estimate_complexity(info)
 
 
-def extract_tables_from_definition(definition: str) -> Set[str]:
+def extract_tables_from_definition(definition: str) -> Set[ObjectName]:
     """依 SP/View/UDF 的完整定義文字提取引用資料表，純字串分析，不需要資料庫連線。
 
     給「已有 definition 文字、但沒有走 quick_analyze_sp() 即時查詢」的路徑使用
@@ -1156,8 +1161,7 @@ def extract_tables_from_definition(definition: str) -> Set[str]:
     if not definition:
         return set()
     analyzer = object.__new__(SQLAnalyzer)
-    # 轉回字串，呼叫端（flow_chain_builder）比對與顯示的名稱不變；Step 2a 移除。
-    return {bare_name(table) for table in analyzer._quick_extract_tables(definition)}
+    return analyzer._quick_extract_tables(definition)
 
 
 # ============================================

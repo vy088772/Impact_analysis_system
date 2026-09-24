@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path
 from datetime import datetime
 
+from canonical_object_identity import ObjectName
+
 # ============================================
 # 列舉類型定義
 # ============================================
@@ -283,7 +285,7 @@ class SQLQuery:
     """
     query_text: str                             # SQL 文字
     query_type: SQLQueryType                    # 查詢類型
-    tables: Set[str] = field(default_factory=set)      # 涉及的資料表
+    tables: Set[ObjectName] = field(default_factory=set)  # 涉及的資料表
     columns: List[str] = field(default_factory=list)   # 涉及的欄位
     parameters: List[str] = field(default_factory=list) # 參數
     location: Optional[CodeLocation] = None
@@ -580,7 +582,7 @@ class ProjectAnalysisResult:
     detected_frameworks: Set[FrameworkType] = field(default_factory=set)
     
     # 資料庫相關
-    referenced_tables: Set[str] = field(default_factory=set)
+    referenced_tables: Set[ObjectName] = field(default_factory=set)
     referenced_stored_procedures: Set[str] = field(default_factory=set)
     
     # 分析時間
@@ -693,7 +695,7 @@ if __name__ == "__main__":
     sql = SQLQuery(
         query_text="SELECT * FROM Users WHERE UserId = @id",
         query_type=SQLQueryType.SELECT,
-        tables={"Users"},
+        tables={ObjectName(server="", database="", schema="", name="Users")},
         is_parameterized=True
     )
     print(f"SQL: {sql}")
