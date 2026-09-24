@@ -24,7 +24,7 @@ class SimplifiedSPInfo:
     """精簡版 SP 資訊（靜態分析）"""
     procedure_name: str
     database: str
-    schema: str = "dbo"
+    schema: str
     
     # 基本資訊（從資料庫查詢）
     exists: bool = False
@@ -250,7 +250,7 @@ class SQLAnalyzer:
         
         return summary
     
-    def get_all_procedures(self, schema: str = 'dbo') -> List[str]:
+    def get_all_procedures(self, schema: str) -> List[str]:
         """取得所有預存程序名稱"""
         query = """
         SELECT ROUTINE_NAME
@@ -263,7 +263,7 @@ class SQLAnalyzer:
         self.cursor.execute(query, schema)
         return [row.ROUTINE_NAME for row in self.cursor.fetchall()]
     
-    def get_all_tables(self, schema: str = 'dbo') -> List[str]:
+    def get_all_tables(self, schema: str) -> List[str]:
         """取得所有資料表名稱"""
         query = """
         SELECT TABLE_NAME
@@ -276,7 +276,7 @@ class SQLAnalyzer:
         self.cursor.execute(query, schema)
         return [row.TABLE_NAME for row in self.cursor.fetchall()]
 
-    def get_all_views(self, schema: str = 'dbo') -> List[str]:
+    def get_all_views(self, schema: str) -> List[str]:
         """取得所有 View（檢視表）名稱"""
         query = """
         SELECT TABLE_NAME
@@ -287,7 +287,7 @@ class SQLAnalyzer:
         self.cursor.execute(query, schema)
         return [row.TABLE_NAME for row in self.cursor.fetchall()]
 
-    def get_all_functions(self, schema: str = 'dbo') -> List[str]:
+    def get_all_functions(self, schema: str) -> List[str]:
         """取得所有使用者定義函數（UDF）名稱"""
         query = """
         SELECT ROUTINE_NAME
@@ -299,7 +299,7 @@ class SQLAnalyzer:
         self.cursor.execute(query, schema)
         return [row.ROUTINE_NAME for row in self.cursor.fetchall()]
 
-    def _get_native_referenced_tables(self, proc_name: str, schema: str = 'dbo') -> Set[str]:
+    def _get_native_referenced_tables(self, proc_name: str, schema: str) -> Set[str]:
         """
         單一物件的原生依賴查詢（給 quick_analyze_sp 即時分析單一 SP 用），
         使用 `sys.dm_sql_referenced_entities`（比 sys.sql_expression_dependencies
@@ -332,7 +332,7 @@ class SQLAnalyzer:
                 tables.add(name)
         return tables
 
-    def get_sp_write_info(self, proc_name: str, schema: str = 'dbo') -> Dict:
+    def get_sp_write_info(self, proc_name: str, schema: str) -> Dict:
         """
         單一 SP 的讀寫資訊查詢（給 dump_all_sql_objects 落地快取用），沿用
         `_get_native_referenced_tables()` 同一套 `sys.dm_sql_referenced_entities`
@@ -395,7 +395,7 @@ class SQLAnalyzer:
             "writes_columns": writes_columns,
         }
 
-    def get_object_definition(self, name: str, schema: str = 'dbo') -> str:
+    def get_object_definition(self, name: str, schema: str) -> str:
         """
         取得任意物件（View/Function/Procedure）的完整定義本體（通用版，
         不含參數解析，供 View/Function 這類「只需要本體」的物件使用）。
@@ -406,7 +406,7 @@ class SQLAnalyzer:
         row = self.cursor.fetchone()
         return (row[0] or "") if row else ""
 
-    def get_function_parameters(self, func_name: str, schema: str = 'dbo') -> Tuple[List[str], str]:
+    def get_function_parameters(self, func_name: str, schema: str) -> Tuple[List[str], str]:
         """取得函數的參數清單與回傳型別。"""
         param_query = """
         SELECT PARAMETER_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, PARAMETER_MODE
@@ -428,7 +428,7 @@ class SQLAnalyzer:
             parameters.append(f"{r[0]} {ptype}")
         return parameters, return_type
 
-    def get_primary_key_columns(self, table_name: str, schema: str = 'dbo') -> List[str]:
+    def get_primary_key_columns(self, table_name: str, schema: str) -> List[str]:
         """取得資料表的主鍵欄位名稱清單（依組成順序）。
 
         原供已移除的「命名慣例推論關聯」功能（曾在 service/fk_resolver.py）使用；
@@ -446,7 +446,7 @@ class SQLAnalyzer:
         self.cursor.execute(query, table_name, schema)
         return [row[0] for row in self.cursor.fetchall()]
 
-    def get_table_columns(self, table_name: str, schema: str = 'dbo') -> List[Dict]:
+    def get_table_columns(self, table_name: str, schema: str) -> List[Dict]:
         """取得資料表的欄位 Schema（名稱/型別/長度/是否可為 NULL）。"""
         query = """
         SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT
@@ -470,7 +470,7 @@ class SQLAnalyzer:
 
     def dump_all_sql_objects(
         self,
-        schema: str = 'dbo',
+        schema: str,
         progress_callback: Optional[Callable[[str, int, int, str], None]] = None,
     ) -> Dict:
         """
@@ -561,7 +561,7 @@ class SQLAnalyzer:
     def quick_analyze_sp(
         self, 
         proc_name: str, 
-        schema: str = 'dbo'
+        schema: str
     ) -> SimplifiedSPInfo:
         """
         快速分析單一預存程序
@@ -843,7 +843,7 @@ class SQLAnalyzer:
     
     def analyze_all_procedures(
         self, 
-        schema: str = 'dbo',
+        schema: str,
         limit: Optional[int] = None
     ) -> DatabaseSummary:
         """
@@ -1124,7 +1124,8 @@ def estimate_complexity_from_definition(definition: str) -> str:
     空殼實例即可安全呼叫。
     """
     definition = definition or ""
-    info = SimplifiedSPInfo(procedure_name="", database="")
+    # 空殼沒有自己的 schema，明寫 dbo 取代原本的預設值；Step 2b 移除。
+    info = SimplifiedSPInfo(procedure_name="", database="", schema="dbo")
     info.definition = definition
     info.definition_length = len(definition)
     info.line_count = definition.count("\n") + 1 if definition else 0
@@ -1202,7 +1203,8 @@ def main():
         
         if function_choice == '1':
             # 單一 SP 分析
-            procedures = analyzer.get_all_procedures()
+            # 明寫 dbo 取代原本的預設值；Step 2a 改用新的物件清單並帶出 schema。
+            procedures = analyzer.get_all_procedures("dbo")
             print(f"\n找到 {len(procedures)} 個預存程序")
             print("\n前 20 個:")
             for i, proc in enumerate(procedures[:20], 1):
@@ -1222,7 +1224,8 @@ def main():
                 sp_name = sp_choice
             
             # 分析
-            sp_info = analyzer.quick_analyze_sp(sp_name)
+            # 明寫 dbo 取代原本的預設值；Step 2a 改傳選單選到的 schema。
+            sp_info = analyzer.quick_analyze_sp(sp_name, "dbo")
             analyzer.print_sp_info(sp_info, detailed=True)
             
             # 匯出
@@ -1235,7 +1238,8 @@ def main():
             limit_input = input("\n限制數量（測試用，直接按 Enter 分析全部）: ").strip()
             limit = int(limit_input) if limit_input.isdigit() else None
             
-            summary = analyzer.analyze_all_procedures(limit=limit)
+            # 明寫 dbo 取代原本的預設值；Step 2a 改用新的物件清單並帶出 schema。
+            summary = analyzer.analyze_all_procedures("dbo", limit=limit)
             analyzer.print_summary(summary)
             
             # 匯出

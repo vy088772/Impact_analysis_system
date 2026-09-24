@@ -360,7 +360,7 @@ class StoredProcedureAnalysis:
     """預存程序分析結果"""
     procedure_name: str
     database: str
-    schema: str = "dbo"
+    schema: str
     
     # 基本資訊
     parameters: List[SPParameter] = field(default_factory=list)

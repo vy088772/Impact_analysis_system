@@ -19,7 +19,7 @@ scanner.initialize_databases(['PUR'])
 
 # 尋找並分析 SP
 analyzer = scanner.sql_analyzers['PUR']
-sp_info = analyzer.quick_analyze_sp('usp_CheckProgramAuth')
+sp_info = analyzer.quick_analyze_sp('usp_CheckProgramAuth', 'dbo')
 
 print(f"\nSP: {sp_info.procedure_name}")
 print(f"資料表: {sp_info.referenced_tables}")

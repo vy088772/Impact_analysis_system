@@ -1149,7 +1149,8 @@ class ProjectScanner:
                 if relation.sp_database in self.sql_analyzers:
                     try:
                         analyzer = self.sql_analyzers[relation.sp_database]
-                        sp_info = analyzer.quick_analyze_sp(sp_call.procedure_name)
+                        # 明寫 dbo 取代原本的預設值；Step 2b 移除。
+                        sp_info = analyzer.quick_analyze_sp(sp_call.procedure_name, "dbo")
                         relation.sp_info = sp_info
                     except Exception as e:
                         pass  # 靜默失敗
@@ -1159,7 +1160,8 @@ class ProjectScanner:
                     for alias, analyzer in self.sql_analyzers.items():
                         try:
                             # 快速檢測
-                            sp_info = analyzer.quick_analyze_sp(sp_call.procedure_name)
+                            # 明寫 dbo 取代原本的預設值；Step 2b 移除。
+                            sp_info = analyzer.quick_analyze_sp(sp_call.procedure_name, "dbo")
                             if sp_info.exists:
                                 relation.sp_info = sp_info
                                 relation.sp_database = alias  # 更新正確的資料庫名稱
@@ -1332,7 +1334,8 @@ class ProjectScanner:
                     if db_source in self.sql_analyzers:
                         try:
                             analyzer = self.sql_analyzers[db_source]
-                            sp_info = analyzer.quick_analyze_sp(sp_call.procedure_name)
+                            # 明寫 dbo 取代原本的預設值；Step 2b 移除。
+                            sp_info = analyzer.quick_analyze_sp(sp_call.procedure_name, "dbo")
                             sp_details[key] = sp_info
                         except:
                             sp_details[key] = None
@@ -1684,13 +1687,15 @@ def main():
                                 # 1. 有指定資料庫來源
                                 if db_source and db_source in analyzer_dict:
                                     used_analyzer = analyzer_dict[db_source]
-                                    sp_info = used_analyzer.quick_analyze_sp(sp_name)
+                                    # 明寫 dbo 取代原本的預設值；Step 2b 移除。
+                                    sp_info = used_analyzer.quick_analyze_sp(sp_name, "dbo")
                                     print(f"      🗄️  資料庫: {db_source} (自動偵測)")
                                 
                                 # 2. 無指定或來源不明，嘗試所有連接的資料庫
                                 elif analyzer_dict:
                                     for alias, analyzer in analyzer_dict.items():
-                                        temp_info = analyzer.quick_analyze_sp(sp_name)
+                                        # 明寫 dbo 取代原本的預設值；Step 2b 移除。
+                                        temp_info = analyzer.quick_analyze_sp(sp_name, "dbo")
                                         if temp_info.exists:
                                             sp_info = temp_info
                                             used_analyzer = analyzer
