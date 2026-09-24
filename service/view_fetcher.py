@@ -7,7 +7,7 @@ SQL View（檢視表）定義擷取（盡力而為）。
 負責：給定一批表名，從本機 SQL 快取（sql_cache_store.py）比對出其中「其實是
 View」的項目，回傳其完整定義（讓 AI 看得到 View 實際查詢邏輯，而不只是表名）。
 
-快取沒有時才即時連線 SQL Server 補查（安全網，行為與 sp_fetcher.py 一致）。
+快取沒有的名稱直接略過，不即時連線 SQL Server 補查（見 ADR-0011）。
 """
 from __future__ import annotations
 
