@@ -27,6 +27,7 @@ from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 import code_analyzer.static_analyzer_host as static_analyzer_host_module
 import code_analyzer.csharp_analysis_gateway as gateway_module
 from service.execution_path_builder import build_execution_paths
+from tests.sql_cache_fixtures import analyzer_operation
 
 
 def _raw_invocation(**overrides) -> dict:
@@ -338,23 +339,23 @@ def test_receiver_binding_without_selector_never_auto_selects_registry_contract(
                 "schema": "dbo",
                 "name": "usp_SaveOrder",
             },
-            {
-                "id": "dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
-                "type": "dml_operation",
-                "module_id": "stored_procedure:dbo.usp_SaveOrder",
-                "module": {
+            analyzer_operation(
+                "UPDATE",
+                sequence=1,
+                reads=[],
+                writes=["dbo.SOrder"],
+                written_columns=[],
+                branch_path=[],
+                conditions=[],
+                id="dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
+                type="dml_operation",
+                module_id="stored_procedure:dbo.usp_SaveOrder",
+                module={
                     "type": "stored_procedure",
                     "schema": "dbo",
                     "name": "usp_SaveOrder",
                 },
-                "sequence": 1,
-                "operation_type": "UPDATE",
-                "branch_path": [],
-                "conditions": [],
-                "read_tables": [],
-                "write_tables": ["dbo.SOrder"],
-                "written_columns": [],
-            },
+            ),
         ],
         "relationships": [
             {

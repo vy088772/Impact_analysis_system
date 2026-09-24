@@ -30,7 +30,7 @@ from service.schemas import (
     SPMatchProgram,
     TableMatchProgram,
 )
-from tests.sql_cache_fixtures import cache_payload, execution_graph
+from tests.sql_cache_fixtures import analyzer_operation, cache_payload, execution_graph
 
 
 _SAVE_ORDER_PROCEDURE = {
@@ -94,32 +94,32 @@ def _cached_path_fixture(
                 "schema": "dbo",
                 "name": "usp_SaveOrder",
             },
-            {
-                "id": "dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
-                "type": "dml_operation",
-                "module_id": "stored_procedure:dbo.usp_SaveOrder",
-                "sequence": 1,
-                "operation_type": "UPDATE",
-                "branch_path": ["IF @Mode = 1"],
-                "conditions": ["IF @Mode = 1", "Id = @Id"],
-                "where": "Id = @Id",
-                "read_tables": [],
-                "write_tables": ["dbo.SOrder"],
-                "written_columns": ["Status"],
-            },
-            {
-                "id": "dml_operation:stored_procedure:dbo.usp_SaveOrder:2",
-                "type": "dml_operation",
-                "module_id": "stored_procedure:dbo.usp_SaveOrder",
-                "sequence": 2,
-                "operation_type": "DELETE",
-                "branch_path": ["ELSE (NOT (@Mode = 1))"],
-                "conditions": ["ELSE (NOT (@Mode = 1))", "Id = @Id"],
-                "where": "Id = @Id",
-                "read_tables": [],
-                "write_tables": ["dbo.SOrder"],
-                "written_columns": [],
-            },
+            analyzer_operation(
+                "UPDATE",
+                sequence=1,
+                reads=[],
+                writes=["dbo.SOrder"],
+                written_columns=["Status"],
+                branch_path=["IF @Mode = 1"],
+                conditions=["IF @Mode = 1", "Id = @Id"],
+                where="Id = @Id",
+                id="dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
+                type="dml_operation",
+                module_id="stored_procedure:dbo.usp_SaveOrder",
+            ),
+            analyzer_operation(
+                "DELETE",
+                sequence=2,
+                reads=[],
+                writes=["dbo.SOrder"],
+                written_columns=[],
+                branch_path=["ELSE (NOT (@Mode = 1))"],
+                conditions=["ELSE (NOT (@Mode = 1))", "Id = @Id"],
+                where="Id = @Id",
+                id="dml_operation:stored_procedure:dbo.usp_SaveOrder:2",
+                type="dml_operation",
+                module_id="stored_procedure:dbo.usp_SaveOrder",
+            ),
             {
                 "id": "table:dbo.SOrder",
                 "type": "table",

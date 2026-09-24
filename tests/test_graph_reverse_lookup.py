@@ -11,6 +11,7 @@ from service import analyze_service
 from service.schemas import AnalyzeRequest, FindBySPRequest, FindByTableRequest, FlowChainRequest
 from service.sql_execution_graph import build_sql_execution_graph
 from tests.sql_cache_fixtures import (
+    analyzer_operation,
     cache_payload,
     case_variant_table_write_data,
     case_variant_temp_table_write_data,
@@ -28,15 +29,15 @@ def _graph() -> dict:
                 "schema": "dbo",
                 "name": "usp_Direct",
             },
-            {
-                "id": "dml_operation:stored_procedure:dbo.usp_Direct:1",
-                "type": "dml_operation",
-                "module_id": "stored_procedure:dbo.usp_Direct",
-                "sequence": 1,
-                "operation_type": "UPDATE",
-                "write_tables": ["dbo.SOrder"],
-                "written_columns": ["Status"],
-            },
+            analyzer_operation(
+                "UPDATE",
+                sequence=1,
+                writes=["dbo.SOrder"],
+                written_columns=["Status"],
+                id="dml_operation:stored_procedure:dbo.usp_Direct:1",
+                type="dml_operation",
+                module_id="stored_procedure:dbo.usp_Direct",
+            ),
             {
                 "id": "stored_procedure:dbo.usp_Entry",
                 "type": "stored_procedure",
@@ -49,15 +50,15 @@ def _graph() -> dict:
                 "schema": "dbo",
                 "name": "usp_Nested",
             },
-            {
-                "id": "dml_operation:stored_procedure:dbo.usp_Nested:1",
-                "type": "dml_operation",
-                "module_id": "stored_procedure:dbo.usp_Nested",
-                "sequence": 1,
-                "operation_type": "INSERT",
-                "write_tables": ["dbo.SOrder"],
-                "written_columns": ["OrderNo"],
-            },
+            analyzer_operation(
+                "INSERT",
+                sequence=1,
+                writes=["dbo.SOrder"],
+                written_columns=["OrderNo"],
+                id="dml_operation:stored_procedure:dbo.usp_Nested:1",
+                type="dml_operation",
+                module_id="stored_procedure:dbo.usp_Nested",
+            ),
             {
                 "id": "table:dbo.SOrder",
                 "type": "table",
