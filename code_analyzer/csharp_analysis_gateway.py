@@ -14,6 +14,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set
 
+from canonical_object_identity import bare_key, parse, part_key
+
 from .external_wrapper_contracts import (
     CONTRACT_SIGNATURE_SCHEMA_VERSION,
     compute_contract_fingerprint,
@@ -322,7 +324,7 @@ class DbInvocation:
         """
         target = self._answering_embedded_target()
         raw_name = target.procedure_name if target is not None else self.procedure_name
-        return normalize_procedure_name(raw_name) if raw_name else None
+        return bare_key(raw_name) if raw_name else None
 
     @property
     def executed_procedure_schema(self) -> Optional[str]:
@@ -2193,18 +2195,10 @@ def _leading_sql_statement(raw_text: str) -> str:
 
 
 def _procedure_name_hint(raw_text: str) -> Optional[str]:
-    normalized = normalize_procedure_name(raw_text)
-    bare = raw_text.strip().replace("[", "").replace("]", "").split(".")[-1]
-    if bare.casefold().startswith(("sp", "usp", "proc")):
+    normalized = bare_key(raw_text)
+    if normalized.startswith(("sp", "usp", "proc")):
         return normalized
     return None
-
-
-def normalize_procedure_name(raw_name: str) -> str:
-    """Normalize a candidate SP name to its bare, case-insensitive identity."""
-    cleaned = raw_name.strip().replace("[", "").replace("]", "")
-    bare = cleaned.split(".")[-1]
-    return bare.strip().lower()
 
 
 @dataclass(frozen=True)
@@ -2223,7 +2217,7 @@ class SpCatalog:
         bare_names: Dict[str, Set[str]] = {}
         qualified_names: Dict[str, Set[str]] = {}
         canonical_databases: Dict[str, str] = {}
-        normalized_default_schema = normalize_schema_name(default_schema or "")
+        normalized_default_schema = part_key(default_schema)
         for database, names in procedures_by_database.items():
             database_name = str(database).strip()
             database_key = database_name.casefold()
@@ -2231,10 +2225,9 @@ class SpCatalog:
             bare_names.setdefault(canonical_database, set())
             qualified_names.setdefault(canonical_database, set())
             for name in names:
-                normalized_name = normalize_procedure_name(name)
+                normalized_name = bare_key(name)
                 bare_names[canonical_database].add(normalized_name)
-                schema = normalize_procedure_schema(name)
-                schema = schema or normalized_default_schema
+                schema = part_key(parse(name).schema) or normalized_default_schema
                 if schema:
                     qualified_names[canonical_database].add(f"{schema}.{normalized_name}")
         return cls(bare_names, qualified_names)
@@ -3306,8 +3299,8 @@ class CSharpAnalysisGateway:
                 target_source=target_source,
             )
 
-        normalized_name = normalize_procedure_name(raw_target)
-        procedure_schema = normalize_procedure_schema(raw_target)
+        normalized_name = bare_key(raw_target)
+        procedure_schema = part_key(parse(raw_target).schema) or None
         if database:
             if self._catalog.contains(database, normalized_name, procedure_schema):
                 return EmbeddedProcedureTarget(
@@ -3917,8 +3910,8 @@ class CSharpAnalysisGateway:
                 and raw.get("command_text_kind") == "literal"
                 and raw.get("command_text")
             ):
-                procedure_name = normalize_procedure_name(raw["command_text"])
-                procedure_schema = normalize_procedure_schema(raw["command_text"])
+                procedure_name = bare_key(raw["command_text"])
+                procedure_schema = part_key(parse(raw["command_text"]).schema) or None
             return annotate(DbInvocation(
                 class_name,
                 method_name,
@@ -4102,8 +4095,8 @@ class CSharpAnalysisGateway:
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> DbInvocation:
         metadata = dict(metadata or {})
-        normalized_name = normalize_procedure_name(command_text)
-        procedure_schema = normalize_procedure_schema(command_text)
+        normalized_name = bare_key(command_text)
+        procedure_schema = part_key(parse(command_text).schema) or None
 
         if database:
             if self._catalog.contains(database, normalized_name, procedure_schema):
@@ -4250,16 +4243,3 @@ class CSharpAnalysisGateway:
         if isinstance(value, str):
             value = [value]
         return tuple(str(item) for item in (value or ()) if str(item).strip())
-
-
-def normalize_procedure_schema(raw_name: str) -> Optional[str]:
-    """Return the explicit schema from a qualified procedure name, when present."""
-    cleaned = raw_name.strip().replace("[", "").replace("]", "")
-    parts = [part.strip() for part in cleaned.split(".") if part.strip()]
-    if len(parts) < 2:
-        return None
-    return normalize_schema_name(parts[-2])
-
-
-def normalize_schema_name(raw_schema: str) -> str:
-    return raw_schema.strip().replace("[", "").replace("]", "").casefold()

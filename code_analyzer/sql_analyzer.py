@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 
+from canonical_object_identity import ObjectName, bare_name
 from config.settings import settings, DatabaseConfig
 
 
@@ -299,7 +300,7 @@ class SQLAnalyzer:
         self.cursor.execute(query, schema)
         return [row.ROUTINE_NAME for row in self.cursor.fetchall()]
 
-    def _get_native_referenced_tables(self, proc_name: str, schema: str) -> Set[str]:
+    def _get_native_referenced_tables(self, proc_name: str, schema: str) -> Set[ObjectName]:
         """
         單一物件的原生依賴查詢（給 quick_analyze_sp 即時分析單一 SP 用），
         使用 `sys.dm_sql_referenced_entities`（比 sys.sql_expression_dependencies
@@ -325,11 +326,11 @@ class SQLAnalyzer:
         except Exception:
             return set()
 
-        tables: Set[str] = set()
+        tables: Set[ObjectName] = set()
         for row in rows:
             name = row[0]
             if name:
-                tables.add(name)
+                tables.add(ObjectName(server="", database="", schema="", name=name))
         return tables
 
     def get_sp_write_info(self, proc_name: str, schema: str) -> Dict:
@@ -601,12 +602,15 @@ class SQLAnalyzer:
             # 4. 提取資料表：原生依賴查詢（sys.dm_sql_referenced_entities）優先，
             #    查不到（權限不足/動態SQL導致整包查詢失敗/查得到但結果是空集合）
             #    才 fallback 回 regex 版 _quick_extract_tables
+            #    存進 SimplifiedSPInfo 前轉回字串，C# Scan Result 的內容不變；Step 2a 改存值本身。
             native_tables = self._get_native_referenced_tables(proc_name, schema)
             if native_tables:
-                info.referenced_tables = native_tables
+                info.referenced_tables = {bare_name(table) for table in native_tables}
                 info.dependency_source = "native"
             else:
-                info.referenced_tables = self._quick_extract_tables(info.definition)
+                info.referenced_tables = {
+                    bare_name(table) for table in self._quick_extract_tables(info.definition)
+                }
                 info.dependency_source = "regex"
             
             # 5. 估算複雜度
@@ -751,12 +755,12 @@ class SQLAnalyzer:
         """偵測交易"""
         return bool(re.search(r'BEGIN\s+(?:TRAN|TRANSACTION)', sql, re.IGNORECASE))
     
-    def _quick_extract_tables(self, sql: str) -> Set[str]:
+    def _quick_extract_tables(self, sql: str) -> Set[ObjectName]:
         """
         快速提取資料表（簡單模式）
         只提取明顯的資料表引用，不深入分析
         """
-        tables = set()
+        tables: Set[ObjectName] = set()
         
         # 移除註解（避免誤判）
         sql = re.sub(r'--.*?$', '', sql, flags=re.MULTILINE)
@@ -786,11 +790,8 @@ class SQLAnalyzer:
                     len(table) > 1 and
                     not table.startswith('(')  # 排除子查詢
                 ):
-                    # 處理 schema.table 格式
-                    if '.' in table:
-                        table = table.split('.')[-1].strip('[]')
-                    
-                    tables.add(table)
+                    # 處理 schema.table 格式：只留表格名稱，schema 留空（Step 2a 改為保留 schema）
+                    tables.add(ObjectName(server="", database="", schema="", name=bare_name(table)))
         
         return tables
     
@@ -1135,7 +1136,8 @@ def estimate_complexity_from_definition(definition: str) -> str:
     info.has_temp_tables = analyzer._detect_temp_tables(definition)
     info.has_cursor = analyzer._detect_cursor(definition)
     info.has_transaction = analyzer._detect_transaction(definition)
-    info.referenced_tables = analyzer._quick_extract_tables(definition)
+    # 轉回字串，跟 quick_analyze_sp() 存進 SimplifiedSPInfo 的形狀一致；Step 2a 移除。
+    info.referenced_tables = {bare_name(table) for table in analyzer._quick_extract_tables(definition)}
 
     return analyzer._estimate_complexity(info)
 
@@ -1154,7 +1156,8 @@ def extract_tables_from_definition(definition: str) -> Set[str]:
     if not definition:
         return set()
     analyzer = object.__new__(SQLAnalyzer)
-    return analyzer._quick_extract_tables(definition)
+    # 轉回字串，呼叫端（flow_chain_builder）比對與顯示的名稱不變；Step 2a 移除。
+    return {bare_name(table) for table in analyzer._quick_extract_tables(definition)}
 
 
 # ============================================

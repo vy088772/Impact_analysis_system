@@ -6,6 +6,7 @@ from hashlib import sha256
 import re
 from typing import Any, Iterable, Mapping, Optional
 
+from canonical_object_identity import ObjectName, bare_key, part_key
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
@@ -48,7 +49,7 @@ def build_execution_paths(
     }
     paths: list[dict[str, Any]] = []
     max_call_depth = max(0, max_call_depth)
-    graph_database = _normalize_database(graph.get("database"))
+    graph_database = part_key(graph.get("database"))
 
     for invocation in sorted(invocations, key=_invocation_sort_key):
         if invocation.invocation_mode and invocation.invocation_mode != "stored_procedure":
@@ -74,7 +75,7 @@ def build_execution_paths(
         if not invocation.procedure_name:
             paths.append(_unresolved_path(invocation, "missing_procedure_name"))
             continue
-        if graph_database and _normalize_database(invocation.database) != graph_database:
+        if graph_database and part_key(invocation.database) != graph_database:
             paths.append(
                 _unresolved_path(
                     invocation,
@@ -87,11 +88,10 @@ def build_execution_paths(
         matches = [
             node
             for node in module_nodes
-            if _normalize_name(node.get("name")) == _normalize_name(invocation.procedure_name)
+            if bare_key(node.get("name")) == bare_key(invocation.procedure_name)
             and (
                 not invocation.procedure_schema
-                or _normalize_schema(node.get("schema"))
-                == _normalize_schema(invocation.procedure_schema)
+                or part_key(node.get("schema")) == part_key(invocation.procedure_schema)
             )
         ]
         if len(matches) != 1:
@@ -99,7 +99,7 @@ def build_execution_paths(
             unresolved_targets = (
                 [str(node.get("id")) for node in matches]
                 if matches
-                else [_qualified_invocation_name(invocation)]
+                else [_written_name(_qualified_invocation_name(invocation))]
             )
             paths.append(
                 _unresolved_path(
@@ -140,7 +140,7 @@ def _paths_from_module(
     max_call_depth: int = 5,
 ) -> list[dict[str, Any]]:
     module_id = str(module.get("id", ""))
-    qualified_module = _qualified_name(module)
+    qualified_module = _written_name(_qualified_name(module))
     current_sp_chain = (*sp_chain, qualified_module)
     current_module_chain = (*module_chain_ids, module_id)
     if module_id in module_chain_ids:
@@ -454,7 +454,7 @@ def _path_for_operation(
         "procedure_name": invocation.procedure_name or "",
         "procedure_schema": invocation.procedure_schema or "",
         "branch_context": list(invocation.branch_context),
-        "sp_chain": list(sp_chain or [_qualified_name(module)]),
+        "sp_chain": list(sp_chain or [_written_name(_qualified_name(module))]),
         "module_chain_ids": list(module_chain),
         "terminal_operation_id": operation_id,
         "terminal_operation": operation.get("operation_type", ""),
@@ -508,7 +508,7 @@ def _unresolved_path(
     )
     procedure_name = invocation.procedure_name or ""
     sp_chain = sp_chain_override or (
-        [_qualified_name(module)] if module else ([procedure_name] if procedure_name else [])
+        [_written_name(_qualified_name(module))] if module else ([procedure_name] if procedure_name else [])
     )
     module_id = path_identity or (str(module.get("id", "")) if module else "")
     path = {
@@ -576,14 +576,14 @@ def _relationship_targets(
         if target is None:
             missing.append(target_id or "<missing-target>")
             continue
-        names.append(_qualified_name(target))
+        names.append(_written_name(_qualified_name(target)))
     return _ordered_unique(names), _ordered_unique(missing)
 
 
 def _stored_procedure_nodes(nodes: Mapping[str, Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     return sorted(
         (node for node in nodes.values() if node.get("type") == "stored_procedure"),
-        key=lambda node: (_normalize_name(node.get("name")), _qualified_name(node)),
+        key=lambda node: (bare_key(node.get("name")), _written_name(_qualified_name(node))),
     )
 
 
@@ -682,13 +682,13 @@ def _path_id(
 ) -> str:
     identity = "\x1f".join(
         (
-            _normalize_database(invocation.database),
+            part_key(invocation.database),
             invocation.source.relative_path,
             str(invocation.source.start_offset),
             str(invocation.source.end_offset),
             _entry_method(invocation),
-            _normalize_schema(invocation.procedure_schema),
-            _normalize_name(invocation.procedure_name),
+            part_key(invocation.procedure_schema),
+            bare_key(invocation.procedure_name),
             invocation.source_snapshot_hash,
             module_id,
             operation_id,
@@ -709,29 +709,27 @@ def _method_chain(invocation: DbInvocation) -> list[str]:
     return list(invocation.method_chain) or [invocation.method_name]
 
 
-def _qualified_name(node: Mapping[str, Any]) -> str:
-    schema = str(node.get("schema", "") or "")
-    name = str(node.get("name", "") or "")
-    return f"{schema}.{name}" if schema and name else name
+def _qualified_name(node: Mapping[str, Any]) -> ObjectName:
+    return ObjectName(
+        server="",
+        database="",
+        schema=str(node.get("schema", "") or ""),
+        name=str(node.get("name", "") or ""),
+    )
 
 
-def _normalize_name(name: Any) -> str:
-    cleaned = str(name or "").replace("[", "").replace("]", "").strip()
-    return cleaned.rsplit(".", 1)[-1].casefold()
+def _qualified_invocation_name(invocation: DbInvocation) -> ObjectName:
+    return ObjectName(
+        server="",
+        database="",
+        schema=invocation.procedure_schema or "",
+        name=invocation.procedure_name or "",
+    )
 
 
-def _normalize_schema(schema: Any) -> str:
-    return str(schema or "").replace("[", "").replace("]", "").strip().casefold()
-
-
-def _normalize_database(database: Any) -> str:
-    return str(database or "").strip().casefold()
-
-
-def _qualified_invocation_name(invocation: DbInvocation) -> str:
-    if invocation.procedure_schema:
-        return f"{invocation.procedure_schema}.{invocation.procedure_name or ''}"
-    return invocation.procedure_name or "<missing-procedure>"
+def _written_name(name: ObjectName) -> str:
+    """Return `schema.name` as written, or the bare name when the schema is empty."""
+    return f"{name.schema}.{name.name}" if name.schema and name.name else name.name
 
 
 def _evidence_value(evidence: Any) -> str:

@@ -18,9 +18,14 @@ from service import analyze_service, sql_cache_store
 from service.sql_cache_store import CacheIdentity
 from tests.sql_cache_fixtures import (
     CacheRoot,
+    analyzer_operation,
     cache_payload,
     execution_graph,
     write_cache,
+)
+
+AGREEMENT = json.loads(
+    (Path(__file__).resolve().parent / "cross_repository_agreement.json").read_text(encoding="utf-8")
 )
 
 
@@ -33,6 +38,107 @@ def _payload(database: str, graph_nodes: tuple = (), **objects: object) -> dict:
         graph=execution_graph(database, nodes=list(graph_nodes)),
         **objects,  # type: ignore[arg-type]
     )
+
+
+# ---------------------------------------------------------------- cross-repository agreement
+
+
+@pytest.mark.parametrize(
+    "case",
+    AGREEMENT["sql_cache_identity"],
+    ids=[case["filename"] for case in AGREEMENT["sql_cache_identity"]],
+)
+def test_each_agreed_identity_names_its_cache_file(case: dict) -> None:
+    identity = CacheIdentity.of(case["server"], case["database"], case["schema"])
+
+    assert identity.filename == case["filename"]
+
+
+def _sample_cache_files() -> dict:
+    """Write the one fixed sample cache and read back its data file and its meta file.
+
+    The payload builder, the graph helper, and the meta writer produce both
+    files. When the cache shape changes, copy this function's output into the
+    `sample_cache` entry of tests/cross_repository_agreement.json.
+    """
+    identity = CacheIdentity.of("sqlsrv01", "SampleDb", "dbo")
+    procedure_id = "stored_procedure:dbo.usp_Load"
+    operation_id = f"dml_operation:{procedure_id}:1"
+    source = {"source_path": procedure_id, "module_id": procedure_id, "module_definition_length": 58}
+    graph = execution_graph(
+        "SampleDb",
+        nodes=[
+            {"id": procedure_id, "type": "stored_procedure", "schema": "dbo", "name": "usp_Load"},
+            {"id": "view:dbo.vw_Orders", "type": "view", "schema": "dbo", "name": "vw_Orders"},
+            {"id": "function:dbo.fn_Rate", "type": "function", "schema": "dbo", "name": "fn_Rate"},
+            {"id": "table:dbo.Orders", "type": "table", "schema": "dbo", "name": "Orders"},
+            analyzer_operation(
+                "UPDATE",
+                writes=["dbo.Orders"],
+                written_columns=["Status"],
+                id=operation_id,
+                type="dml_operation",
+                module={"type": "stored_procedure", "schema": "dbo", "name": "usp_Load"},
+                module_id=procedure_id,
+                source=source,
+            ),
+        ],
+        relationships=[
+            {
+                "id": f"contains:{procedure_id}:{operation_id}",
+                "type": "contains",
+                "source": procedure_id,
+                "target": operation_id,
+                "confidence": "proven",
+                "branch_path": [],
+                "source_location": source,
+            },
+            {
+                "id": f"writes:{operation_id}:table:dbo.Orders",
+                "type": "writes",
+                "source": operation_id,
+                "target": "table:dbo.Orders",
+                "confidence": "proven",
+                "branch_path": [],
+                "source_location": source,
+                "columns": ["Status"],
+            },
+        ],
+    )
+    payload = cache_payload(
+        "SampleDb",
+        procedures={
+            "dbo.usp_Load": {
+                "definition": "CREATE PROCEDURE dbo.usp_Load AS UPDATE dbo.Orders SET Status = 1",
+                "parameters": [],
+            }
+        },
+        views={"dbo.vw_Orders": {"definition": "CREATE VIEW dbo.vw_Orders AS SELECT Id FROM dbo.Orders"}},
+        functions={
+            "dbo.fn_Rate": {
+                "definition": "CREATE FUNCTION dbo.fn_Rate() RETURNS int AS BEGIN RETURN 1 END",
+                "parameters": [],
+                "return_type": "int",
+            }
+        },
+        tables={
+            "dbo.Orders": {
+                "columns": [{"name": "Id", "type": "int", "nullable": False, "default": None}],
+                "primary_keys": ["Id"],
+            }
+        },
+        graph=graph,
+    )
+    with CacheRoot() as root:
+        write_cache(root, identity, payload)
+        return {
+            "data_file": json.loads((root / identity.filename).read_text(encoding="utf-8")),
+            "meta_file": json.loads((root / identity.meta_filename).read_text(encoding="utf-8")),
+        }
+
+
+def test_the_committed_sample_cache_is_what_the_builders_produce() -> None:
+    assert _sample_cache_files() == AGREEMENT["sample_cache"]
 
 
 # ---------------------------------------------------------------- normalization

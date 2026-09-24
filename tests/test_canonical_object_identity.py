@@ -72,6 +72,36 @@ def test_the_case_preserving_variant_keeps_the_written_case() -> None:
     assert coi.bare_name(" dbo . fn_GetRate ") == "fn_GetRate"
 
 
+def test_a_part_written_alone_keys_without_brackets_or_case() -> None:
+    assert coi.part_key("[COMMON]") == "common"
+    assert coi.part_key(" Straße ") == "strasse"
+    assert coi.part_key(None) == ""
+
+
+def test_a_part_written_alone_keeps_its_dots() -> None:
+    assert coi.part_key("Y.Docs") == "y.docs"
+
+
+@pytest.mark.parametrize(
+    ("written", "schema_key", "name_key"),
+    [
+        ("usp_Load", "", "usp_load"),
+        ("[COMMON].[usp_Load]", "common", "usp_load"),
+    ],
+)
+def test_a_procedure_name_gives_the_gateway_its_schema_and_name(
+    written: str, schema_key: str, name_key: str
+) -> None:
+    """The C# analysis gateway keys a procedure name this way, and `path_id` reads both keys."""
+    assert coi.part_key(coi.parse(written).schema) == schema_key
+    assert coi.bare_key(written) == name_key
+
+
+@pytest.mark.parametrize("written", ["usp_SO_Delete", "dbo.usp_SO_Delete", "[dbo].[usp_SO_Delete]"])
+def test_a_procedure_bare_key_drops_the_schema_and_the_brackets(written: str) -> None:
+    assert coi.bare_key(written) == "usp_so_delete"
+
+
 def test_the_value_is_frozen() -> None:
     parsed = coi.parse("dbo.Orders")
 

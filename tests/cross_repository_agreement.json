@@ -72,5 +72,190 @@
       "bare_key": "usp_load",
       "full_key": ".common.usp_load"
     }
-  ]
+  ],
+  "sql_cache_identity": [
+    {
+      "server": "sqlsrv01",
+      "database": "PUR",
+      "schema": "dbo",
+      "filename": "sqlsrv01.topmost.com.tw__PUR__dbo.json"
+    },
+    {
+      "server": "SQLSRV01\\INST01",
+      "database": "PUR",
+      "schema": "dbo",
+      "filename": "sqlsrv01.topmost.com.tw__PUR__dbo.json"
+    },
+    {
+      "server": "tcp:sqlsrv01,1433",
+      "database": "PUR",
+      "schema": "dbo",
+      "filename": "sqlsrv01.topmost.com.tw__PUR__dbo.json"
+    },
+    {
+      "server": "db01.example.org",
+      "database": "Response",
+      "schema": "COMMON",
+      "filename": "db01.example.org__Response__COMMON.json"
+    },
+    {
+      "server": "sqlsrv01",
+      "database": "Y Docs",
+      "schema": "dbo",
+      "filename": "sqlsrv01.topmost.com.tw__Y_Docs__dbo.json"
+    },
+    {
+      "server": "sqlsrv01",
+      "database": "A__B",
+      "schema": "dbo",
+      "filename": "sqlsrv01.topmost.com.tw__A__B__dbo.json"
+    }
+  ],
+  "sample_cache": {
+    "data_file": {
+      "database": "SampleDb",
+      "schema": "dbo",
+      "procedures": [
+        {
+          "name": "dbo.usp_Load",
+          "schema": "dbo",
+          "definition": "CREATE PROCEDURE dbo.usp_Load AS UPDATE dbo.Orders SET Status = 1",
+          "parameters": []
+        }
+      ],
+      "views": [
+        {
+          "name": "dbo.vw_Orders",
+          "schema": "dbo",
+          "definition": "CREATE VIEW dbo.vw_Orders AS SELECT Id FROM dbo.Orders"
+        }
+      ],
+      "functions": [
+        {
+          "name": "dbo.fn_Rate",
+          "schema": "dbo",
+          "definition": "CREATE FUNCTION dbo.fn_Rate() RETURNS int AS BEGIN RETURN 1 END",
+          "parameters": [],
+          "return_type": "int"
+        }
+      ],
+      "tables": [
+        {
+          "name": "dbo.Orders",
+          "schema": "dbo",
+          "columns": [
+            {
+              "name": "Id",
+              "type": "int",
+              "nullable": false,
+              "default": null
+            }
+          ],
+          "primary_keys": [
+            "Id"
+          ]
+        }
+      ],
+      "sql_execution_graph": {
+        "graph_version": 4,
+        "database": "SampleDb",
+        "nodes": [
+          {
+            "id": "stored_procedure:dbo.usp_Load",
+            "type": "stored_procedure",
+            "schema": "dbo",
+            "name": "usp_Load"
+          },
+          {
+            "id": "view:dbo.vw_Orders",
+            "type": "view",
+            "schema": "dbo",
+            "name": "vw_Orders"
+          },
+          {
+            "id": "function:dbo.fn_Rate",
+            "type": "function",
+            "schema": "dbo",
+            "name": "fn_Rate"
+          },
+          {
+            "id": "table:dbo.Orders",
+            "type": "table",
+            "schema": "dbo",
+            "name": "Orders"
+          },
+          {
+            "operation_type": "UPDATE",
+            "sequence": 1,
+            "branch_path": [],
+            "conditions": [],
+            "where": null,
+            "read_tables": [],
+            "write_tables": [
+              "dbo.Orders"
+            ],
+            "read_columns": [],
+            "written_columns": [
+              "Status"
+            ],
+            "function_references": [],
+            "call_targets": [],
+            "dynamic_sql": false,
+            "id": "dml_operation:stored_procedure:dbo.usp_Load:1",
+            "type": "dml_operation",
+            "module": {
+              "type": "stored_procedure",
+              "schema": "dbo",
+              "name": "usp_Load"
+            },
+            "module_id": "stored_procedure:dbo.usp_Load",
+            "source": {
+              "source_path": "stored_procedure:dbo.usp_Load",
+              "module_id": "stored_procedure:dbo.usp_Load",
+              "module_definition_length": 58
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "id": "contains:stored_procedure:dbo.usp_Load:dml_operation:stored_procedure:dbo.usp_Load:1",
+            "type": "contains",
+            "source": "stored_procedure:dbo.usp_Load",
+            "target": "dml_operation:stored_procedure:dbo.usp_Load:1",
+            "confidence": "proven",
+            "branch_path": [],
+            "source_location": {
+              "source_path": "stored_procedure:dbo.usp_Load",
+              "module_id": "stored_procedure:dbo.usp_Load",
+              "module_definition_length": 58
+            }
+          },
+          {
+            "id": "writes:dml_operation:stored_procedure:dbo.usp_Load:1:table:dbo.Orders",
+            "type": "writes",
+            "source": "dml_operation:stored_procedure:dbo.usp_Load:1",
+            "target": "table:dbo.Orders",
+            "confidence": "proven",
+            "branch_path": [],
+            "source_location": {
+              "source_path": "stored_procedure:dbo.usp_Load",
+              "module_id": "stored_procedure:dbo.usp_Load",
+              "module_definition_length": 58
+            },
+            "columns": [
+              "Status"
+            ]
+          }
+        ],
+        "parse_errors": []
+      }
+    },
+    "meta_file": {
+      "cache_version": 10,
+      "server": "sqlsrv01.topmost.com.tw",
+      "database": "SampleDb",
+      "schema": "dbo",
+      "saved_at": "2026-08-04 13:29:13"
+    }
+  }
 }

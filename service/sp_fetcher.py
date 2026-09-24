@@ -14,22 +14,19 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from canonical_object_identity import ObjectName, bare_key
+
 from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
 from code_analyzer.sql_analyzer import estimate_complexity_from_definition
 
 
-def _normalize(name: str) -> str:
-    """正規化 SP 名稱以利比對：去除 schema 前綴與方括號、轉小寫。"""
-    core = (name or "").strip().replace("[", "").replace("]", "")
-    if "." in core:
-        core = core.rsplit(".", 1)[-1]
-    return core.lower()
-
-
-def _qualified_node_name(node: dict) -> str:
-    schema = str(node.get("schema") or "").strip()
-    name = str(node.get("name") or "").strip()
-    return f"{schema}.{name}" if schema and name else name
+def _qualified_node_name(node: dict) -> ObjectName:
+    return ObjectName(
+        server="",
+        database="",
+        schema=str(node.get("schema") or "").strip(),
+        name=str(node.get("name") or "").strip(),
+    )
 
 
 def _graph_tables_for_procedure(cached: dict, procedure_name: str) -> List[str]:
@@ -44,7 +41,7 @@ def _graph_tables_for_procedure(cached: dict, procedure_name: str) -> List[str]:
         node_id
         for node_id, node in nodes.items()
         if node.get("type") == "stored_procedure"
-        and _normalize(_qualified_node_name(node)) == _normalize(procedure_name)
+        and bare_key(_qualified_node_name(node)) == bare_key(procedure_name)
     }
     queue = list(roots)
     visited: set[str] = set()
@@ -68,7 +65,8 @@ def _graph_tables_for_procedure(cached: dict, procedure_name: str) -> List[str]:
             elif relationship_type in {"reads", "writes"}:
                 target_type = target.get("type")
                 if target_type == "table":
-                    tables.add(_qualified_node_name(target))
+                    table = _qualified_node_name(target)
+                    tables.add(f"{table.schema}.{table.name}" if table.schema and table.name else table.name)
                 elif target_type in {"view", "function", "dml_operation", "unresolved_dynamic_sql"}:
                     queue.append(target_id)
         if source.get("type") in {"view", "function"}:
@@ -98,11 +96,11 @@ def _from_cache(
     if not cached:
         return [], sp_names
 
-    lookup = {_normalize(p["name"]): p for p in cached.get("procedures", [])}
+    lookup = {bare_key(p["name"]): p for p in cached.get("procedures", [])}
     found: List[dict] = []
     missing: List[str] = []
     for raw in sp_names:
-        p = lookup.get(_normalize(raw))
+        p = lookup.get(bare_key(raw))
         if p is None:
             missing.append(raw)
             continue

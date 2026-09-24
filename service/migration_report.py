@@ -7,11 +7,10 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
+from canonical_object_identity import bare_key, parse, part_key
 from code_analyzer.csharp_analysis_gateway import (
     DbInvocation,
     InvocationEvidence,
-    normalize_procedure_name,
-    normalize_procedure_schema,
 )
 from code_analyzer.models import StoredProcedureCall
 from code_analyzer.project_scanner import CSharpSPRelation, ProjectScanResult
@@ -501,8 +500,8 @@ def _normalize_database(database: str) -> str:
 def _normalize_procedure(procedure: str) -> str:
     if not procedure or procedure == "<unresolved>":
         return "<unresolved>"
-    name = normalize_procedure_name(procedure)
-    schema = normalize_procedure_schema(procedure) or "dbo"
+    name = bare_key(procedure)
+    schema = part_key(parse(procedure).schema) or "dbo"
     return f"{schema}.{name}"
 
 

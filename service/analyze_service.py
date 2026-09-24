@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Opt
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
+from canonical_object_identity import bare_key, parse
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
@@ -32,7 +33,6 @@ from code_analyzer.csharp_analysis_gateway import (
     invocation_wrapper_evidence_fields,
     load_external_wrapper_contract,
     load_wrapper_review_exclusions,
-    normalize_procedure_name,
     wrapper_observation_identity,
 )
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
@@ -2228,11 +2228,11 @@ def _cached_sql_object(cached: Mapping[str, object], node: Mapping[str, object])
     node_name = str(node.get("name") or "").casefold()
     for item in cached.get(collection, []) or []:
         item_dict = dict(item)
-        item_schema, item_name = _split_sql_object_name(
-            item_dict.get("name", ""),
-            str(item_dict.get("schema") or node.get("schema") or "dbo"),
-        )
-        if item_schema.casefold() == node_schema and item_name.casefold() == node_name:
+        item_name = parse(str(item_dict.get("name") or ""))
+        # A name that states no schema takes the object's own schema, then dbo.
+        # The listing commit of Step 2a removes both dbo fallbacks of this lookup.
+        item_schema = item_name.schema or str(item_dict.get("schema") or node.get("schema") or "dbo")
+        if item_schema.casefold() == node_schema and item_name.name.casefold() == node_name:
             return item_dict
     return None
 
@@ -2242,7 +2242,10 @@ def _find_graph_object_id(
     object_type: str,
     object_name: str,
 ) -> str:
-    schema, name = _split_sql_object_name(object_name, "dbo")
+    object_ref = parse(object_name)
+    # A reference that states no schema reads as dbo here. Step 2b removes this default.
+    schema = object_ref.schema or "dbo"
+    name = object_ref.name
     for node_id, node in nodes.items():
         if (
             node.get("type") == object_type
@@ -2251,16 +2254,6 @@ def _find_graph_object_id(
         ):
             return node_id
     return ""
-
-
-def _split_sql_object_name(value: object, default_schema: str) -> tuple[str, str]:
-    cleaned = str(value or "").replace("[", "").replace("]", "").replace('"', "").strip()
-    parts = [part.strip() for part in cleaned.split(".") if part.strip()]
-    if not parts:
-        return default_schema, ""
-    if len(parts) == 1:
-        return default_schema, parts[0]
-    return parts[-2], parts[-1]
 
 
 def _slice_utf16(text: str, start_offset: int, length: int) -> str:
@@ -2770,7 +2763,7 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
     scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
     root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
 
-    sp_lower = normalize_procedure_name(sp_name)
+    sp_lower = bare_key(sp_name)
     matches: List[SPMatchProgram] = []
     diagnostics: List[Dict] = []
     seen_invocations: set[tuple[str, int, int]] = set()
@@ -2797,7 +2790,7 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         # procedure name -- declares no procedure of its own, and reading only the
         # declared field answered "no callers" for a call the database really makes.
         executed = invocation.executed_procedure_name
-        if not executed or normalize_procedure_name(executed) != sp_lower:
+        if not executed or bare_key(executed) != sp_lower:
             continue
         csharp_file = _source_file_for_span(
             scan,
@@ -2843,15 +2836,6 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         diagnostics=diagnostics,
         source_root=str(root),
     )
-
-
-def _normalize_table(name: str) -> str:
-    """正規化資料表名稱供 inline SQL facts 與 SQL graph query 比對。
-
-    例如 `[dbo].[Customers]`／`dbo.Customers`／`Customers` 都會正規化成 `customers`。
-    """
-    cleaned = (name or "").replace("[", "").replace("]", "").strip()
-    return cleaned.rsplit(".", 1)[-1].lower()
 
 
 def _record_table_reverse_lookup(table_name: str, scope: DerivedExecutionEvidenceScope) -> None:
@@ -2911,7 +2895,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     scope = DerivedExecutionEvidenceScope.of(req, roots)
     _record_table_reverse_lookup(table_name, scope)
 
-    table_norm = _normalize_table(table_name)
+    table_norm = bare_key(table_name)
     # Graph-derived facts key by Execution Path identity, not by file
     # (ADR-0016) -- see `_table_match_identity`. An inline C# SQL fact carries
     # no such identity of its own; it keeps the pre-ticket file-scoped rule
@@ -2921,7 +2905,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     inline_matches_by_file: Dict[str, TableMatchProgram] = {}
     diagnostics: List[Dict] = []
     for rel in scan.table_relations:
-        if _normalize_table(rel.table_name) != table_norm:
+        if bare_key(rel.table_name) != table_norm:
             continue
         database = str(getattr(rel, "database", "") or "")
         caller_class = str(getattr(rel, "class_name", "") or "")
@@ -3084,11 +3068,10 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
     """從磁碟上每一份 SQL 快取的 Object Location Index 猜哪些 Database 可能持有這個
     物件名稱，一律不開任何 SQL 快取本體（見 ADR-0012）。
 
-    kind="sp" 用 normalize_procedure_name 正規化查詢名稱，比對索引的 stored_procedures
-    桶——跟 find_by_sp() 比對 invocation 用同一個函式。kind="table" 用
-    sql_cache_store.normalize_table_name（= graph_queries._normalize_table）正規化，
-    比對索引的 tables 桶——跟 find_by_table() 經 SQL Execution Graph 比對表名用同一個
-    函式。索引因此不會剪掉一個對應端點其實找得到的名字。
+    兩種 kind 都用 Canonical Object Identity 的 bare key 正規化查詢名稱：kind="sp"
+    比對索引的 stored_procedures 桶，kind="table" 比對 tables 桶——跟 find_by_sp()
+    比對 invocation、find_by_table() 經 SQL Execution Graph 比對表名用同一個函式。
+    索引因此不會剪掉一個對應端點其實找得到的名字。
 
     一份索引新鮮且持有這個名稱 → matched；快取存在但索引依 staleness 規則判定缺席
     （缺失/讀不了/舊/版本不符/身分不符）→ unindexed；索引新鮮但不持有這個名稱 →
@@ -3104,11 +3087,7 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
         raise ValueError(f"kind 必須是 sp 或 table，收到：{req.kind!r}")
 
     object_name = (req.object_name or "").strip()
-    normalized = (
-        normalize_procedure_name(object_name)
-        if kind == "sp"
-        else sql_cache_store.normalize_table_name(object_name)
-    )
+    normalized = bare_key(object_name)
 
     databases: Dict[Tuple[str, str], LocatedDatabase] = {}
     matched_keys: Set[Tuple[str, str]] = set()

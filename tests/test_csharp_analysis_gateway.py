@@ -19,7 +19,6 @@ from code_analyzer.csharp_analysis_gateway import (
     SpCatalog,
     WrapperReconciliation,
     invocation_wrapper_evidence_fields,
-    normalize_procedure_name,
     project_wrapper_evidence,
     wrapper_observation_identity,
 )
@@ -1266,13 +1265,6 @@ def test_resolved_invocation_retains_wrapper_reconciliation_provenance(tmp_path:
     assert unresolved.external_wrapper_method == "ExeProcNon"
 
 
-def test_normalize_procedure_name_strips_schema_and_brackets() -> None:
-    """Only the bare, case-insensitive procedure name is used for catalog matching."""
-    assert normalize_procedure_name("usp_SO_Delete") == "usp_so_delete"
-    assert normalize_procedure_name("dbo.usp_SO_Delete") == "usp_so_delete"
-    assert normalize_procedure_name("[dbo].[usp_SO_Delete]") == "usp_so_delete"
-
-
 def test_catalog_merges_case_variants_of_one_database_identity() -> None:
     catalog = SpCatalog.from_databases({
         "OrdersDb": ["usp_SaveOrder"],
@@ -1300,6 +1292,25 @@ def test_explicit_stored_procedure_type_with_catalog_hit_is_proven() -> None:
     assert invocation.source.relative_path == "Ship/PUR_SOMaintain.aspx.cs"
     assert invocation.source.start_offset == 10
     assert invocation.source.end_offset == 90
+
+
+def test_a_database_qualified_procedure_name_states_no_schema() -> None:
+    """`PUR..usp_Load` names a Database and a procedure, and states no schema.
+
+    Before Step 1 of the Canonical Object Identity work, the gateway read `PUR` as
+    the schema, so the catalog lookup missed and the call stayed unresolved.
+    """
+    catalog = SpCatalog.from_databases({"PUR": ["usp_Load"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "PUR"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "OrderPage.cs",
+        [_raw_invocation(command_text="PUR..usp_Load")],
+    )[0]
+
+    assert invocation.procedure_name == "usp_load"
+    assert invocation.procedure_schema is None
+    assert invocation.evidence is InvocationEvidence.PROVEN
 
 
 def test_stored_procedure_projection_separates_execution_and_evidence_fields() -> None:
@@ -6796,7 +6807,6 @@ def test_unresolvable_wrapper_owned_connection_stays_connection_source_unresolve
 
 
 if __name__ == "__main__":
-    test_normalize_procedure_name_strips_schema_and_brackets()
     test_explicit_stored_procedure_type_with_catalog_hit_is_proven()
     test_inline_sql_without_stored_procedure_type_is_a_database_invocation()
     test_dynamic_command_text_is_unresolved()

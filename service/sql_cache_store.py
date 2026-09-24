@@ -30,14 +30,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Union
 
-from code_analyzer.csharp_analysis_gateway import normalize_procedure_name
+# 索引的兩個桶跟 /find_by_sp、/find_by_table 比對時用同一個 bare key
+# （Canonical Object Identity module），特意重用而不是自己另寫一份等價邏輯——否則
+# 索引跟真正的比對邏輯日後可能悄悄長歪，讓索引誤刪一個端點其實會找到的名字。
+from canonical_object_identity import bare_key
 from config.settings import settings
-
-# 資料表名稱正規化跟 /find_by_table 比對 SQL Execution Graph 節點時用的同一個函式
-# （service/graph_queries.py 內部用來判斷一個 graph table 節點是否等於呼叫端要找的
-# 表名），特意重用而不是自己另寫一份等價邏輯——否則索引跟真正的比對邏輯日後可能
-# 悄悄長歪，讓索引誤刪一個 find_by_table 其實會找到的名字。
-from .graph_queries import _normalize_table as normalize_table_name
 
 # 快取格式版本：dump_all_sql_objects() 回傳結構若變動則遞增，讓舊快取自動失效
 # v2：tables[].primary_keys（原供已移除的 fk_resolver.py 之 PK 命名慣例推論關聯使用）
@@ -465,10 +462,10 @@ def write_meta(identity: CacheIdentity, saved_at: str) -> None:
 class ObjectLocationIndex:
     """一份 SQL 快取的 Object Location Index：這份快取能回答哪些物件名稱。
 
-    分兩個桶，各自正規化：stored_procedures（procedures/views/functions，用
-    normalize_procedure_name）與 tables（快取宣告的 tables ∪ SQL Execution
-    Graph 裡的 table 節點，用 normalize_table_name，並且已經去掉 schema——
-    dbo.Orders 與 sales.Orders 收斂成同一個 key，這是今天既有的比對行為）。
+    分兩個桶，都用 Canonical Object Identity 的 bare key 正規化：stored_procedures
+    （procedures/views/functions）與 tables（快取宣告的 tables ∪ SQL Execution
+    Graph 裡的 table 節點）。兩個桶都已經去掉 schema——dbo.Orders 與 sales.Orders
+    收斂成同一個 key，這是今天既有的比對行為。
     寧可多報也不能少報：多報頂多多讀一次快取，少報會漏掉一個本該找到的答案。
     """
 
@@ -490,13 +487,13 @@ def build_object_location_index(identity: CacheIdentity, data: Dict) -> ObjectLo
         for item in data.get(collection, []) or []:
             name = str((item or {}).get("name") or "").strip()
             if name:
-                stored_procedures.add(normalize_procedure_name(name))
+                stored_procedures.add(bare_key(name))
 
     tables: set[str] = set()
     for item in data.get("tables", []) or []:
         name = str((item or {}).get("name") or "").strip()
         if name:
-            tables.add(normalize_table_name(name))
+            tables.add(bare_key(name))
 
     graph = data.get("sql_execution_graph")
     if isinstance(graph, dict):
@@ -505,7 +502,7 @@ def build_object_location_index(identity: CacheIdentity, data: Dict) -> ObjectLo
                 continue
             name = str(node.get("name") or "").strip()
             if name:
-                tables.add(normalize_table_name(name))
+                tables.add(bare_key(name))
 
     return ObjectLocationIndex(
         server=identity.server,

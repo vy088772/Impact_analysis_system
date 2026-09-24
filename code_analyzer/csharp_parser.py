@@ -7,6 +7,7 @@ import re
 from typing import List, NamedTuple, Optional, Set, Tuple, Dict
 from pathlib import Path
 from datetime import datetime
+from canonical_object_identity import ObjectName, bare_name
 from config.sp_detector_config import SPDetectionConfig
 from .db_connection_tracker import DBConnectionTracker
 from .models import (
@@ -621,7 +622,8 @@ class CSharpParser:
             query_type = self._determine_sql_type(sql_text)
             
             if query_type != SQLQueryType.UNKNOWN:
-                tables = self._extract_tables_from_sql(sql_text)
+                # 存進 SQLQuery 前轉回字串，C# Scan Result 的內容不變；Step 2a 改存值本身。
+                tables = {bare_name(table) for table in self._extract_tables_from_sql(sql_text)}
                 is_parameterized = '@' in sql_text or '{' in sql_text
                 has_join = 'JOIN' in sql_text.upper()
                 has_subquery = sql_text.upper().count('SELECT') > 1
@@ -670,7 +672,8 @@ class CSharpParser:
                 seen_queries.add(sql_text)
                 
                 line_num = content[:match.start()].count('\n') + 1
-                tables = self._extract_tables_from_sql(sql_text)
+                # 存進 SQLQuery 前轉回字串，C# Scan Result 的內容不變；Step 2a 改存值本身。
+                tables = {bare_name(table) for table in self._extract_tables_from_sql(sql_text)}
                 is_parameterized = '@' in sql_text or '{' in sql_text
                 has_join = 'JOIN' in sql_text.upper()
                 has_subquery = sql_text.count('SELECT') > 1
@@ -710,7 +713,8 @@ class CSharpParser:
             query_type = self._determine_sql_type(sql_text)
             
             if query_type != SQLQueryType.UNKNOWN:
-                tables = self._extract_tables_from_sql(sql_text)
+                # 存進 SQLQuery 前轉回字串，C# Scan Result 的內容不變；Step 2a 改存值本身。
+                tables = {bare_name(table) for table in self._extract_tables_from_sql(sql_text)}
                 is_parameterized = '@' in sql_text or '{' in sql_text
                 has_join = 'JOIN' in sql_text.upper()
                 has_subquery = sql_text.upper().count('SELECT') > 1
@@ -859,9 +863,9 @@ class CSharpParser:
         else:
             return SQLQueryType.UNKNOWN
     
-    def _extract_tables_from_sql(self, sql: str) -> Set[str]:
+    def _extract_tables_from_sql(self, sql: str) -> Set[ObjectName]:
         """從 SQL 提取資料表名稱（增強版）"""
-        tables = set()
+        tables: Set[ObjectName] = set()
         
         # 清理 SQL
         sql_clean = sql.upper()
@@ -885,10 +889,10 @@ class CSharpParser:
                 else:
                     table_name = match
                 
-                table_name = self._clean_table_name(table_name)
+                table = self._clean_table_name(table_name)
                 # 過濾掉常見的 schema 名稱
-                if table_name and len(table_name) > 1 and table_name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
-                    tables.add(table_name)
+                if len(table.name) > 1 and table.name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
+                    tables.add(table)
         
         # JOIN 子句
         join_patterns = [
@@ -904,10 +908,10 @@ class CSharpParser:
                 else:
                     table_name = match
                 
-                table_name = self._clean_table_name(table_name)
+                table = self._clean_table_name(table_name)
                 # 過濾掉常見的 schema 名稱
-                if table_name and len(table_name) > 1 and table_name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
-                    tables.add(table_name)
+                if len(table.name) > 1 and table.name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
+                    tables.add(table)
         
         # INSERT INTO（支援 schema.table 格式）
         insert_patterns = [
@@ -921,9 +925,9 @@ class CSharpParser:
                     table_name = match[1] if len(match) > 1 and match[1] else match[0]
                 else:
                     table_name = match
-                table_name = self._clean_table_name(table_name)
-                if table_name and len(table_name) > 1 and table_name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
-                    tables.add(table_name)
+                table = self._clean_table_name(table_name)
+                if len(table.name) > 1 and table.name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
+                    tables.add(table)
         
         # UPDATE（支援 schema.table 格式）
         update_patterns = [
@@ -937,9 +941,9 @@ class CSharpParser:
                     table_name = match[1] if len(match) > 1 and match[1] else match[0]
                 else:
                     table_name = match
-                table_name = self._clean_table_name(table_name)
-                if table_name and len(table_name) > 1 and table_name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
-                    tables.add(table_name)
+                table = self._clean_table_name(table_name)
+                if len(table.name) > 1 and table.name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
+                    tables.add(table)
         
         # DELETE FROM（支援 schema.table 格式）
         delete_patterns = [
@@ -953,29 +957,15 @@ class CSharpParser:
                     table_name = match[1] if len(match) > 1 and match[1] else match[0]
                 else:
                     table_name = match
-                table_name = self._clean_table_name(table_name)
-                if table_name and len(table_name) > 1 and table_name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
-                    tables.add(table_name)
+                table = self._clean_table_name(table_name)
+                if len(table.name) > 1 and table.name.upper() not in ('DBO', 'SYS', 'INFORMATION_SCHEMA'):
+                    tables.add(table)
         
         return tables
 
-    def _clean_table_name(self, table: str) -> str:
-        """清理資料表名稱"""
-        if not table:
-            return ""
-        
-        # 移除方括號
-        table = table.replace('[', '').replace(']', '')
-        
-        # 如果有 schema，只取表格名稱
-        if '.' in table:
-            parts = table.split('.')
-            table = parts[-1]
-        
-        # 移除空白
-        table = table.strip()
-        
-        return table
+    def _clean_table_name(self, table: str) -> ObjectName:
+        """清理資料表名稱：只留表格名稱，schema 留空（Step 2a 改為保留整個名稱）。"""
+        return ObjectName(server="", database="", schema="", name=bare_name(table))
     
     
     def _extract_stored_procedure_calls(self, content: str, lines: List[str]) -> List[StoredProcedureCall]:

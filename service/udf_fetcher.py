@@ -18,14 +18,9 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
+from canonical_object_identity import bare_key
+
 from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
-
-
-def _normalize(name: str) -> str:
-    core = (name or "").strip().replace("[", "").replace("]", "")
-    if "." in core:
-        core = core.rsplit(".", 1)[-1]
-    return core.lower()
 
 
 def fetch_udf_definitions(
@@ -70,7 +65,7 @@ def fetch_udf_definitions(
     found: List[dict] = []
     for fn in functions:
         name = fn.get("name", "")
-        if not _normalize(name):
+        if not bare_key(name):
             continue
         # 函數呼叫形式：（可能的 schema 前綴/中括號）名稱 + 左括號
         call_pattern = re.compile(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Iterable, Mapping
 
+from canonical_object_identity import bare_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 
 from .execution_path_builder import build_execution_paths
@@ -69,7 +70,7 @@ def filter_table_accesses(
     if access not in _ACCESS_MODES:
         raise ValueError(f"unsupported table access mode: {access}")
 
-    target_name = _normalize_table(table_name)
+    target_name = bare_key(table_name)
     if not target_name:
         return []
 
@@ -347,7 +348,7 @@ class _LineageIndex:
 
 def _add_table_name(reached: _TableNames, name: str) -> None:
     """Record one raw table name under its normalized key, without duplicates."""
-    bucket = reached.setdefault(_normalize_table(name), [])
+    bucket = reached.setdefault(bare_key(name), [])
     if name not in bucket:
         bucket.append(name)
 
@@ -368,13 +369,8 @@ def _matching_names(names: Iterable[object], target_name: str) -> list[str]:
     return [
         str(name)
         for name in names
-        if _normalize_table(str(name)) == target_name
+        if bare_key(str(name)) == target_name
     ]
-
-
-def _normalize_table(name: str) -> str:
-    cleaned = str(name or "").replace("[", "").replace("]", "").strip()
-    return cleaned.rsplit(".", 1)[-1].casefold()
 
 
 def _access_sort_key(access: Mapping[str, Any]) -> tuple[str, str, str]:

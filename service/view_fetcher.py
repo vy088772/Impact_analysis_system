@@ -13,14 +13,9 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from canonical_object_identity import bare_key
+
 from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
-
-
-def _normalize(name: str) -> str:
-    core = (name or "").strip().replace("[", "").replace("]", "")
-    if "." in core:
-        core = core.rsplit(".", 1)[-1]
-    return core.lower()
 
 
 def _from_cache(
@@ -42,12 +37,12 @@ def _from_cache(
     if not cached:
         return []
 
-    view_names = {_normalize(v["name"]) for v in cached.get("views", [])}
-    lookup = {_normalize(v["name"]): v for v in cached.get("views", [])}
+    view_names = {bare_key(v["name"]) for v in cached.get("views", [])}
+    lookup = {bare_key(v["name"]): v for v in cached.get("views", [])}
 
     found: List[dict] = []
     for raw in table_names:
-        key = _normalize(raw)
+        key = bare_key(raw)
         if key not in view_names:
             continue  # 不是 View（是一般資料表或快取未涵蓋），跳過
         v = lookup[key]

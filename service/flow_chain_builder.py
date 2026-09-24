@@ -34,19 +34,12 @@ from pathlib import Path
 import re
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
+from canonical_object_identity import bare_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 from code_analyzer.models import FileAnalysisResult
 from code_analyzer.sql_analyzer import extract_tables_from_definition
 from .graph_queries import query_table_accesses
 from .execution_path_builder import build_execution_paths
-
-
-def _normalize_name(name: str) -> str:
-    """去除中括號、schema 前綴、轉小寫；SP 名稱與資料表名稱共用同一套正規化規則。"""
-    core = (name or "").strip().replace("[", "").replace("]", "")
-    if "." in core:
-        core = core.rsplit(".", 1)[-1]
-    return core.lower()
 
 
 def _rel(file_path: str, root: Path) -> str:
@@ -205,7 +198,7 @@ def build_forward_chain(
                         node
                         for node in graph_nodes.values()
                         if node.get("type") == "stored_procedure"
-                        and _normalize_name(node.get("name")) == _normalize_name(name)
+                        and bare_key(node.get("name")) == bare_key(name)
                     ),
                     None,
                 )
@@ -505,9 +498,9 @@ def build_backward_chains(
 
     # 2) Inline C# SQL remains a separate direct source fact. It does not infer
     # stored-procedure relationships and is never used to reconstruct SQL calls.
-    table_norm = _normalize_name(table_name)
+    table_norm = bare_key(table_name)
     for rel in scan.table_relations:
-        if _normalize_name(rel.table_name) != table_norm:
+        if bare_key(rel.table_name) != table_norm:
             continue
         add_chain(
             rel.csharp_file,

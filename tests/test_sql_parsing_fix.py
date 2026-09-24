@@ -2,6 +2,7 @@
 import sys
 sys.path.insert(0, 'D:\\pratice\\Python\\Impact_analysis_system')
 
+from canonical_object_identity import bare_name
 from code_analyzer.csharp_parser import CSharpParser
 
 # 測試案例
@@ -15,7 +16,7 @@ Where R.ID = 1
 parser = CSharpParser()
 
 # 測試提取資料表
-tables = parser._extract_tables_from_sql(test_sql)
+tables = {bare_name(table) for table in parser._extract_tables_from_sql(test_sql)}
 
 print("=" * 80)
 print("測試 SQL 解析修復")

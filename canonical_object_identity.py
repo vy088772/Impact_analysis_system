@@ -14,6 +14,8 @@ Two keys compare names:
 - The full key is `database.schema.name`, casefolded. It always holds three
   segments, so an empty part stays an empty segment: `Orders` gives `..orders`.
 
+A caller that holds one part alone, such as a schema, uses the part key.
+
 No key reads the server field. The field only keeps a four-part name's server.
 
 This module imports nothing from this project, so every package can import it.
@@ -59,6 +61,15 @@ def full_key(name: Union[ObjectName, str, None]) -> str:
     """Return the `database.schema.name` key; an unstated part stays an empty segment."""
     parsed = _parsed(name)
     return ".".join(part.casefold() for part in (parsed.database, parsed.schema, parsed.name))
+
+
+def part_key(part: Optional[str]) -> str:
+    """Return the key of one part written alone, such as a schema or a database.
+
+    The part keeps its dots: a caller that holds one part never asks the parse
+    to split it.
+    """
+    return (part or "").replace("[", "").replace("]", "").strip().casefold()
 
 
 def _parsed(name: Union[ObjectName, str, None]) -> ObjectName:

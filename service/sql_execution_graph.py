@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
+from canonical_object_identity import parse
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 
 
@@ -47,7 +48,10 @@ def build_sql_execution_graph(
 
     for collection, object_type in _MODULE_COLLECTIONS:
         for item in data.get(collection, []) or []:
-            object_schema, name = _split_object_name(item.get("name", ""), schema)
+            written = parse(str(item.get("name") or ""))
+            # A listed name that states no schema takes the cache-wide schema.
+            # The listing commit of Step 2a reads each object's own schema instead.
+            object_schema, name = written.schema or schema, written.name
             if not name:
                 continue
             module_id = _node_id(object_type, object_schema, name)
@@ -66,7 +70,10 @@ def build_sql_execution_graph(
                 module_specs.append((object_type, object_schema, name, definition))
 
     for item in data.get("tables", []) or []:
-        object_schema, name = _split_object_name(item.get("name", ""), schema)
+        written = parse(str(item.get("name") or ""))
+        # A listed name that states no schema takes the cache-wide schema.
+        # The listing commit of Step 2a reads each object's own schema instead.
+        object_schema, name = written.schema or schema, written.name
         if not name:
             continue
         _add_node(
@@ -247,7 +254,9 @@ def _add_operation(
     if operation_type == "CALL":
         call_conditions = list(operation.get("conditions") or branch_path)
         for call_target in operation.get("call_targets", []) or []:
-            target_schema, target_name = _split_object_name(call_target, default_schema)
+            target = parse(str(call_target or ""))
+            # A call target that states no schema takes the cache-wide schema. Step 2b removes this default.
+            target_schema, target_name = target.schema or default_schema, target.name
             if not target_name:
                 continue
             _add_relationship(
@@ -364,7 +373,9 @@ def _ensure_referenced_node(
     object_name: str,
     default_schema: str,
 ) -> str:
-    object_schema, name = _split_object_name(object_name, default_schema)
+    reference = parse(str(object_name or ""))
+    # A reference that states no schema takes the cache-wide schema. Step 2b removes this default.
+    object_schema, name = reference.schema or default_schema, reference.name
     view_key = _node_key("view", object_schema, name)
     function_key = _node_key("function", object_schema, name)
     if view_key in node_by_key:
@@ -388,7 +399,9 @@ def _known_object_node_id(
     object_name: str,
     default_schema: str,
 ) -> str:
-    object_schema, name = _split_object_name(object_name, default_schema)
+    reference = parse(str(object_name or ""))
+    # A reference that states no schema takes the cache-wide schema. Step 2b removes this default.
+    object_schema, name = reference.schema or default_schema, reference.name
     node = node_by_key.get(_node_key(object_type, object_schema, name))
     return str(node.get("id")) if node else ""
 
@@ -457,20 +470,6 @@ def _node_key(object_type: str, schema: str, name: str) -> tuple[str, str, str]:
 
 def _node_id(object_type: str, schema: str, name: str) -> str:
     return f"{object_type}:{schema}.{name}"
-
-
-def _split_object_name(value: object, default_schema: str) -> tuple[str, str]:
-    cleaned = _clean_identifier(str(value or ""))
-    parts = [_clean_identifier(part) for part in cleaned.split(".") if part.strip()]
-    if not parts:
-        return default_schema, ""
-    if len(parts) == 1:
-        return default_schema, parts[0]
-    return parts[-2], parts[-1]
-
-
-def _clean_identifier(value: str) -> str:
-    return value.strip().strip("[]\"")
 
 
 def _safe_name(value: str) -> str:
