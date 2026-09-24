@@ -20,7 +20,7 @@
 
 ## Comments
 
-Implemented in commit `18737ff`.
+Implemented in commit `18737ff`. The ticket 02 commit `ddbafce` has `18737ff` as its parent, but its tree came from `cb0c50a`. Thus it reverted this ticket. Commit `383ebfe` applies the same changes again. At `383ebfe`, HEAD contains both tickets.
 
 **Changes:**
 
