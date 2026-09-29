@@ -5,10 +5,13 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Iterable, Mapping
 
-from canonical_object_identity import bare_key
+from typing import NamedTuple
+
+from canonical_object_identity import part_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 
 from .execution_path_builder import build_execution_paths
+from .table_match import UNPROVEN_SCHEMA, TableMatch, TableQuestion
 
 
 _ACCESS_MODES = {"all", "read", "write"}
@@ -19,6 +22,7 @@ def query_table_accesses(
     *,
     access: str = "all",
     max_call_depth: int = 5,
+    database: str = "",
 ) -> list[dict[str, Any]]:
     """Return C#-to-table facts held by execution paths in ``graph``.
 
@@ -33,7 +37,7 @@ def query_table_accesses(
     `filter_table_accesses` directly instead, so paths are not rebuilt per table.
     """
     paths = build_execution_paths(invocations, graph, max_call_depth=max_call_depth)
-    return filter_table_accesses(paths, graph, table_name, access=access)
+    return filter_table_accesses(paths, graph, table_name, access=access, database=database)
 
 
 def filter_table_accesses(
@@ -42,6 +46,7 @@ def filter_table_accesses(
     table_name: str,
     *,
     access: str = "all",
+    database: str = "",
 ) -> list[dict[str, Any]]:
     """Return every C#-to-table fact an already-built set of Execution Paths holds.
 
@@ -62,6 +67,13 @@ def filter_table_accesses(
     one. It is not surfaced for a directional ``access="read"``/``"write"``
     request, which has no name match to hang a direction off of.
 
+    A path matches a table through its ``read_full_keys`` and ``write_full_keys``
+    under the table match rule (see `table_match`). ``database`` is the Database
+    of the request; a table name that states none takes it. A record carries
+    ``unproven_schema`` in its ``risk_flags`` when the matched target states no
+    schema, and ``stated_database`` when the target names another Database than
+    the graph's own.
+
     Split out of `query_table_accesses` so a caller holding one scope's Execution
     Paths (see `service.analyze_service._execution_paths_for_scope`) can query
     more than one table without rebuilding them -- the paths themselves do not
@@ -70,28 +82,29 @@ def filter_table_accesses(
     if access not in _ACCESS_MODES:
         raise ValueError(f"unsupported table access mode: {access}")
 
-    target_name = bare_key(table_name)
-    if not target_name:
+    question = TableQuestion.of(table_name, database)
+    if not question.name:
         return []
+    own_database = str(graph.get("database") or "")
 
     accesses: list[dict[str, Any]] = []
     lineage_index: _LineageIndex | None = None
     for path in paths:
-        writes = _matching_names(path.get("writes", []), target_name)
-        reads = _matching_names(path.get("reads", []), target_name)
+        writes = _matching_targets(path.get("write_full_keys", []), question, own_database)
+        reads = _matching_targets(path.get("read_full_keys", []), question, own_database)
         is_dynamic = "dynamic_sql" in set(path.get("risk_flags", []) or [])
         is_proven = path.get("evidence") == "proven" and not is_dynamic
 
         if writes and access in {"all", "write"}:
-            accesses.append(_access_record(path, writes[0], is_write=True, is_proven=is_proven))
+            accesses.append(_access_record(path, *writes[0], is_write=True, is_proven=is_proven))
             continue
 
         if reads and access in {"all", "read"}:
-            accesses.append(_access_record(path, reads[0], is_write=False, is_proven=is_proven))
+            accesses.append(_access_record(path, *reads[0], is_write=False, is_proven=is_proven))
             continue
 
         if access == "all" and is_dynamic and not writes and not reads:
-            accesses.append(_access_record(path, table_name, is_write=False, is_proven=False))
+            accesses.append(_access_record(path, table_name, None, is_write=False, is_proven=False))
             continue
 
         # A View/Function read reaches the table by lineage, not by name --
@@ -104,12 +117,13 @@ def filter_table_accesses(
         if access in {"all", "read"} and not writes and not reads:
             if lineage_index is None:
                 lineage_index = _LineageIndex(graph)
-            lineage_reads = lineage_index.read_lineage(path, target_name)
-            for table in lineage_reads:
+            lineage_reads = lineage_index.read_lineage(path, question, own_database)
+            for table, match in lineage_reads:
                 accesses.append(
                     _access_record(
                         path,
                         table,
+                        match,
                         is_write=False,
                         is_proven=is_proven,
                         is_indirect_override=True,
@@ -122,6 +136,7 @@ def filter_table_accesses(
 def _access_record(
     path: Mapping[str, Any],
     table_name: str,
+    match: TableMatch | None,
     *,
     is_write: bool,
     is_proven: bool,
@@ -135,6 +150,11 @@ def _access_record(
     as ``access_type``; anything not `proven` -- write-shaped or not -- reads
     ``"UNRESOLVED"``, per ADR-0015: the record states that the path reaches
     the table, not what it does there.
+
+    ``table_name`` is the target as the graph stores it. ``match`` carries the
+    Unproven Schema mark and ``stated_database`` of that target: the mark sits
+    on this record and never on the path, because one path serves every table
+    question in its scope.
     """
     sp_chain = list(path.get("sp_chain", []) or [])
     operation = str(path.get("terminal_operation") or "")
@@ -173,10 +193,12 @@ def _access_record(
         "evidence": path.get("evidence", "unresolved"),
         "reason": path.get("reason", ""),
         "confirmed": path.get("confirmed", False),
-        "risk_flags": list(path.get("risk_flags", []) or []),
+        "risk_flags": _record_risk_flags(path, match),
         "unresolved_reason": path.get("unresolved_reason", ""),
         "unresolved_targets": list(path.get("unresolved_targets", []) or []),
     }
+    if match is not None and match.stated_database is not None:
+        record["stated_database"] = match.stated_database
     for key in WRAPPER_EVIDENCE_FIELDS:
         if key not in path:
             continue
@@ -185,10 +207,23 @@ def _access_record(
     return record
 
 
-# A table's normalized name to the raw names actually seen for it (there is
-# usually one raw name; more than one only happens if two differently-cased
-# or differently-schema'd table nodes normalize to the same key).
-_TableNames = dict[str, list[str]]
+class _Target(NamedTuple):
+    """One table a View or a Function reaches, in the case the graph and the relationship state it."""
+
+    database: str
+    schema: str
+    name: str
+
+
+_TargetKey = tuple[str, str, str]
+
+# The tables one container reaches, keyed by full key. The Database comes from the
+# relationship inside the container, because node identity holds no Database.
+_Tables = dict[_TargetKey, _Target]
+
+
+def _target_key(target: _Target) -> _TargetKey:
+    return part_key(target.database), part_key(target.schema), target.name.casefold()
 
 
 class _LineageIndex:
@@ -204,6 +239,8 @@ class _LineageIndex:
 
     The inversion still respects the forward walk's own rules -- follow
     `reads` only, and stop at a table node -- so the answer does not change.
+    A table is keyed by its full key: the Database of the relationship that
+    reads it, the schema of its node, and its bare name.
     A cycle among Views or Functions is resolved by a worklist fixed point
     over the container graph (see `_ensure_built`), not by cutting a branch
     short the first time it is visited: a container revisited while its own
@@ -224,22 +261,25 @@ class _LineageIndex:
     only the membership test, not another build.
     """
 
-    __slots__ = ("_graph", "_operations_by_table")
+    __slots__ = ("_graph", "_reached")
 
     def __init__(self, graph: Mapping[str, Any]) -> None:
         self._graph = graph
-        self._operations_by_table: dict[str, dict[str, list[str]]] | None = None
+        self._reached: dict[str, dict[_TargetKey, tuple[_Target, set[str]]]] | None = None
 
-    def _ensure_built(self) -> dict[str, dict[str, list[str]]]:  # table -> {operation_id: names}
-        if self._operations_by_table is not None:
-            return self._operations_by_table
+    def _ensure_built(self) -> dict[str, dict[_TargetKey, tuple[_Target, set[str]]]]:
+        """Return bare name -> full key -> (table, ids of the operations that reach it)."""
+        if self._reached is not None:
+            return self._reached
+
+        graph_database = str(self._graph.get("database") or "")
 
         nodes = {
             str(node.get("id")): node
             for node in self._graph.get("nodes", []) or []
             if node.get("id")
         }
-        reads_by_source: dict[str, list[str]] = {}
+        reads_by_source: dict[str, list[tuple[str, str]]] = {}  # source -> (target id, Database)
         contains_by_source: dict[str, list[str]] = {}
         for relationship in self._graph.get("relationships", []) or []:
             source = relationship.get("source")
@@ -249,7 +289,9 @@ class _LineageIndex:
             source = str(source)
             target = str(target)
             if relationship.get("type") == "reads":
-                reads_by_source.setdefault(source, []).append(target)
+                # A relationship that states no Database takes the graph's own Database.
+                database = str(relationship.get("database") or "") or graph_database
+                reads_by_source.setdefault(source, []).append((target, database))
             elif relationship.get("type") == "contains":
                 contains_by_source.setdefault(source, []).append(target)
 
@@ -260,36 +302,35 @@ class _LineageIndex:
         # what its children read directly; `successors[container]` /
         # `predecessors[container]` are the edges to and from the other
         # containers those children read.
-        direct_tables: dict[str, _TableNames] = {}
+        direct_tables: dict[str, _Tables] = {}
         successors: dict[str, set[str]] = {}
         predecessors: dict[str, set[str]] = {}
 
-        def _record_target(container_id: str, target_id: str) -> None:
+        def _record_target(container_id: str, target_id: str, database: str) -> None:
             node = nodes.get(target_id)
             if not node:
                 return
             node_type = node.get("type")
             if node_type == "table":
-                name = str(node.get("name") or "")
-                if name:
-                    _add_table_name(direct_tables.setdefault(container_id, {}), name)
+                table = _table_of(node, database)
+                if table is not None:
+                    _add_table(direct_tables.setdefault(container_id, {}), table)
             elif node_type in {"view", "function"}:
                 successors.setdefault(container_id, set()).add(target_id)
                 predecessors.setdefault(target_id, set()).add(container_id)
 
         for container_id, child_operation_ids in contains_by_source.items():
             for child_operation_id in child_operation_ids:
-                for target_id in reads_by_source.get(child_operation_id, []):
-                    _record_target(container_id, target_id)
+                for target_id, database in reads_by_source.get(child_operation_id, []):
+                    _record_target(container_id, target_id, database)
 
         # Worklist fixed point: each container starts at its own direct
         # tables and grows by folding in each successor's tables, until a
         # round adds nothing new. A container revisited through a cycle is
         # simply reprocessed once its successor's own set has grown -- so a
         # cycle changes the order tables are folded in, never the result.
-        reachable: dict[str, _TableNames] = {
-            container_id: {name: list(raws) for name, raws in tables.items()}
-            for container_id, tables in direct_tables.items()
+        reachable: dict[str, _Tables] = {
+            container_id: dict(tables) for container_id, tables in direct_tables.items()
         }
         for container_id in successors:
             reachable.setdefault(container_id, {})
@@ -314,63 +355,97 @@ class _LineageIndex:
         # or one nested inside a container) resolves in one hop now: a table
         # target counts directly, a container target counts via its already
         # fully-resolved `reachable` entry.
-        operations_by_table: dict[str, dict[str, list[str]]] = {}
-        for operation_id, target_ids in reads_by_source.items():
-            reached: _TableNames = {}
-            for target_id in target_ids:
+        reached_by_name: dict[str, dict[_TargetKey, tuple[_Target, set[str]]]] = {}
+        for operation_id, targets in reads_by_source.items():
+            reached: _Tables = {}
+            for target_id, database in targets:
                 node = nodes.get(target_id)
                 if not node:
                     continue
                 node_type = node.get("type")
                 if node_type == "table":
-                    name = str(node.get("name") or "")
-                    if name:
-                        _add_table_name(reached, name)
+                    table = _table_of(node, database)
+                    if table is not None:
+                        _add_table(reached, table)
                 elif node_type in {"view", "function"}:
                     _merge_reachable(reached, reachable.get(target_id, {}))
-            for table_name, raw_names in reached.items():
-                operations_by_table.setdefault(table_name, {})[operation_id] = raw_names
+            for key, table in reached.items():
+                entry = reached_by_name.setdefault(table.name.casefold(), {}).setdefault(
+                    key, (table, set())
+                )
+                entry[1].add(operation_id)
 
-        self._operations_by_table = operations_by_table
-        return operations_by_table
+        self._reached = reached_by_name
+        return reached_by_name
 
-    def read_lineage(self, path: Mapping[str, Any], target_name: str) -> list[str]:
-        """Resolve a path's View/UDF reads to base tables without inferring writes."""
+    def read_lineage(
+        self, path: Mapping[str, Any], question: TableQuestion, own_database: str
+    ) -> list[tuple[str, TableMatch]]:
+        """Resolve a path's View/UDF reads to base tables without inferring writes.
+
+        Returns each matched table with its match. A table reached by lineage
+        reports its node name, as it did before the match compared schemas.
+        """
         operation_id = str(path.get("terminal_operation_id") or "")
         if not operation_id:
             return []
 
-        table_entry = self._ensure_built().get(target_name)
-        if not table_entry:
-            return []
-        return list(table_entry.get(operation_id, []))
+        matches: list[tuple[str, TableMatch]] = []
+        for table, operation_ids in self._ensure_built().get(question.name, {}).values():
+            if operation_id not in operation_ids:
+                continue
+            match = question.match(table.database, table.schema, table.name, own_database)
+            if match is not None:
+                matches.append((table.name, match))
+        return matches
 
 
-def _add_table_name(reached: _TableNames, name: str) -> None:
-    """Record one raw table name under its normalized key, without duplicates."""
-    bucket = reached.setdefault(bare_key(name), [])
-    if name not in bucket:
-        bucket.append(name)
+def _table_of(node: Mapping[str, Any], database: str) -> _Target | None:
+    name = str(node.get("name") or "")
+    if not name:
+        return None
+    return _Target(database=database, schema=str(node.get("schema") or ""), name=name)
 
 
-def _merge_reachable(target: _TableNames, source: Mapping[str, list[str]]) -> bool:
+def _add_table(reached: _Tables, table: _Target) -> None:
+    """Record one table under its full key; the first spelling seen stays."""
+    reached.setdefault(_target_key(table), table)
+
+
+def _merge_reachable(target: _Tables, source: Mapping[_TargetKey, _Target]) -> bool:
     """Fold `source`'s tables into `target`; report whether anything was new."""
     changed = False
-    for key, names in source.items():
-        bucket = target.setdefault(key, [])
-        for name in names:
-            if name not in bucket:
-                bucket.append(name)
-                changed = True
+    for key, table in source.items():
+        if key not in target:
+            target[key] = table
+            changed = True
     return changed
 
 
-def _matching_names(names: Iterable[object], target_name: str) -> list[str]:
-    return [
-        str(name)
-        for name in names
-        if bare_key(str(name)) == target_name
-    ]
+def _written_target(schema: str, name: str) -> str:
+    """The target as the graph stores it: `schema.name`, or the bare name when the schema is empty."""
+    return f"{schema}.{name}" if schema else name
+
+
+def _matching_targets(
+    full_keys: Iterable[Mapping[str, Any]], question: TableQuestion, own_database: str
+) -> list[tuple[str, TableMatch]]:
+    """Return each full key that answers the question, as (target as stored, match)."""
+    matches: list[tuple[str, TableMatch]] = []
+    for full_key in full_keys or []:
+        schema = str(full_key.get("schema") or "")
+        name = str(full_key.get("name") or "")
+        match = question.match(full_key.get("database"), schema, name, own_database)
+        if match is not None:
+            matches.append((_written_target(schema, name), match))
+    return matches
+
+
+def _record_risk_flags(path: Mapping[str, Any], match: TableMatch | None) -> list[str]:
+    flags = list(path.get("risk_flags", []) or [])
+    if match is not None and match.unproven_schema and UNPROVEN_SCHEMA not in flags:
+        flags.append(UNPROVEN_SCHEMA)
+    return flags
 
 
 def _access_sort_key(access: Mapping[str, Any]) -> tuple[str, str, str]:

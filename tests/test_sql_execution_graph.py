@@ -27,6 +27,7 @@ from service import sql_cache_store
 from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
 from tests.sql_cache_fixtures import (
     CacheRoot,
+    StubAnalyzerHost,
     analyzer_operation,
     assert_relationships_resolve_to_known_nodes,
     cache_payload,
@@ -347,8 +348,8 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
 def test_each_relationship_records_the_database_and_server_its_reference_stated() -> None:
     """A reads, writes, or calls relationship keeps the parts its reference stated; a node keeps none.
 
-    A reference that states no schema reads as `dbo` at the call site. A
-    function reference to another Database resolves to no local function node.
+    A reference that states no schema keeps an empty schema, and a function
+    reference to another Database resolves to no local function node.
     """
     data = cache_payload(
         "Response",
@@ -384,8 +385,8 @@ END;
     assert stated == {
         ("writes", "table:dbo.Archive", None, "PUR"),
         ("reads", "table:dbo.Users", "LNK", "PUR"),
-        ("reads", "table:dbo.Users", None, None),
-        ("reads", "table:dbo.Orders", None, "PUR"),
+        ("reads", "table:.Users", None, None),
+        ("reads", "table:.Orders", None, "PUR"),
         ("calls", "stored_procedure:COMMON.usp_Child", None, "PUR"),
         ("reads", "table:dbo.Rates", None, None),
     }
@@ -810,7 +811,7 @@ def test_a_scoped_temp_table_node_keeps_its_written_name_and_names_its_module() 
         ("#tmp", "table", "stored_procedure:dbo.usp_B"),
     }
     assert len({node["id"] for node in temp_nodes}) == 2
-    assert all(node["id"].startswith("table:dbo.#") for node in temp_nodes)
+    assert all(node["id"].startswith("table:.#") for node in temp_nodes)
     plain_nodes = [node for node in graph["nodes"] if node["type"] == "table" and node not in temp_nodes]
     assert all("scope_module_id" not in node for node in plain_nodes)
 
@@ -961,8 +962,8 @@ def test_a_temp_table_is_visible_through_a_chain_of_calls() -> None:
     assert derived[0]["confidence"] == "proven"
     # The lineage holds the scoped temp nodes from the read to the base read.
     assert derived[0]["lineage"] == [
-        "table:dbo.#tmp@stored_procedure:dbo.usp_C",
-        "table:dbo.#tmp@stored_procedure:dbo.usp_A",
+        "table:.#tmp@stored_procedure:dbo.usp_C",
+        "table:.#tmp@stored_procedure:dbo.usp_A",
     ]
 
 
@@ -1011,3 +1012,43 @@ def test_a_temp_read_inside_a_callee_writer_does_not_climb_back_to_the_caller_si
 if __name__ == "__main__":
     test_sql_host_emits_typed_operations_with_module_and_source_evidence()
     print("SQL execution graph tests passed")
+
+
+def test_a_reference_that_states_no_schema_names_every_listed_node_with_that_bare_name() -> None:
+    """Two-bucket rule: an unstated schema is never `dbo`; it matches every schema that lists the name."""
+    data = cache_payload(
+        "Response",
+        procedures={
+            "dbo.usp_Caller": {"definition": "caller"},
+            "dbo.usp_Child": {},
+            "COMMON.usp_Child": {},
+        },
+        views={"dbo.vw_Rates": {}, "COMMON.vw_Rates": {}},
+    )
+    host = StubAnalyzerHost(
+        {
+            "caller": [
+                analyzer_operation("CALL", sequence=1, calls=["usp_Child"]),
+                analyzer_operation("SELECT", sequence=2, reads=["vw_Rates"]),
+                analyzer_operation("SELECT", sequence=3, reads=["COMMON.vw_Rates"]),
+            ]
+        }
+    )
+
+    graph = build_sql_execution_graph(data, host=host)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    targets = {
+        (relationship["type"], relationship["source"].rsplit(":", 1)[-1], relationship["target"])
+        for relationship in graph["relationships"]
+        if relationship["type"] in {"calls", "reads"}
+    }
+    assert {target for kind, _, target in targets if kind == "calls"} == {
+        "stored_procedure:dbo.usp_Child",
+        "stored_procedure:COMMON.usp_Child",
+    }
+    assert {(source, target) for kind, source, target in targets if kind == "reads"} == {
+        ("2", "view:dbo.vw_Rates"),
+        ("2", "view:COMMON.vw_Rates"),
+        ("3", "view:COMMON.vw_Rates"),
+    }

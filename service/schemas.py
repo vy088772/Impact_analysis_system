@@ -449,6 +449,12 @@ class TableMatchProgram(WrapperEvidenceFields):
     path_id: str = ""
     entry_method: str = ""
     sp_chain: List[str] = Field(default_factory=list)
+    table: str = ""                           # 命中的目標：Execution Graph 怎麼存就怎麼給（沒證明 schema 的目標只有 bare name）；
+    # inline C# SQL 命中則是原始碼怎麼寫就怎麼給
+    risk_flags: List[str] = Field(default_factory=list)
+    # "unproven_schema"：命中的目標沒寫 schema，靠 bare key 退回比對成功，schema 沒人證明。
+    # 標記掛在這一筆命中，不掛在 Execution Path 上；Evidence Status 不因此降級。
+    stated_database: Optional[str] = None     # 命中的 key 寫的是另一個 Database 時才有；否則不出現
     operation_type: str = ""
     invocation_mode: str = ""
     terminal_sink: str = ""

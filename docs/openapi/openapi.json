@@ -1940,6 +1940,13 @@
             "title": "Review Candidate",
             "type": "boolean"
           },
+          "risk_flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Risk Flags",
+            "type": "array"
+          },
           "scan_root": {
             "default": "",
             "title": "Scan Root",
@@ -1977,6 +1984,17 @@
             "title": "Sp Chain",
             "type": "array"
           },
+          "stated_database": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stated Database"
+          },
           "status": {
             "default": "",
             "title": "Status",
@@ -1986,6 +2004,11 @@
             "default": false,
             "title": "Stored Procedure Mode",
             "type": "boolean"
+          },
+          "table": {
+            "default": "",
+            "title": "Table",
+            "type": "string"
           },
           "terminal_sink": {
             "default": "",

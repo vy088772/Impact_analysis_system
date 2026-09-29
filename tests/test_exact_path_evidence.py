@@ -35,6 +35,7 @@ from service.sql_cache_store import CacheIdentity
 from service.sql_execution_graph import build_sql_execution_graph
 from tests.sql_cache_fixtures import (
     CacheRoot,
+    StubAnalyzerHost,
     analyzer_operation,
     cache_payload,
     execution_graph,
@@ -647,13 +648,20 @@ def test_wrapper_evidence_bag_schemas_drop_evidence_alias_keep_evidence_status()
 
 
 def _function_path_fixture(
-    tmp_path: Path, cache_root: Path, *, procedure: str, call: str, functions: list[str]
+    tmp_path: Path,
+    cache_root: Path,
+    *,
+    procedure: str,
+    call: str,
+    functions: list[str],
+    host: StubAnalyzerHost | None = None,
 ) -> tuple[ProjectScanResult, str]:
     """Write one `Response` cache on disk and one scan whose method calls `procedure`.
 
     The procedure's one operation calls the function `call`. The real graph
     builder analyses each definition, so the function reference that reaches
-    the evidence is the one the analyzer host reports.
+    the evidence is the one the analyzer host reports. A test that needs a
+    reference the real host never reports gives a stub ``host`` instead.
     """
     procedure_name = parse(procedure)
 
@@ -673,7 +681,7 @@ def _function_path_fixture(
             graph=graph,
         )
 
-    graph = build_sql_execution_graph(response_cache())
+    graph = build_sql_execution_graph(response_cache(), host=host)
     payload = response_cache(graph)
     write_cache(cache_root, CacheIdentity.of("vmsystest07", "Response"), payload)
 
@@ -780,3 +788,37 @@ def test_path_evidence_holds_the_function_its_operation_calls(
 
     assert [item["name"] for item in evidence.stored_procedures] == [procedure]
     assert [item["name"] for item in evidence.functions] == expected_functions
+
+
+def test_path_evidence_holds_every_function_a_reference_with_no_schema_can_name(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Seam 1 path evidence case 3 (canonical-object-identity, Step 2b).
+
+    The cache holds `COMMON.fn_Rate` and `dbo.fn_Rate`, and the operation's
+    reference states no schema. The real host never reports such a reference,
+    because T-SQL requires a schema on a scalar function call, so a stub host does.
+    """
+    procedure = "dbo.usp_Load"
+    call = "fn_Rate"
+    definition = f"CREATE PROCEDURE {procedure} AS SELECT {call}(Id) FROM dbo.Rates;"
+    host = StubAnalyzerHost(
+        {definition: [analyzer_operation("SELECT", reads=["dbo.Rates"], functions=[call])]}
+    )
+    with CacheRoot() as cache_root:
+        scan, path_id = _function_path_fixture(
+            tmp_path,
+            cache_root,
+            procedure=procedure,
+            call=call,
+            functions=["COMMON.fn_Rate", "dbo.fn_Rate"],
+            host=host,
+        )
+        monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
+        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+
+        evidence = analyze_service.get_path_evidence(
+            PathEvidenceRequest(path_id=path_id, database="Response", program_names=["RatePage"])
+        )
+
+    assert sorted(item["name"] for item in evidence.functions) == ["COMMON.fn_Rate", "dbo.fn_Rate"]

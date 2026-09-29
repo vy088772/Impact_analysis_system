@@ -385,11 +385,12 @@ def _path_for_operation(
     call_conditions: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     operation_id = str(operation["id"])
-    reads, missing_reads = _relationship_targets(
-        operation_id, "reads", relationships, nodes
+    graph_database = str(graph.get("database") or "")
+    reads, read_full_keys, missing_reads = _relationship_targets(
+        operation_id, "reads", relationships, nodes, graph_database
     )
-    writes, missing_writes = _relationship_targets(
-        operation_id, "writes", relationships, nodes
+    writes, write_full_keys, missing_writes = _relationship_targets(
+        operation_id, "writes", relationships, nodes, graph_database
     )
     written_columns = _ordered_unique(
         list(operation.get("written_columns", []) or [])
@@ -464,6 +465,8 @@ def _path_for_operation(
         "conditions": _ordered_unique((*call_conditions, *operation_conditions)),
         "reads": reads,
         "writes": writes,
+        "read_full_keys": read_full_keys,
+        "write_full_keys": write_full_keys,
         "risk_flags": _ordered_unique(risk_flags),
         "evidence": evidence,
         "reason": (
@@ -548,6 +551,8 @@ def _unresolved_path(
         "conditions": list(effective_conditions),
         "reads": [],
         "writes": [],
+        "read_full_keys": [],
+        "write_full_keys": [],
         "risk_flags": [reason],
         "evidence": evidence,
         "reason": reason,
@@ -568,8 +573,17 @@ def _relationship_targets(
     relationship_type: str,
     relationships: Iterable[Mapping[str, Any]],
     nodes: Mapping[str, Mapping[str, Any]],
-) -> tuple[list[str], list[str]]:
+    graph_database: str,
+) -> tuple[list[str], list[dict[str, str]], list[str]]:
+    """Return the target names, the target full keys, and the ids of missing targets.
+
+    A full key is `database`, `schema`, and `name`, as three named fields. The
+    schema comes from the node, and stays empty when the node states none. The
+    database comes from the relationship, because node identity holds none. A
+    relationship that states no database takes the graph's own Database.
+    """
     names: list[str] = []
+    full_keys: list[dict[str, str]] = []
     missing: list[str] = []
     for relationship in relationships:
         if relationship.get("type") != relationship_type or relationship.get("source") != source_id:
@@ -580,7 +594,14 @@ def _relationship_targets(
             missing.append(target_id or "<missing-target>")
             continue
         names.append(_written_name(_qualified_name(target)))
-    return _ordered_unique(names), _ordered_unique(missing)
+        full_key = {
+            "database": str(relationship.get("database") or "") or graph_database,
+            "schema": str(target.get("schema", "") or ""),
+            "name": str(target.get("name", "") or ""),
+        }
+        if full_key not in full_keys:
+            full_keys.append(full_key)
+    return _ordered_unique(names), full_keys, _ordered_unique(missing)
 
 
 def _stored_procedure_nodes(nodes: Mapping[str, Mapping[str, Any]]) -> list[Mapping[str, Any]]:

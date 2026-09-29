@@ -58,7 +58,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance only
 # or of any pickled field inside it changes, so an old on-disk file left by a
 # previous version of this module is treated as unreadable (a miss) rather
 # than unpickled into an object this version does not expect.
-_STORE_VERSION = 1
+_STORE_VERSION = 2  # v2: each Execution Path gains `read_full_keys` and `write_full_keys`.
 
 _DATA_SUFFIX = ".pkl"
 

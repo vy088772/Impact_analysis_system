@@ -594,20 +594,18 @@ def load_object_location_index(identity: CacheIdentity) -> Optional[ObjectLocati
         return None
     if not _same_scope(payload.get("database"), identity.database):
         return None
-    buckets = [
-        payload.get(field)
-        for field in (
-            "stored_procedure_bare_keys",
-            "stored_procedure_full_keys",
-            "table_bare_keys",
-            "table_full_keys",
-        )
-    ]
-    if not all(isinstance(bucket, list) for bucket in buckets):
-        return None
-    stored_procedure_bare, stored_procedure_full, table_bare, table_full = (
-        frozenset(str(key) for key in bucket) for bucket in buckets
-    )
+    buckets: list[frozenset[str]] = []
+    for field in (
+        "stored_procedure_bare_keys",
+        "stored_procedure_full_keys",
+        "table_bare_keys",
+        "table_full_keys",
+    ):
+        bucket = payload.get(field)
+        if not isinstance(bucket, list):
+            return None
+        buckets.append(frozenset(str(key) for key in bucket))
+    stored_procedure_bare, stored_procedure_full, table_bare, table_full = buckets
     return ObjectLocationIndex(
         server=identity.server,
         database=identity.database,

@@ -193,7 +193,7 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         raise HTTPException(status_code=500, detail=f"SP 反查失敗：{exc}")
 
 
-@app.post("/find_by_table", response_model=FindByTableResponse)
+@app.post("/find_by_table", response_model=FindByTableResponse, response_model_exclude_none=True)
 def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     """反查「哪些程式存取了這張資料表」（純快取比對；cache_only=True 時不觸發 clone）。"""
     if not req.table_name.strip():

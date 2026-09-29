@@ -43,6 +43,16 @@ from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyze
 # Database into one node, is rejected until it is rebuilt.
 GRAPH_VERSION = 6
 NodeKey = tuple[str, str, str, str]
+
+
+class _NodeIndex(dict):
+    """Nodes by full key, plus the same nodes by bare name for a reference that states no schema."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bare: dict[tuple[str, str], list[dict[str, Any]]] = {}
+
+
 _MODULE_COLLECTIONS = (
     ("procedures", "stored_procedure"),
     ("views", "view"),
@@ -59,7 +69,7 @@ def build_sql_execution_graph(
     """Analyze refreshed SQL modules and return a deterministic graph payload."""
     nodes: list[dict[str, Any]] = []
     relationships: list[dict[str, Any]] = []
-    node_by_key: dict[NodeKey, dict[str, Any]] = {}
+    node_by_key = _NodeIndex()
     call_edges: set[tuple[str, str]] = set()
     module_specs: list[tuple[str, str, str, str]] = []
 
@@ -350,7 +360,7 @@ def _report_progress(
 def _add_operation(
     nodes: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
-    node_by_key: dict[NodeKey, dict[str, Any]],
+    node_by_key: _NodeIndex,
     call_edges: set[tuple[str, str]],
     raw_operation: dict[str, Any],
     module_type: str,
@@ -383,21 +393,21 @@ def _add_operation(
             target = _reference(call_target)
             if not target.name:
                 continue
-            target_id, target_module = _resolve_call_target(node_by_key, target, cache_database)
-            if target_module is not None:
-                # The temp table expansion reads calls only from these edges.
-                call_edges.add((module_id, str(target_module["id"])))
-            _add_relationship(
-                relationships,
-                "calls",
-                module_id,
-                target_id,
-                source,
-                branch_path,
-                conditions=call_conditions,
-                identity_suffix=str(sequence),
-                stated=target,
-            )
+            for target_id, target_module in _resolve_call_target(node_by_key, target, cache_database):
+                if target_module is not None:
+                    # The temp table expansion reads calls only from these edges.
+                    call_edges.add((module_id, str(target_module["id"])))
+                _add_relationship(
+                    relationships,
+                    "calls",
+                    module_id,
+                    target_id,
+                    source,
+                    branch_path,
+                    conditions=call_conditions,
+                    identity_suffix=str(sequence),
+                    stated=target,
+                )
         return
 
     node_type = "unresolved_dynamic_sql" if (
@@ -435,50 +445,53 @@ def _add_operation(
 
     for read_table in operation.get("read_tables", []) or []:
         reference = _reference(read_table)
-        target_id = _ensure_referenced_node(nodes, node_by_key, reference, module_id)
-        _add_relationship(
-            relationships,
-            "reads",
-            operation_id,
-            target_id,
-            source,
-            branch_path,
-            columns=list(operation.get("read_columns", []) or []),
-            stated=reference,
-        )
-        if target_id.split(":", 1)[0] in {"view", "function"}:
+        for target_id in _ensure_referenced_nodes(
+            nodes, node_by_key, reference, module_id, cache_database
+        ):
             _add_relationship(
                 relationships,
-                "uses",
-                module_id,
+                "reads",
+                operation_id,
                 target_id,
                 source,
                 branch_path,
-                conditions=list(operation.get("conditions") or branch_path),
+                columns=list(operation.get("read_columns", []) or []),
+                stated=reference,
             )
+            if target_id.split(":", 1)[0] in {"view", "function"}:
+                _add_relationship(
+                    relationships,
+                    "uses",
+                    module_id,
+                    target_id,
+                    source,
+                    branch_path,
+                    conditions=list(operation.get("conditions") or branch_path),
+                )
 
     for write_table in operation.get("write_tables", []) or []:
         reference = _reference(write_table)
-        target_id = _ensure_referenced_node(nodes, node_by_key, reference, module_id)
-        _add_relationship(
-            relationships,
-            "writes",
-            operation_id,
-            target_id,
-            source,
-            branch_path,
-            columns=list(operation.get("written_columns", []) or []),
-            stated=reference,
-        )
+        for target_id in _ensure_referenced_nodes(
+            nodes, node_by_key, reference, module_id, cache_database
+        ):
+            _add_relationship(
+                relationships,
+                "writes",
+                operation_id,
+                target_id,
+                source,
+                branch_path,
+                columns=list(operation.get("written_columns", []) or []),
+                stated=reference,
+            )
 
     for function_reference in operation.get("function_references", []) or []:
-        target_id = _known_object_node_id(
+        for target_id in _known_object_node_ids(
             node_by_key,
             "function",
             _reference(function_reference),
             cache_database,
-        )
-        if target_id:
+        ):
             _add_relationship(
                 relationships,
                 "uses",
@@ -500,16 +513,42 @@ def _reference(entry: dict[str, Any]) -> ObjectName:
     )
 
 
-def _ensure_referenced_node(
+def _listed_nodes(
+    node_by_key: _NodeIndex, object_type: str, schema: str, name: str
+) -> list[dict[str, Any]]:
+    """The listed nodes one reference names, under the two-bucket rule.
+
+    A reference that states a schema matches the node of that full key. A reference
+    that states no schema matches every node of that type with the bare name. The
+    lookup never fills an unstated schema with `dbo`. Listed nodes always carry a
+    schema, so none of them carries the Unproven Schema mark.
+    """
+    if schema:
+        node = node_by_key.get(_node_key(object_type, schema, name))
+        return [node] if node else []
+    return list(node_by_key.bare.get((object_type, name.casefold()), []))
+
+
+def _names_another_database(reference: ObjectName, cache_database: str) -> bool:
+    return bool(reference.database) and part_key(reference.database) != part_key(cache_database)
+
+
+def _ensure_referenced_nodes(
     nodes: list[dict[str, Any]],
-    node_by_key: dict[NodeKey, dict[str, Any]],
+    node_by_key: _NodeIndex,
     reference: ObjectName,
     module_id: str,
-) -> str:
-    # A reference that states no schema reads as dbo here. Step 2b removes this default.
-    # The node takes no database: node identity is type, schema, and name, and the
-    # relationship records the database its reference stated.
-    object_schema, name = reference.schema or "dbo", reference.name
+    cache_database: str,
+) -> list[str]:
+    """Return the ids of the nodes one table, View, or Function reference names.
+
+    A reference that names a listed View or Function returns their ids. Any other
+    reference is a table node that keeps the schema the reference states, and an
+    empty schema when it states none. The node takes no database: node identity is
+    type, schema, and name, and the relationship records the database its
+    reference stated.
+    """
+    object_schema, name = reference.schema, reference.name
     if _is_scoped_temp_table(name):
         # A `#name` temp table belongs to the module that uses it.
         node = {
@@ -519,13 +558,14 @@ def _ensure_referenced_node(
             "name": name,
             "scope_module_id": module_id,
         }
-        return str(_add_node(nodes, node_by_key, node)["id"])
-    view_key = _node_key("view", object_schema, name)
-    function_key = _node_key("function", object_schema, name)
-    if view_key in node_by_key:
-        return str(node_by_key[view_key]["id"])
-    if function_key in node_by_key:
-        return str(node_by_key[function_key]["id"])
+        return [str(_add_node(nodes, node_by_key, node)["id"])]
+    # A reference to another Database matches no listed View or Function: this cache
+    # holds no definition of that object, so a local node would be false evidence.
+    if not _names_another_database(reference, cache_database):
+        for object_type in ("view", "function"):
+            listed = _listed_nodes(node_by_key, object_type, object_schema, name)
+            if listed:
+                return [str(node["id"]) for node in listed]
 
     node = {
         "id": _node_id("table", object_schema, name),
@@ -534,39 +574,41 @@ def _ensure_referenced_node(
         "name": name,
     }
     kept_node = _add_node(nodes, node_by_key, node)
-    return str(kept_node["id"])
+    return [str(kept_node["id"])]
 
 
 def _resolve_call_target(
-    node_by_key: dict[NodeKey, dict[str, Any]],
+    node_by_key: _NodeIndex,
     target: ObjectName,
     cache_database: str,
-) -> tuple[str, dict[str, Any] | None]:
-    """Return the node id a calls relationship names, and the module node the graph defines for it or None."""
+) -> list[tuple[str, dict[str, Any] | None]]:
+    """Return each node id a calls relationship names, with the module node the graph defines for it or None."""
     # A call through a linked server, to another Database, or to a module that this
     # cache does not list has no module node. A listed module with no definition is a node.
-    # A call target that states no schema reads as dbo here. Step 2b removes this default.
-    target_schema, target_name = target.schema or "dbo", target.name
-    target_id = _node_id("stored_procedure", target_schema, target_name)
-    if target.server or (target.database and part_key(target.database) != part_key(cache_database)):
-        return target_id, None
-    return target_id, node_by_key.get(_node_key("stored_procedure", target_schema, target_name))
+    # A call target that states no schema matches every listed procedure with that bare name.
+    stated_id = _node_id("stored_procedure", target.schema, target.name)
+    if target.server or _names_another_database(target, cache_database):
+        return [(stated_id, None)]
+    modules = _listed_nodes(node_by_key, "stored_procedure", target.schema, target.name)
+    if not modules:
+        return [(stated_id, None)]
+    return [(str(module["id"]), module) for module in modules]
 
 
-def _known_object_node_id(
-    node_by_key: dict[NodeKey, dict[str, Any]],
+def _known_object_node_ids(
+    node_by_key: _NodeIndex,
     object_type: str,
     reference: ObjectName,
     cache_database: str,
-) -> str:
+) -> list[str]:
     # A reference to another Database matches no node: this cache holds no
     # definition of that object, so a local node would be false evidence.
-    if reference.database and part_key(reference.database) != part_key(cache_database):
-        return ""
-    # A reference that states no schema reads as dbo here. Step 2b removes this default.
-    object_schema, name = reference.schema or "dbo", reference.name
-    node = node_by_key.get(_node_key(object_type, object_schema, name))
-    return str(node.get("id")) if node else ""
+    if _names_another_database(reference, cache_database):
+        return []
+    return [
+        str(node["id"])
+        for node in _listed_nodes(node_by_key, object_type, reference.schema, reference.name)
+    ]
 
 
 def _add_relationship(
@@ -621,7 +663,7 @@ def _object_schema(item: dict[str, Any], written: ObjectName) -> str:
 
 def _add_node(
     nodes: list[dict[str, Any]],
-    node_by_key: dict[NodeKey, dict[str, Any]],
+    node_by_key: _NodeIndex,
     node: dict[str, Any],
 ) -> dict[str, Any]:
     """Add ``node`` unless a node already holds its case-insensitive key.
@@ -632,7 +674,7 @@ def _add_node(
     the id it built may name a node this call decided not to add.
     """
     object_type = str(node.get("type", ""))
-    schema = str(node.get("schema", "dbo"))
+    schema = str(node.get("schema", ""))
     name = str(node.get("name", ""))
     key = _node_key(object_type, schema, name, str(node.get("scope_module_id", ""))) if name else (
         object_type,
@@ -643,6 +685,8 @@ def _add_node(
     if key in node_by_key:
         return node_by_key[key]
     node_by_key[key] = node
+    if name:
+        node_by_key.bare.setdefault((object_type, name.casefold()), []).append(node)
     nodes.append(node)
     return node
 

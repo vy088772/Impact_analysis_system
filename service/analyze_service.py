@@ -67,6 +67,7 @@ from .execution_path_builder import (
     build_execution_paths,
 )
 from .graph_queries import filter_table_accesses
+from .table_match import UNPROVEN_SCHEMA, TableQuestion
 from .program_screen import (
     ProgramScreen,
     resolve_program_screens,
@@ -2062,11 +2063,9 @@ def _materialize_path_evidence(
 
         cache_database = str(cached.get("database") or graph.get("database") or "")
         for function_reference in operation.get("function_references", []) or []:
-            target_id = _find_graph_object_id(
-                nodes, "function", function_reference, cache_database
+            referenced_object_ids.update(
+                _find_graph_object_ids(nodes, "function", function_reference, cache_database)
             )
-            if target_id:
-                referenced_object_ids.add(target_id)
 
     for object_id in sorted(referenced_object_ids):
         object_node = nodes[object_id]
@@ -2240,29 +2239,33 @@ def _cached_sql_object(cached: Mapping[str, object], node: Mapping[str, object])
     return None
 
 
-def _find_graph_object_id(
+def _find_graph_object_ids(
     nodes: Mapping[str, Mapping[str, object]],
     object_type: str,
     reference: Mapping[str, object],
     cache_database: str,
-) -> str:
-    """Find the node one analyzer reference names; the reference holds four parts."""
+) -> List[str]:
+    """Find the nodes one analyzer reference names; the reference holds four parts.
+
+    The lookup obeys the two-bucket rule over listed nodes. A reference that states
+    a schema matches the node of that schema. A reference that states no schema
+    matches every node with the bare name. Listed nodes always carry a schema, so
+    none of them carries the Unproven Schema mark.
+    """
     # A reference to another Database matches no node: this cache holds no
     # definition of that object, so a local definition would be false evidence.
     database = str(reference.get("database") or "")
     if database and part_key(database) != part_key(cache_database):
-        return ""
-    # A reference that states no schema reads as dbo here. Step 2b removes this default.
-    schema = str(reference.get("schema") or "") or "dbo"
-    name = str(reference.get("name") or "")
-    for node_id, node in nodes.items():
-        if (
-            node.get("type") == object_type
-            and str(node.get("schema") or "dbo").casefold() == schema.casefold()
-            and str(node.get("name") or "").casefold() == name.casefold()
-        ):
-            return node_id
-    return ""
+        return []
+    schema = part_key(str(reference.get("schema") or ""))
+    name = bare_key(str(reference.get("name") or ""))
+    return [
+        node_id
+        for node_id, node in nodes.items()
+        if node.get("type") == object_type
+        and bare_key(str(node.get("name") or "")) == name
+        and (not schema or part_key(str(node.get("schema") or "")) == schema)
+    ]
 
 
 def _slice_utf16(text: str, start_offset: int, length: int) -> str:
@@ -2713,6 +2716,11 @@ def _prefer_table_match(
         existing[key] = candidate
 
 
+def _written_table_name(table: ObjectName) -> str:
+    """The table as the source code writes it: the parts it states, joined by dots."""
+    return ".".join(part for part in (table.server, table.database, table.schema, table.name) if part)
+
+
 def _table_match_rank(match: TableMatchProgram) -> tuple[int, int, int]:
     access_type = (match.access_type or "").upper()
     is_write = access_type in {"WRITE", "WRITE_INDIRECT", "INSERT", "UPDATE", "DELETE", "SELECT_INTO"}
@@ -2904,7 +2912,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     scope = DerivedExecutionEvidenceScope.of(req, roots)
     _record_table_reverse_lookup(table_name, scope)
 
-    table_norm = bare_key(table_name)
+    question = TableQuestion.of(table_name, req.database or "")
     # Graph-derived facts key by Execution Path identity, not by file
     # (ADR-0016) -- see `_table_match_identity`. An inline C# SQL fact carries
     # no such identity of its own; it keeps the pre-ticket file-scoped rule
@@ -2914,10 +2922,14 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     inline_matches_by_file: Dict[str, TableMatchProgram] = {}
     diagnostics: List[Dict] = []
     for rel in scan.table_relations:
-        # Step 2b matches by the table match rule and the Database of the connection.
-        if bare_key(rel.table) != table_norm:
-            continue
+        # A relation that states no Database takes the Database of its C# connection,
+        # and a connection the parser cannot resolve leaves the Database out of the match.
         database = str(getattr(rel, "database", "") or "")
+        table_match = question.match(
+            rel.table.database or database, rel.table.schema, rel.table.name, database
+        )
+        if table_match is None:
+            continue
         caller_class = str(getattr(rel, "class_name", "") or "")
         caller_method = str(getattr(rel, "method_name", "") or "")
         candidate = TableMatchProgram(
@@ -2938,6 +2950,9 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             ),
             caller_class=caller_class,
             caller_method=caller_method,
+            table=_written_table_name(rel.table),
+            risk_flags=[UNPROVEN_SCHEMA] if table_match.unproven_schema else [],
+            stated_database=table_match.stated_database,
         )
         _prefer_table_match(inline_matches_by_file, candidate.file, candidate)
 
@@ -2969,6 +2984,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             graph,
             table_name,
             access="all",
+            database=req.database or "",
         ):
             source_span = access_record.get("source_span") or {}
             relative_path = str(source_span.get("relative_path") or "")
@@ -3007,6 +3023,9 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
                 path_id=str(access_record.get("path_id") or ""),
                 entry_method=str(access_record.get("entry_method") or ""),
                 sp_chain=sp_chain,
+                table=str(access_record.get("table") or ""),
+                risk_flags=list(access_record.get("risk_flags") or []),
+                stated_database=access_record.get("stated_database"),
                 evidence_status=str(access_record.get("evidence") or "unresolved"),
                 reason=str(access_record.get("reason") or ""),
                 database=str(access_record.get("database") or ""),
@@ -3223,6 +3242,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
             column_name=req.column_name or None,
             graph=execution_graph,
             invocations=rated_invocations,
+            database=req.database or "",
         )
         return FlowChainResponse(
             direction="backward",
