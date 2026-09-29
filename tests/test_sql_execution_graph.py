@@ -156,12 +156,12 @@ def test_the_graph_reads_an_object_with_no_schema_field_as_dbo() -> None:
 def test_sql_cache_rejects_stale_graph_version() -> None:
     """A cache built under any earlier graph version must be rejected.
 
-    GRAPH_VERSION rises whenever the graph payload shape changes -- most
-    recently to 6, when each `#name` temp table became one node for each
-    module that uses it (temp-table-scope, ticket 03), so a graph that shares
-    one temp table node fails this check until it is rebuilt.
+    GRAPH_VERSION rises whenever the graph payload changes what a reader
+    concludes -- most recently to 7, when a reference that states no schema
+    stopped getting a `dbo` fill (canonical-object-identity, Step 2b), so a
+    graph that still holds the fill fails this check until it is rebuilt.
     """
-    assert GRAPH_VERSION == 6
+    assert GRAPH_VERSION == 7
 
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(

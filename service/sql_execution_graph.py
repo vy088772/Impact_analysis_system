@@ -41,7 +41,11 @@ from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyze
 # behind the writers in its callers or its callees, with a worklist fixed point
 # (temp-table-scope, ticket 04). A v5 graph, which joins every `#tmp` of the
 # Database into one node, is rejected until it is rebuilt.
-GRAPH_VERSION = 6
+# v7: a reference that states no schema keeps an empty schema, and a call or a
+# View/Function reference with no schema names every listed node with that bare
+# name (canonical-object-identity, Step 2b). A v6 graph, which filled `dbo`, reads
+# its no-schema targets as proven `dbo`, so it is rejected until it is rebuilt.
+GRAPH_VERSION = 7
 NodeKey = tuple[str, str, str, str]
 
 

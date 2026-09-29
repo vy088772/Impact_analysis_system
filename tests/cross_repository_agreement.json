@@ -150,7 +150,7 @@
         }
       ],
       "sql_execution_graph": {
-        "graph_version": 6,
+        "graph_version": 7,
         "database": "SampleDb",
         "nodes": [
           {
