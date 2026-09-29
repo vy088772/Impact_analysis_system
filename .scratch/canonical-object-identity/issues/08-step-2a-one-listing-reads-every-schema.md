@@ -83,8 +83,9 @@ spec.
   `schemaless_procedures_by_database`, and the fallback reads only that set.
   `match_reason` returns `None` for a miss, `""` for an exact match, and
   `"unproven_schema"` for the fallback. `contains` wraps it. The Object Location
-  Index in ticket 11 must decide the same question. **The spec text needs one
-  sentence that says which rule holds.**
+  Index in ticket 11 must decide the same question. **Decision (2026-09-29):**
+  keep the third set. The spec's "The SP Catalog" section now states that the
+  catalog's fallback is narrower than the Object Location Index's.
 - **Reason on a proven match.** The gateway sets `reason="unproven_schema"` on a
   `DbInvocation` and on an `EmbeddedProcedureTarget`. The Evidence Status stays
   `proven`, and `unresolved_reason` stays empty. `reason` on the Execution Path
