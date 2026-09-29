@@ -185,6 +185,47 @@ def _references(written_names: Iterable[str]) -> list[dict[str, str]]:
     ]
 
 
+class StubAnalyzerHost:
+    """Stand in for the StaticAnalyzerHost: report fixed operations for each module.
+
+    The graph builder writes each module definition to a file and asks the host
+    to analyze that file. This stub reads the file back and reports the
+    operations it holds for that definition text, so a test does not start the
+    analyzer host.
+    """
+
+    def __init__(self, operations_by_definition: Mapping[str, Iterable[dict]]) -> None:
+        self._operations_by_definition = {
+            definition: [dict(operation) for operation in operations]
+            for definition, operations in operations_by_definition.items()
+        }
+
+    def ensure_ready(self) -> None:
+        return None
+
+    def analyze_sql(self, path: Path) -> dict:
+        definition = Path(path).read_text(encoding="utf-8")
+        operations = self._operations_by_definition.get(definition, [])
+        return {"operations": [dict(operation) for operation in operations], "parse_errors": []}
+
+
+def stubbed_procedures(
+    database: str,
+    operations_by_procedure: Mapping[str, Iterable[dict]],
+) -> tuple[dict, StubAnalyzerHost]:
+    """Build a cache payload of procedures and a stub host that reports their operations.
+
+    Each procedure's definition text is its written name, so the stub host
+    finds the operations of each module that the graph builder analyzes.
+    Give the payload and the host to ``build_sql_execution_graph()``.
+    """
+    payload = cache_payload(
+        database,
+        procedures={name: {"definition": name} for name in operations_by_procedure},
+    )
+    return payload, StubAnalyzerHost(operations_by_procedure)
+
+
 def cache_with_procedures(*procedures: str) -> dict:
     """An ``OrdersDb`` cache whose graph holds one node for each named procedure, in ``dbo``."""
     return cache_payload(

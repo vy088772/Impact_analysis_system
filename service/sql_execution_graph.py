@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
@@ -126,7 +127,7 @@ def build_sql_execution_graph(
                     )
                 _report_progress(progress_callback, "graph", index, len(module_specs), name)
 
-    _expand_temp_table_lineage(nodes, relationships)
+    _expand_temp_table_lineage(nodes, relationships, progress_callback)
 
     return {
         "graph_version": GRAPH_VERSION,
@@ -140,11 +141,16 @@ def build_sql_execution_graph(
 def _expand_temp_table_lineage(
     nodes: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
-    max_depth: int = 32,
+    progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> None:
+    """Add one lineage read from each temp table read to each base table behind it.
+
+    A worklist fixed point computes the base tables of each temp table once, so
+    the cost grows with the graph, not with the number of paths through it.
+    """
     node_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
     reads_by_operation: dict[str, list[dict[str, Any]]] = {}
-    writers_by_table: dict[str, list[str]] = {}
+    writers_by_table: dict[str, set[str]] = {}
     for relationship in relationships:
         relationship_type = relationship.get("type")
         source_id = str(relationship.get("source") or "")
@@ -152,46 +158,66 @@ def _expand_temp_table_lineage(
         if relationship_type == "reads":
             reads_by_operation.setdefault(source_id, []).append(relationship)
         elif relationship_type == "writes":
-            writers_by_table.setdefault(target_id, []).append(source_id)
+            writers_by_table.setdefault(target_id, set()).add(source_id)
 
     def is_temp_table(node_id: str) -> bool:
         return str(node_by_id.get(node_id, {}).get("name") or "").startswith("#")
 
-    def resolve_base_targets(
-        read_relationship: dict[str, Any],
-        visited: frozenset[str] = frozenset(),
-    ) -> set[tuple[str, str, str]]:
-        """Return each base table id behind one read, with the server and database that read stated."""
-        table_id = str(read_relationship.get("target") or "")
-        if not is_temp_table(table_id):
-            return {
-                (
-                    table_id,
-                    str(read_relationship.get("server") or ""),
-                    str(read_relationship.get("database") or ""),
-                )
-            }
-        if table_id in visited or len(visited) >= max_depth:
-            return set()
-        base_targets: set[tuple[str, str, str]] = set()
-        next_visited = visited | {table_id}
-        for writer_id in sorted(set(writers_by_table.get(table_id, []))):
-            for writer_read in sorted(
-                reads_by_operation.get(writer_id, []),
-                key=lambda item: str(item.get("target") or ""),
-            ):
-                base_targets.update(resolve_base_targets(writer_read, next_visited))
-        return base_targets
+    temp_reads = [
+        relationship
+        for relationship in relationships
+        if relationship.get("type") == "reads" and is_temp_table(str(relationship.get("target") or ""))
+    ]
+    _report_progress(progress_callback, "lineage", 0, len(temp_reads), "")
+
+    # A temp table's base tables are the non-temp reads of its writers, each
+    # with the server and database that read stated. A temp read of a writer
+    # is an edge to that temp table, whose base tables fold in too.
+    base_tables: dict[str, set[tuple[str, str, str]]] = {}
+    successors: dict[str, set[str]] = {}
+    predecessors: dict[str, set[str]] = {}
+    for temp_id in {str(relationship.get("target") or "") for relationship in temp_reads} | {
+        table_id for table_id in writers_by_table if is_temp_table(table_id)
+    }:
+        own = base_tables.setdefault(temp_id, set())
+        for writer_id in writers_by_table.get(temp_id, ()):
+            for writer_read in reads_by_operation.get(writer_id, []):
+                read_id = str(writer_read.get("target") or "")
+                if is_temp_table(read_id):
+                    successors.setdefault(temp_id, set()).add(read_id)
+                    predecessors.setdefault(read_id, set()).add(temp_id)
+                else:
+                    own.add(
+                        (
+                            read_id,
+                            str(writer_read.get("server") or ""),
+                            str(writer_read.get("database") or ""),
+                        )
+                    )
+
+    # Worklist fixed point, as in graph_queries._LineageIndex: a temp table
+    # grows by each successor's set until no set changes. Each step only adds
+    # base tables, so a cycle ends, and visit order does not change the result.
+    queue: deque[str] = deque(sorted(base_tables))
+    queued: set[str] = set(queue)
+    while queue:
+        temp_id = queue.popleft()
+        queued.discard(temp_id)
+        own = base_tables[temp_id]
+        size = len(own)
+        for successor_id in successors.get(temp_id, ()):
+            own |= base_tables.get(successor_id, set())
+        if len(own) != size:
+            for predecessor_id in predecessors.get(temp_id, ()):
+                if predecessor_id not in queued:
+                    queue.append(predecessor_id)
+                    queued.add(predecessor_id)
 
     derived: list[tuple[str, str, ObjectName, dict[str, Any], list[str], list[str]]] = []
-    for relationship in list(relationships):
-        if relationship.get("type") != "reads":
-            continue
+    for index, relationship in enumerate(temp_reads, start=1):
         source_id = str(relationship.get("source") or "")
         temp_id = str(relationship.get("target") or "")
-        if not is_temp_table(temp_id):
-            continue
-        for base_id, server, database in sorted(resolve_base_targets(relationship)):
+        for base_id, server, database in sorted(base_tables.get(temp_id, set())):
             derived.append(
                 (
                     source_id,
@@ -202,6 +228,7 @@ def _expand_temp_table_lineage(
                     [temp_id],
                 )
             )
+        _report_progress(progress_callback, "lineage", index, len(temp_reads), source_id)
 
     for source_id, target_id, stated, source_location, branch_path, lineage in derived:
         _add_relationship(

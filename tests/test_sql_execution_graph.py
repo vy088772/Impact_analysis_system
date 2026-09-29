@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -18,11 +19,13 @@ from service import sql_cache_store
 from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
 from tests.sql_cache_fixtures import (
     CacheRoot,
+    analyzer_operation,
     assert_relationships_resolve_to_known_nodes,
     cache_payload,
     case_variant_table_write_data,
     case_variant_temp_table_write_data,
     execution_graph,
+    stubbed_procedures,
     write_cache,
 )
 
@@ -547,6 +550,93 @@ def test_write_to_real_table_survives_a_case_variant_read_through_a_temp_table()
         if relationship["type"] == "writes"
     ]
     assert any(relationship["target"] == "table:dbo.RealTable" for relationship in writes)
+
+
+def _temp_chain_procedure(base_table: str) -> list[dict]:
+    """One procedure that fills `#t1` from a base table, copies it to `#t4`, and reads `#t4`."""
+    chain = [base_table, "#t1", "#t2", "#t3", "#t4"]
+    operations = [
+        analyzer_operation("INSERT", sequence=index, reads=[source], writes=[target])
+        for index, (source, target) in enumerate(zip(chain, chain[1:]), start=1)
+    ]
+    operations.append(analyzer_operation("SELECT", sequence=len(chain), reads=["#t4"]))
+    return operations
+
+
+def _lineage_reads(graph: dict) -> list[tuple[str, str]]:
+    return sorted(
+        (relationship["source"], relationship["target"])
+        for relationship in graph["relationships"]
+        if relationship.get("lineage")
+    )
+
+
+def test_the_temp_table_expansion_ends_when_many_procedures_share_a_chain() -> None:
+    """Test case 1 (cost): forty procedures that each run `#t1` to `#t4` build in a few seconds.
+
+    The old expansion enumerated every path and took more than a minute here.
+    """
+    data, host = stubbed_procedures(
+        "PUR",
+        {f"dbo.usp_Chain{index:02d}": _temp_chain_procedure(f"dbo.Base{index:02d}") for index in range(40)},
+    )
+
+    started = time.monotonic()
+    graph = build_sql_execution_graph(data, host=host)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5, f"the graph build took {elapsed:.1f} seconds"
+    assert_relationships_resolve_to_known_nodes(graph)
+    final_reads = {f"dml_operation:stored_procedure:dbo.usp_Chain{index:02d}:5" for index in range(40)}
+    assert final_reads <= {source for source, _ in _lineage_reads(graph)}
+
+
+def test_a_cycle_of_temp_table_writes_gives_one_stable_result() -> None:
+    """Test case 7 (cycle): A calls B, B calls A, and both write and read `#tmp`."""
+    data, host = stubbed_procedures(
+        "PUR",
+        {
+            "dbo.usp_A": [
+                analyzer_operation("INSERT", sequence=1, reads=["dbo.BaseA"], writes=["#tmp"]),
+                analyzer_operation("INSERT", sequence=2, reads=["#tmp"], writes=["#tmp"]),
+                analyzer_operation("CALL", sequence=3, calls=["dbo.usp_B"]),
+                analyzer_operation("SELECT", sequence=4, reads=["#tmp"]),
+            ],
+            "dbo.usp_B": [
+                analyzer_operation("INSERT", sequence=1, reads=["dbo.BaseB"], writes=["#tmp"]),
+                analyzer_operation("CALL", sequence=2, calls=["dbo.usp_A"]),
+                analyzer_operation("SELECT", sequence=3, reads=["#tmp"]),
+            ],
+        },
+    )
+
+    first = build_sql_execution_graph(data, host=host)
+    second = build_sql_execution_graph(data, host=host)
+
+    assert_relationships_resolve_to_known_nodes(first)
+    assert first["relationships"] == second["relationships"]
+    assert {target for _, target in _lineage_reads(first)} == {"table:dbo.BaseA", "table:dbo.BaseB"}
+
+
+def test_the_lineage_stage_reports_after_the_graph_stage() -> None:
+    """Test case 11 (progress): the `lineage` stage follows the last `graph` report."""
+    data, host = stubbed_procedures("PUR", {"dbo.usp_Chain": _temp_chain_procedure("dbo.Base")})
+    reports: list[tuple[str, int, int]] = []
+
+    build_sql_execution_graph(
+        data,
+        host=host,
+        progress_callback=lambda stage, current, total, item: reports.append((stage, current, total)),
+    )
+
+    stages = [stage for stage, _, _ in reports]
+    assert "lineage" in stages
+    last_graph = max(index for index, stage in enumerate(stages) if stage == "graph")
+    first_lineage = stages.index("lineage")
+    assert last_graph < first_lineage
+    assert set(stages[first_lineage:]) == {"lineage"}
+    _, current, total = reports[-1]
+    assert current == total
 
 
 if __name__ == "__main__":
