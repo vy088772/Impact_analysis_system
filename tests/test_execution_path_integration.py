@@ -107,7 +107,7 @@ def _cached_schema_sql_graph() -> dict:
             "columns": ["Status"],
         },
     ]
-    return cache_payload("OrdersDb", procedures={"usp_SaveOrder": {"schema": "sales"}}, graph=graph)
+    return cache_payload("OrdersDb", procedures=["sales.usp_SaveOrder"], graph=graph)
 
 
 def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: Path) -> None:

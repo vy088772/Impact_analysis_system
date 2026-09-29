@@ -7,7 +7,8 @@ four rules:
 
 1. A SQL cache payload key fails outside the fixture module.
 2. A graph format version or a contract version reads its constant, or an
-   expression over it. A bare number fails.
+   expression over it. A bare number fails, in a literal, a keyword argument,
+   or a store into a version key or attribute.
 3. A bare number passes in a comparison whose other side names the constant.
 4. An analyzer operation's object-reference key fails outside the fixture
    module, the graph builder's test, and the analyzer host's test. Those two
@@ -64,6 +65,25 @@ def _reads_a_version(node: ast.AST) -> bool:
     )
 
 
+def _names_a_version(node: ast.AST) -> bool:
+    return _reads_a_version(node) or (isinstance(node, ast.Attribute) and node.attr in VERSION_CONSTANTS)
+
+
+def _stored_version_lines(node: ast.AST) -> list[int]:
+    """The line of a store into a version key or attribute whose value is a bare number."""
+    if isinstance(node, ast.Assign):
+        targets, value = node.targets, node.value
+    elif isinstance(node, (ast.AugAssign, ast.AnnAssign)) and node.value is not None:
+        targets, value = [node.target], node.value
+    else:
+        return []
+    if not any(_names_a_version(target) for target in targets):
+        return []
+    if _holds_a_bare_number(value) and not _names_a_version_constant(value):
+        return [node.lineno]
+    return []
+
+
 def _stored_keys(node: ast.AST) -> list[tuple[int, str]]:
     targets: list[ast.expr] = []
     if isinstance(node, ast.Assign):
@@ -116,6 +136,7 @@ def violations(source: str, file_name: str) -> dict[str, list[int]]:
                 _names_a_version_constant(operand) for operand in operands
             ) and any(_holds_a_bare_number(operand) for operand in operands):
                 found["version"].append(node.lineno)
+        found["version"].extend(_stored_version_lines(node))
         if file_name != FIXTURE_MODULE:
             found["payload key"].extend(line for line, _ in _stored_keys(node))
     return {rule: sorted(lines) for rule, lines in found.items()}
@@ -169,9 +190,12 @@ def test_a_bare_version_number_breaks_rule_two_unless_the_other_side_names_the_c
         'assert response["contract_version"] == 2\n'
         'assert response["contract_version"] == CONTRACT_VERSION\n'
         "assert GRAPH_VERSION == 4\n"
+        'graph["graph_version"] = 3\n'
+        "graph.graph_version = 3\n"
+        'graph["graph_version"] = GRAPH_VERSION - 1\n'
     )
 
-    assert violations(source, "test_example.py")["version"] == [1, 3, 4]
+    assert violations(source, "test_example.py")["version"] == [1, 3, 4, 7, 8]
 
 
 def test_an_operation_literal_breaks_rule_four_outside_the_two_contract_tests() -> None:

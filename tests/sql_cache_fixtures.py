@@ -109,6 +109,8 @@ def _sql_objects(objects: SqlObjects) -> list[dict[str, Any]]:
     )
     entries = []
     for written_name, fields in fields_by_name.items():
+        if "schema" in fields:
+            raise ValueError(f"write the schema in the name {written_name!r}, not as a field")
         parsed = canonical_object_identity.parse(written_name)
         entries.append({"name": written_name, "schema": parsed.schema or "dbo", **fields})
     return entries
