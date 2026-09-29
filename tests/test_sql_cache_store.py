@@ -502,6 +502,37 @@ def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_unreadabl
         assert row.database == "PUR"
 
 
+def test_list_caches_never_lists_an_old_schema_keyed_cache_as_the_database() -> None:
+    """A cache from before one cache held one Database keeps its three-part name.
+
+    Its Scan Record still says `database: PUR`, but no load reads that file. The
+    row keeps the name the file states, so the operator sees a strange row, not a
+    second PUR scan.
+    """
+    with CacheRoot() as cache_root:
+        write_cache(cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR"))
+        old_stem = "vmsystest07.topmost.com.tw__PUR__dbo"
+        (cache_root / f"{old_stem}.json").write_text("{}", encoding="utf-8")
+        (cache_root / f"{old_stem}.meta.json").write_text(
+            json.dumps(
+                {
+                    "server": "vmsystest07.topmost.com.tw",
+                    "database": "PUR",
+                    "schema": "dbo",
+                    "saved_at": "2026-09-01 10:00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        rows = sql_cache_store.list_caches()
+
+        assert [(row.database, row.scanned_at) for row in rows] == [
+            ("PUR", "2026-08-04 13:29:13"),
+            ("PUR__dbo", "2026-09-01 10:00:00"),
+        ]
+
+
 def test_list_caches_never_lists_a_scan_record_file_as_a_cache() -> None:
     with CacheRoot() as cache_root:
         # A meta file with no sibling data file must never surface as a row.

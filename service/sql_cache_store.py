@@ -339,6 +339,19 @@ class ScanRecordListing:
     scanned_at: Optional[str]
 
 
+def _meta_names_file(info: Dict, data_filename: str) -> bool:
+    """Scan Record 記錄的身分是否正好命名這個資料檔。
+
+    舊的三段式快取（`server__PUR__dbo`）的 Scan Record 仍寫著 `database: PUR`；
+    照收的話，一份永遠不會被載入的檔案會在清單上冒充 PUR 的掃描。
+    """
+    try:
+        identity = CacheIdentity.of(str(info.get("server") or ""), str(info.get("database") or ""))
+    except ValueError:
+        return False
+    return identity.filename == data_filename
+
+
 def list_caches() -> List[ScanRecordListing]:
     """列出磁碟上每一份 SQL 快取的 (server, database) 與 Scan Record。
 
@@ -350,9 +363,9 @@ def list_caches() -> List[ScanRecordListing]:
 
     每一列的 scan 時間來自同目錄下的 sibling meta 檔（.meta.json）；meta 檔
     缺失或無法解析時該列仍然列出，scanned_at 回 None，而不是整列被跳過。
-    身分欄位優先採 meta 檔內容，而且照寫照收、不經過 CacheIdentity.of()——
-    手動改壞的 Scan Record 只該讓這一列看起來怪，不該讓整個端點失敗；meta
-    讀不到或某欄位缺漏時才退回檔名。
+    meta 檔記錄的身分正好命名這個資料檔時，身分欄位採 meta 檔內容（保留
+    database 原本的寫法）；否則退回檔名——手動改壞的 Scan Record、或舊三段式
+    快取的 Scan Record，只該讓這一列看起來怪，不該冒充另一份快取或讓端點失敗。
 
     回傳依 (server, database) 排序，讓同一份清單在多次呼叫間穩定
     （不受掃描先後影響）。
@@ -373,8 +386,9 @@ def list_caches() -> List[ScanRecordListing]:
         except Exception:
             info = None
         if isinstance(info, dict):
-            server = str(info.get("server") or server)
-            database = str(info.get("database") or database)
+            if _meta_names_file(info, cache_file.data_path.name):
+                server = str(info.get("server") or server)
+                database = str(info.get("database") or database)
             saved_at = info.get("saved_at")
             if saved_at:
                 scanned_at = str(saved_at)
