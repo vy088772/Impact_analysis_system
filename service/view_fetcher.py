@@ -15,7 +15,7 @@ from typing import List, Optional
 
 from canonical_object_identity import bare_key
 
-from .sql_cache_store import load_cached, named_cache_identity
+from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
 
 
 def _from_cache(
@@ -28,8 +28,12 @@ def _from_cache(
     if not database_alias:
         return []  # 無資料庫可查，視為「無法判斷」，不當作快取缺漏去即時連線（避免誤連）
 
-    identity = named_cache_identity(database_alias, db_server)
-    cached = load_cached(identity) if identity else None
+    identity = (
+        CacheIdentity.of(db_server, database_alias)
+        if db_server
+        else find_cache_identity(database_alias)
+    )
+    cached = load_cached(identity) if isinstance(identity, CacheIdentity) else None
     if not cached:
         return []
 

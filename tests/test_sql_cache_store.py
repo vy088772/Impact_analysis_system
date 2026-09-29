@@ -378,18 +378,6 @@ def test_a_caller_without_a_server_refuses_an_ambiguous_database_name() -> None:
         )
 
 
-def test_a_named_cache_identity_takes_the_stated_server_else_the_one_cache_on_disk() -> None:
-    with CacheRoot() as cache_root:
-        write_cache(cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR"))
-        write_cache(cache_root, CacheIdentity.of("vmsystest07", "STC"), _payload("STC"))
-        write_cache(cache_root, CacheIdentity.of("vmsystest08", "STC"), _payload("STC"))
-
-        assert sql_cache_store.named_cache_identity("PUR", "vmsystest08") == CacheIdentity.of("vmsystest08", "PUR")
-        assert sql_cache_store.named_cache_identity("PUR") == CacheIdentity.of("vmsystest07", "PUR")
-        assert sql_cache_store.named_cache_identity("STC") is None
-        assert sql_cache_store.named_cache_identity("") is None
-
-
 def test_a_caller_without_a_server_reads_a_database_whose_name_the_filename_rewrites() -> None:
     """The filename holds a safe-named Database; the read still names the real one."""
     with CacheRoot() as cache_root:

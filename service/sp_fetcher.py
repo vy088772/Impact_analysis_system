@@ -16,7 +16,7 @@ from typing import List, Optional
 
 from canonical_object_identity import ObjectName, bare_key, schema_qualified
 
-from .sql_cache_store import load_cached, named_cache_identity
+from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
 from code_analyzer.sql_analyzer import estimate_complexity_from_definition
 
 
@@ -86,8 +86,12 @@ def _from_cache(
     if not database_alias:
         return [], sp_names
 
-    identity = named_cache_identity(database_alias, db_server)
-    cached = load_cached(identity) if identity else None
+    identity = (
+        CacheIdentity.of(db_server, database_alias)
+        if db_server
+        else find_cache_identity(database_alias)
+    )
+    cached = load_cached(identity) if isinstance(identity, CacheIdentity) else None
     if not cached:
         return [], sp_names
 
