@@ -5,25 +5,39 @@ This context defines the SQL execution-analysis vocabulary used to trace applica
 ## SQL Execution Analysis
 
 **SQL Cache Identity**:
-The normalized `(server, database)` pair that names one SQL cache, independent of any System. One cache holds one Database and every schema inside it, and each object in the cache carries its own schema, so the identity has no schema part. The server part drops a named-instance suffix, gains the internal domain when it has none, and is lowercased, so one host never holds two identities. A Database shared by many Systems has exactly one identity, and so exactly one cache. The identity owns its three filenames: the data file, the Scan Record, and the Object Location Index. The cache store alone answers which files in the cache directory are caches. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md) and [ADR-0033](docs/adr/0033-one-sql-cache-holds-one-database.md).
+The normalized `(server, database)` pair that names one SQL cache, independent of any System. One cache holds one Database and every schema inside it. Each object in the cache carries its own schema, so the identity has no schema part. The server part drops a named-instance suffix and gains the internal domain when it has none. The server part is lowercased, so one host never holds two identities.
+
+A Database shared by many Systems has exactly one identity, and so exactly one cache. The identity owns its three filenames: the data file, the Scan Record, and the Object Location Index. The cache store alone answers which files in the cache directory are caches. A file whose name no identity writes, such as an old schema-keyed cache, never lists as another Database. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md) and [ADR-0033](docs/adr/0033-one-sql-cache-holds-one-database.md).
 _Avoid_: system_id cache key, per-System cache, database name alone
 
 **Canonical Object Identity**:
-The one rule that turns a written SQL object name into a comparison key. The top-level `canonical_object_identity` module holds it, and `llamaindex-spec-rag` holds a mirror module that passes the same shared cases. A written name has up to four parts: server, database, schema, and bare name. An empty part means "not stated", never "default", so the rule never fills an unstated schema with `dbo`. The bare key is the casefolded bare name, and the full key is the casefolded `database.schema.name`. No key reads the server part.
+The one rule that turns a written SQL object name into a comparison key. The top-level `canonical_object_identity` module holds it. The `llamaindex-spec-rag` repository holds a mirror module that passes the same shared cases. A written name has up to four parts: server, database, schema, and bare name. An empty part means "not stated", never "default", so the rule never fills an unstated schema with `dbo`.
+
+The bare key is the casefolded bare name. The full key is the casefolded `database.schema.name`. No key reads the server part. The schema-qualified name shows a name as `schema.name` in the written case, or as the bare name when the schema is empty.
+
 Each lookup of a name obeys the two-bucket rule:
 - A name that states no schema asks the bare bucket.
 - A name that states a schema asks the full bucket.
 - A name that states a schema and misses the full bucket falls back to the bare bucket.
 
-The Object Location Index falls back to every entry with that bare name. The SP Catalog and the `/find_by_table` table match fall back only to an entry that states no schema, so `sales.X` never matches `HR.X`. Each of the three sites composes its keys with the bare-key and full-key functions of this module. The Unproven Schema entry states which matches carry a mark.
+The Object Location Index falls back to every entry with that bare name, inside the Database that the name states. The SP Catalog and the `/find_by_table` table match fall back only to an entry that states no schema. So there, `sales.X` never matches `HR.X`. Each of the three sites composes its keys with the bare-key and full-key functions of this module. The Unproven Schema entry states which matches carry a mark.
 _Avoid_: normalized name, stripped name, bare-name comparison
 
 **Unproven Schema**:
-The mark on a match whose target states no schema, so nothing proves that the target is in the schema of the question. The value `unproven_schema` carries the mark in two places. The SP Catalog gives it as the match reason when a question that states a schema falls back to a procedure that states none. The `/find_by_table` table match puts it in the `risk_flags` of every match record whose target states no schema. The mark describes the target, never the question, and it does not lower the Evidence Status. One target with an unproven schema produces one Execution Path, never one path per candidate schema. See [ADR-0035](docs/adr/0035-an-unproven-schema-marks-one-execution-path.md).
+The mark on a match that proves no schema. The value `unproven_schema` carries the mark in three places:
+- The SP Catalog gives it as the match reason when a question that states a schema falls back to a procedure that states none.
+- The `/find_by_table` table match puts it in the `risk_flags` of every match record whose target states no schema.
+- The `/locate_object` row puts it in its `risk_flags` when the index falls back to the bare bucket. The row also carries it when the matched key states no schema.
+
+In a match record, the mark describes the target, never the question. The mark does not lower the Evidence Status. One target with an unproven schema produces one Execution Path, never one path per candidate schema. See [ADR-0035](docs/adr/0035-an-unproven-schema-marks-one-execution-path.md).
 _Avoid_: guessed schema, default schema, dbo fallback
 
 **Object Location Index**:
-The record of every object name one SQL cache can answer for, carried beside that cache under the same SQL Cache Identity. It holds the union of the declared object names and the SQL Execution Graph node names, so a table reached only inside a stored-procedure body stays findable. Each kind of object (stored procedures, tables) has two buckets. The bare bucket holds bare keys. The full bucket holds `database.schema.name` keys. Both buckets obey the two-bucket rule of the Canonical Object Identity. An index that reports no match is an authoritative negative: the reader skips that cache without opening it. The index states its own format version (`index_version`), separate from the cache format version. An index that is older than its cache, has no version, has another version, or misses a bucket counts as absent, and the reader falls back to reading the whole cache — a stale index makes a search slow, never wrong. The index backfill tool rebuilds every index from the caches on disk after an index version rise. See [ADR-0012](docs/adr/0012-object-location-index-authoritative-pruning.md) and [ADR-0034](docs/adr/0034-the-object-location-index-states-its-own-format-version.md).
+The record of every object name one SQL cache can answer for. It sits beside that cache under the same SQL Cache Identity. It holds the union of the declared object names and the SQL Execution Graph node names. So a table reached only inside a stored-procedure body stays findable. Each kind of object (stored procedures, tables) has two buckets: bare keys and `database.schema.name` keys. Both buckets obey the two-bucket rule of the Canonical Object Identity.
+
+An index that reports no match is an authoritative negative: the reader skips that cache without opening it. The index states its own format version (`index_version`), separate from the cache format version. An index counts as absent when it is older than its cache or has no version. It also counts as absent when it has another version or misses a bucket. The reader then reads the whole cache, so a stale index makes a search slow, never wrong. The index backfill tool rebuilds every index from the caches on disk after an index version rise.
+
+See [ADR-0012](docs/adr/0012-object-location-index-authoritative-pruning.md) and [ADR-0034](docs/adr/0034-the-object-location-index-states-its-own-format-version.md).
 _Avoid_: name list, cache summary, object catalog
 
 **Derived Execution Evidence**:

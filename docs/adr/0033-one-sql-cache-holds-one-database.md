@@ -24,7 +24,7 @@ One SQL cache holds one Database and every schema inside it. Each object in the 
 
 ## Rejected alternative
 
-**Keep one cache per schema.** The cache format cannot record which schema an object belongs to, because the schema is a property of the whole file. A cross-schema reference in the SQL Execution Graph then has no cache that can resolve it. The operator must also know every schema of every Database before a refresh, and a schema that nobody names stays empty with no warning. The caller's catalog declares a (System, Database) pair and states no schema, so the caller cannot know which schema caches to open.
+**Keep one cache per schema.** The cache format cannot record which schema an object belongs to, because the schema is a property of the whole file. A cross-schema reference in the SQL Execution Graph then has no cache that can resolve it. The operator must also know every schema of every Database before a refresh. A schema that nobody names stays empty with no warning. The caller's catalog declares a (System, Database) pair and states no schema, so the caller cannot know which schema caches to open.
 
 ## Consequences
 

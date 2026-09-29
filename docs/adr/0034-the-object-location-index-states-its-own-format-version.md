@@ -26,4 +26,4 @@ The read-side step of the canonical-object-identity work (`.scratch/canonical-ob
 - The backfill tool rebuilds every index from the caches on this machine. It opens no SQL Server connection, so an index version rise needs no operator refresh. A rerun of the tool is the recovery path after each index version rise.
 - A change to the cache shape raises `_SQL_CACHE_VERSION` alone. The index does not need to follow, because an unreadable cache answers nothing.
 - The version is a property of the file, not of the index content. The in-memory index value holds no version field.
-- The degrade reasons of ADR-0012 change: "built against a different cache format version" becomes "states no index version, or another index version, or misses a bucket". The guarantee of ADR-0012 does not change. A stale or incomplete index makes a search slow, never wrong.
+- The degrade reasons of ADR-0012 change. "Built against a different cache format version" becomes "states no index version, or another index version, or misses a bucket". The guarantee of ADR-0012 does not change. A stale or incomplete index makes a search slow, never wrong.
