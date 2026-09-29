@@ -7,7 +7,7 @@ from hashlib import sha256
 import re
 from typing import Any, Iterable, Mapping, Optional
 
-from canonical_object_identity import ObjectName, bare_key, part_key
+from canonical_object_identity import ObjectName, bare_key, part_key, schema_qualified
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
@@ -100,7 +100,7 @@ def build_execution_paths(
             unresolved_targets = (
                 [str(node.get("id")) for node in matches]
                 if matches
-                else [_written_name(_qualified_invocation_name(invocation))]
+                else [schema_qualified(_invocation_object_name(invocation))]
             )
             paths.append(
                 _unresolved_path(
@@ -141,7 +141,7 @@ def _paths_from_module(
     max_call_depth: int = 5,
 ) -> list[dict[str, Any]]:
     module_id = str(module.get("id", ""))
-    qualified_module = _written_name(_qualified_name(module))
+    qualified_module = schema_qualified(_node_object_name(module))
     current_sp_chain = (*sp_chain, qualified_module)
     current_module_chain = (*module_chain_ids, module_id)
     if module_id in module_chain_ids:
@@ -456,7 +456,7 @@ def _path_for_operation(
         "procedure_name": invocation.procedure_name or "",
         "procedure_schema": invocation.procedure_schema or "",
         "branch_context": list(invocation.branch_context),
-        "sp_chain": list(sp_chain or [_written_name(_qualified_name(module))]),
+        "sp_chain": list(sp_chain or [schema_qualified(_node_object_name(module))]),
         "module_chain_ids": list(module_chain),
         "terminal_operation_id": operation_id,
         "terminal_operation": operation.get("operation_type", ""),
@@ -512,7 +512,7 @@ def _unresolved_path(
     )
     procedure_name = invocation.procedure_name or ""
     sp_chain = sp_chain_override or (
-        [_written_name(_qualified_name(module))] if module else ([procedure_name] if procedure_name else [])
+        [schema_qualified(_node_object_name(module))] if module else ([procedure_name] if procedure_name else [])
     )
     module_id = path_identity or (str(module.get("id", "")) if module else "")
     path = {
@@ -593,7 +593,7 @@ def _relationship_targets(
         if target is None:
             missing.append(target_id or "<missing-target>")
             continue
-        names.append(_written_name(_qualified_name(target)))
+        names.append(schema_qualified(_node_object_name(target)))
         full_key = {
             "database": str(relationship.get("database") or "") or graph_database,
             "schema": str(target.get("schema", "") or ""),
@@ -607,7 +607,7 @@ def _relationship_targets(
 def _stored_procedure_nodes(nodes: Mapping[str, Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     return sorted(
         (node for node in nodes.values() if node.get("type") == "stored_procedure"),
-        key=lambda node: (bare_key(node.get("name")), _written_name(_qualified_name(node))),
+        key=lambda node: (bare_key(node.get("name")), schema_qualified(_node_object_name(node))),
     )
 
 
@@ -815,7 +815,7 @@ def _method_chain(invocation: DbInvocation) -> list[str]:
     return list(invocation.method_chain) or [invocation.method_name]
 
 
-def _qualified_name(node: Mapping[str, Any]) -> ObjectName:
+def _node_object_name(node: Mapping[str, Any]) -> ObjectName:
     return ObjectName(
         server="",
         database="",
@@ -824,18 +824,13 @@ def _qualified_name(node: Mapping[str, Any]) -> ObjectName:
     )
 
 
-def _qualified_invocation_name(invocation: DbInvocation) -> ObjectName:
+def _invocation_object_name(invocation: DbInvocation) -> ObjectName:
     return ObjectName(
         server="",
         database="",
         schema=invocation.procedure_schema or "",
         name=invocation.procedure_name or "",
     )
-
-
-def _written_name(name: ObjectName) -> str:
-    """Return `schema.name` as written, or the bare name when the schema is empty."""
-    return f"{name.schema}.{name.name}" if name.schema and name.name else name.name
 
 
 def _evidence_value(evidence: Any) -> str:

@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Opt
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
-from canonical_object_identity import ObjectName, bare_key, bare_name, full_key, parse, part_key
+from canonical_object_identity import ObjectName, bare_key, bare_name, full_key, parse, part_key, schema_qualified
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
@@ -947,9 +947,10 @@ def _execution_sql_context(
         procedures_by_database.setdefault(database, set()).add(name)
 
     def qualified_procedure_name(item: Mapping[str, object]) -> str:
-        name = str(item.get("name") or "").strip()
-        schema = str(item.get("schema") or "").strip()
-        return f"{schema}.{name}" if schema and "." not in name else name
+        # A name that states its own schema keeps it; else the entry's schema field.
+        written = parse(str(item.get("name") or ""))
+        schema = written.schema or str(item.get("schema") or "").strip()
+        return schema_qualified(ObjectName("", "", schema, written.name))
 
     for node in graph.get("nodes", []) or []:
         if node.get("type") == "stored_procedure":

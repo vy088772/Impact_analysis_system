@@ -14,13 +14,13 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from canonical_object_identity import ObjectName, bare_key
+from canonical_object_identity import ObjectName, bare_key, schema_qualified
 
 from .sql_cache_store import load_cached, named_cache_identity
 from code_analyzer.sql_analyzer import estimate_complexity_from_definition
 
 
-def _qualified_node_name(node: dict) -> ObjectName:
+def _node_object_name(node: dict) -> ObjectName:
     return ObjectName(
         server="",
         database="",
@@ -41,7 +41,7 @@ def _graph_tables_for_procedure(cached: dict, procedure_name: str) -> List[str]:
         node_id
         for node_id, node in nodes.items()
         if node.get("type") == "stored_procedure"
-        and bare_key(_qualified_node_name(node)) == bare_key(procedure_name)
+        and bare_key(_node_object_name(node)) == bare_key(procedure_name)
     }
     queue = list(roots)
     visited: set[str] = set()
@@ -65,8 +65,7 @@ def _graph_tables_for_procedure(cached: dict, procedure_name: str) -> List[str]:
             elif relationship_type in {"reads", "writes"}:
                 target_type = target.get("type")
                 if target_type == "table":
-                    table = _qualified_node_name(target)
-                    tables.add(f"{table.schema}.{table.name}" if table.schema and table.name else table.name)
+                    tables.add(schema_qualified(_node_object_name(target)))
                 elif target_type in {"view", "function", "dml_operation", "unresolved_dynamic_sql"}:
                     queue.append(target_id)
         if source.get("type") in {"view", "function"}:

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, NamedTuple
 
-from typing import NamedTuple
-
-from canonical_object_identity import part_key
+from canonical_object_identity import ObjectName, part_key, schema_qualified
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 
 from .execution_path_builder import build_execution_paths
@@ -422,11 +420,6 @@ def _merge_reachable(target: _Tables, source: Mapping[_TargetKey, _Target]) -> b
     return changed
 
 
-def _written_target(schema: str, name: str) -> str:
-    """The target as the graph stores it: `schema.name`, or the bare name when the schema is empty."""
-    return f"{schema}.{name}" if schema else name
-
-
 def _matching_targets(
     full_keys: Iterable[Mapping[str, Any]], question: TableQuestion, own_database: str
 ) -> list[tuple[str, TableMatch]]:
@@ -437,7 +430,7 @@ def _matching_targets(
         name = str(full_key.get("name") or "")
         match = question.match(full_key.get("database"), schema, name, own_database)
         if match is not None:
-            matches.append((_written_target(schema, name), match))
+            matches.append((schema_qualified(ObjectName("", "", schema, name)), match))
     return matches
 
 
