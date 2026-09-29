@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from canonical_object_identity import ObjectName, parse, part_key
-from code_analyzer.static_analyzer_host import StaticAnalyzerHost
+from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 
 
 # v2: nested CALL branches, unresolved dynamic SQL nodes, typed View/UDF uses,
@@ -109,11 +109,28 @@ def build_sql_execution_graph(
         analyzer.ensure_ready()
         with tempfile.TemporaryDirectory(prefix="sql-graph-") as temp_dir:
             temp_root = Path(temp_dir)
-            for index, (object_type, object_schema, name, definition) in enumerate(module_specs, start=1):
-                module_id = _node_id(object_type, object_schema, name)
+            input_paths: list[Path] = []
+            for index, (_, _, name, definition) in enumerate(module_specs, start=1):
                 input_path = temp_root / f"{index:05d}_{_safe_name(name)}.sql"
                 input_path.write_text(definition, encoding="utf-8", newline="")
-                result = analyzer.analyze_sql(input_path)
+                input_paths.append(input_path)
+            name_by_path = {str(path): spec[2] for path, spec in zip(input_paths, module_specs)}
+
+            def report_batch(completed: int, total: int, last_input: str) -> None:
+                _report_progress(progress_callback, "graph", completed, total, name_by_path[last_input])
+
+            try:
+                results = analyzer.analyze_sql_files(input_paths, report_batch)
+            except StaticAnalyzerHostError as exc:
+                # The host names the failed input by path; the operator needs the module.
+                module_name = next((name for path, name in name_by_path.items() if path in str(exc)), None)
+                if module_name is None:
+                    raise
+                raise StaticAnalyzerHostError(f"SQL analysis failed for module {module_name}: {exc}") from exc
+            if len(results) != len(module_specs):
+                raise StaticAnalyzerHostError("StaticAnalyzerHost returned a SQL result count that differs from the module count")
+            for (object_type, object_schema, name, definition), result in zip(module_specs, results):
+                module_id = _node_id(object_type, object_schema, name)
                 for error in result.get("parse_errors", []) or []:
                     parse_errors.append(
                         {
@@ -136,7 +153,6 @@ def build_sql_execution_graph(
                         str(data.get("database") or ""),
                         len(definition),
                     )
-                _report_progress(progress_callback, "graph", index, len(module_specs), name)
 
     _expand_temp_table_lineage(nodes, relationships, call_edges, progress_callback)
 

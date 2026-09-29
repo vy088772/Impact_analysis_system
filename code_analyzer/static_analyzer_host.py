@@ -14,7 +14,7 @@ from typing import Any, Callable
 from .decompilation_cache import DecompilationAttemptCache
 
 
-CONTRACT_VERSION = 3
+CONTRACT_VERSION = 4
 _MAX_HOST_COMMAND_CHARS = 24_000
 # Every host invocation re-parses every `.cs` file under the given source roots as analysis
 # context before it looks at a single --input file, so that context cost is paid once per
@@ -92,42 +92,35 @@ class StaticAnalyzerHost:
         source_roots: list[Path] | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> list[dict[str, Any]]:
-        if not input_paths:
-            return []
         source_roots = source_roots or []
-        results: list[dict[str, Any]] = []
-        batch: list[Path] = []
         base_command_length = len("csharp") + sum(
             len(" --source-root ") + len(str(source_root))
             for source_root in source_roots
         )
-        command_length = base_command_length
-        completed = 0
-
-        for input_path in input_paths:
-            input_length = len(str(input_path)) + len(" --input ")
-            if batch and (
-                len(batch) >= _MAX_HOST_FILES_PER_BATCH
-                or command_length + input_length > _MAX_HOST_COMMAND_CHARS
-            ):
-                results.extend(self._analyze_csharp_batch(batch, source_roots))
-                completed += len(batch)
-                if progress_callback is not None:
-                    progress_callback(completed, len(input_paths), str(batch[-1]))
-                batch = []
-                command_length = base_command_length
-            batch.append(input_path)
-            command_length += input_length
-
-        if batch:
-            results.extend(self._analyze_csharp_batch(batch, source_roots))
-            completed += len(batch)
-            if progress_callback is not None:
-                progress_callback(completed, len(input_paths), str(batch[-1]))
-        return results
+        return self._run_in_batches(
+            input_paths,
+            base_command_length,
+            lambda batch: self._analyze_csharp_batch(batch, source_roots),
+            progress_callback,
+        )
 
     def analyze_sql(self, input_path: Path) -> dict[str, Any]:
         return self._run("sql", "--input", str(input_path))
+
+    def analyze_sql_files(
+        self,
+        input_paths: list[Path],
+        progress_callback: Callable[[int, int, str], None] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Analyze many SQL files, one host run for each batch, and return one result for
+        each input in input order. A failed input stops the run with an error that holds
+        the path of that input."""
+        return self._run_in_batches(
+            input_paths,
+            len("sql"),
+            self._analyze_sql_batch,
+            progress_callback,
+        )
 
     def semantic_binding_availability(self, scan_roots: list[Path]) -> list[dict[str, Any]]:
         """Report Semantic Binding Availability for each project file found under each
@@ -230,6 +223,53 @@ class StaticAnalyzerHost:
                 f"StaticAnalyzerHost contract mismatch: expected {CONTRACT_VERSION}, got {payload.get('contract_version')}"
             )
         return payload
+
+    def _run_in_batches(
+        self,
+        input_paths: list[Path],
+        base_command_length: int,
+        run_batch: Callable[[list[Path]], list[dict[str, Any]]],
+        progress_callback: Callable[[int, int, str], None] | None,
+    ) -> list[dict[str, Any]]:
+        """Split the inputs by the batch limits, run each batch, report each completed batch."""
+        results: list[dict[str, Any]] = []
+        batch: list[Path] = []
+        command_length = base_command_length
+        completed = 0
+
+        for input_path in input_paths:
+            input_length = len(str(input_path)) + len(" --input ")
+            if batch and (
+                len(batch) >= _MAX_HOST_FILES_PER_BATCH
+                or command_length + input_length > _MAX_HOST_COMMAND_CHARS
+            ):
+                results.extend(run_batch(batch))
+                completed += len(batch)
+                if progress_callback is not None:
+                    progress_callback(completed, len(input_paths), str(batch[-1]))
+                batch = []
+                command_length = base_command_length
+            batch.append(input_path)
+            command_length += input_length
+
+        if batch:
+            results.extend(run_batch(batch))
+            completed += len(batch)
+            if progress_callback is not None:
+                progress_callback(completed, len(input_paths), str(batch[-1]))
+        return results
+
+    def _analyze_sql_batch(self, input_paths: list[Path]) -> list[dict[str, Any]]:
+        args = ["sql"]
+        for input_path in input_paths:
+            args.extend(["--input", str(input_path)])
+        payload = self._run(*args)
+        if len(input_paths) == 1:
+            return [payload]
+        sources = payload.get("sources")
+        if not isinstance(sources, list) or len(sources) != len(input_paths):
+            raise StaticAnalyzerHostError("StaticAnalyzerHost returned an invalid SQL batch response")
+        return sources
 
     def _analyze_csharp_batch(
         self,

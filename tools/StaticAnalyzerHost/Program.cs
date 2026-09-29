@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 internal static class Program
 {
-    private const int ContractVersion = 3;
+    private const int ContractVersion = 4;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -30,7 +30,7 @@ internal static class Program
             if (args[0] == "sql")
             {
                 var inputs = ReadInputPaths(args);
-                return inputs.Count == 1 ? AnalyzeSql(inputs[0]) : Fail("sql accepts exactly one input file");
+                return AnalyzeSql(inputs);
             }
             if (args[0] == "decompile-wrapper")
             {
@@ -105,10 +105,34 @@ internal static class Program
         return 0;
     }
 
-    private static int AnalyzeSql(string inputPath)
+    private static int AnalyzeSql(List<string> inputPaths)
     {
-        var analysis = SqlAnalyzer.Analyze(inputPath);
-        Write(new { contract_version = ContractVersion, operations = analysis.Operations, parse_errors = analysis.ParseErrors });
+        // One failed input stops the run. The message names that input, so the caller
+        // finds the bad module without a search through the whole batch.
+        var analyses = inputPaths.Select(inputPath =>
+        {
+            try
+            {
+                return SqlAnalyzer.Analyze(inputPath);
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException($"sql analysis failed for input {inputPath}: {exception.Message}", exception);
+            }
+        }).ToList();
+        if (analyses.Count == 1)
+        {
+            var analysis = analyses[0];
+            Write(new { contract_version = ContractVersion, operations = analysis.Operations, parse_errors = analysis.ParseErrors });
+        }
+        else
+        {
+            Write(new
+            {
+                contract_version = ContractVersion,
+                sources = analyses.Select(analysis => new { operations = analysis.Operations, parse_errors = analysis.ParseErrors }),
+            });
+        }
         return 0;
     }
 
@@ -237,7 +261,7 @@ internal static class Program
             if (args[index] != "--input")
                 throw new ArgumentException("expected --input before each source file");
             if (!File.Exists(args[index + 1]))
-                throw new FileNotFoundException("input file not found", args[index + 1]);
+                throw new FileNotFoundException($"input file not found: {args[index + 1]}", args[index + 1]);
             inputPaths.Add(args[index + 1]);
         }
         return inputPaths;

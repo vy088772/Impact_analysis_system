@@ -7,12 +7,20 @@ import tempfile
 import time
 from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from code_analyzer.static_analyzer_host import CONTRACT_VERSION, StaticAnalyzerHost
+from code_analyzer import static_analyzer_host
+from code_analyzer.static_analyzer_host import (
+    CONTRACT_VERSION,
+    StaticAnalyzerHost,
+    StaticAnalyzerHostError,
+)
 from code_analyzer import sql_analyzer
 from code_analyzer.sql_analyzer import ObjectListing, SQLAnalyzer
 from service import sql_cache_store
@@ -631,6 +639,96 @@ def test_a_cycle_of_temp_table_writes_gives_one_stable_result() -> None:
     assert_relationships_resolve_to_known_nodes(first)
     assert first["relationships"] == second["relationships"]
     assert {target for _, target in _lineage_reads(first)} == {"table:dbo.BaseA", "table:dbo.BaseB"}
+
+
+class _OneRunPerModuleHost:
+    """The real host, asked for one analyzer run for each module: the graph the batch path must equal."""
+
+    def __init__(self, host: StaticAnalyzerHost) -> None:
+        self._host = host
+
+    def ensure_ready(self) -> None:
+        self._host.ensure_ready()
+
+    def analyze_sql_files(self, paths: list[Path], progress_callback=None) -> list[dict]:
+        return [self._host.analyze_sql(path) for path in paths]
+
+
+def _three_procedures() -> dict:
+    return cache_payload(
+        "PUR",
+        procedures={
+            "dbo.usp_A": {"definition": "CREATE PROCEDURE dbo.usp_A AS INSERT INTO dbo.T1 (Id) SELECT Id FROM dbo.S1;"},
+            "dbo.usp_B": {"definition": "CREATE PROCEDURE dbo.usp_B AS BEGIN EXEC dbo.usp_A; UPDATE dbo.T2 SET Id = 1; END;"},
+            "dbo.usp_C": {"definition": "CREATE PROCEDURE dbo.usp_C AS DELETE FROM dbo.T3 WHERE Id = 1;"},
+        },
+    )
+
+
+def test_a_batched_graph_equals_the_graph_from_one_run_for_each_module() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+    data = _three_procedures()
+    expected = build_sql_execution_graph(data, host=_OneRunPerModuleHost(host))
+
+    with patch.object(static_analyzer_host, "_MAX_HOST_FILES_PER_BATCH", 2):
+        batched = build_sql_execution_graph(data, host=host)
+
+    assert batched == expected
+    assert batched["relationships"]
+
+
+def test_the_graph_stage_reports_once_for_each_batch_with_the_last_module_name() -> None:
+    data = _three_procedures()
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+    reports: list[tuple[int, int, str]] = []
+
+    with patch.object(static_analyzer_host, "_MAX_HOST_FILES_PER_BATCH", 2):
+        build_sql_execution_graph(
+            data,
+            host=host,
+            progress_callback=lambda stage, current, total, item: (
+                reports.append((current, total, item)) if stage == "graph" else None
+            ),
+        )
+
+    assert reports == [(0, 3, ""), (2, 3, "usp_B"), (3, 3, "usp_C")]
+
+
+def test_a_host_error_that_names_an_input_path_names_the_module() -> None:
+    class FailingHost:
+        def ensure_ready(self) -> None:
+            return None
+
+        def analyze_sql_files(self, paths: list[Path], progress_callback=None) -> list[dict]:
+            raise StaticAnalyzerHostError(f"sql analysis failed for input {paths[1]}: boom")
+
+    with pytest.raises(StaticAnalyzerHostError, match="for module usp_B: "):
+        build_sql_execution_graph(_three_procedures(), host=FailingHost())
+
+
+def test_a_host_error_that_names_no_input_path_passes_through_unchanged() -> None:
+    class FailingHost:
+        def ensure_ready(self) -> None:
+            return None
+
+        def analyze_sql_files(self, paths: list[Path], progress_callback=None) -> list[dict]:
+            raise StaticAnalyzerHostError("dotnet is gone")
+
+    with pytest.raises(StaticAnalyzerHostError) as caught:
+        build_sql_execution_graph(_three_procedures(), host=FailingHost())
+    assert str(caught.value) == "dotnet is gone"
+
+
+def test_a_cache_with_no_module_definitions_never_starts_the_analyzer() -> None:
+    class UnusedHost:
+        def ensure_ready(self) -> None:
+            raise AssertionError("the analyzer must not start")
+
+    graph = build_sql_execution_graph(cache_payload("PUR", tables=["dbo.T1"]), host=UnusedHost())
+
+    assert [node["id"] for node in graph["nodes"]] == ["table:dbo.T1"]
 
 
 def test_the_lineage_stage_reports_after_the_graph_stage() -> None:

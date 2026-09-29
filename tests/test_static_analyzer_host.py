@@ -90,6 +90,118 @@ def test_static_analyzer_host_contract() -> None:
         assert sql["operations"] == []
 
 
+def test_the_analyzer_build_reports_the_contract_version_of_the_host() -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    assert host.ensure_ready()["contract_version"] == CONTRACT_VERSION
+
+
+def test_the_sql_command_answers_many_inputs_with_one_source_for_each_in_input_order(tmp_path: Path) -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+    paths = []
+    for name in ("First", "Second"):
+        path = tmp_path / f"{name}.sql"
+        path.write_text(f"CREATE PROCEDURE dbo.usp_{name} AS DELETE FROM dbo.T{name};", encoding="utf-8")
+        paths.append(path)
+
+    results = host.analyze_sql_files(paths)
+
+    assert [result["operations"][0]["module"]["name"] for result in results] == ["usp_First", "usp_Second"]
+    single = host.analyze_sql(paths[0])
+    assert set(single) == {"contract_version", "operations", "parse_errors"}
+
+
+def test_analyze_sql_files_splits_by_the_batch_limit_and_reports_each_batch(tmp_path: Path) -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    paths = [tmp_path / f"M{index}.sql" for index in range(5)]
+    runs: list[list[Path]] = []
+    events: list[tuple[int, int, str]] = []
+
+    def fake_run(_host: StaticAnalyzerHost, *args: str) -> dict:
+        batch = [Path(value) for value in args[1::2]]
+        runs.append(batch)
+        if len(batch) == 1:
+            return {"operations": [], "parse_errors": []}
+        return {"sources": [{"operations": [], "parse_errors": []} for _ in batch]}
+
+    with (
+        patch("code_analyzer.static_analyzer_host._MAX_HOST_FILES_PER_BATCH", 2),
+        patch.object(StaticAnalyzerHost, "_run", new=fake_run),
+    ):
+        results = host.analyze_sql_files(paths, lambda *event: events.append(event))
+
+    assert len(results) == 5
+    assert [len(run) for run in runs] == [2, 2, 1]
+    assert events == [(2, 5, str(paths[1])), (4, 5, str(paths[3])), (5, 5, str(paths[4]))]
+
+
+def test_analyze_sql_files_splits_before_a_command_passes_the_character_limit(tmp_path: Path) -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    paths = [tmp_path / f"M{index}.sql" for index in range(4)]
+    per_input = len(str(paths[0])) + len(" --input ")
+    runs: list[int] = []
+
+    def fake_run(_host: StaticAnalyzerHost, *args: str) -> dict:
+        count = len(args) // 2
+        runs.append(count)
+        if count == 1:
+            return {"operations": [], "parse_errors": []}
+        return {"sources": [{"operations": [], "parse_errors": []} for _ in range(count)]}
+
+    # Room for two inputs after the command name, not three.
+    with (
+        patch("code_analyzer.static_analyzer_host._MAX_HOST_COMMAND_CHARS", len("sql") + 2 * per_input + 1),
+        patch.object(StaticAnalyzerHost, "_run", new=fake_run),
+    ):
+        results = host.analyze_sql_files(paths)
+
+    assert len(results) == 4
+    assert runs == [2, 2]
+
+
+def test_one_sql_input_longer_than_the_character_limit_still_runs_alone(tmp_path: Path) -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    paths = [tmp_path / "A.sql", tmp_path / "B.sql"]
+    runs: list[int] = []
+
+    def fake_run(_host: StaticAnalyzerHost, *args: str) -> dict:
+        runs.append(len(args) // 2)
+        return {"operations": [], "parse_errors": []}
+
+    with (
+        patch("code_analyzer.static_analyzer_host._MAX_HOST_COMMAND_CHARS", 10),
+        patch.object(StaticAnalyzerHost, "_run", new=fake_run),
+    ):
+        results = host.analyze_sql_files(paths)
+
+    assert len(results) == 2
+    assert runs == [1, 1]
+
+
+def test_a_failed_sql_input_stops_the_run_with_its_path_in_the_error(tmp_path: Path) -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+    good = tmp_path / "Good.sql"
+    good.write_text("CREATE PROCEDURE dbo.usp_Good AS SELECT 1;", encoding="utf-8")
+    missing = tmp_path / "Missing.sql"
+
+    with pytest.raises(StaticAnalyzerHostError, match="Missing.sql"):
+        host.analyze_sql_files([good, missing])
+
+
+def test_a_sql_batch_response_with_a_wrong_entry_count_is_rejected(tmp_path: Path) -> None:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    paths = [tmp_path / "A.sql", tmp_path / "B.sql"]
+
+    with patch.object(
+        StaticAnalyzerHost,
+        "_run",
+        return_value={"contract_version": CONTRACT_VERSION, "sources": [{"operations": [], "parse_errors": []}]},
+    ):
+        with pytest.raises(StaticAnalyzerHostError, match="invalid SQL batch response"):
+            host.analyze_sql_files(paths)
+
+
 def test_a_command_response_from_another_contract_version_is_rejected(tmp_path: Path) -> None:
     """The client rejects any command response whose contract version is not its own."""
     host = StaticAnalyzerHost(tmp_path / "StaticAnalyzerHost.csproj")

@@ -17,7 +17,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional, Union
+from typing import Any, Callable, Iterable, Mapping, Optional, Union
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -207,6 +207,17 @@ class StubAnalyzerHost:
         definition = Path(path).read_text(encoding="utf-8")
         operations = self._operations_by_definition.get(definition, [])
         return {"operations": [dict(operation) for operation in operations], "parse_errors": []}
+
+    def analyze_sql_files(
+        self,
+        paths: list[Path],
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> list[dict]:
+        """Batch method: one result for each path, in path order, and one progress report."""
+        results = [self.analyze_sql(path) for path in paths]
+        if progress_callback is not None and paths:
+            progress_callback(len(paths), len(paths), str(paths[-1]))
+        return results
 
 
 def stubbed_procedures(
