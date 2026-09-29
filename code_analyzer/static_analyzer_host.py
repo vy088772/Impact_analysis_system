@@ -26,7 +26,13 @@ _MAX_HOST_FILES_PER_BATCH = 100
 
 
 class StaticAnalyzerHostError(RuntimeError):
-    """Raised when the analyzer host cannot satisfy its public contract."""
+    """Raised when the analyzer host cannot satisfy its public contract.
+
+    `input_path` is the input that made the host fail, when the failure names one."""
+
+    def __init__(self, message: str, input_path: Path | None = None) -> None:
+        super().__init__(message)
+        self.input_path = input_path
 
 
 @dataclass(frozen=True)
@@ -233,37 +239,48 @@ class StaticAnalyzerHost:
     ) -> list[dict[str, Any]]:
         """Split the inputs by the batch limits, run each batch, report each completed batch."""
         results: list[dict[str, Any]] = []
-        batch: list[Path] = []
-        command_length = base_command_length
         completed = 0
 
+        def run_and_report(batch: list[Path]) -> None:
+            nonlocal completed
+            results.extend(run_batch(batch))
+            completed += len(batch)
+            if progress_callback is not None:
+                progress_callback(completed, len(input_paths), str(batch[-1]))
+
+        batch: list[Path] = []
+        command_length = base_command_length
         for input_path in input_paths:
             input_length = len(str(input_path)) + len(" --input ")
             if batch and (
                 len(batch) >= _MAX_HOST_FILES_PER_BATCH
                 or command_length + input_length > _MAX_HOST_COMMAND_CHARS
             ):
-                results.extend(run_batch(batch))
-                completed += len(batch)
-                if progress_callback is not None:
-                    progress_callback(completed, len(input_paths), str(batch[-1]))
+                run_and_report(batch)
                 batch = []
                 command_length = base_command_length
             batch.append(input_path)
             command_length += input_length
 
         if batch:
-            results.extend(run_batch(batch))
-            completed += len(batch)
-            if progress_callback is not None:
-                progress_callback(completed, len(input_paths), str(batch[-1]))
+            run_and_report(batch)
         return results
 
     def _analyze_sql_batch(self, input_paths: list[Path]) -> list[dict[str, Any]]:
         args = ["sql"]
         for input_path in input_paths:
             args.extend(["--input", str(input_path)])
-        payload = self._run(*args)
+        try:
+            payload = self._run(*args)
+        except StaticAnalyzerHostError as exc:
+            # The analyzer names the failed input by path in its message. This is the one
+            # place that reads that wording; callers read `input_path`.
+            message = str(exc)
+            longest_first = sorted(input_paths, key=lambda path: len(str(path)), reverse=True)
+            failed = next((path for path in longest_first if str(path) in message), None)
+            if failed is None:
+                raise
+            raise StaticAnalyzerHostError(message, failed) from exc
         if len(input_paths) == 1:
             return [payload]
         sources = payload.get("sources")

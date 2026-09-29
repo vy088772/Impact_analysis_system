@@ -650,8 +650,8 @@ class _OneRunPerModuleHost:
     def ensure_ready(self) -> None:
         self._host.ensure_ready()
 
-    def analyze_sql_files(self, paths: list[Path], progress_callback=None) -> list[dict]:
-        return [self._host.analyze_sql(path) for path in paths]
+    def analyze_sql_files(self, input_paths: list[Path], progress_callback=None) -> list[dict]:
+        return [self._host.analyze_sql(path) for path in input_paths]
 
 
 def _three_procedures() -> dict:
@@ -701,8 +701,8 @@ def test_a_host_error_that_names_an_input_path_names_the_module() -> None:
         def ensure_ready(self) -> None:
             return None
 
-        def analyze_sql_files(self, paths: list[Path], progress_callback=None) -> list[dict]:
-            raise StaticAnalyzerHostError(f"sql analysis failed for input {paths[1]}: boom")
+        def analyze_sql_files(self, input_paths: list[Path], progress_callback=None) -> list[dict]:
+            raise StaticAnalyzerHostError(f"sql analysis failed for input {input_paths[1]}: boom", input_paths[1])
 
     with pytest.raises(StaticAnalyzerHostError, match="for module usp_B: "):
         build_sql_execution_graph(_three_procedures(), host=FailingHost())
@@ -713,7 +713,7 @@ def test_a_host_error_that_names_no_input_path_passes_through_unchanged() -> Non
         def ensure_ready(self) -> None:
             return None
 
-        def analyze_sql_files(self, paths: list[Path], progress_callback=None) -> list[dict]:
+        def analyze_sql_files(self, input_paths: list[Path], progress_callback=None) -> list[dict]:
             raise StaticAnalyzerHostError("dotnet is gone")
 
     with pytest.raises(StaticAnalyzerHostError) as caught:

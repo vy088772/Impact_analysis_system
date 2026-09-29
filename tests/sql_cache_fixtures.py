@@ -210,13 +210,13 @@ class StubAnalyzerHost:
 
     def analyze_sql_files(
         self,
-        paths: list[Path],
+        input_paths: list[Path],
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> list[dict]:
-        """Batch method: one result for each path, in path order, and one progress report."""
-        results = [self.analyze_sql(path) for path in paths]
-        if progress_callback is not None and paths:
-            progress_callback(len(paths), len(paths), str(paths[-1]))
+        """Batch method: one result for each input, in input order, and one progress report."""
+        results = [self.analyze_sql(path) for path in input_paths]
+        if progress_callback is not None and input_paths:
+            progress_callback(len(input_paths), len(input_paths), str(input_paths[-1]))
         return results
 
 

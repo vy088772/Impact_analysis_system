@@ -114,21 +114,22 @@ def build_sql_execution_graph(
                 input_path = temp_root / f"{index:05d}_{_safe_name(name)}.sql"
                 input_path.write_text(definition, encoding="utf-8", newline="")
                 input_paths.append(input_path)
-            name_by_path = {str(path): spec[2] for path, spec in zip(input_paths, module_specs)}
+            module_names = [name for _, _, name, _ in module_specs]
+            name_by_path = dict(zip(input_paths, module_names))
 
             def report_batch(completed: int, total: int, last_input: str) -> None:
-                _report_progress(progress_callback, "graph", completed, total, name_by_path[last_input])
+                _report_progress(progress_callback, "graph", completed, total, name_by_path[Path(last_input)])
 
             try:
                 results = analyzer.analyze_sql_files(input_paths, report_batch)
             except StaticAnalyzerHostError as exc:
-                # The host names the failed input by path; the operator needs the module.
-                module_name = next((name for path, name in name_by_path.items() if path in str(exc)), None)
+                # The host names the failed input; the operator needs the module.
+                module_name = name_by_path.get(exc.input_path)
                 if module_name is None:
                     raise
-                raise StaticAnalyzerHostError(f"SQL analysis failed for module {module_name}: {exc}") from exc
-            if len(results) != len(module_specs):
-                raise StaticAnalyzerHostError("StaticAnalyzerHost returned a SQL result count that differs from the module count")
+                raise StaticAnalyzerHostError(
+                    f"SQL analysis failed for module {module_name}: {exc}", exc.input_path
+                ) from exc
             for (object_type, object_schema, name, definition), result in zip(module_specs, results):
                 module_id = _node_id(object_type, object_schema, name)
                 for error in result.get("parse_errors", []) or []:
