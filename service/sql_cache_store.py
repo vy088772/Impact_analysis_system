@@ -322,6 +322,21 @@ def find_cache_identity(database: str) -> Union[CacheIdentity, AmbiguousServer, 
     return CacheIdentity.of(servers[0], database)
 
 
+def named_cache_identity(database: str, server: str = "") -> Optional[CacheIdentity]:
+    """呼叫端指名的快取身分：有 server 就是那一台，沒有就從磁碟找唯一一份。
+
+    多台 server 都有同名 database 時跟查無快取一樣回傳 None——寧可查無快取，
+    也不猜錯資料庫。database 為空時同樣回傳 None。
+    """
+    database = str(database or "").strip()
+    if not database:
+        return None
+    if server:
+        return CacheIdentity.of(server, database)
+    found = find_cache_identity(database)
+    return found if isinstance(found, CacheIdentity) else None
+
+
 @dataclass(frozen=True)
 class ScanRecordListing:
     """list_caches() 的一列：一份 SQL 快取的身分與 Scan Record（掃描時間）。

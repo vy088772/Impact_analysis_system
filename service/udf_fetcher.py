@@ -20,7 +20,7 @@ from typing import List, Optional
 
 from canonical_object_identity import bare_key
 
-from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
+from .sql_cache_store import load_cached, named_cache_identity
 
 
 def fetch_udf_definitions(
@@ -45,12 +45,8 @@ def fetch_udf_definitions(
     if not sql_texts or not database_alias:
         return []
 
-    identity = (
-        CacheIdentity.of(db_server, database_alias)
-        if db_server
-        else find_cache_identity(database_alias)
-    )
-    cached = load_cached(identity) if isinstance(identity, CacheIdentity) else None
+    identity = named_cache_identity(database_alias, db_server)
+    cached = load_cached(identity) if identity else None
     if not cached:
         return []
 

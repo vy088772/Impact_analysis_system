@@ -924,14 +924,9 @@ def _execution_sql_context(
     """
     database_alias = str(database_alias or "").strip()
     cached = None
-    if database_alias:
-        identity = (
-            sql_cache_store.CacheIdentity.of(db_server, database_alias)
-            if db_server
-            else sql_cache_store.find_cache_identity(database_alias)
-        )
-        if isinstance(identity, sql_cache_store.CacheIdentity):
-            cached = sql_cache_store.load_cached(identity)
+    identity = sql_cache_store.named_cache_identity(database_alias, db_server)
+    if identity:
+        cached = sql_cache_store.load_cached(identity)
     graph = dict((cached or {}).get("sql_execution_graph") or {})
     graph_database = str(
         graph.get("database")
@@ -982,16 +977,8 @@ def _require_sql_execution_graph(database: str, db_server: str = "") -> Tuple[Di
         raise ValueError(
             "database 不可為空；Gateway path analysis 需要指定 SQL execution graph cache。"
         )
-    identity = (
-        sql_cache_store.CacheIdentity.of(db_server, database)
-        if db_server
-        else sql_cache_store.find_cache_identity(database)
-    )
-    cached = (
-        sql_cache_store.load_cached(identity)
-        if isinstance(identity, sql_cache_store.CacheIdentity)
-        else None
-    )
+    identity = sql_cache_store.named_cache_identity(database, db_server)
+    cached = sql_cache_store.load_cached(identity) if identity else None
     graph = (cached or {}).get("sql_execution_graph") if cached else None
     if not cached or not graph:
         raise SqlExecutionGraphRequiredError(
@@ -1396,21 +1383,11 @@ def _rated_invocations_validity_stamp(
     scans: Iterable[ProjectScanResult],
 ) -> _RatedInvocationsValidityStamp:
     """Take a fresh reading of every input `_rated_execution_invocations` depends on."""
-    identity = None
-    if scope.database:
-        identity = (
-            sql_cache_store.CacheIdentity.of(scope.db_server, scope.database)
-            if scope.db_server
-            else sql_cache_store.find_cache_identity(scope.database)
-        )
-    sql_cache = (
-        sql_cache_store.load_cached(identity)
-        if isinstance(identity, sql_cache_store.CacheIdentity)
-        else None
-    )
+    identity = sql_cache_store.named_cache_identity(scope.database, scope.db_server)
+    sql_cache = sql_cache_store.load_cached(identity) if identity else None
     sql_cache_freshness = (
         _freshness_or_sentinel(sql_cache_store.cached_saved_at(identity))
-        if sql_cache is not None and isinstance(identity, sql_cache_store.CacheIdentity)
+        if sql_cache is not None and identity
         else None
     )
     external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
