@@ -266,15 +266,14 @@ def _add_operation(
         call_conditions = list(operation.get("conditions") or branch_path)
         for call_target in operation.get("call_targets", []) or []:
             target = _reference(call_target)
-            # A call target that states no schema reads as dbo here. Step 2b removes this default.
-            target_schema, target_name = target.schema or "dbo", target.name
-            if not target_name:
+            if not target.name:
                 continue
+            target_id, _ = _resolve_call_target(node_by_key, target, cache_database)
             _add_relationship(
                 relationships,
                 "calls",
                 module_id,
-                _node_id("stored_procedure", target_schema, target_name),
+                target_id,
                 source,
                 branch_path,
                 conditions=call_conditions,
@@ -407,6 +406,22 @@ def _ensure_referenced_node(
     }
     kept_node = _add_node(nodes, node_by_key, node)
     return str(kept_node["id"])
+
+
+def _resolve_call_target(
+    node_by_key: dict[tuple[str, str, str], dict[str, Any]],
+    target: ObjectName,
+    cache_database: str,
+) -> tuple[str, dict[str, Any] | None]:
+    """Return the node id a calls relationship names, and the module node the graph defines for it or None."""
+    # A call through a linked server, to another Database, or to a module that this
+    # cache does not list has no module node. A listed module with no definition is a node.
+    # A call target that states no schema reads as dbo here. Step 2b removes this default.
+    target_schema, target_name = target.schema or "dbo", target.name
+    target_id = _node_id("stored_procedure", target_schema, target_name)
+    if target.server or (target.database and part_key(target.database) != part_key(cache_database)):
+        return target_id, None
+    return target_id, node_by_key.get(_node_key("stored_procedure", target_schema, target_name))
 
 
 def _known_object_node_id(
