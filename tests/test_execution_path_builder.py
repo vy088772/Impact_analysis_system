@@ -20,6 +20,7 @@ from service.execution_path_builder import (
     build_compact_execution_path_summary,
     build_execution_paths,
     build_execution_paths_from_raw_invocations,
+    PathIdentity,
 )
 from service.sql_execution_graph import GRAPH_VERSION
 from tests.sql_cache_fixtures import analyzer_operation
@@ -944,3 +945,24 @@ def test_path_ids_for_four_fixed_inputs_never_change() -> None:
     ]
 
     assert path_ids == [[expected] for _, expected in cases]
+
+
+def test_path_identities_that_differ_only_in_letter_case_are_equal() -> None:
+    upper = _golden_invocation("USP_LOAD", procedure_schema="[COMMON]")
+    lower = _golden_invocation("usp_load", procedure_schema="common")
+    lower = DbInvocation(**{**lower.__dict__, "database": "ordersdb"})
+
+    upper_identity = PathIdentity.resolved(upper, "op", ("m1", "m2"), ("IF a",))
+    lower_identity = PathIdentity.resolved(lower, "op", ("m1", "m2"), ("IF a",))
+
+    assert upper_identity == lower_identity
+    assert upper_identity.path_id == lower_identity.path_id
+
+
+def test_an_unresolved_path_identity_names_its_reason_and_falls_back_to_the_module() -> None:
+    invocation = _golden_invocation("usp_Missing")
+
+    identity = PathIdentity.unresolved(invocation, "procedure_not_found", "", "", "SP:dbo.usp_Missing")
+
+    assert identity.operation_id == "unresolved:procedure_not_found"
+    assert identity.module_chain == ("SP:dbo.usp_Missing",)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from hashlib import sha256
 import re
 from typing import Any, Iterable, Mapping, Optional
@@ -430,12 +431,12 @@ def _path_for_operation(
     )
 
     path = {
-        "path_id": _path_id(
+        "path_id": PathIdentity.resolved(
             invocation,
             operation_id,
-            "|".join(module_chain),
+            module_chain,
             path_identity_conditions,
-        ),
+        ).path_id,
         "source_span": _source_span(invocation),
         "method_class_chain": list(invocation.method_class_chain),
         "external_wrapper_method": invocation.external_wrapper_method,
@@ -512,12 +513,14 @@ def _unresolved_path(
     )
     module_id = path_identity or (str(module.get("id", "")) if module else "")
     path = {
-        "path_id": _path_id(
+        "path_id": PathIdentity.unresolved(
             invocation,
-            operation_id or f"unresolved:{reason}",
-            module_id,
+            reason,
+            operation_id,
+            path_identity,
+            str(module.get("id", "")) if module else "",
             effective_conditions,
-        ),
+        ).path_id,
         "source_span": _source_span(invocation),
         "method_class_chain": list(invocation.method_class_chain),
         "external_wrapper_method": invocation.external_wrapper_method,
@@ -674,28 +677,110 @@ def _question_tokens(question: str) -> tuple[str, ...]:
     )
 
 
-def _path_id(
-    invocation: DbInvocation,
-    operation_id: str,
-    module_id: str,
-    path_conditions: Iterable[str] = (),
-) -> str:
-    identity = "\x1f".join(
-        (
-            part_key(invocation.database),
-            invocation.source.relative_path,
-            str(invocation.source.start_offset),
-            str(invocation.source.end_offset),
-            _entry_method(invocation),
-            part_key(invocation.procedure_schema),
-            bare_key(invocation.procedure_name),
-            invocation.source_snapshot_hash,
-            module_id,
-            operation_id,
-            "\x1e".join(path_conditions),
+@dataclass(frozen=True)
+class SourceSpan:
+    """The source file and the character range of one Database Invocation."""
+
+    file_path: str
+    start_offset: int
+    end_offset: int
+
+
+@dataclass(frozen=True)
+class PathIdentity:
+    """The nine fields that make one Execution Path a distinct path.
+
+    The Database, the procedure schema, and the procedure name hold the
+    Canonical Object Identity keys, so two values that name one path are equal.
+    Adding a field changes every `path_id`, and that change needs its own ADR.
+    """
+
+    database: str
+    source_span: SourceSpan
+    entry_method: str
+    procedure_schema: str
+    procedure_name: str
+    source_snapshot_hash: str
+    module_chain: tuple[str, ...]
+    operation_id: str
+    conditions: tuple[str, ...]
+
+    @classmethod
+    def resolved(
+        cls,
+        invocation: DbInvocation,
+        operation_id: str,
+        module_chain: Iterable[str],
+        conditions: Iterable[str] = (),
+    ) -> "PathIdentity":
+        """Return the identity of a path that reaches a graph operation."""
+        return cls._of(invocation, operation_id, tuple(module_chain), tuple(conditions))
+
+    @classmethod
+    def unresolved(
+        cls,
+        invocation: DbInvocation,
+        reason: str,
+        operation_id: str = "",
+        module_chain_id: str = "",
+        fallback_module_id: str = "",
+        conditions: Iterable[str] = (),
+    ) -> "PathIdentity":
+        """Return the identity of a path that stops for `reason`.
+
+        The module chain arrives as one `|` joined id. An empty one falls back
+        to the module id, and an empty operation names the reason.
+        """
+        module_id = module_chain_id or fallback_module_id
+        return cls._of(
+            invocation,
+            operation_id or f"unresolved:{reason}",
+            tuple(module_id.split("|")) if module_id else (),
+            tuple(conditions),
         )
-    )
-    return f"P-{sha256(identity.encode('utf-8')).hexdigest()[:12]}"
+
+    @classmethod
+    def _of(
+        cls,
+        invocation: DbInvocation,
+        operation_id: str,
+        module_chain: tuple[str, ...],
+        conditions: tuple[str, ...],
+    ) -> "PathIdentity":
+        return cls(
+            database=part_key(invocation.database),
+            source_span=SourceSpan(
+                file_path=invocation.source.relative_path,
+                start_offset=invocation.source.start_offset,
+                end_offset=invocation.source.end_offset,
+            ),
+            entry_method=_entry_method(invocation),
+            procedure_schema=part_key(invocation.procedure_schema),
+            procedure_name=bare_key(invocation.procedure_name),
+            source_snapshot_hash=invocation.source_snapshot_hash,
+            module_chain=module_chain,
+            operation_id=operation_id,
+            conditions=conditions,
+        )
+
+    @property
+    def path_id(self) -> str:
+        identity = "\x1f".join(
+            (
+                self.database,
+                self.source_span.file_path,
+                str(self.source_span.start_offset),
+                str(self.source_span.end_offset),
+                self.entry_method,
+                self.procedure_schema,
+                self.procedure_name,
+                self.source_snapshot_hash,
+                "|".join(self.module_chain),
+                self.operation_id,
+                "\x1e".join(self.conditions),
+            )
+        )
+        return f"P-{sha256(identity.encode('utf-8')).hexdigest()[:12]}"
 
 
 def _entry_method(invocation: DbInvocation) -> str:
