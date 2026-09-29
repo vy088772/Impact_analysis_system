@@ -1,6 +1,6 @@
 # Canonical Object Identity
 
-Status: draft
+Status: ready-for-agent
 
 This spec covers two repositories. This repository holds the analysis service.
 The companion repository, `llamaindex-spec-rag`, holds the orchestrator and the
@@ -117,14 +117,16 @@ The work runs in three steps. Step 1 merges twenty-two sites into one module
 and changes one behaviour. Step 2a changes the write side and produces a cache
 that carries schemas. Step 2b changes the read side and surfaces them.
 
-Two preparatory issues run before Step 1, in order. The first routes every
-test's cache payload through one builder. The second makes the SQL Cache
+Three preparatory issues run before Step 1, in order. The first adds the
+Canonical Object Identity module and its string tests, and no site calls it yet.
+The second routes every test's cache payload through one builder, and that
+builder parses a written name with the module. The third makes the SQL Cache
 Identity the only way to name a SQL cache, so that Step 2a's removal of the
 schema part is one edit in one value type rather than a list of nine sites.
-Neither changes an answer this system gives, and every existing test returns the
-same result before and after each of them. The second changes one behaviour no
-test covers today: a repair run over the cache directory as it stands raises on
-its first file, and after that issue it runs to the end.
+None of them changes an answer this system gives, and every existing test
+returns the same result before and after each of them. The third changes one
+behaviour no test covers today: a repair run over the cache directory as it
+stands raises on its first file, and after that issue it runs to the end.
 
 ## User Stories
 
@@ -222,86 +224,86 @@ its first file, and after that issue it runs to the end.
 92. As a caller, I want a table match record to carry `stated_database` when the matched key names another Database, so that I can act on a cross-database answer without opening the cache.
 93. As a caller, I want the Unproven Schema rule to leave the `path_id` formula unchanged, so that both deduplication sites and `/path_evidence` keep reading one identity as one path.
 94. As a reviewer, I want an ADR recording why an unproven schema does not multiply an Execution Path, so that nobody proposes one path per candidate schema again.
-85. As a reviewer, I want duplicate removal to compare all four parts, so that two references that state different databases stay two references.
-86. As a maintainer, I want a test to assert that the two contract version constants agree, so that raising one and forgetting the other fails before the analyzer ever runs.
-87. As an analyst, I want a reference that states no schema to answer exactly as it does today, so that this change moves only the names it set out to move.
-88. As a caller, I want each Execution Graph relationship to carry the database its reference stated, so that the read side reads a field instead of parsing a name again.
-89. As a reviewer, I want a referenced node to carry no database, so that two references that disagree cannot leave one of their databases on the node they share.
-90. As an operator, I want a stale Execution Graph rebuilt from the definitions already on this machine, so that a graph shape change never waits for a SQL Server refresh.
-91. As an operator, I want no rebuild on the query path, so that one question never blocks for minutes behind a graph rebuild.
-92. As a maintainer, I want the graph format version to rise whenever the graph payload shape changes, so that two different shapes never claim one version.
-93. As a maintainer, I want one shared helper to build a four-part reference from a short written name, so that a test about graph queries stays about graph queries.
-94. As a caller, I want the server normalization rule covered by the shared fixture, so that the two repositories stop computing different keys for one server.
-95. As a maintainer, I want one test fixture module to be the only way a test gets a payload, a version, or an analyzer operation, so that a shape change breaks one file instead of twenty-three.
-96. As a maintainer, I want a check that fails when a payload key, a version literal, or an operation key appears outside the fixture module, so that the module's one source is checkable rather than approximate.
-97. As a maintainer, I want the in-memory reader stubs to take their payload from the builder, so that a test that bypasses the reader cannot pass against a shape no cache holds.
-98. As a maintainer, I want the payload builder to take each object as a written name, so that a test states which schema holds a name instead of restating the payload shape.
-99. As a maintainer, I want the Execution Graph payload built by its own helper, so that one builder never owns two format versions that rise in two commits.
-100. As a maintainer, I want every payload's graph version read from the graph module's constant, so that no test asserts against a version number it wrote itself.
-101. As a maintainer, I want the fixture's write helper to take a SQL Cache Identity, so that no test composes a cache filename by hand.
-102. As a maintainer, I want the fixture's meta file written by the cache store's own meta writer, so that the meta format stays defined in one place.
-103. As a maintainer, I want a separately named helper for a key no identity can produce, so that a deliberate legacy key is visible at the call site.
-104. As a maintainer, I want the fixture work in its own issue with no behaviour change, so that the whole suite's result is identical before and after it.
-105. As a reviewer, I want the SQL Cache Identity to lose its schema field in Step 2a, so that a caller that still names a schema fails instead of reading a schema nobody holds.
-106. As a maintainer, I want every cache-store function to take a SQL Cache Identity, so that removing the schema part is one edit rather than a list I must enumerate correctly.
-107. As a maintainer, I want the identity's constructor to stay pure, so that building one never reads the cache directory.
-108. As a maintainer, I want a separately named function for a caller that knows no server, so that "reads the disk and may find nothing" is visible at the call site.
-109. As a maintainer, I want the ambiguous-server case to return a value, so that a test can state it instead of observing it through a reader's side effect.
-110. As a maintainer, I want each call site to state which of the two it asks for, so that no function takes a server that may or may not be there.
-111. As a reviewer, I want the identity's `dbo` default removed in the preparatory issue, so that Step 2a deletes a field instead of hunting defaults at the same time.
-112. As a reviewer, I want that reversal written into this spec beside the rule it reverses, so that a decision changes in the open rather than in silence.
-113. As a maintainer, I want the identity to own its three filenames, so that nothing else composes or filters a cache suffix.
-114. As a maintainer, I want the reverse parse to sit beside the forward compose, so that a two-part filename can never be read by a three-part rule.
-115. As a maintainer, I want the reverse parse to return nothing for a stem that names no identity, so that a stray file is never reported as a partial one.
-116. As a maintainer, I want the in-memory cache keyed by the identity, so that nothing inside the module parses a key string back into fields.
-117. As a maintainer, I want the meta writer to take the identity alone, so that the path it writes to cannot disagree with the identity it records.
-118. As an operator, I want `/scan_records` to keep listing a file whose name states no identity, so that an unrecognised file stays visible instead of disappearing.
-119. As an operator, I want `/scan_records` to report the same fields it reports today, so that this preparatory work changes nothing I read.
-120. As an operator, I want a hand-edited Scan Record to produce a row rather than a failed request, so that one bad file never hides every other cache.
-121. As an operator, I want the graph repair tool to run to completion, so that Step 2a's recovery is a plan I can actually execute.
-122. As an operator, I want the repair tool to ask the cache store which files are caches, so that a suffix added later cannot be missed by a second copy of the list.
-123. As a maintainer, I want the one-off key-migration tool deleted, so that no tool survives that migrates to a filename shape this work removes.
-124. As a reviewer, I want `CONTEXT.md` to record that the identity owns its filenames, so that a future reader does not build a second suffix list.
-125. As a reviewer, I want the index to state its own format version, so that a change to the index shape invalidates every index on disk.
-126. As a maintainer, I want every graph format version in a test read from the graph module's constant, so that a stale value cannot sit in a test that never validates it.
-127. As a maintainer, I want the twelve stale graph versions decided by one rule, so that a per-file judgement is not made twelve times with twelve chances to differ.
-128. As a maintainer, I want a test that needs another version to write it relative to the constant, so that a deliberate version reads as deliberate.
-129. As a maintainer, I want every contract version in a test read from the client's constant, so that raising that constant breaks no test that only restated it.
-130. As a maintainer, I want the contract mismatch raise covered by a test, so that the client's rejection is proven rather than assumed.
-131. As a maintainer, I want one shared helper to build an analyzer operation, so that Step 2a changes one helper instead of five test files.
-132. As a maintainer, I want a contract test to keep writing the operation shape out in full, so that the test that states the shape is not the test that hides it.
-133. As a maintainer, I want the check to exclude its own file by path, so that the check's own rule strings never fail its own rules.
-134. As a maintainer, I want the check to read the test directory alone, so that a constant's own definition is never reported as a violation.
-135. As a maintainer, I want the check to allow a bare number beside the constant it pins, so that the assertion on the constant survives with no file-name exemption.
-136. As a maintainer, I want the fixture issue's two suite runs compared by test identifier, so that one broken test cannot hide behind one newly passing test.
-137. As a maintainer, I want the fixture issue split one commit per shape, so that one shape's move reverts without the other three.
-138. As a reviewer, I want the spec to state why three decompile-wrapper files join this issue, so that a later reader does not infer a subject they do not share.
-139. As a maintainer, I want the SQL Cache Identity issue to wait for the whole fixture issue, so that the fixture issue's proof covers an interval nobody else changed.
-140. As a reviewer, I want `CONTEXT.md` to record the test fixture module as the one source of every shape, so that the rule does not live only inside the check that enforces it.
-141. As a reviewer, I want the identity commit's site list written against the code the preparatory issue leaves behind, so that the list does not name sites that issue already removes.
-142. As a reviewer, I want the identity commit to name every site that still reads a schema, so that its completeness does not depend on which code a test happens to reach.
-143. As a reviewer, I want a grep check in the identity commit's acceptance, so that a site the list misses still fails the commit.
-144. As a caller of `/find_by_sp` or `/find_by_table`, I want the server reverse-derivation to match on the identity's Database field, so that a two-part filename still finds its cache.
-145. As a maintainer, I want a test for a Database name that holds `__`, so that a change in the number of filename parts cannot mis-split that name in silence.
-146. As a maintainer, I want the meta file and the Object Location Index to lose their `schema` field in the identity commit, so that no reader compares a field the identity no longer holds.
-147. As a maintainer, I want tests that describe two caches for one Database deleted with the identity commit, so that no test asserts a state the cache format cannot produce.
-148. As a reviewer, I want a caller that needs a string to call the bare-key or full-key function by name, so that a dropped schema is a decision at a named call and not a defect in a container.
-149. As an analyst, I want the native dependency query to select the schema, the database, and the server, so that the main source of referenced tables keeps what SQL Server already knows.
-150. As an analyst, I want the C# parser to keep a three-part reference, so that `PUR.dbo.Users` in inline SQL is reported instead of removed as a schema name.
-151. As a reviewer, I want the C# parser to keep the written case of a name, so that a report shows the name as the source code writes it.
-152. As a reviewer, I want the Canonical Object Identity value to carry a server field that no key reads, so that a four-part name keeps its server on the Python side as it does in the analyzer.
-153. As a reviewer, I want Step 1 to change the container type and no displayed string, so that the type change is separable from the extraction fix in Step 2a.
-154. As an analyst, I want an inline C# SQL table to obey the table match rule, so that `dbo.AVM` does not match `COMMON.AVM` when my question states no Database.
-155. As an analyst, I want an inline C# SQL table that states no Database to take the Database of its connection, so that the fill follows the language rule and not the question.
-156. As a maintainer, I want the Scan Record to hold the value itself, so that no reader of a table relation splits a string to recover a schema.
-157. As a maintainer, I want the evaluation repository to read the new table relation in the same deployment, so that its routing expectations do not lose every write table in silence.
-158. As a maintainer, I want one frozen value to name every field of an Execution Path identity, so that one place answers what identifies a path.
-159. As a reviewer, I want a test that states four fixed `path_id` values before Step 1 starts, so that no later commit changes a `path_id` in silence.
-160. As a maintainer, I want the Path Identity value as the first commit of issue 7, so that the golden test proves that the refactor changes no `path_id`.
-161. As a reviewer, I want the Path Identity value to hold no candidate schema field, so that ADR-0035 stays the one rule for an unproven schema.
-162. As a reviewer, I want one fixed input of the golden test to hold a bracketed name, so that the one bracket rule of Step 1 cannot change a `path_id` in silence.
-163. As a reviewer, I want the shared case list to state the schema and the bracket handling of a procedure name, so that the Step 1 merge cannot change a `path_id` input in silence.
-164. As a caller, I want two stored-procedure chain entries with two schemas to stay two facts in the consumer's deduplication, so that the consumer counts the same facts as the producer.
+95. As a reviewer, I want duplicate removal to compare all four parts, so that two references that state different databases stay two references.
+96. As a maintainer, I want a test to assert that the two contract version constants agree, so that raising one and forgetting the other fails before the analyzer ever runs.
+97. As an analyst, I want a reference that states no schema to answer exactly as it does today, so that this change moves only the names it set out to move.
+98. As a caller, I want each Execution Graph relationship to carry the database its reference stated, so that the read side reads a field instead of parsing a name again.
+99. As a reviewer, I want a referenced node to carry no database, so that two references that disagree cannot leave one of their databases on the node they share.
+100. As an operator, I want a stale Execution Graph rebuilt from the definitions already on this machine, so that a graph shape change never waits for a SQL Server refresh.
+101. As an operator, I want no rebuild on the query path, so that one question never blocks for minutes behind a graph rebuild.
+102. As a maintainer, I want the graph format version to rise whenever the graph payload shape changes, so that two different shapes never claim one version.
+103. As a maintainer, I want one shared helper to build a four-part reference from a short written name, so that a test about graph queries stays about graph queries.
+104. As a caller, I want the server normalization rule covered by the shared fixture, so that the two repositories stop computing different keys for one server.
+105. As a maintainer, I want one test fixture module to be the only way a test gets a payload, a version, or an analyzer operation, so that a shape change breaks one file instead of twenty-three.
+106. As a maintainer, I want a check that fails when a payload key, a version literal, or an operation key appears outside the fixture module, so that the module's one source is checkable rather than approximate.
+107. As a maintainer, I want the in-memory reader stubs to take their payload from the builder, so that a test that bypasses the reader cannot pass against a shape no cache holds.
+108. As a maintainer, I want the payload builder to take each object as a written name, so that a test states which schema holds a name instead of restating the payload shape.
+109. As a maintainer, I want the Execution Graph payload built by its own helper, so that one builder never owns two format versions that rise in two commits.
+110. As a maintainer, I want every payload's graph version read from the graph module's constant, so that no test asserts against a version number it wrote itself.
+111. As a maintainer, I want the fixture's write helper to take a SQL Cache Identity, so that no test composes a cache filename by hand.
+112. As a maintainer, I want the fixture's meta file written by the cache store's own meta writer, so that the meta format stays defined in one place.
+113. As a maintainer, I want a separately named helper for a key no identity can produce, so that a deliberate legacy key is visible at the call site.
+114. As a maintainer, I want the fixture work in its own issue with no behaviour change, so that the whole suite's result is identical before and after it.
+115. As a reviewer, I want the SQL Cache Identity to lose its schema field in Step 2a, so that a caller that still names a schema fails instead of reading a schema nobody holds.
+116. As a maintainer, I want every cache-store function to take a SQL Cache Identity, so that removing the schema part is one edit rather than a list I must enumerate correctly.
+117. As a maintainer, I want the identity's constructor to stay pure, so that building one never reads the cache directory.
+118. As a maintainer, I want a separately named function for a caller that knows no server, so that "reads the disk and may find nothing" is visible at the call site.
+119. As a maintainer, I want the ambiguous-server case to return a value, so that a test can state it instead of observing it through a reader's side effect.
+120. As a maintainer, I want each call site to state which of the two it asks for, so that no function takes a server that may or may not be there.
+121. As a reviewer, I want the identity's `dbo` default removed in the preparatory issue, so that Step 2a deletes a field instead of hunting defaults at the same time.
+122. As a reviewer, I want that reversal written into this spec beside the rule it reverses, so that a decision changes in the open rather than in silence.
+123. As a maintainer, I want the identity to own its three filenames, so that nothing else composes or filters a cache suffix.
+124. As a maintainer, I want the reverse parse to sit beside the forward compose, so that a two-part filename can never be read by a three-part rule.
+125. As a maintainer, I want the reverse parse to return nothing for a stem that names no identity, so that a stray file is never reported as a partial one.
+126. As a maintainer, I want the in-memory cache keyed by the identity, so that nothing inside the module parses a key string back into fields.
+127. As a maintainer, I want the meta writer to take the identity alone, so that the path it writes to cannot disagree with the identity it records.
+128. As an operator, I want `/scan_records` to keep listing a file whose name states no identity, so that an unrecognised file stays visible instead of disappearing.
+129. As an operator, I want `/scan_records` to report the same fields it reports today, so that this preparatory work changes nothing I read.
+130. As an operator, I want a hand-edited Scan Record to produce a row rather than a failed request, so that one bad file never hides every other cache.
+131. As an operator, I want the graph repair tool to run to completion, so that Step 2a's recovery is a plan I can actually execute.
+132. As an operator, I want the repair tool to ask the cache store which files are caches, so that a suffix added later cannot be missed by a second copy of the list.
+133. As a maintainer, I want the one-off key-migration tool deleted, so that no tool survives that migrates to a filename shape this work removes.
+134. As a reviewer, I want `CONTEXT.md` to record that the identity owns its filenames, so that a future reader does not build a second suffix list.
+135. As a reviewer, I want the index to state its own format version, so that a change to the index shape invalidates every index on disk.
+136. As a maintainer, I want every graph format version in a test read from the graph module's constant, so that a stale value cannot sit in a test that never validates it.
+137. As a maintainer, I want the twelve stale graph versions decided by one rule, so that a per-file judgement is not made twelve times with twelve chances to differ.
+138. As a maintainer, I want a test that needs another version to write it relative to the constant, so that a deliberate version reads as deliberate.
+139. As a maintainer, I want every contract version in a test read from the client's constant, so that raising that constant breaks no test that only restated it.
+140. As a maintainer, I want the contract mismatch raise covered by a test, so that the client's rejection is proven rather than assumed.
+141. As a maintainer, I want one shared helper to build an analyzer operation, so that Step 2a changes one helper instead of five test files.
+142. As a maintainer, I want a contract test to keep writing the operation shape out in full, so that the test that states the shape is not the test that hides it.
+143. As a maintainer, I want the check to exclude its own file by path, so that the check's own rule strings never fail its own rules.
+144. As a maintainer, I want the check to read the test directory alone, so that a constant's own definition is never reported as a violation.
+145. As a maintainer, I want the check to allow a bare number beside the constant it pins, so that the assertion on the constant survives with no file-name exemption.
+146. As a maintainer, I want the fixture issue's two suite runs compared by test identifier, so that one broken test cannot hide behind one newly passing test.
+147. As a maintainer, I want the fixture issue split one commit per shape, so that one shape's move reverts without the other three.
+148. As a reviewer, I want the spec to state why three decompile-wrapper files join this issue, so that a later reader does not infer a subject they do not share.
+149. As a maintainer, I want the SQL Cache Identity issue to wait for the whole fixture issue, so that the fixture issue's proof covers an interval nobody else changed.
+150. As a reviewer, I want `CONTEXT.md` to record the test fixture module as the one source of every shape, so that the rule does not live only inside the check that enforces it.
+151. As a reviewer, I want the identity commit's site list written against the code the preparatory issue leaves behind, so that the list does not name sites that issue already removes.
+152. As a reviewer, I want the identity commit to name every site that still reads a schema, so that its completeness does not depend on which code a test happens to reach.
+153. As a reviewer, I want a grep check in the identity commit's acceptance, so that a site the list misses still fails the commit.
+154. As a caller of `/find_by_sp` or `/find_by_table`, I want the server reverse-derivation to match on the identity's Database field, so that a two-part filename still finds its cache.
+155. As a maintainer, I want a test for a Database name that holds `__`, so that a change in the number of filename parts cannot mis-split that name in silence.
+156. As a maintainer, I want the meta file and the Object Location Index to lose their `schema` field in the identity commit, so that no reader compares a field the identity no longer holds.
+157. As a maintainer, I want tests that describe two caches for one Database deleted with the identity commit, so that no test asserts a state the cache format cannot produce.
+158. As a reviewer, I want a caller that needs a string to call the bare-key or full-key function by name, so that a dropped schema is a decision at a named call and not a defect in a container.
+159. As an analyst, I want the native dependency query to select the schema, the database, and the server, so that the main source of referenced tables keeps what SQL Server already knows.
+160. As an analyst, I want the C# parser to keep a three-part reference, so that `PUR.dbo.Users` in inline SQL is reported instead of removed as a schema name.
+161. As a reviewer, I want the C# parser to keep the written case of a name, so that a report shows the name as the source code writes it.
+162. As a reviewer, I want the Canonical Object Identity value to carry a server field that no key reads, so that a four-part name keeps its server on the Python side as it does in the analyzer.
+163. As a reviewer, I want Step 1 to change the container type and no displayed string, so that the type change is separable from the extraction fix in Step 2a.
+164. As an analyst, I want an inline C# SQL table to obey the table match rule, so that `dbo.AVM` does not match `COMMON.AVM` when my question states no Database.
+165. As an analyst, I want an inline C# SQL table that states no Database to take the Database of its connection, so that the fill follows the language rule and not the question.
+166. As a maintainer, I want the C# Scan Result (the saved result of one C# project scan) to hold the value itself, so that no reader of a table relation splits a string to recover a schema.
+167. As a maintainer, I want the evaluation repository to read the new table relation in the same deployment, so that its routing expectations do not lose every write table in silence.
+168. As a maintainer, I want one frozen value to name every field of an Execution Path identity, so that one place answers what identifies a path.
+169. As a reviewer, I want a test that states four fixed `path_id` values before Step 1 starts, so that no later commit changes a `path_id` in silence.
+170. As a maintainer, I want the Path Identity value as the first commit of issue 7, so that the golden test proves that the refactor changes no `path_id`.
+171. As a reviewer, I want the Path Identity value to hold no candidate schema field, so that ADR-0035 stays the one rule for an unproven schema.
+172. As a reviewer, I want one fixed input of the golden test to hold a bracketed name, so that the one bracket rule of Step 1 cannot change a `path_id` in silence.
+173. As a reviewer, I want the shared case list to state the schema and the bracket handling of a procedure name, so that the Step 1 merge cannot change a `path_id` input in silence.
+174. As a caller, I want two stored-procedure chain entries with two schemas to stay two facts in the consumer's deduplication, so that the consumer counts the same facts as the producer.
 
 ## Implementation Decisions
 
@@ -358,7 +360,9 @@ Eight call sites reach one of these sixteen without stating a schema today:
   definition text, with no schema of its own.
 
 Each of these eight passes `dbo` explicitly instead of relying on the default.
-A comment at each site names Step 2b as the step that removes it.
+A comment at each site names the step that removes it. The interactive menu's
+two paths name Step 2a, because the listing commit moves both onto the new
+listing method, under "The object listing". The other six name Step 2b.
 
 Two more sites have no caller at all: the write-info lookup, and the schema
 field on the full analysis result. Their defaults are removed with no caller
@@ -399,6 +403,9 @@ caller a future edit misses, raises `TypeError` instead of reading `dbo`.
   builds a regular expression from a procedure name and needs the original case.
   It currently re-derives half the rule to get it.
 - All case folding uses `casefold`.
+- The module lands in issue 0, before any site calls it. The test fixture's
+  payload builder parses a written name with it, and that builder lands in
+  issue 1.
 
 ### Which sites the module absorbs
 
@@ -594,20 +601,20 @@ join Step 1.
   named `table_name` is removed. The name `database` is not used, because a
   relation already holds a `database` field with a different meaning: the
   Database of the C# connection.
-- The Scan Record holds each relation as it is. The scan cache version rises, so
-  every Scan Record on disk is rejected until the next scan.
+- The C# Scan Result holds each relation as it is. The scan cache version rises, so
+  every C# Scan Result on disk is rejected until the next scan.
 - Four readers of a relation's table change in the same commit. The two readers
   that build the shared-component table list call the case-preserving variant.
   The two inline C# SQL comparisons, in the analysis service and in the flow
   chain builder, call the bare-key function until Step 2b. Neither change
   alters an answer.
-- The evaluation repository reads the Scan Record with a restricted unpickler.
+- The evaluation repository reads the C# Scan Result with a restricted unpickler.
   That unpickler admits classes under `code_analyzer` and a short list of
   built-in types, and nothing else. The module sits at the top level of this
   repository, so the unpickler must admit it. The routing-expectations reader
   also reads `table_name` and splits it on a dot. It reads the bare name from the
   value instead. Issue 6 carries both changes, and issues 5 and 6 deploy
-  together. Without both, the evaluation repository cannot read any Scan Record,
+  together. Without both, the evaluation repository cannot read any C# Scan Result,
   or it loses every write table without an error.
 
 ### The behaviour change in Step 1
@@ -1020,6 +1027,12 @@ listing commit deletes that field, so the catalog changes in the listing commit.
 - The gateway keeps asking with the schema it read from the C# call site. Under
   the fallback above, a qualified call still matches a catalog entry that states
   no schema, so no match that exists today is lost.
+- The catalog's fallback is narrower than the Object Location Index's. The
+  catalog falls back only to entries that state no schema. It never falls back
+  to an entry that states another schema, so `sales.X` does not match `HR.X`.
+  A match there would be false evidence, and no match that exists today would
+  need it. The catalog therefore keeps a third set of the names that state no
+  schema, beside its bare bucket and its full bucket.
 - A match reached through that fallback keeps its Evidence Status of `proven`.
   Only its reason changes, to one that names the Unproven Schema. A downgrade to
   `likely` is rejected: two downstream readers treat `likely` differently from
@@ -1040,9 +1053,18 @@ listing commit deletes that field, so the catalog changes in the listing commit.
   fixed to `dbo`.
 - The located-database row keeps naming the cache it came from. Its server and
   database fields are the cache's SQL Cache Identity, exactly as today. The
-  caller intersects on those two fields, so a row that renamed itself after the
-  matched key would drop the cache that holds the evidence — an under-report
-  that ADR-0012 forbids.
+  caller intersects on `server` and `database` only, so a row that renamed
+  itself after the matched key would drop the cache that holds the evidence —
+  an under-report that ADR-0012 forbids.
+- The caller never reads `stated_database` for the intersection. A Database that a full key names
+  answers for itself: if its own cache holds the object, its own index reports
+  its own row. The field therefore adds no cache to the Candidate Database Set,
+  and its case is whatever a T-SQL author typed.
+- The intersection key folds the Database name with `casefold`. Today it only
+  strips the name, so a catalog that declares `pur` drops the cache written as
+  `PUR`. That drop is silent and authoritative, the under-report ADR-0012
+  forbids. The Impact side already compares a Database with `casefold`, and
+  story 40 moves every other site to it.
 - The row gains a schema field describing the matched key. One Database with
   three schemas produces three rows. The caller's intersection collapses them,
   so extra rows cost bandwidth and never change the Candidate Database Set.
@@ -1222,14 +1244,27 @@ promises to prevent.
   mirrors this repository's: the same value type, the same parse function, and
   the same two key functions. Its three call sites all use it.
 - That module sits in the orchestration package. The evaluation code already
-  imports that package from six files, so the fourth call site needs no new
-  top-level package.
+  imports that package from six files, so no call site needs a new top-level
+  package.
 - One fixture file carries the whole cross-repository agreement. It is checked
   into this repository, under the test directory, as JSON. One file cannot drift
-  from itself, so no copy needs comparing.
+  from itself, so no copy needs comparing. Issue 0 creates the file with the
+  `object_names` list. Issue 3 adds the `sql_cache_identity` list and the
+  `sample_cache` entry.
 - The file holds two case lists. The `object_names` list covers the Canonical
   Object Identity rule. The `sql_cache_identity` list covers the SQL Cache
   Identity rule.
+- The file also holds one sample cache, the `sample_cache` entry. The sample
+  has a data file and a meta file. This repository's payload builder, graph
+  helper, and meta writer produce it from one fixed input. A test in this
+  repository fails when the committed sample differs from that output. The
+  sample therefore changes whenever the cache shape changes.
+- The `llamaindex-spec-rag` fixture module is checked against the sample by
+  key names only. The check compares the key set at each level: the data
+  file's top level, the Execution Graph, each node type, a relationship, and
+  the meta file. It never compares a value. A value comparison would need a
+  second copy of the builder's logic in that repository, and that copy is one
+  more thing to keep in step.
 - Each `object_names` case states an input name, the three parsed parts, the
   bare key, and the full key. The case states the parsed parts because the parse
   function returns an empty schema, and a key column alone cannot show that.
@@ -1251,8 +1286,12 @@ promises to prevent.
   host names, so it never reached the drifted server rule.
 - The evaluation repository keeps one reader of the cache directory. It holds
   two today: one excludes both sibling suffixes, and one excludes the Scan
-  Record alone. The second calls the first instead of holding its own list, and
-  that function takes a name stating that it returns data files. Its two
+  Record alone. The function that lists the data files moves into
+  `impact_orch.sql_cache_identity`, and both readers call it. That module
+  already owns the cache filename rule, so it owns the sibling suffixes too.
+  The function cannot stay in the cache writers module: that module imports the
+  routing expectations module, and the reverse import makes a cycle. The
+  function takes a name stating that it returns data files. Its two
   failures — a directory that does not exist, and a directory holding no
   cache — already read the same in both readers, so no caller's behaviour
   changes. The
@@ -1314,6 +1353,11 @@ promises to prevent.
 - `CONTEXT.md` gains a test fixture entry. It records that one module is the
   only source of a cache payload, a format version, and an analyzer operation in
   a test. It names the check that enforces this rule.
+- `CONTEXT.md` gains a C# Scan Result entry: the saved result of one C# project
+  scan, which the evaluation repository reads with a restricted unpickler. The
+  entry states that it is not a Scan Record, because a Scan Record describes one
+  SQL cache. The term names a file that exists today, so no single behaviour
+  change owns it, and it lands in the documents issue.
 - The cache store docstring that states schemas collapse to one key is
   corrected.
 - A sentence in the operator manual or the advanced manual belongs to the issue
@@ -1330,8 +1374,19 @@ promises to prevent.
 
 ### How the work is split into issues
 
-Eight issues. Each issue changes one repository, so each is accepted inside the
-repository it changes.
+Nine issues, numbered 0 to 8. Each issue changes one repository, so each is
+accepted inside the repository it changes. Issue 0 joined the list after the
+others were numbered. The others keep their numbers, because the precondition
+spec in `llamaindex-spec-rag` names issue 4 and issue 8.
+
+0. The Canonical Object Identity module in this repository. The module, its
+   string tests under Seam 4, and the cross-repository fixture file with the
+   `object_names` list. No site calls the module yet, so no answer changes.
+
+   The module lands here, and not in Step 1, because the test fixture's
+   payload builder parses a written name with it. It cannot land inside issue 1:
+   that issue compares two suite runs by test identifier, and the module's new
+   tests would join that comparison.
 
 1. The test fixture in this repository. One cache payload builder, one analyzer
    operation helper, the write helper's identity argument, the legacy-key
@@ -1345,8 +1400,8 @@ repository it changes.
    the two mismatch cases.
 
    This issue changes no behaviour, and it touches no module either precondition
-   spec deletes. It runs before every other issue, because Seam 1 and Seam 4
-   both add cases to the builder.
+   spec deletes. It runs after issue 0 and before every other issue, because
+   Seam 1 and Seam 4 both add cases to the builder.
 
    The issue lands in five commits, one per shape. "One test fixture module"
    states the order and the proof that behaviour holds.
@@ -1395,14 +1450,19 @@ repository it changes.
    commit. The test-fixture issue proves that behaviour holds by comparing two
    runs of the suite, and a second issue inside that interval voids the proof.
 
-3. Step 1 in this repository. Nineteen sites, the new module, the shared
-   cross-repository fixture file, and the precondition check that the two deleted modules are
+3. Step 1 in this repository. Nineteen sites move onto the module that issue 0
+   added. The issue also carries the `sql_cache_identity` list of the shared
+   fixture file, and the precondition check that the two deleted modules are
    gone.
 
-   The fixture carries both case lists. The `sql_cache_identity` list states
+   The fixture file then carries both case lists. The `sql_cache_identity` list states
    three-part filenames, because the identity still holds a schema until Step
    2a. This repository already applies all four server rules, so both lists pass
    here.
+
+   The fixture file also carries the `sample_cache` entry. The sample lands
+   with the fixture file, together with the test that compares it against the
+   builder's output.
 
    This issue lands in three commits. The first commit adds only the golden
    test under "The Path Identity value, over the execution path builder". A
@@ -1422,10 +1482,23 @@ repository it changes.
    spec, the third precondition. Without it, this issue edits a normalizer that
    the precondition deletes.
 
-   That reader answers nothing wrong today: a downstream type guard discards the
-   files it wrongly admits. It joins this issue because this issue is the
+   The second cache-directory reader answers nothing wrong today: a downstream
+   type guard discards the files it wrongly admits. It joins this issue because this issue is the
    earliest one in that repository, and because it is the same defect the
-   preparatory issue removes here.
+   preparatory issue removes here. The data-file function moves into
+   `impact_orch.sql_cache_identity` in this issue, as Cross-repository
+   coordination states.
+
+   This issue also folds the Database name in the Candidate Database Set key
+   with `casefold`. It adds one test: the catalog declares `pur`, the located
+   row states `PUR`, and the Candidate Database Set keeps that Database. The
+   module docstring sentence that says the name compares with its case intact
+   changes with it.
+
+   This issue adds the fixture module under "The evaluation repository's
+   fixture module". It moves the three test files onto it, and it adds the
+   key-name check against `sample_cache`. It changes no behaviour, and Step 2a
+   then edits one file instead of three.
 
    The `sql_cache_identity` list fails in this repository before the fix. This
    repository's server rule lacks the `tcp:` prefix rule and the `,port` suffix
@@ -1465,22 +1538,22 @@ repository it changes.
    Location Index's `schema` field, and three object location tests that it
    deletes. The grep check in that section is part of this commit's acceptance.
 
-   Each commit leaves the whole test suite green on its own. Deploying the three
+   Each commit leaves the whole test suite green on its own. Deploying the four
    commits together does not replace this rule. Each commit therefore changes
    the tests that its own change breaks, and its message names each test file it
    changes. A test that fails at one commit and passes at the next fails this
    rule.
 
    The order matters. The analyzer commit rejects every graph on disk, and one
-   local repair run restores all five caches. The listing commit leaves them
-   loading. The identity commit stops them loading, and only an operator refresh
+   local repair run restores all five caches. The extraction commit touches no
+   SQL cache. The listing commit leaves them loading. The identity commit stops them loading, and only an operator refresh
    returns them.
 
    The extraction commit changes the three extraction sites under "The
    extraction sites": the native query, the C# parser's patterns and filter, the
    `table` field of a C# table relation, its four readers, and the scan cache
    version. It lands after the analyzer commit and before the listing commit.
-   The scan cache version rejects every Scan Record on disk, and the next scan
+   The scan cache version rejects every C# Scan Result on disk, and the next scan
    rebuilds each one.
 
    The analyzer commit stands alone. It reaches no SQL Server, it needs nothing
@@ -1491,12 +1564,28 @@ repository it changes.
 
    The extraction commit also stands alone. It reaches no SQL Server either, but
    it must deploy with issue 6.
+
+   Each commit that changes the cache shape also regenerates `sample_cache`.
+   The key-name check in `llamaindex-spec-rag` then fails until issue 6 lands.
+   That failure is expected, and it is the check doing its job. The rule that
+   each commit leaves the suite green covers this repository's suite only. The
+   analyzer commit can deploy long before issue 6. The check then stays red for
+   that whole interval, and that is accepted.
 6. Step 2a in `llamaindex-spec-rag`. The removed request field, the refresh CLI,
    the regenerated routing expectations, and this repository's reader of the
-   two-part `sql_cache_identity` case list. It also carries the two Scan Record
+   two-part `sql_cache_identity` case list. It also carries the two C# Scan Result
    changes under "The extraction sites": the restricted unpickler admits the
    Canonical Object Identity module, and the routing-expectations reader reads
    the bare name from a relation's `table` field.
+
+   This issue also moves the evaluation fixture module to the new cache shape.
+   The key-name check against `sample_cache` turns green again here.
+
+   The regeneration of the routing expectations waits for the operator action
+   under Preconditions. It reads the new cache files, and those files exist only
+   after issues 5 and 6 deploy and an operator refreshes each Database. The rest
+   of this issue deploys with issue 5. The regeneration is a separate ticket,
+   blocked by this issue and by the operator action.
 7. Step 2b in this repository. The index buckets, the index's own format
    version, the located-database shape, the table match rule, the two full-key
    fields on an Execution Path, the Unproven Schema mark, the bare-key fallback
@@ -1525,7 +1614,8 @@ repository it changes.
    reaches no SQL Server, so it is not the operator action under Preconditions.
 8. The documents. The three new ADRs, the amendment note on ADR-0012, the
    `CONTEXT.md` entries that no single behaviour change owns, the cache store
-   docstring about collapsed schemas, and one sentence in the Database
+   docstring about collapsed schemas, the C# Scan Result entry, and one
+   sentence in the Database
    Invocation entry. That sentence states that one entry method through one call
    site is one Database Invocation, whichever SQL cache reports it. The third
    precondition decides that rule, and this issue writes it, because the
@@ -1541,8 +1631,10 @@ A good test here states an externally visible outcome. It gives a name in and
 reads an answer out. It does not assert which function produced the key, how
 many buckets the index has, or what a private helper returned.
 
-One exception exists. The Path Identity value is the interface that states what
-identifies an Execution Path, so a test states its fields directly.
+Two exceptions exist. The Path Identity value is the interface that states what
+identifies an Execution Path, so a test states its fields directly. The cache
+file shape is the interface between the two repositories, so the `sample_cache`
+tests state that shape directly.
 
 Five seams. Three already exist, and Seam 4 and Seam 5 are new. The SQL Cache
 Identity work adds none.
@@ -1755,8 +1847,10 @@ hand-built shape onto it, before Step 2a.
 - Two test files write an operation out in full and keep doing so. The graph
   builder's test and the analyzer host's test both take that shape as their
   subject, so writing it out is their job.
-- One check keeps every shape at one source. The check reads every file under
-  the test directory. It holds four named rules. It excludes its own file by
+- One check keeps every shape at one source. The check reads every Python file
+  under the test directory. A JSON file holds data and no test, so the
+  cross-repository fixture file and its `sample_cache` entry stay outside the
+  check. It holds four named rules. It excludes its own file by
   path, not by a list a reader must maintain.
 - Rule one: a payload key literal fails outside the fixture module. The fixture
   module is the only name on this rule's allow list, because a second allowed
@@ -1780,9 +1874,10 @@ and after it.
 
 One run of the suite records that result before the issue starts. A second run
 records it after the issue ends. The two runs compare by test identifier. Every
-identifier must report the same outcome, and the two identifier sets must match
-exactly. A count of passes and failures hides one test that breaks beside
-another that starts passing.
+identifier in the first run must report the same outcome in the second run. The
+second run may hold new identifiers, but only the two contract mismatch cases
+that the third commit adds. A count of passes and failures hides one test that
+breaks beside another that starts passing.
 
 The issue lands in five commits, one per shape. The first commit adds the
 builder, the graph helper, the operation helper, the write helper's identity
@@ -1795,6 +1890,34 @@ This issue owns one shape that this spec's subject does not reach. The contract
 version sits in three files on the decompile-wrapper path, and no SQL object
 name reaches them. They join this issue because the check covers a rule whole or
 not at all. They do not join it because they share this spec's subject.
+
+### The evaluation repository's fixture module
+
+`llamaindex-spec-rag` builds a cache by hand in three test files. The cache
+writers test and the cache-derived lookup test each hold a near-identical
+write helper, and each helper writes an Execution Graph payload with no graph
+format version. The routing expectations test writes three object-list
+payloads. All three files write a three-part filename by hand.
+
+The evaluation readers never check a version. They read every field with a
+default, so a changed shape returns fewer answers and raises no error. A test
+that writes the old shape stays green against a shape no cache holds. This is
+the failure of the twelve stale graph versions, one repository over. The
+preparatory issue cannot reach it, because each issue changes one repository.
+
+- That repository gets its own fixture module under its test directory. It is
+  the one source of a hand-built cache in that repository.
+- All three test files move onto it. The two write helpers merge into one.
+- The module composes each filename with the SQL Cache Identity function, not
+  by hand. Step 2a changes the filename, and a hand-written name then survives
+  as a name nobody recognises.
+- A test checks the module's output against the `sample_cache` entry of the
+  cross-repository fixture file, by key names only. Cross-repository
+  coordination states the rule.
+- No check forbids a payload key outside the module. The rule in "One test
+  fixture module" exists because twenty-three files hold a shape. Here three
+  files hold one, and after the move none do. The sample check already catches
+  a shape that drifts, and a review catches a new hand-built cache.
 
 ### Seam 1 — the analysis service over a fixture cache on disk
 
@@ -1824,7 +1947,7 @@ and reads the records back.
 | 7 | A relationship that states no database, to `dbo.Users` | `Response.dbo.Users` | One record, with no `stated_database`. |
 | 8 | One View that reads `AVM`, and one that reads `dbo.AVM` | `COMMON.AVM` | One record for the first View, with the mark. No record for the second. |
 
-The inline C# SQL match takes four cases. Each one writes one Scan Record with
+The inline C# SQL match takes four cases. Each one writes one C# Scan Result with
 one C# table relation, asks `/find_by_table` with no Database, and reads the
 records back.
 
@@ -1946,7 +2069,7 @@ fixture's `object_names` list is this seam's case list. Without this seam that
 list has nowhere to live.
 
 This test passes strings in and reads strings out. It builds no graph and opens
-no cache. The mirror module in `llamaindex-spec-rag` gets the same seam over
+no cache. It lands in issue 0, with the module. The mirror module in `llamaindex-spec-rag` gets the same seam over
 the same fixture file.
 
 Two cases cover the server field. The parse of `srv.PUR.dbo.Users` holds the
@@ -2154,28 +2277,28 @@ written into Preconditions, into "Which sites the module absorbs", into "The
 behaviour change in Step 1", into issue 4, and into issue 8.
 
 The stored-procedure chain finding is decided and no longer listed. It is
-written into "Two sites that keep the schema", into story 164, and into issue 4.
+written into "Two sites that keep the schema", into story 174, and into issue 4.
 The two sites keep the schema, and no issue changes them. The producer and the
 two sites count the same facts, because ADR-0035 removed the one producer step
 that merged two schemas. The grounding module's normalizer stays under Out of
 Scope, and the census does not add it.
 
-The findings below still block this spec. One of them is new, and the review
-that produced the others did not raise it.
+The Candidate Database Set case finding is decided and no longer listed. It is
+written into "The read side", into Cross-repository coordination,
+and into issue 4. `stated_database` does not feed the intersection, and the
+intersection key folds the Database name with `casefold`. The data-file
+function moves into `impact_orch.sql_cache_identity`, because the cache writers
+module imports the routing expectations module.
 
-- **The Candidate Database Set intersects on a case-sensitive Database name.**
-  Its key normalizes the server and only strips the Database name. Step 2b adds a
-  field naming a Database that a full key states, and that name's case is
-  whatever a T-SQL author typed. Decide whether that field feeds the
-  intersection.
-- **The evaluation repository builds a cache payload by hand in two test
-  files.** Both write an Execution Graph payload with no graph format version at
-  all, and the second cache-directory reader named under Cross-repository
-  coordination consumes that shape. This is
-  the same failure the twelve stale versions had in this repository, and issue 1
-  cannot reach it: each issue changes one repository, and this spec has already
-  rejected a shared package. Decide whether that repository gets its own fixture
-  module, and in which issue.
+The evaluation repository's hand-built payload finding is decided and no longer
+listed. It is written into "The evaluation repository's fixture module", into
+Cross-repository coordination, and into issues 3, 4, 5, and 6. That repository
+gets its own fixture module in issue 4. A third test file joins the two the
+finding named. The module is checked against a sample cache that this
+repository commits, by key names only. No check forbids a payload key outside
+the module.
+
+No finding blocks this spec.
 
 ### Other notes
 
@@ -2186,7 +2309,7 @@ schemas. This is the defect the analyzer change fixes.
 
 Step 2a crosses two repositories. Deploy issues 5 and 6 together.
 
-This spec is `draft`. The architecture review that produced it settled the
+This spec was `draft`. The architecture review that produced it settled the
 preparatory identity issue, and left the findings under "Findings this spec has
 not yet decided" open. A later interview settled the contract version finding
 and the graph version finding, and it widened issue 1 to carry both. That
@@ -2248,11 +2371,11 @@ extraction sites and kept the string container that made the loss possible. The
 interview gave all three extraction sites the value type, and it added the
 native dependency query as the third. It gave the value type a server field
 that no key reads. It put the container change in Step 1 and the extraction fix
-in a fourth commit of issue 5. It carried the value into the Scan Record, and it
+in a fourth commit of issue 5. It carried the value into the C# Scan Result, and it
 gave issue 6 the two readers in `llamaindex-spec-rag` that the change breaks. It
 put the inline C# SQL match under the table match rule in Step 2b, and it filled
 an unstated Database from the C# connection. It ruled that a set of values
-compares the parts as written. It added story 148 to story 157,
+compares the parts as written. It added story 158 to story 167,
 rewrote story 8, and added Seam 5. The seventh interview's rule that each
 commit of issue 5 leaves the suite green now covers four commits.
 
@@ -2268,7 +2391,7 @@ first agent round. It does not lock a `path_id`.
 
 The interview first made the value a separate refactor issue outside this spec.
 A later decision reversed that and put the value in issue 7 as its first commit.
-The interview added story 158 to story 161, "The Path Identity value", and its
+The interview added story 168 to story 171, "The Path Identity value", and its
 testing section. It decided none of the other findings.
 
 That choice made the refactor wait for the operator action and for the Step 2a
@@ -2280,14 +2403,14 @@ A third decision therefore split the golden test from the value. The golden test
 is now the first commit of issue 3, alone, and it holds a fourth input with a
 bracketed name. It could not join issue 1, because issue 1 compares two suite
 runs by test identifier, and a new test breaks that comparison. The value stays
-in issue 7. This decision added story 162.
+in issue 7. This decision added story 172.
 
 A later interview examined one more gap. It first said that the `dbo` default
 removal in issue 3 could change a `path_id` input. That was wrong. The sixteen
 sites sit in the SQL analyzer, and the C# analysis gateway gives the procedure
 schema, with no `dbo` default. The one real input change in Step 1 is the merge
 of the gateway's two procedure functions. Seam 4 now guards it with two cases,
-and the interview added story 163.
+and the interview added story 173.
 
 A review of these changes added two rules. A test states the fields of the Path
 Identity value directly, as the one exception to the Testing Decisions rule. A
@@ -2317,5 +2440,41 @@ sites in `llamaindex-spec-rag` that key on the whole chain entry, and it wrote
 down why, so that no later change merges them into the bare key. It checked the
 producer side against the same rule. The review's finding B2 had merged two
 schemas in the producer, and ADR-0035 had already removed that step. The
-decision added "Two sites that keep the schema", story 164, and two tests to
+decision added "Two sites that keep the schema", story 174, and two tests to
 issue 4. It decided none of the other findings.
+
+A twelfth interview settled the last two findings. For the Candidate Database
+Set, it ruled that `stated_database` does not feed the intersection. It also
+ruled that the intersection key folds the Database name with `casefold`. It
+moved the data-file function into `impact_orch.sql_cache_identity`, because
+the earlier plan made an import cycle. For the hand-built payloads, it gave the
+evaluation repository its own fixture module in issue 4. It checked that module
+against a sample cache by key names, and it added no key check. It found a
+third test file that builds a cache by hand.
+
+A consistency review after the twelfth interview fixed eight contradictions. The
+check in issue 1 now reads Python files only, so the `sample_cache` entry does
+not fail it. Testing Decisions now names two exceptions. Issue 5 states that the
+evaluation check can stay red from the analyzer commit to issue 6. Issue 5
+counts four commits throughout. Cross-repository coordination no longer names a
+fourth call site. The second run of stories 85 to 94 became 95 to 104, and every
+later story and every reference moved up by ten. Two of the eight explicit
+`dbo` call sites name Step 2a. The C# scan output is now the C# Scan Result, and
+Scan Record keeps its `CONTEXT.md` meaning alone.
+
+After that review, the spec gained a C# Scan Result entry for `CONTEXT.md`,
+carried by issue 8. No finding stays open, so the spec returned to
+`ready-for-agent`.
+
+Breaking the spec into tickets found one more ordering gap. The test fixture's
+payload builder parses a written name with the Canonical Object Identity
+module, but issue 3 created that module. A new issue 0 now adds the module, its
+string tests, and the `object_names` list before issue 1. The other issues keep
+their numbers. The same pass found that issue 1 adds two contract mismatch
+cases while its proof demanded identical identifier sets. The proof now allows
+those two named cases and no other new identifier.
+
+The same pass found that issue 6 regenerates the routing expectations from cache
+files that exist only after an operator refresh, while issue 6 deploys with
+issue 5 before any refresh. The regeneration now waits for the operator action,
+as a separate ticket.
