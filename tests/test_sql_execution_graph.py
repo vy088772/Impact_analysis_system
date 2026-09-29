@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from code_analyzer.static_analyzer_host import CONTRACT_VERSION, StaticAnalyzerHost
 from code_analyzer import sql_analyzer
-from code_analyzer.sql_analyzer import SQLAnalyzer
+from code_analyzer.sql_analyzer import ObjectListing, SQLAnalyzer
 from service import sql_cache_store
 from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
 from tests.sql_cache_fixtures import (
@@ -59,12 +59,9 @@ def test_dump_all_sql_objects_keeps_sp_helpers_on_sql_analyzer() -> None:
     analyzer = SQLAnalyzer.__new__(SQLAnalyzer)
     analyzer.db_config = SimpleNamespace(alias="TestDb")
     analyzer.cursor = FakeCursor()
-    analyzer.get_all_procedures = lambda schema: ["usp_Repro"]
-    analyzer.get_all_views = lambda schema: []
-    analyzer.get_all_functions = lambda schema: []
-    analyzer.get_all_tables = lambda schema: []
+    analyzer.list_objects = lambda: [ObjectListing("procedures", "dbo", "usp_Repro")]
 
-    data = analyzer.dump_all_sql_objects("dbo")
+    data = analyzer.dump_all_sql_objects()
 
     assert [procedure["name"] for procedure in data["procedures"]] == ["usp_Repro"]
     assert "dependencies" not in data
@@ -111,6 +108,37 @@ def test_sql_cache_rejects_stale_payload_version() -> None:
         )
 
         assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")) is None
+
+
+def test_the_graph_reads_the_schema_each_object_carries() -> None:
+    """One cache holds `COMMON` and `HR` objects; no cache-wide field decides their schema."""
+    data = cache_payload(
+        "TestDb",
+        procedures=["COMMON.usp_Load", "HR.usp_Load"],
+        tables=["HR.Staff"],
+    )
+
+    graph = build_sql_execution_graph(data)
+
+    assert sorted(node["id"] for node in graph["nodes"]) == [
+        "stored_procedure:COMMON.usp_Load",
+        "stored_procedure:HR.usp_Load",
+        "table:HR.Staff",
+    ]
+
+
+def test_the_graph_reads_an_object_with_no_schema_field_as_dbo() -> None:
+    """A cache written before each object carried its own schema holds only `dbo` objects."""
+    data = cache_payload("TestDb", procedures=["usp_Load"], tables=["Orders"])
+    for entry in [*data["procedures"], *data["tables"]]:
+        del entry["schema"]
+
+    graph = build_sql_execution_graph(data)
+
+    assert sorted(node["id"] for node in graph["nodes"]) == [
+        "stored_procedure:dbo.usp_Load",
+        "table:dbo.Orders",
+    ]
 
 
 def test_sql_cache_rejects_stale_graph_version() -> None:
@@ -224,10 +252,9 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
         def disconnect(self) -> None:
             return None
 
-        def dump_all_sql_objects(self, schema: str) -> dict:
+        def dump_all_sql_objects(self, progress_callback=None) -> dict:
             return cache_payload(
                 self.alias,
-                schema=schema,
                 procedures={
                     "usp_SaveOrder": {
                         "definition": (
@@ -260,7 +287,6 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             # payload producer 重新長出這兩個舊欄位名稱，這裡就會失敗。
             assert set(data.keys()) == {
                 "database",
-                "schema",
                 "procedures",
                 "views",
                 "functions",

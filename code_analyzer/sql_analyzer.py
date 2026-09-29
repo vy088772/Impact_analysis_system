@@ -6,13 +6,13 @@ SQL 分析器（精簡版）
 
 import re
 import pyodbc
-from typing import Callable, List, Dict, Set, Optional, Tuple
+from typing import Callable, List, Dict, NamedTuple, Set, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import json
 
-from canonical_object_identity import ObjectName, bare_name, parse
+from canonical_object_identity import ObjectName, bare_key, bare_name, parse
 from config.settings import settings, DatabaseConfig
 
 
@@ -99,6 +99,83 @@ class DatabaseSummary:
             },
             'procedures': [sp.to_dict() for sp in self.procedures]
         }
+
+
+# ============================================
+# 物件清單
+# ============================================
+
+class ObjectListing(NamedTuple):
+    """One object the listing reports: its kind, its schema, and its bare name."""
+
+    kind: str
+    schema: str
+    name: str
+
+
+# One row per kind: (kind, catalog view, schema column, name column, extra condition).
+# The kind values are the keys the cache payload already uses, in the order the
+# dump reports them.
+_LISTING_KINDS: Tuple[Tuple[str, str, str, str, Optional[str]], ...] = (
+    ("procedures", "INFORMATION_SCHEMA.ROUTINES", "ROUTINE_SCHEMA", "ROUTINE_NAME", "ROUTINE_TYPE = 'PROCEDURE'"),
+    ("views", "INFORMATION_SCHEMA.VIEWS", "TABLE_SCHEMA", "TABLE_NAME", None),
+    ("functions", "INFORMATION_SCHEMA.ROUTINES", "ROUTINE_SCHEMA", "ROUTINE_NAME", "ROUTINE_TYPE = 'FUNCTION'"),
+    ("tables", "INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_TYPE = 'BASE TABLE'"),
+)
+
+# Schemas that SQL Server owns. A constant, not a setting: SQL Server fixes it.
+# `sys` and `INFORMATION_SCHEMA` hold no row of the views above; they stay here
+# because the list describes SQL Server, not one catalog view.
+_EXCLUDED_SCHEMAS = frozenset({"sys", "information_schema", "guest"})
+_EXCLUDED_SCHEMA_PREFIX = "db_"
+
+
+def _is_excluded_schema(schema: str) -> bool:
+    folded = schema.casefold()
+    return folded in _EXCLUDED_SCHEMAS or folded.startswith(_EXCLUDED_SCHEMA_PREFIX)
+
+
+def _listing_query() -> str:
+    selects = []
+    for kind, view, schema_column, name_column, condition in _LISTING_KINDS:
+        where = f" WHERE {condition}" if condition else ""
+        selects.append(
+            f"SELECT '{kind}' AS kind, {schema_column} AS schema_name, "
+            f"{name_column} AS object_name FROM {view}{where}"
+        )
+    return (
+        "SELECT kind, schema_name, object_name FROM (\n"
+        + "\nUNION ALL\n".join(selects)
+        + "\n) AS listing\nORDER BY kind, schema_name, object_name"
+    )
+
+
+def quote_name(*parts: str) -> str:
+    """Bracket each part of a qualified name; a closing bracket inside a part is doubled."""
+    return ".".join("[" + part.replace("]", "]]") + "]" for part in parts)
+
+
+def _name_collisions(listing: List[ObjectListing]) -> List[Dict]:
+    """One entry for each bare name that two schemas hold in one kind, in listing order.
+
+    The entry keeps the name as the first row wrote it.
+    """
+    holders: Dict[Tuple[str, str], Tuple[str, Dict[str, str]]] = {}
+    for row in listing:
+        _, schemas = holders.setdefault((row.kind, bare_key(row.name)), (row.name, {}))
+        schemas.setdefault(row.schema.casefold(), row.schema)
+    return [
+        {"kind": kind, "name": name, "schemas": sorted(schemas.values(), key=str.casefold)}
+        for (kind, _), (name, schemas) in holders.items()
+        if len(schemas) > 1
+    ]
+
+
+def _qualified_procedure_name(proc_name: str, schema: str) -> str:
+    """Qualify a procedure name a caller typed or listed; a dotted name states its own parts."""
+    clean_name = proc_name.replace("[", "").replace("]", "")
+    parts = clean_name.split(".") if "." in clean_name else [schema, clean_name]
+    return quote_name(*parts)
 
 
 # ============================================
@@ -251,54 +328,21 @@ class SQLAnalyzer:
         
         return summary
     
-    def get_all_procedures(self, schema: str) -> List[str]:
-        """取得所有預存程序名稱"""
-        query = """
-        SELECT ROUTINE_NAME
-        FROM INFORMATION_SCHEMA.ROUTINES
-        WHERE ROUTINE_TYPE = 'PROCEDURE'
-        AND ROUTINE_SCHEMA = ?
-        ORDER BY ROUTINE_NAME
-        """
-        
-        self.cursor.execute(query, schema)
-        return [row.ROUTINE_NAME for row in self.cursor.fetchall()]
-    
-    def get_all_tables(self, schema: str) -> List[str]:
-        """取得所有資料表名稱"""
-        query = """
-        SELECT TABLE_NAME
-        FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_TYPE = 'BASE TABLE'
-        AND TABLE_SCHEMA = ?
-        ORDER BY TABLE_NAME
-        """
-        
-        self.cursor.execute(query, schema)
-        return [row.TABLE_NAME for row in self.cursor.fetchall()]
+    def list_objects(self, kind: Optional[str] = None) -> List[ObjectListing]:
+        """List every procedure, view, function, and table in every schema, in one query.
 
-    def get_all_views(self, schema: str) -> List[str]:
-        """取得所有 View（檢視表）名稱"""
-        query = """
-        SELECT TABLE_NAME
-        FROM INFORMATION_SCHEMA.VIEWS
-        WHERE TABLE_SCHEMA = ?
-        ORDER BY TABLE_NAME
+        The query applies no schema condition. The excluded-schema rule runs over
+        the returned rows, so a fake cursor sees it as an outcome. The comparison
+        ignores case, and the `db_` rule is a prefix comparison with no wildcard.
+        `kind` keeps the rows of one kind; the query still reads all four.
         """
-        self.cursor.execute(query, schema)
-        return [row.TABLE_NAME for row in self.cursor.fetchall()]
-
-    def get_all_functions(self, schema: str) -> List[str]:
-        """取得所有使用者定義函數（UDF）名稱"""
-        query = """
-        SELECT ROUTINE_NAME
-        FROM INFORMATION_SCHEMA.ROUTINES
-        WHERE ROUTINE_TYPE = 'FUNCTION'
-        AND ROUTINE_SCHEMA = ?
-        ORDER BY ROUTINE_NAME
-        """
-        self.cursor.execute(query, schema)
-        return [row.ROUTINE_NAME for row in self.cursor.fetchall()]
+        self.cursor.execute(_listing_query())
+        return [
+            ObjectListing(kind=row.kind, schema=row.schema_name, name=row.object_name)
+            for row in self.cursor.fetchall()
+            if not _is_excluded_schema(row.schema_name)
+            and (kind is None or row.kind == kind)
+        ]
 
     def _get_native_referenced_tables(self, proc_name: str, schema: str) -> Set[ObjectName]:
         """
@@ -308,11 +352,7 @@ class SQLAnalyzer:
         查詢失敗（權限不足、物件含無法解析的動態 SQL 導致 TVF 整個丟例外等）
         一律回傳空集合，由呼叫端 fallback 回 regex 版 _quick_extract_tables。
         """
-        clean_name = proc_name.replace('[', '').replace(']', '')
-        if '.' in clean_name:
-            full_name = clean_name
-        else:
-            full_name = f"{schema}.{clean_name}"
+        full_name = _qualified_procedure_name(proc_name, schema)
 
         query = """
         SELECT DISTINCT
@@ -363,11 +403,7 @@ class SQLAnalyzer:
           dump_all_sql_objects()（呼叫端會把這支 SP 視為「無寫入資訊記錄」，
           find_by_table 端 fallback 回 regex 文字比對）。
         """
-        clean_name = proc_name.replace('[', '').replace(']', '')
-        if '.' in clean_name:
-            full_name = clean_name
-        else:
-            full_name = f"{schema}.{clean_name}"
+        full_name = _qualified_procedure_name(proc_name, schema)
 
         query = """
         SELECT referenced_entity_name, referenced_minor_name, is_selected, is_updated
@@ -412,8 +448,7 @@ class SQLAnalyzer:
         不含參數解析，供 View/Function 這類「只需要本體」的物件使用）。
         """
         query = "SELECT OBJECT_DEFINITION(OBJECT_ID(?))"
-        full_name = f"{schema}.{name}" if '.' not in name else name
-        self.cursor.execute(query, full_name)
+        self.cursor.execute(query, quote_name(schema, name))
         row = self.cursor.fetchone()
         return (row[0] or "") if row else ""
 
@@ -481,90 +516,104 @@ class SQLAnalyzer:
 
     def dump_all_sql_objects(
         self,
-        schema: str,
         progress_callback: Optional[Callable[[str, int, int, str], None]] = None,
     ) -> Dict:
         """
-        把整個資料庫（指定 schema）的 SP/View/Function 完整定義與資料表欄位 Schema
+        把整個資料庫（每一個 schema）的 SP/View/Function 完整定義與資料表欄位 Schema
         一次全部撈出來，供本機落地快取（sql_cache_store.py），避免每次問問題都要
         即時連線查詢。純靜態擷取，不含任何 AI 摘要（AI 注記交由 spec-rag 端按需做）。
 
-        逐類別（SP/View/Function/資料表）顯示 tqdm 進度條，避免物件數量多時
-        （尤其逐一查詢 SP 定義/參數）使用者看著終端機沒有任何輸出、以為當機。
+        物件由 `list_objects()` 一次列出；每個物件帶自己的 schema，逐一查詢時
+        也用它自己的 schema。逐類別（SP/View/Function/資料表）顯示 tqdm 進度條，
+        避免物件數量多時（尤其逐一查詢 SP 定義/參數）使用者看著終端機沒有任何輸出、
+        以為當機。
 
         回傳結構：
         {
-            "database": alias, "schema": schema,
-            "procedures": [{"name","definition","parameters"}],
-            "views": [{"name","definition"}],
-            "functions": [{"name","definition","parameters","return_type"}],
-            "tables": [{"name","columns":[{"name","type","nullable","default"}]}],
+            "database": alias,
+            "procedures": [{"name","schema","definition","parameters"}],
+            "views": [{"name","schema","definition"}],
+            "functions": [{"name","schema","definition","parameters","return_type"}],
+            "tables": [{"name","schema","columns":[...],"primary_keys":[...]}],
+            "name_collisions": [{"kind","name","schemas":[...]}],
         }
+        `name_collisions` 記下「同一類別裡，同一個裸名稱出現在兩個以上 schema」的情況。
+        目前沒有讀取端；它先量出這個問題有多大。
         """
         from tqdm import tqdm
 
+        listing = self.list_objects()
+        by_kind: Dict[str, List[ObjectListing]] = {kind: [] for kind, *_ in _LISTING_KINDS}
+        for row in listing:
+            by_kind[row.kind].append(row)
+
         procedures: List[Dict] = []
-        proc_names = self.get_all_procedures(schema)
-        _report_progress(progress_callback, "procedures", 0, len(proc_names), "")
-        for current, name in enumerate(
-            tqdm(proc_names, desc="   SP 定義", unit="個"), start=1
+        procedure_rows = by_kind["procedures"]
+        _report_progress(progress_callback, "procedures", 0, len(procedure_rows), "")
+        for current, row in enumerate(
+            tqdm(procedure_rows, desc="   SP 定義", unit="個"), start=1
         ):
-            info = self._get_sp_basic_info(name, schema) or {}
+            info = self._get_sp_basic_info(row.name, row.schema) or {}
             procedures.append({
-                "name": name,
+                "name": row.name,
+                "schema": row.schema,
                 "definition": info.get("definition", ""),
                 "parameters": info.get("parameters", []),
             })
-            _report_progress(progress_callback, "procedures", current, len(proc_names), name)
+            _report_progress(progress_callback, "procedures", current, len(procedure_rows), row.name)
 
         views: List[Dict] = []
-        view_names = self.get_all_views(schema)
-        _report_progress(progress_callback, "views", 0, len(view_names), "")
-        for current, name in enumerate(
-            tqdm(view_names, desc="   View 定義", unit="個"), start=1
+        view_rows = by_kind["views"]
+        _report_progress(progress_callback, "views", 0, len(view_rows), "")
+        for current, row in enumerate(
+            tqdm(view_rows, desc="   View 定義", unit="個"), start=1
         ):
             views.append({
-                "name": name,
-                "definition": self.get_object_definition(name, schema),
+                "name": row.name,
+                "schema": row.schema,
+                "definition": self.get_object_definition(row.name, row.schema),
             })
-            _report_progress(progress_callback, "views", current, len(view_names), name)
+            _report_progress(progress_callback, "views", current, len(view_rows), row.name)
 
         functions: List[Dict] = []
-        function_names = self.get_all_functions(schema)
-        _report_progress(progress_callback, "functions", 0, len(function_names), "")
-        for current, name in enumerate(
-            tqdm(function_names, desc="   Function 定義", unit="個"), start=1
+        function_rows = by_kind["functions"]
+        _report_progress(progress_callback, "functions", 0, len(function_rows), "")
+        for current, row in enumerate(
+            tqdm(function_rows, desc="   Function 定義", unit="個"), start=1
         ):
-            parameters, return_type = self.get_function_parameters(name, schema)
+            parameters, return_type = self.get_function_parameters(row.name, row.schema)
             functions.append({
-                "name": name,
-                "definition": self.get_object_definition(name, schema),
+                "name": row.name,
+                "schema": row.schema,
+                "definition": self.get_object_definition(row.name, row.schema),
                 "parameters": parameters,
                 "return_type": return_type,
             })
-            _report_progress(progress_callback, "functions", current, len(function_names), name)
+            _report_progress(progress_callback, "functions", current, len(function_rows), row.name)
 
         tables: List[Dict] = []
-        table_names = self.get_all_tables(schema)
-        _report_progress(progress_callback, "tables", 0, len(table_names), "")
-        for current, name in enumerate(
-            tqdm(table_names, desc="   資料表 Schema", unit="個"), start=1
+        table_rows = by_kind["tables"]
+        _report_progress(progress_callback, "tables", 0, len(table_rows), "")
+        for current, row in enumerate(
+            tqdm(table_rows, desc="   資料表 Schema", unit="個"), start=1
         ):
             tables.append({
-                "name": name,
-                "columns": self.get_table_columns(name, schema),
-                "primary_keys": self.get_primary_key_columns(name, schema),
+                "name": row.name,
+                "schema": row.schema,
+                "columns": self.get_table_columns(row.name, row.schema),
+                "primary_keys": self.get_primary_key_columns(row.name, row.schema),
             })
-            _report_progress(progress_callback, "tables", current, len(table_names), name)
+            _report_progress(progress_callback, "tables", current, len(table_rows), row.name)
 
         return {
             "database": self.db_config.alias,
-            "schema": schema,
             "procedures": procedures,
             "views": views,
             "functions": functions,
             "tables": tables,
+            "name_collisions": _name_collisions(listing),
         }
+
     # ========================================
     # 單一 SP 快速分析
     # ========================================
@@ -699,7 +748,7 @@ class SQLAnalyzer:
         if not definition or len(definition) >= 4000:
             self.cursor.execute(
                 "SELECT OBJECT_DEFINITION(OBJECT_ID(?))",
-                f"{target_schema}.{target_name}",
+                quote_name(target_schema, target_name),
             )
             def_row = self.cursor.fetchone()
             if def_row and def_row[0]:
@@ -850,14 +899,12 @@ class SQLAnalyzer:
     
     def analyze_all_procedures(
         self, 
-        schema: str,
         limit: Optional[int] = None
     ) -> DatabaseSummary:
         """
-        分析所有預存程序
+        分析所有預存程序（每一個 schema）
         
         Args:
-            schema: Schema 名稱
             limit: 限制數量（用於測試）
         """
         print("\n" + "=" * 80)
@@ -868,7 +915,7 @@ class SQLAnalyzer:
         summary = self.get_database_summary()
         
         # 取得所有 SP
-        all_procs = self.get_all_procedures(schema)
+        all_procs = self.list_objects("procedures")
         
         if limit:
             all_procs = all_procs[:limit]
@@ -879,13 +926,13 @@ class SQLAnalyzer:
         # 批次分析
         from tqdm import tqdm
         
-        for proc_name in tqdm(all_procs, desc="分析進度"):
+        for proc in tqdm(all_procs, desc="分析進度"):
             try:
-                sp_info = self.quick_analyze_sp(proc_name, schema)
+                sp_info = self.quick_analyze_sp(proc.name, proc.schema)
                 summary.procedures.append(sp_info)
                 summary.analyzed_procedures += 1
             except Exception as e:
-                print(f"\n   ⚠️  分析失敗 ({proc_name}): {e}")
+                print(f"\n   ⚠️  分析失敗 ({proc.schema}.{proc.name}): {e}")
         
         print(f"\n✅ 分析完成: {summary.analyzed_procedures}/{len(all_procs)}")
         
@@ -1168,6 +1215,24 @@ def extract_tables_from_definition(definition: str) -> Set[ObjectName]:
 # 測試與使用範例
 # ============================================
 
+def _match_typed_procedure(
+    procedures: List[ObjectListing], typed: str
+) -> Optional[ObjectListing]:
+    """Find the one listed procedure a typed name means; None when none or several match.
+
+    A typed name that states a schema must match that schema. A bare typed name
+    matches only when one schema holds it.
+    """
+    written = parse(typed)
+    matches = [
+        row
+        for row in procedures
+        if bare_key(row.name) == bare_key(written.name)
+        and (not written.schema or row.schema.casefold() == written.schema.casefold())
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def main():
     """主測試程式"""
     print("=" * 80)
@@ -1210,29 +1275,31 @@ def main():
         
         if function_choice == '1':
             # 單一 SP 分析
-            # 明寫 dbo 取代原本的預設值；Step 2a 改用新的物件清單並帶出 schema。
-            procedures = analyzer.get_all_procedures("dbo")
+            procedures = analyzer.list_objects("procedures")
             print(f"\n找到 {len(procedures)} 個預存程序")
             print("\n前 20 個:")
             for i, proc in enumerate(procedures[:20], 1):
-                print(f"  {i}. {proc}")
+                print(f"  {i}. {proc.schema}.{proc.name}")
             
             sp_choice = input("\n請輸入預存程序名稱（或編號）: ").strip()
             
             if sp_choice.isdigit():
                 sp_index = int(sp_choice) - 1
                 if 0 <= sp_index < len(procedures):
-                    sp_name = procedures[sp_index]
+                    chosen = procedures[sp_index]
                 else:
                     print("❌ 編號無效")
                     analyzer.disconnect()
                     return
             else:
-                sp_name = sp_choice
+                chosen = _match_typed_procedure(procedures, sp_choice)
+                if chosen is None:
+                    print("❌ 找不到這個預存程序，或名稱同時出現在多個 schema；請輸入 schema.名稱 或編號")
+                    analyzer.disconnect()
+                    return
             
             # 分析
-            # 明寫 dbo 取代原本的預設值；Step 2a 改傳選單選到的 schema。
-            sp_info = analyzer.quick_analyze_sp(sp_name, "dbo")
+            sp_info = analyzer.quick_analyze_sp(chosen.name, chosen.schema)
             analyzer.print_sp_info(sp_info, detailed=True)
             
             # 匯出
@@ -1245,8 +1312,7 @@ def main():
             limit_input = input("\n限制數量（測試用，直接按 Enter 分析全部）: ").strip()
             limit = int(limit_input) if limit_input.isdigit() else None
             
-            # 明寫 dbo 取代原本的預設值；Step 2a 改用新的物件清單並帶出 schema。
-            summary = analyzer.analyze_all_procedures("dbo", limit=limit)
+            summary = analyzer.analyze_all_procedures(limit=limit)
             analyzer.print_summary(summary)
             
             # 匯出

@@ -1355,7 +1355,13 @@ def test_schema_qualified_catalog_matching_does_not_cross_same_name_schemas() ->
     assert unresolved.reason == "not_in_resolved_catalog"
 
 
-def test_bare_catalog_entries_are_scoped_to_default_schema_for_qualified_calls() -> None:
+def test_a_qualified_call_matches_a_catalog_name_that_states_no_schema() -> None:
+    """The catalog never fills `dbo` for a name that states no schema.
+
+    A caller states `sales`, and the catalog holds the name without a schema. The
+    full bucket misses, and the bare bucket answers. The match keeps its Evidence
+    Status of `proven`, and its reason names the Unproven Schema.
+    """
     catalog = SpCatalog.from_databases({"Y-Docs_TTPUR": ["usp_SO_Delete"]})
     gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "Y-Docs_TTPUR"})
 
@@ -1364,8 +1370,30 @@ def test_bare_catalog_entries_are_scoped_to_default_schema_for_qualified_calls()
         [_raw_invocation(command_text="sales.usp_SO_Delete")],
     )[0]
 
-    assert invocation.evidence is InvocationEvidence.UNRESOLVED
-    assert invocation.reason == "not_in_resolved_catalog"
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.reason == "unproven_schema"
+    assert invocation.procedure_schema == "sales"
+
+
+def test_a_match_on_the_full_key_carries_no_unproven_schema_reason() -> None:
+    catalog = SpCatalog.from_databases({"Y-Docs_TTPUR": ["sales.usp_SO_Delete"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "Y-Docs_TTPUR"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "f.cs",
+        [_raw_invocation(command_text="sales.usp_SO_Delete")],
+    )[0]
+
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.reason == ""
+
+
+def test_a_name_that_states_no_schema_enters_the_bare_bucket_only() -> None:
+    catalog = SpCatalog.from_databases({"PUR": ["usp_Load", "COMMON.usp_Save"]})
+
+    assert catalog.contains("PUR", "usp_load") is True
+    assert catalog.contains("PUR", "usp_save") is True
+    assert catalog.qualified_procedures_by_database["PUR"] == {"common.usp_save"}
 
 
 def test_inline_sql_without_stored_procedure_type_is_a_database_invocation() -> None:

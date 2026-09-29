@@ -407,8 +407,6 @@ def _is_valid_cache(data: object, identity: CacheIdentity) -> bool:
         return False
     if not _same_scope(data.get("database"), identity.database):
         return False
-    if not _same_scope(data.get("schema"), identity.schema):
-        return False
     return _same_scope(graph.get("database"), identity.database)
 
 
@@ -678,9 +676,9 @@ def get_or_dump(
     _report_progress(progress_callback, "connecting", 1, 1, db)
     try:
         if progress_callback is None:
-            data = analyzer.dump_all_sql_objects(schema)
+            data = analyzer.dump_all_sql_objects()
         else:
-            data = analyzer.dump_all_sql_objects(schema, progress_callback=progress_callback)
+            data = analyzer.dump_all_sql_objects(progress_callback=progress_callback)
     finally:
         try:
             analyzer.disconnect()

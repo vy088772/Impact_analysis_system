@@ -47,7 +47,6 @@ def build_sql_execution_graph(
     progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Analyze refreshed SQL modules and return a deterministic graph payload."""
-    schema = str(data.get("schema") or "dbo")
     nodes: list[dict[str, Any]] = []
     relationships: list[dict[str, Any]] = []
     node_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -56,9 +55,7 @@ def build_sql_execution_graph(
     for collection, object_type in _MODULE_COLLECTIONS:
         for item in data.get(collection, []) or []:
             written = parse(str(item.get("name") or ""))
-            # A listed name that states no schema takes the cache-wide schema.
-            # The listing commit of Step 2a reads each object's own schema instead.
-            object_schema, name = written.schema or schema, written.name
+            object_schema, name = _object_schema(item, written), written.name
             if not name:
                 continue
             module_id = _node_id(object_type, object_schema, name)
@@ -78,9 +75,7 @@ def build_sql_execution_graph(
 
     for item in data.get("tables", []) or []:
         written = parse(str(item.get("name") or ""))
-        # A listed name that states no schema takes the cache-wide schema.
-        # The listing commit of Step 2a reads each object's own schema instead.
-        object_schema, name = written.schema or schema, written.name
+        object_schema, name = _object_schema(item, written), written.name
         if not name:
             continue
         _add_node(
@@ -469,6 +464,15 @@ def _add_relationship(
     if stated is not None and stated.server:
         relationship["server"] = stated.server
     relationships.append(relationship)
+
+
+def _object_schema(item: dict[str, Any], written: ObjectName) -> str:
+    """The schema of one listed object: its own `schema` field, then the name it is written with.
+
+    A cache written before each object carried its own schema holds none, and
+    holds no other schema than `dbo`, so an object that states none reads as `dbo`.
+    """
+    return str(item.get("schema") or "") or written.schema or "dbo"
 
 
 def _add_node(

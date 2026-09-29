@@ -89,8 +89,8 @@ def test_object_definition_fallback_uses_parameterized_query() -> None:
     assert len(fallback_calls) == 1
     query, params = fallback_calls[0]
     assert "?" in query
-    assert "dbo.usp_Long" not in query
-    assert params == ("dbo.usp_Long",)
+    assert "usp_Long" not in query
+    assert params == ("[dbo].[usp_Long]",)
 
 
 def test_missing_routine_definition_falls_back_to_object_definition() -> None:

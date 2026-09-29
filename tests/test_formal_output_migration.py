@@ -87,9 +87,7 @@ def test_sp_fetcher_uses_graph_lineage_and_keeps_dynamic_sql_unresolved(monkeypa
     monkeypatch.setattr(
         sp_fetcher,
         "load_cached",
-        lambda identity: cache_payload(
-            identity.database, schema=identity.schema, procedures=procedures, graph=graph
-        ),
+        lambda identity: cache_payload(identity.database, procedures=procedures, graph=graph),
     )
 
     results = sp_fetcher.fetch_sp_definitions(

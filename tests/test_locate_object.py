@@ -14,14 +14,11 @@ from service.sql_cache_store import CacheIdentity
 from tests.sql_cache_fixtures import CacheRoot, cache_payload, execution_graph, write_cache
 
 
-def _payload(
-    database: str, procedures=(), tables=(), graph_nodes=None, schema: str = "dbo"
-) -> dict:
+def _payload(database: str, procedures=(), tables=(), graph_nodes=None) -> dict:
     return cache_payload(
         database,
         procedures=procedures,
         tables=tables,
-        schema=schema,
         graph=execution_graph(database, nodes=graph_nodes or []),
     )
 
@@ -178,7 +175,7 @@ def test_two_schemas_of_one_database_never_land_in_both_lists() -> None:
             _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
         )
         unindexed = CacheIdentity.of("vmsystest07", "PUR", "sales")
-        write_cache(cache_root, unindexed, _payload("PUR", schema="sales"))
+        write_cache(cache_root, unindexed, _payload("PUR"))
 
         response = analyze_service.locate_object(
             LocateObjectRequest(object_name="spAddRecordError", kind="sp")
@@ -200,7 +197,6 @@ def test_two_schemas_that_both_hold_the_name_report_the_database_once() -> None:
                 _payload(
                     "PUR",
                     procedures={f"{schema}.spAddRecordError": {"definition": ""}},
-                    schema=schema,
                 ),
             )
 
@@ -219,7 +215,7 @@ def test_two_schemas_that_are_both_unindexed_report_the_database_once() -> None:
     with CacheRoot() as cache_root:
         for schema in ("dbo", "sales"):
             identity = CacheIdentity.of("vmsystest07", "PUR", schema)
-            write_cache(cache_root, identity, _payload("PUR", schema=schema))
+            write_cache(cache_root, identity, _payload("PUR"))
 
         response = analyze_service.locate_object(
             LocateObjectRequest(object_name="spAddRecordError", kind="sp")

@@ -114,7 +114,6 @@
   "sample_cache": {
     "data_file": {
       "database": "SampleDb",
-      "schema": "dbo",
       "procedures": [
         {
           "name": "dbo.usp_Load",

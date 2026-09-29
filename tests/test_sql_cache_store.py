@@ -912,3 +912,42 @@ def test_eviction_never_changes_which_databases_answer_a_read(monkeypatch) -> No
 
         for name in ("Db1", "Db2", "Db3"):
             assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", name, "dbo"))["database"] == name
+
+
+# --------------------------------------- one cache holds every schema of a Database
+# (`.scratch/canonical-object-identity/` ticket 08: each object carries its own schema)
+
+
+def test_a_saved_data_file_holds_no_top_level_schema_key() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        saved = json.loads((cache_root / identity.filename).read_text(encoding="utf-8"))
+        assert "schema" not in saved
+        assert all("schema" in entry for entry in saved["procedures"])
+        assert sql_cache_store.load_cached(identity) is not None
+
+
+def test_the_catalog_reads_each_procedure_with_its_own_schema() -> None:
+    with CacheRoot():
+        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        procedures = {
+            "COMMON.usp_Load": {"definition": ""},
+            "HR.usp_Load": {"definition": ""},
+            "dbo.usp_Save": {"definition": ""},
+        }
+        graph_nodes = tuple(
+            {"id": f"stored_procedure:{schema}.{name}", "type": "stored_procedure",
+             "schema": schema, "name": name}
+            for schema, name in (("COMMON", "usp_Load"), ("HR", "usp_Load"), ("dbo", "usp_Save"))
+        )
+        sql_cache_store._save(identity, _payload("PUR", procedures=procedures, graph_nodes=graph_nodes))
+
+        catalog, _graph, _database = analyze_service._execution_sql_context("PUR", "vmsystest07")
+
+        assert catalog.match_reason("PUR", "usp_load", "common") == ""
+        assert catalog.match_reason("PUR", "usp_load", "hr") == ""
+        assert catalog.match_reason("PUR", "usp_load", "dbo") is None
+        assert catalog.match_reason("PUR", "usp_save") == ""

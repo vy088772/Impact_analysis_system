@@ -108,7 +108,7 @@ def test_repair_only_touches_the_graph_field() -> None:
         after_bytes = data_path.read_bytes()
         after = json.loads(after_bytes.decode("utf-8"))
         assert after["database"] == before["database"]
-        assert after["schema"] == before["schema"]
+        assert "schema" not in after
         assert after["procedures"] == before["procedures"]
         assert after["views"] == before["views"]
         assert after["functions"] == before["functions"]

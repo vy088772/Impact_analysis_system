@@ -71,7 +71,6 @@ def cache_payload(
     functions: SqlObjects = (),
     tables: SqlObjects = (),
     graph: Optional[dict] = None,
-    schema: str = "dbo",
 ) -> dict:
     """Build one SQL cache payload: the envelope and its four object lists.
 
@@ -89,11 +88,11 @@ def cache_payload(
     Execution Graph keeps its own helper, because its format version and the SQL
     cache format version rise in different commits. With no graph, the payload
     holds no ``sql_execution_graph`` key, as a dump holds before the graph
-    builder runs. ``schema`` is the cache-wide schema field.
+    builder runs. The payload holds no cache-wide ``schema`` key: each object
+    entry carries its own.
     """
     payload: dict[str, Any] = {
         "database": database,
-        "schema": schema,
         "procedures": _sql_objects(procedures),
         "views": _sql_objects(views),
         "functions": _sql_objects(functions),

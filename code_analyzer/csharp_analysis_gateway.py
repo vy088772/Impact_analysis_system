@@ -2201,36 +2201,51 @@ def _procedure_name_hint(raw_text: str) -> Optional[str]:
     return None
 
 
+# The reason of a catalog match that a qualified caller reached through a catalog
+# name that states no schema. The Evidence Status stays `proven`.
+UNPROVEN_SCHEMA_REASON = "unproven_schema"
+
+
 @dataclass(frozen=True)
 class SpCatalog:
-    """Database-scoped set of normalized stored procedure identities."""
+    """Database-scoped set of normalized stored procedure identities.
+
+    Two buckets answer a question. The bare bucket holds the bare key of every
+    name. The full bucket holds `schema.name` for every name that states a
+    schema. A third set records the names that state none, because a qualified
+    question falls back to those and to no others. The catalog never fills `dbo`
+    for a name that states no schema.
+    """
 
     procedures_by_database: Dict[str, Set[str]]
     qualified_procedures_by_database: Dict[str, Set[str]] = field(default_factory=dict)
+    schemaless_procedures_by_database: Dict[str, Set[str]] = field(default_factory=dict)
 
     @classmethod
     def from_databases(
         cls,
         procedures_by_database: Dict[str, Iterable[str]],
-        default_schema: Optional[str] = "dbo",
     ) -> "SpCatalog":
         bare_names: Dict[str, Set[str]] = {}
         qualified_names: Dict[str, Set[str]] = {}
+        schemaless_names: Dict[str, Set[str]] = {}
         canonical_databases: Dict[str, str] = {}
-        normalized_default_schema = part_key(default_schema)
         for database, names in procedures_by_database.items():
             database_name = str(database).strip()
             database_key = database_name.casefold()
             canonical_database = canonical_databases.setdefault(database_key, database_name)
             bare_names.setdefault(canonical_database, set())
             qualified_names.setdefault(canonical_database, set())
+            schemaless_names.setdefault(canonical_database, set())
             for name in names:
                 normalized_name = bare_key(name)
                 bare_names[canonical_database].add(normalized_name)
-                schema = part_key(parse(name).schema) or normalized_default_schema
+                schema = part_key(parse(name).schema)
                 if schema:
                     qualified_names[canonical_database].add(f"{schema}.{normalized_name}")
-        return cls(bare_names, qualified_names)
+                else:
+                    schemaless_names[canonical_database].add(normalized_name)
+        return cls(bare_names, qualified_names, schemaless_names)
 
     @classmethod
     def merged(cls, catalogs: Iterable["SpCatalog"]) -> "SpCatalog":
@@ -2245,12 +2260,15 @@ class SpCatalog:
         """
         merged_bare: Dict[str, Set[str]] = {}
         merged_qualified: Dict[str, Set[str]] = {}
+        merged_schemaless: Dict[str, Set[str]] = {}
         for catalog in catalogs:
             for database, names in catalog.procedures_by_database.items():
                 merged_bare.setdefault(database, set()).update(names)
             for database, names in catalog.qualified_procedures_by_database.items():
                 merged_qualified.setdefault(database, set()).update(names)
-        return cls(merged_bare, merged_qualified)
+            for database, names in catalog.schemaless_procedures_by_database.items():
+                merged_schemaless.setdefault(database, set()).update(names)
+        return cls(merged_bare, merged_qualified, merged_schemaless)
 
     def contains(
         self,
@@ -2258,13 +2276,33 @@ class SpCatalog:
         normalized_name: str,
         schema: Optional[str] = None,
     ) -> bool:
+        return self.match_reason(database, normalized_name, schema) is not None
+
+    def match_reason(
+        self,
+        database: str,
+        normalized_name: str,
+        schema: Optional[str] = None,
+    ) -> Optional[str]:
+        """Answer one question: `None` for a miss, otherwise the reason of the match.
+
+        A name that states no schema is asked of the bare bucket. A name that
+        states a schema is asked of the full bucket. A qualified question that
+        misses the full bucket falls back to the catalog names that state no
+        schema. That match returns `UNPROVEN_SCHEMA_REASON`. Every other match
+        returns an empty reason.
+        """
         database_key = self._database_key(database)
-        bare_names = self.procedures_by_database.get(database_key, set())
         if not schema:
-            return normalized_name in bare_names
+            bare_names = self.procedures_by_database.get(database_key, set())
+            return "" if normalized_name in bare_names else None
         qualified_names = self.qualified_procedures_by_database.get(database_key, set())
-        qualified_identity = f"{schema}.{normalized_name}"
-        return qualified_identity in qualified_names
+        if f"{schema}.{normalized_name}" in qualified_names:
+            return ""
+        schemaless_names = self.schemaless_procedures_by_database.get(database_key, set())
+        if normalized_name in schemaless_names:
+            return UNPROVEN_SCHEMA_REASON
+        return None
 
     def databases_containing(
         self,
@@ -3302,13 +3340,14 @@ class CSharpAnalysisGateway:
         normalized_name = bare_key(raw_target)
         procedure_schema = part_key(parse(raw_target).schema) or None
         if database:
-            if self._catalog.contains(database, normalized_name, procedure_schema):
+            match_reason = self._catalog.match_reason(database, normalized_name, procedure_schema)
+            if match_reason is not None:
                 return EmbeddedProcedureTarget(
                     normalized_name,
                     procedure_schema,
                     database,
                     InvocationEvidence.PROVEN,
-                    "catalog_match",
+                    match_reason or "catalog_match",
                     raw_target=raw_target,
                     target_source=target_source,
                 )
@@ -4099,7 +4138,8 @@ class CSharpAnalysisGateway:
         procedure_schema = part_key(parse(command_text).schema) or None
 
         if database:
-            if self._catalog.contains(database, normalized_name, procedure_schema):
+            match_reason = self._catalog.match_reason(database, normalized_name, procedure_schema)
+            if match_reason is not None:
                 return DbInvocation(
                     class_name,
                     method_name,
@@ -4107,6 +4147,7 @@ class CSharpAnalysisGateway:
                     normalized_name,
                     InvocationEvidence.PROVEN,
                     source,
+                    reason=match_reason,
                     procedure_schema=procedure_schema,
                     method_chain=method_chain,
                     branch_context=branch_context,

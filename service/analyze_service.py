@@ -962,8 +962,7 @@ def _execution_sql_context(
     for procedure in (cached or {}).get("procedures", []) or []:
         add_procedure(graph_database, qualified_procedure_name(procedure))
 
-    schema = str((cached or {}).get("schema") or "dbo")
-    return SpCatalog.from_databases(procedures_by_database, default_schema=schema), graph, graph_database
+    return SpCatalog.from_databases(procedures_by_database), graph, graph_database
 
 
 def load_sp_catalog(database: str = "") -> SpCatalog:
@@ -2227,15 +2226,16 @@ def _cached_sql_object(cached: Mapping[str, object], node: Mapping[str, object])
     }.get(str(node.get("type") or ""))
     if collection is None:
         return None
-    node_schema = str(node.get("schema") or "dbo").casefold()
+    # Both sides state a schema, or nothing matches: an empty schema is not `dbo`.
+    node_schema = str(node.get("schema") or "").casefold()
     node_name = str(node.get("name") or "").casefold()
+    if not node_schema:
+        return None
     for item in cached.get(collection, []) or []:
         item_dict = dict(item)
         item_name = parse(str(item_dict.get("name") or ""))
-        # A name that states no schema takes the object's own schema, then dbo.
-        # The listing commit of Step 2a removes both dbo fallbacks of this lookup.
-        item_schema = item_name.schema or str(item_dict.get("schema") or node.get("schema") or "dbo")
-        if item_schema.casefold() == node_schema and item_name.name.casefold() == node_name:
+        item_schema = (item_name.schema or str(item_dict.get("schema") or "")).casefold()
+        if item_schema and item_schema == node_schema and item_name.name.casefold() == node_name:
             return item_dict
     return None
 
@@ -4274,7 +4274,7 @@ def refresh_sql_source(
     )
     return {
         "database": data.get("database", database),
-        "db_schema": data.get("schema", schema),
+        "db_schema": schema,
         "procedures": len(data.get("procedures", [])),
         "views": len(data.get("views", [])),
         "functions": len(data.get("functions", [])),
