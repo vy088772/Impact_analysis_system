@@ -1,4 +1,4 @@
-"""Ticket 02 behavior checks: SQL cache identity is (server, database, schema)."""
+"""Behavior checks: SQL cache identity is (server, database); one cache holds one Database."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def _payload(database: str, graph_nodes: tuple = (), **objects: object) -> dict:
     ids=[case["filename"] for case in AGREEMENT["sql_cache_identity"]],
 )
 def test_each_agreed_identity_names_its_cache_file(case: dict) -> None:
-    identity = CacheIdentity.of(case["server"], case["database"], case["schema"])
+    identity = CacheIdentity.of(case["server"], case["database"])
 
     assert identity.filename == case["filename"]
 
@@ -61,7 +61,7 @@ def _sample_cache_files() -> dict:
     files. When the cache shape changes, copy this function's output into the
     `sample_cache` entry of tests/cross_repository_agreement.json.
     """
-    identity = CacheIdentity.of("sqlsrv01", "SampleDb", "dbo")
+    identity = CacheIdentity.of("sqlsrv01", "SampleDb")
     procedure_id = "stored_procedure:dbo.usp_Load"
     operation_id = f"dml_operation:{procedure_id}:1"
     definition = (
@@ -236,47 +236,47 @@ def test_port_suffix_with_named_instance_suffix_is_discarded() -> None:
 
 
 def test_a_cache_identity_names_its_own_files() -> None:
-    identity = CacheIdentity.of("vmsystest07", "STC", "dbo")
+    identity = CacheIdentity.of("vmsystest07", "STC")
 
-    assert identity.filename == "vmsystest07.topmost.com.tw__STC__dbo.json"
-    assert identity.meta_filename == "vmsystest07.topmost.com.tw__STC__dbo.meta.json"
+    assert identity.filename == "vmsystest07.topmost.com.tw__STC.json"
+    assert identity.meta_filename == "vmsystest07.topmost.com.tw__STC.meta.json"
 
 
 def test_one_shared_database_has_one_key_regardless_of_which_system_asks() -> None:
     """SysErrorRecord is referenced by many systems; its cache key must not vary."""
     assert (
-        CacheIdentity.of("vmsystest07", "SysErrorRecord", "dbo").key
-        == CacheIdentity.of("VMSYSTEST07.topmost.com.tw\\pdcs", "SysErrorRecord", "dbo").key
+        CacheIdentity.of("vmsystest07", "SysErrorRecord").key
+        == CacheIdentity.of("VMSYSTEST07.topmost.com.tw\\pdcs", "SysErrorRecord").key
     )
 
 
 def test_same_database_name_on_two_servers_gets_two_keys() -> None:
     assert (
-        CacheIdentity.of("vmsystest07", "PUR", "dbo").key
-        != CacheIdentity.of("vmsystest08", "PUR", "dbo").key
+        CacheIdentity.of("vmsystest07", "PUR").key
+        != CacheIdentity.of("vmsystest08", "PUR").key
     )
 
 
 def test_a_cache_identity_rejects_an_unknown_server() -> None:
     with pytest.raises(ValueError):
-        CacheIdentity.of("", "PUR", "dbo")
+        CacheIdentity.of("", "PUR")
 
 
 def test_a_cache_identity_rejects_an_unknown_database() -> None:
     with pytest.raises(ValueError):
-        CacheIdentity.of("vmsystest07", "", "dbo")
+        CacheIdentity.of("vmsystest07", "")
 
 
-def test_the_reverse_parse_reads_a_three_part_stem_back_into_its_identity() -> None:
-    assert CacheIdentity.from_key("vmsystest07.topmost.com.tw__PUR__dbo") == CacheIdentity(
-        "vmsystest07.topmost.com.tw", "PUR", "dbo"
+def test_the_reverse_parse_reads_a_two_part_stem_back_into_its_identity() -> None:
+    assert CacheIdentity.from_key("vmsystest07.topmost.com.tw__PUR") == CacheIdentity(
+        "vmsystest07.topmost.com.tw", "PUR"
     )
 
 
 def test_the_reverse_parse_returns_nothing_for_a_stem_that_names_no_identity() -> None:
     assert CacheIdentity.from_key("stray") is None
-    assert CacheIdentity.from_key("STC__dbo") is None
-    assert CacheIdentity.from_key("__PUR__dbo") is None
+    assert CacheIdentity.from_key("PUR__") is None
+    assert CacheIdentity.from_key("__PUR") is None
 
 
 # ------------------------------------------------------- the directory listing
@@ -284,7 +284,7 @@ def test_the_reverse_parse_returns_nothing_for_a_stem_that_names_no_identity() -
 
 def test_the_directory_listing_returns_the_data_file_alone_beside_its_siblings() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(identity, _payload("PUR"))
         assert (cache_root / identity.meta_filename).exists()  # sanity: all three files
         assert (cache_root / identity.index_filename).exists()
@@ -292,20 +292,20 @@ def test_the_directory_listing_returns_the_data_file_alone_beside_its_siblings()
         rows = sql_cache_store.list_cache_files()
 
         assert [(row.data_path.name, row.identity) for row in rows] == [
-            ("vmsystest07.topmost.com.tw__PUR__dbo.json", identity)
+            ("vmsystest07.topmost.com.tw__PUR.json", identity)
         ]
 
 
 def test_the_directory_listing_returns_an_empty_identity_for_a_file_that_names_none() -> None:
     with CacheRoot() as cache_root:
         (cache_root / "stray.json").write_text("{}", encoding="utf-8")
-        (cache_root / "vmsystest07__PUR__dbo.json").write_text("{}", encoding="utf-8")
+        (cache_root / "vmsystest07__PUR.json").write_text("{}", encoding="utf-8")
 
         rows = sql_cache_store.list_cache_files()
 
         assert [(row.data_path.name, row.identity) for row in rows] == [
             ("stray.json", None),
-            ("vmsystest07__PUR__dbo.json", None),
+            ("vmsystest07__PUR.json", None),
         ]
 
 
@@ -313,13 +313,13 @@ def test_the_server_is_found_for_a_database_name_that_holds_the_separator() -> N
     with CacheRoot() as cache_root:
         write_cache(
             cache_root,
-            CacheIdentity.of("vmsystest07", "Y__Docs", "dbo"),
+            CacheIdentity.of("vmsystest07", "Y__Docs"),
             _payload("Y__Docs"),
         )
 
-        identity = sql_cache_store.find_cache_identity("Y__Docs", "dbo")
+        identity = sql_cache_store.find_cache_identity("Y__Docs")
 
-        assert identity == CacheIdentity.of("vmsystest07", "Y__Docs", "dbo")
+        assert identity == CacheIdentity.of("vmsystest07", "Y__Docs")
         assert sql_cache_store.load_cached(identity)["database"] == "Y__Docs"
 
 
@@ -328,35 +328,35 @@ def test_the_server_is_found_for_a_database_name_that_holds_the_separator() -> N
 
 def test_a_database_is_cataloged_exactly_when_its_cache_file_exists() -> None:
     with CacheRoot() as cache_root:
-        assert sql_cache_store.has_cache(CacheIdentity.of("vmsystest07", "SysErrorRecord", "dbo")) is False
+        assert sql_cache_store.has_cache(CacheIdentity.of("vmsystest07", "SysErrorRecord")) is False
 
         write_cache(
             cache_root,
-            CacheIdentity.of("vmsystest07", "SysErrorRecord", "dbo"),
+            CacheIdentity.of("vmsystest07", "SysErrorRecord"),
             _payload("SysErrorRecord"),
         )
 
-        assert sql_cache_store.has_cache(CacheIdentity.of("vmsystest07", "SysErrorRecord", "dbo")) is True
+        assert sql_cache_store.has_cache(CacheIdentity.of("vmsystest07", "SysErrorRecord")) is True
 
 
 def test_a_cache_written_for_one_server_is_not_found_under_another() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR")
         )
 
-        assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest08", "PUR", "dbo")) is None
+        assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest08", "PUR")) is None
 
 
 def test_a_caller_without_a_server_resolves_the_only_cache_for_that_database() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR")
         )
 
-        identity = sql_cache_store.find_cache_identity("PUR", "dbo")
+        identity = sql_cache_store.find_cache_identity("PUR")
 
-        assert identity == CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        assert identity == CacheIdentity.of("vmsystest07", "PUR")
         cached = sql_cache_store.load_cached(identity)
 
         assert cached is not None
@@ -366,15 +366,14 @@ def test_a_caller_without_a_server_resolves_the_only_cache_for_that_database() -
 def test_a_caller_without_a_server_refuses_an_ambiguous_database_name() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR")
         )
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest08", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest08", "PUR"), _payload("PUR")
         )
 
-        assert sql_cache_store.find_cache_identity("PUR", "dbo") == sql_cache_store.AmbiguousServer(
+        assert sql_cache_store.find_cache_identity("PUR") == sql_cache_store.AmbiguousServer(
             database="PUR",
-            schema="dbo",
             servers=("vmsystest07.topmost.com.tw", "vmsystest08.topmost.com.tw"),
         )
 
@@ -383,32 +382,32 @@ def test_a_caller_without_a_server_reads_a_database_whose_name_the_filename_rewr
     """The filename holds a safe-named Database; the read still names the real one."""
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "Y Docs", "dbo"), _payload("Y Docs")
+            cache_root, CacheIdentity.of("vmsystest07", "Y Docs"), _payload("Y Docs")
         )
 
-        identity = sql_cache_store.find_cache_identity("Y Docs", "dbo")
+        identity = sql_cache_store.find_cache_identity("Y Docs")
 
-        assert identity == CacheIdentity.of("vmsystest07", "Y Docs", "dbo")
+        assert identity == CacheIdentity.of("vmsystest07", "Y Docs")
         assert sql_cache_store.load_cached(identity)["database"] == "Y Docs"
 
 
 def test_a_caller_without_a_server_finds_nothing_when_no_cache_names_the_database() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR")
         )
 
-        assert sql_cache_store.find_cache_identity("STC", "dbo") is None
+        assert sql_cache_store.find_cache_identity("STC") is None
 
 
 def test_a_system_id_is_not_a_cache_key() -> None:
     """Y-Docs_TTPUR is a system_id; the cached database is named PUR."""
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR")
         )
 
-        assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Y-Docs_TTPUR", "dbo")) is None
+        assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Y-Docs_TTPUR")) is None
 
 
 # --------------------------------------------------------- freshness (ticket 05)
@@ -417,20 +416,20 @@ def test_a_system_id_is_not_a_cache_key() -> None:
 def test_cached_saved_at_reads_the_recorded_save_time() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR")
         )
 
-        assert sql_cache_store.cached_saved_at(CacheIdentity.of("vmsystest07", "PUR", "dbo")) == "2026-08-04 13:29:13"
+        assert sql_cache_store.cached_saved_at(CacheIdentity.of("vmsystest07", "PUR")) == "2026-08-04 13:29:13"
 
 
 def test_cached_saved_at_resolves_the_server_the_same_way_load_cached_does() -> None:
     """No server given, exactly one cache on disk -- resolved the same as load_cached()."""
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR")
         )
 
-        identity = sql_cache_store.find_cache_identity("PUR", "dbo")
+        identity = sql_cache_store.find_cache_identity("PUR")
 
         assert isinstance(identity, CacheIdentity)
         assert sql_cache_store.cached_saved_at(identity) == "2026-08-04 13:29:13"
@@ -438,7 +437,7 @@ def test_cached_saved_at_resolves_the_server_the_same_way_load_cached_does() -> 
 
 def test_cached_saved_at_is_none_when_nothing_is_cached() -> None:
     with CacheRoot():
-        assert sql_cache_store.cached_saved_at(CacheIdentity.of("vmsystest07", "NoSuchDb", "dbo")) is None
+        assert sql_cache_store.cached_saved_at(CacheIdentity.of("vmsystest07", "NoSuchDb")) is None
 
 
 # ---------------------------------------------------------------- get_or_dump
@@ -448,17 +447,17 @@ def test_get_or_dump_refuses_to_key_a_cache_by_the_display_alias() -> None:
     """database is a display label; without db_name there is no cache identity."""
     with pytest.raises(ValueError):
         sql_cache_store.get_or_dump(
-            CacheIdentity.of("vmsystest07", "", "dbo"), connection_server="vmsystest07"
+            CacheIdentity.of("vmsystest07", ""), connection_server="vmsystest07"
         )
 
 
 # -------------------------------------------------------------- list_caches
 
 
-def test_list_caches_returns_every_cache_with_its_four_fields() -> None:
+def test_list_caches_returns_every_cache_with_its_three_fields() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR")
         )
 
         rows = sql_cache_store.list_caches()
@@ -467,13 +466,12 @@ def test_list_caches_returns_every_cache_with_its_four_fields() -> None:
         row = rows[0]
         assert row.server == "vmsystest07.topmost.com.tw"
         assert row.database == "PUR"
-        assert row.schema == "dbo"
         assert row.scanned_at == "2026-08-04 13:29:13"
 
 
 def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_missing() -> None:
     with CacheRoot() as cache_root:
-        (cache_root / CacheIdentity.of("vmsystest07", "PUR", "dbo").filename).write_text(
+        (cache_root / CacheIdentity.of("vmsystest07", "PUR").filename).write_text(
             json.dumps(_payload("PUR"), ensure_ascii=False), encoding="utf-8"
         )
 
@@ -482,16 +480,15 @@ def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_missing()
         assert len(rows) == 1
         assert rows[0].server == "vmsystest07.topmost.com.tw"
         assert rows[0].database == "PUR"
-        assert rows[0].schema == "dbo"
         assert rows[0].scanned_at is None
 
 
 def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_unreadable() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR")
         )
-        (cache_root / CacheIdentity.of("vmsystest07", "PUR", "dbo").meta_filename).write_text(
+        (cache_root / CacheIdentity.of("vmsystest07", "PUR").meta_filename).write_text(
             "{not valid json", encoding="utf-8"
         )
 
@@ -503,18 +500,16 @@ def test_list_caches_reports_an_absent_scan_time_when_the_meta_file_is_unreadabl
         # Identity still comes from the filename when meta cannot be read.
         assert row.server == "vmsystest07.topmost.com.tw"
         assert row.database == "PUR"
-        assert row.schema == "dbo"
 
 
 def test_list_caches_never_lists_a_scan_record_file_as_a_cache() -> None:
     with CacheRoot() as cache_root:
         # A meta file with no sibling data file must never surface as a row.
-        (cache_root / CacheIdentity.of("vmsystest07", "PUR", "dbo").meta_filename).write_text(
+        (cache_root / CacheIdentity.of("vmsystest07", "PUR").meta_filename).write_text(
             json.dumps(
                 {
                     "server": "vmsystest07.topmost.com.tw",
                     "database": "PUR",
-                    "schema": "dbo",
                     "saved_at": "2026-08-04 13:29:13",
                 }
             ),
@@ -527,7 +522,7 @@ def test_list_caches_never_lists_a_scan_record_file_as_a_cache() -> None:
 def test_list_caches_never_lists_an_object_location_index_file_as_a_cache() -> None:
     """The index file also ends in ``.json``; it must not surface as a second row."""
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
 
         sql_cache_store._save(identity, _payload("PUR"))
 
@@ -536,27 +531,26 @@ def test_list_caches_never_lists_an_object_location_index_file_as_a_cache() -> N
         assert len(rows) == 1
         assert rows[0].server == "vmsystest07.topmost.com.tw"
         assert rows[0].database == "PUR"
-        assert rows[0].schema == "dbo"
 
 
-def test_list_caches_orders_rows_by_server_then_database_then_schema() -> None:
+def test_list_caches_orders_rows_by_server_then_database() -> None:
     with CacheRoot() as cache_root:
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest08", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest08", "PUR"), _payload("PUR")
         )
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "STC", "dbo"), _payload("STC")
+            cache_root, CacheIdentity.of("vmsystest07", "STC"), _payload("STC")
         )
         write_cache(
-            cache_root, CacheIdentity.of("vmsystest07", "PUR", "dbo"), _payload("PUR")
+            cache_root, CacheIdentity.of("vmsystest07", "PUR"), _payload("PUR")
         )
 
         rows = sql_cache_store.list_caches()
 
-        assert [(row.server, row.database, row.schema) for row in rows] == [
-            ("vmsystest07.topmost.com.tw", "PUR", "dbo"),
-            ("vmsystest07.topmost.com.tw", "STC", "dbo"),
-            ("vmsystest08.topmost.com.tw", "PUR", "dbo"),
+        assert [(row.server, row.database) for row in rows] == [
+            ("vmsystest07.topmost.com.tw", "PUR"),
+            ("vmsystest07.topmost.com.tw", "STC"),
+            ("vmsystest08.topmost.com.tw", "PUR"),
         ]
 
 
@@ -579,12 +573,12 @@ def test_the_analyze_read_path_reads_the_server_the_request_named() -> None:
     with CacheRoot() as cache_root:
         write_cache(
             cache_root,
-            CacheIdentity.of("vmsystest07", "PUR", "dbo"),
+            CacheIdentity.of("vmsystest07", "PUR"),
             _payload_with_procedure("PUR", "spOnSeven"),
         )
         write_cache(
             cache_root,
-            CacheIdentity.of("vmsystest08", "PUR", "dbo"),
+            CacheIdentity.of("vmsystest08", "PUR"),
             _payload_with_procedure("PUR", "spOnEight"),
         )
 
@@ -599,12 +593,12 @@ def test_the_analyze_read_path_without_a_server_cannot_pick_between_two() -> Non
     with CacheRoot() as cache_root:
         write_cache(
             cache_root,
-            CacheIdentity.of("vmsystest07", "PUR", "dbo"),
+            CacheIdentity.of("vmsystest07", "PUR"),
             _payload_with_procedure("PUR", "spOnSeven"),
         )
         write_cache(
             cache_root,
-            CacheIdentity.of("vmsystest08", "PUR", "dbo"),
+            CacheIdentity.of("vmsystest08", "PUR"),
             _payload_with_procedure("PUR", "spOnEight"),
         )
 
@@ -644,7 +638,7 @@ def _payload_with_graph_only_table(database: str) -> dict:
 
 
 def test_the_stored_procedure_bucket_holds_procedures_views_and_functions_normalized() -> None:
-    identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+    identity = CacheIdentity.of("vmsystest07", "PUR")
     data = _payload(
         "PUR",
         procedures={"[dbo].[spDoThing]": {"definition": ""}},
@@ -658,7 +652,7 @@ def test_the_stored_procedure_bucket_holds_procedures_views_and_functions_normal
 
 
 def test_the_table_bucket_holds_the_declared_tables_normalized() -> None:
-    identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+    identity = CacheIdentity.of("vmsystest07", "PUR")
     data = _payload("PUR", tables={"Customers": {"columns": [], "primary_keys": []}})
 
     index = sql_cache_store.build_object_location_index(identity, data)
@@ -668,7 +662,7 @@ def test_the_table_bucket_holds_the_declared_tables_normalized() -> None:
 
 def test_table_name_normalization_drops_the_schema() -> None:
     """dbo.Orders and sales.Orders must collapse to the same key."""
-    identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+    identity = CacheIdentity.of("vmsystest07", "PUR")
     data = _payload("PUR", tables={"sales.Orders": {"columns": [], "primary_keys": []}})
 
     index = sql_cache_store.build_object_location_index(identity, data)
@@ -678,7 +672,7 @@ def test_table_name_normalization_drops_the_schema() -> None:
 
 def test_the_table_bucket_includes_a_table_reached_only_inside_a_stored_procedure_body() -> None:
     """The union with graph node names is the point of the table bucket."""
-    identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+    identity = CacheIdentity.of("vmsystest07", "PUR")
     data = _payload_with_graph_only_table("PUR")
 
     index = sql_cache_store.build_object_location_index(identity, data)
@@ -688,19 +682,18 @@ def test_the_table_bucket_includes_a_table_reached_only_inside_a_stored_procedur
 
 
 def test_the_index_carries_its_identity_and_the_cache_format_version() -> None:
-    identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+    identity = CacheIdentity.of("vmsystest07", "PUR")
 
     index = sql_cache_store.build_object_location_index(identity, _payload("PUR"))
 
     assert index.server == "vmsystest07.topmost.com.tw"
     assert index.database == "PUR"
-    assert index.schema == "dbo"
     assert index.cache_version == sql_cache_store._SQL_CACHE_VERSION
 
 
 def test_the_index_is_written_beside_the_cache_not_merged_into_the_scan_record() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
 
         sql_cache_store._save(identity, _payload("PUR"))
 
@@ -713,7 +706,7 @@ def test_the_index_is_written_beside_the_cache_not_merged_into_the_scan_record()
 def test_a_refresh_writes_the_cache_before_the_index() -> None:
     """An interrupted refresh must leave the index detectably older, never missing this order."""
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
 
         sql_cache_store._save(identity, _payload("PUR"))
 
@@ -724,7 +717,7 @@ def test_a_refresh_writes_the_cache_before_the_index() -> None:
 
 def test_a_fresh_index_round_trips_through_load_object_location_index() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         data = _payload("PUR", procedures={"spAddRecordError": {"definition": ""}})
 
         sql_cache_store._save(identity, data)
@@ -737,7 +730,7 @@ def test_a_fresh_index_round_trips_through_load_object_location_index() -> None:
 
 def test_a_missing_index_file_counts_as_absent() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         write_cache(cache_root, identity, _payload("PUR"))
 
         assert sql_cache_store.load_object_location_index(identity) is None
@@ -745,7 +738,7 @@ def test_a_missing_index_file_counts_as_absent() -> None:
 
 def test_an_unreadable_index_file_counts_as_absent() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         write_cache(cache_root, identity, _payload("PUR"))
         (cache_root / identity.index_filename).write_text("{not valid json", encoding="utf-8")
 
@@ -755,7 +748,7 @@ def test_an_unreadable_index_file_counts_as_absent() -> None:
 def test_an_index_older_than_its_cache_counts_as_absent() -> None:
     """Simulates a refresh that stopped halfway: the cache moved on, the index did not."""
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(identity, _payload("PUR"))
 
         old = time.time() - 1000
@@ -766,7 +759,7 @@ def test_an_index_older_than_its_cache_counts_as_absent() -> None:
 
 def test_an_index_built_against_a_different_cache_format_version_counts_as_absent() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(identity, _payload("PUR"))
 
         index_path = cache_root / identity.index_filename
@@ -782,8 +775,8 @@ def test_an_index_built_against_a_different_cache_format_version_counts_as_absen
 def test_an_index_moved_by_hand_to_a_different_identity_counts_as_absent() -> None:
     """A reviewer must be able to detect a file moved/renamed by hand, not trust it."""
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
-        other = CacheIdentity.of("vmsystest08", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
+        other = CacheIdentity.of("vmsystest08", "PUR")
         sql_cache_store._save(identity, _payload("PUR"))
 
         (cache_root / other.filename).write_bytes((cache_root / identity.filename).read_bytes())
@@ -800,7 +793,7 @@ def test_an_index_moved_by_hand_to_a_different_identity_counts_as_absent() -> No
 def test_the_staleness_check_never_reads_the_cache_body() -> None:
     """A 105 MB cache must never be parsed just to decide whether its index is fresh."""
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(identity, _payload("PUR"))
 
         data_path = cache_root / identity.filename
@@ -823,10 +816,10 @@ def test_the_memory_cache_retains_no_more_databases_than_its_bound(monkeypatch) 
     with CacheRoot() as cache_root:
         monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 2)
         for name in ("Db1", "Db2", "Db3"):
-            write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
+            write_cache(cache_root, CacheIdentity.of("vmsystest07", name), _payload(name))
 
         for name in ("Db1", "Db2", "Db3"):
-            assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", name, "dbo")) is not None
+            assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", name)) is not None
 
         assert len(sql_cache_store._mem_cache) == 2
 
@@ -837,18 +830,18 @@ def test_exceeding_the_bound_evicts_the_least_recently_used_database_and_records
     with CacheRoot() as cache_root:
         monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 2)
         for name in ("Db1", "Db2"):
-            write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
+            write_cache(cache_root, CacheIdentity.of("vmsystest07", name), _payload(name))
 
-        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
-        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db2", "dbo"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db2"))
         capsys.readouterr()  # discard output from the first two, unbounded, insertions
 
-        write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db3", "dbo"), _payload("Db3"))
-        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db3", "dbo"))
+        write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db3"), _payload("Db3"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db3"))
 
-        db1 = CacheIdentity.of("vmsystest07", "Db1", "dbo")
-        db2 = CacheIdentity.of("vmsystest07", "Db2", "dbo")
-        db3 = CacheIdentity.of("vmsystest07", "Db3", "dbo")
+        db1 = CacheIdentity.of("vmsystest07", "Db1")
+        db2 = CacheIdentity.of("vmsystest07", "Db2")
+        db3 = CacheIdentity.of("vmsystest07", "Db3")
         assert db1 not in sql_cache_store._mem_cache
         assert db2 in sql_cache_store._mem_cache
         assert db3 in sql_cache_store._mem_cache
@@ -866,22 +859,22 @@ def test_a_served_database_survives_more_new_arrivals_than_the_bound(monkeypatch
     with CacheRoot() as cache_root:
         monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 2)
         for name in ("Db1", "Db2", "Db3", "Db4"):
-            write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
+            write_cache(cache_root, CacheIdentity.of("vmsystest07", name), _payload(name))
 
-        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
-        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db2", "dbo"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db2"))
 
-        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
-        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db3", "dbo"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db3"))
 
-        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
-        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db4", "dbo"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db4"))
 
         retained = sql_cache_store._mem_cache
-        assert CacheIdentity.of("vmsystest07", "Db1", "dbo") in retained
-        assert CacheIdentity.of("vmsystest07", "Db2", "dbo") not in retained
-        assert CacheIdentity.of("vmsystest07", "Db3", "dbo") not in retained
-        assert CacheIdentity.of("vmsystest07", "Db4", "dbo") in retained
+        assert CacheIdentity.of("vmsystest07", "Db1") in retained
+        assert CacheIdentity.of("vmsystest07", "Db2") not in retained
+        assert CacheIdentity.of("vmsystest07", "Db3") not in retained
+        assert CacheIdentity.of("vmsystest07", "Db4") in retained
 
 
 def test_a_database_evicted_from_memory_is_read_from_disk_again_with_the_same_content(
@@ -889,15 +882,15 @@ def test_a_database_evicted_from_memory_is_read_from_disk_again_with_the_same_co
 ) -> None:
     with CacheRoot() as cache_root:
         monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 1)
-        write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db1", "dbo"), _payload("Db1"))
-        write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db2", "dbo"), _payload("Db2"))
+        write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db1"), _payload("Db1"))
+        write_cache(cache_root, CacheIdentity.of("vmsystest07", "Db2"), _payload("Db2"))
 
-        first = sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
-        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db2", "dbo"))  # evicts Db1 from memory
-        db1 = CacheIdentity.of("vmsystest07", "Db1", "dbo")
+        first = sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1"))
+        sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db2"))  # evicts Db1 from memory
+        db1 = CacheIdentity.of("vmsystest07", "Db1")
         assert db1 not in sql_cache_store._mem_cache  # sanity: really evicted
 
-        reloaded = sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1", "dbo"))
+        reloaded = sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "Db1"))
 
         assert reloaded is not None
         assert reloaded == first
@@ -908,10 +901,10 @@ def test_eviction_never_changes_which_databases_answer_a_read(monkeypatch) -> No
     with CacheRoot() as cache_root:
         monkeypatch.setattr(sql_cache_store.settings, "SQL_CACHE_MEMORY_RETENTION_LIMIT", 1)
         for name in ("Db1", "Db2", "Db3"):
-            write_cache(cache_root, CacheIdentity.of("vmsystest07", name, "dbo"), _payload(name))
+            write_cache(cache_root, CacheIdentity.of("vmsystest07", name), _payload(name))
 
         for name in ("Db1", "Db2", "Db3"):
-            assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", name, "dbo"))["database"] == name
+            assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", name))["database"] == name
 
 
 # --------------------------------------- one cache holds every schema of a Database
@@ -920,7 +913,7 @@ def test_eviction_never_changes_which_databases_answer_a_read(monkeypatch) -> No
 
 def test_a_saved_data_file_holds_no_top_level_schema_key() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
 
         sql_cache_store._save(identity, _payload("PUR"))
 
@@ -930,9 +923,46 @@ def test_a_saved_data_file_holds_no_top_level_schema_key() -> None:
         assert sql_cache_store.load_cached(identity) is not None
 
 
+def test_the_meta_file_and_the_index_file_hold_no_schema_field() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR")
+
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        meta = json.loads((cache_root / identity.meta_filename).read_text(encoding="utf-8"))
+        index = json.loads((cache_root / identity.index_filename).read_text(encoding="utf-8"))
+        assert "schema" not in meta
+        assert "schema" not in index
+
+
+def test_a_cache_written_at_the_previous_format_version_never_loads() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR")
+        sql_cache_store._save(identity, _payload("PUR"))
+        assert sql_cache_store.load_cached(identity) is not None  # sanity: it loads now
+        sql_cache_store._mem_cache.clear()
+
+        meta_path = cache_root / identity.meta_filename
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["cache_version"] = sql_cache_store._SQL_CACHE_VERSION - 1
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+        assert sql_cache_store.load_cached(identity) is None
+
+
+def test_a_cache_under_a_three_part_filename_is_not_the_cache_of_its_database() -> None:
+    with CacheRoot() as cache_root:
+        (cache_root / "vmsystest07.topmost.com.tw__PUR__dbo.json").write_text(
+            json.dumps(_payload("PUR")), encoding="utf-8"
+        )
+
+        assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "PUR")) is None
+        assert sql_cache_store.find_cache_identity("PUR") is None
+
+
 def test_the_catalog_reads_each_procedure_with_its_own_schema() -> None:
     with CacheRoot():
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         procedures = {
             "COMMON.usp_Load": {"definition": ""},
             "HR.usp_Load": {"definition": ""},

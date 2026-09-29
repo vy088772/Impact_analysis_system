@@ -3,7 +3,7 @@
 SQL 物件（預存程序/View/使用者定義函數/資料表 Schema）的本機落地快取。
 
 跟 scan_store.py（C#/View 層程式碼的靜態掃描快取）是同一套設計理念：
-第一次「更新 SQL 快取」後，把整個資料庫（指定 schema）的 SP/View/Function
+第一次「更新 SQL 快取」後，把整個資料庫（含庫內每個 schema）的 SP/View/Function
 完整定義與資料表欄位 Schema 以 JSON 寫入 data/sql_cache，之後直接讀取，
 不必每次問問題都即時連線 SQL Server 查詢。只有明確執行更新指令
 （refresh=True，見 /refresh_sql）時才重新連線撈取並覆寫。
@@ -11,11 +11,12 @@ SQL 物件（預存程序/View/使用者定義函數/資料表 Schema）的本�
 純靜態資料，不含任何 AI 摘要（AI 注記交由 spec-rag 端的 code_retriever 按需、
 依內容雜湊快取產生，符合本專案「全程無 AI」的分工原則）。
 
-快取鍵是 (server, database, schema) 這組正規化三元組，與 system_id 無關
+快取鍵是 (server, database) 這組正規化二元組，與 system_id 無關
 （見 docs/adr/0009-sql-cache-identity-decoupled-from-system.md）：同一個
 Database 被幾套 System 參照、或不屬於任何 System，都只掃描與快取一次。
-模組的每個公開函式都收 CacheIdentity 這一個值，不收零散的 database/schema/
-server 參數；只知道 database 名稱的呼叫端先用 find_cache_identity() 從磁碟找。
+模組的每個公開函式都收 CacheIdentity 這一個值，不收零散的 database/
+server 參數；一份快取涵蓋一個 Database 的每個 schema，每個物件自帶它的 schema。
+只知道 database 名稱的呼叫端先用 find_cache_identity() 從磁碟找。
 CacheIdentity 擁有它的三個檔名（資料檔、Scan Record、Object Location Index），
 「目錄裡哪些檔案是快取」只由 list_cache_files() 回答。
 「這個 Database 有沒有建檔」完全由對應的快取檔在不在磁碟上決定，沒有其他名單。
@@ -51,7 +52,10 @@ from config.settings import settings
 # NVARCHAR(4000) limit) were silently truncated mid-statement instead of falling
 # back to OBJECT_DEFINITION; caches built before this fix may hold truncated SQL
 # text that fails ScriptDom parsing, so they must be rebuilt via refresh_sql_cli.
-_SQL_CACHE_VERSION = 10
+# v11：one cache holds one Database. The cache identity and the filename lose the
+# schema part, and the meta file and the Object Location Index lose their `schema`
+# field. A cache written under a three-part filename never loads again.
+_SQL_CACHE_VERSION = 11
 
 # 同 process 內的記憶體快取。有界、LRU 淘汰（ticket 08，見
 # settings.SQL_CACHE_MEMORY_RETENTION_LIMIT 上方註解的動機）：淘汰只影響這份
@@ -86,8 +90,8 @@ def _evict_for_new_mem_cache_key(identity: CacheIdentity) -> None:
     print(
         "⚠️  SQL 快取記憶體保留已達上限"
         f"（limit={limit}），淘汰最久未使用的資料庫："
-        f"evicted server={evicted.server!r} database={evicted.database!r} schema={evicted.schema!r} / "
-        f"new server={identity.server!r} database={identity.database!r} schema={identity.schema!r}"
+        f"evicted server={evicted.server!r} database={evicted.database!r} / "
+        f"new server={identity.server!r} database={identity.database!r}"
     )
 
 
@@ -107,7 +111,7 @@ def _retain_in_mem_cache(identity: CacheIdentity, data: Dict) -> None:
 # 這是一條演算法規則，不是對照表——新的主機（如未來的 vmsystest09）不需要改設定。
 SERVER_DOMAIN_SUFFIX = ".topmost.com.tw"
 
-# 快取檔名的形狀只在這裡定義一次：{server}__{database}__{schema}.json。
+# 快取檔名的形狀只在這裡定義一次：{server}__{database}.json。
 _KEY_SEPARATOR = "__"
 _DATA_SUFFIX = ".json"
 _META_SUFFIX = ".meta.json"
@@ -146,50 +150,48 @@ def normalize_server(server: str) -> str:
 
 @dataclass(frozen=True)
 class CacheIdentity:
-    """一份 SQL 快取的身分：正規化過的 (server, database, schema) 三元組。
+    """一份 SQL 快取的身分：正規化過的 (server, database) 二元組。
 
-    模組內所有需要這組三元組的函式都收這一個值、用這一個順序；快取鍵與它的
+    一份快取涵蓋一個 Database 與庫內每個 schema，所以身分沒有 schema 這一段。
+    模組內所有需要這組二元組的函式都收這一個值、用這一個順序；快取鍵與它的
     三個檔名都由它算出來，from_key() 是檔名主幹的反操作，就放在 key 旁邊。
     用 of() 建立，不要直接呼叫建構式——of() 才會正規化 server、並檢查 server
     與 database 都有值。of() 是純函式，從不讀磁碟；只知道 database 的呼叫端改用
-    find_cache_identity()。schema 沒有預設值，呼叫端必須明說（空字串等同
-    _safe_name() 的 "default"）。
+    find_cache_identity()。
     """
 
     server: str
     database: str
-    schema: str
 
     @classmethod
-    def of(cls, server: str, database: str, schema: str) -> "CacheIdentity":
+    def of(cls, server: str, database: str) -> "CacheIdentity":
         normalized_server = normalize_server(server)
         database = str(database or "").strip()
-        schema = str(schema or "").strip()
         if not normalized_server or not database:
             raise ValueError(
                 f"SQL 快取鍵需要 server 與 database（server={server!r}, database={database!r}）"
             )
-        return cls(normalized_server, database, schema)
+        return cls(normalized_server, database)
 
     @classmethod
     def from_key(cls, stem: str) -> Optional["CacheIdentity"]:
         """key 的反操作：把一個快取檔名（去掉副檔名後）拆回它命名的身分。
 
-        server 一律在最前、schema 一律在最後，中間全部併回 database——database
-        本身含 `__` 時也能正確反解。拆不出三段、或拆出來的 server/database 建不出
-        身分時回傳 None：寧可說「這個檔名不是快取」，也不回報一個殘缺的身分。
+        server 一律在最前，其後全部併回 database——database 本身含 `__` 時也能
+        正確反解。拆不出兩段、或拆出來的 server/database 建不出身分時回傳 None：
+        寧可說「這個檔名不是快取」，也不回報一個殘缺的身分。
         """
         parts = stem.split(_KEY_SEPARATOR)
-        if len(parts) < 3:
+        if len(parts) < 2:
             return None
         try:
-            return cls.of(parts[0], _KEY_SEPARATOR.join(parts[1:-1]), parts[-1])
+            return cls.of(parts[0], _KEY_SEPARATOR.join(parts[1:]))
         except ValueError:
             return None
 
     @property
     def key(self) -> str:
-        return _key_of(self.server, self.database, self.schema)
+        return _key_of(self.server, self.database)
 
     @property
     def filename(self) -> str:
@@ -239,7 +241,7 @@ def list_cache_files() -> List[CacheFile]:
     結尾，這裡排除它們，不產生任何一列。其餘每個 .json 檔都產生一列：身分用
     來回比對決定——從檔名拆出身分、由那個身分組回它自己的資料檔名，兩者相同
     才算這個身分命名的檔案。來回比對本身擋不掉 sibling 檔（索引檔的檔名會拆成
-    schema 以 `.index` 結尾的身分，而那個身分又剛好組回索引檔的檔名），所以
+    database 以 `.index` 結尾的身分，而那個身分又剛好組回索引檔的檔名），所以
     副檔名排除必須留在這裡。依檔名排序回傳。
     """
     rows: List[CacheFile] = []
@@ -272,20 +274,17 @@ class AmbiguousServer:
     """
 
     database: str
-    schema: str
     servers: tuple[str, ...]
 
 
-def find_cache_identity(
-    database: str, schema: str
-) -> Union[CacheIdentity, AmbiguousServer, None]:
+def find_cache_identity(database: str) -> Union[CacheIdentity, AmbiguousServer, None]:
     """呼叫端只知道 database 名稱時，從磁碟上唯一一份快取找出它的身分。
 
     會讀快取目錄，所以跟純函式 CacheIdentity.of() 分開命名。沒有任何快取以這個
     database 命名時回傳 None；同名 database 在多台 server 上都有快取時回傳
     AmbiguousServer。比對的是目錄列舉每一列身分的 Database 欄位，從不自己組
     檔名尾綴。檔名裡的 Database 是 _safe_name() 過的片段，所以只取它的 server，
-    回傳的身分仍用呼叫端給的 database 與 schema——跟快取內容記錄的名字一致。
+    回傳的身分仍用呼叫端給的 database——跟快取內容記錄的名字一致。
 
     結構上沒有 server 可帶的呼叫端有三個：/find_by_sp 與 /find_by_table
     （FindBySPRequest/FindByTableRequest 沒有 db_server 欄位），以及 refresh 流程的
@@ -303,7 +302,6 @@ def find_cache_identity(
                 for row in list_cache_files()
                 if row.identity is not None
                 and _same_file_part(row.identity.database, database)
-                and _same_file_part(row.identity.schema, schema)
             }
         )
     )
@@ -311,33 +309,32 @@ def find_cache_identity(
         return None
     if len(servers) > 1:
         print(
-            f"⚠️  {database}.{schema} 在多台 server 上都有 SQL 快取（{', '.join(servers)}）；"
+            f"⚠️  {database} 在多台 server 上都有 SQL 快取（{', '.join(servers)}）；"
             f"請指定 server。"
         )
-        return AmbiguousServer(database=database, schema=schema, servers=servers)
-    return CacheIdentity.of(servers[0], database, schema)
+        return AmbiguousServer(database=database, servers=servers)
+    return CacheIdentity.of(servers[0], database)
 
 
 @dataclass(frozen=True)
 class ScanRecordListing:
     """list_caches() 的一列：一份 SQL 快取的身分與 Scan Record（掃描時間）。
 
-    server/database/schema 不正規化也不驗證，純粹反映磁碟上讀到的內容，連身分
+    server/database 不正規化也不驗證，純粹反映磁碟上讀到的內容，連身分
     不完整的異常檔案都要能被列出（規格要求「never omitted from listing」）。
-    檔名不是任何身分會寫出的名字時，database 帶著檔名主幹、server 與 schema
-    為空，讓操作者看得到這個認不得的檔案。
+    檔名不是任何身分會寫出的名字時，database 帶著檔名主幹、server 為空，
+    讓操作者看得到這個認不得的檔案。
     scanned_at 為 None 代表 Scan Record 缺失或無法讀取，不是「從未掃描」與
     「讀不到」的混淆表達——呼叫端據此決定要不要顯示「never scanned」。
     """
 
     server: str
     database: str
-    schema: str
     scanned_at: Optional[str]
 
 
 def list_caches() -> List[ScanRecordListing]:
-    """列出磁碟上每一份 SQL 快取的 (server, database, schema) 與 Scan Record。
+    """列出磁碟上每一份 SQL 快取的 (server, database) 與 Scan Record。
 
     純目錄列舉，不連線 SQL Server、不觸發掃描、不修改任何快取檔案；供
     GET /scan_records 這個唯讀端點使用。哪些檔案是快取由 list_cache_files()
@@ -351,7 +348,7 @@ def list_caches() -> List[ScanRecordListing]:
     手動改壞的 Scan Record 只該讓這一列看起來怪，不該讓整個端點失敗；meta
     讀不到或某欄位缺漏時才退回檔名。
 
-    回傳依 (server, database, schema) 排序，讓同一份清單在多次呼叫間穩定
+    回傳依 (server, database) 排序，讓同一份清單在多次呼叫間穩定
     （不受掃描先後影響）。
     """
     rows: List[ScanRecordListing] = []
@@ -359,9 +356,9 @@ def list_caches() -> List[ScanRecordListing]:
         identity = cache_file.identity
         stem = cache_file.data_path.name[: -len(_DATA_SUFFIX)]
         if identity is not None:
-            server, database, schema = identity.server, identity.database, identity.schema
+            server, database = identity.server, identity.database
         else:
-            server, database, schema = "", stem, ""
+            server, database = "", stem
 
         scanned_at: Optional[str] = None
         meta_path = cache_file.data_path.with_name(f"{stem}{_META_SUFFIX}")
@@ -372,17 +369,14 @@ def list_caches() -> List[ScanRecordListing]:
         if isinstance(info, dict):
             server = str(info.get("server") or server)
             database = str(info.get("database") or database)
-            schema = str(info.get("schema") or schema)
             saved_at = info.get("saved_at")
             if saved_at:
                 scanned_at = str(saved_at)
 
         rows.append(
-            ScanRecordListing(
-                server=server, database=database, schema=schema, scanned_at=scanned_at
-            )
+            ScanRecordListing(server=server, database=database, scanned_at=scanned_at)
         )
-    rows.sort(key=lambda row: (row.server, row.database, row.schema))
+    rows.sort(key=lambda row: (row.server, row.database))
     return rows
 
 
@@ -438,7 +432,6 @@ def _meta_payload(identity: CacheIdentity, saved_at: str) -> Dict[str, object]:
         "cache_version": _SQL_CACHE_VERSION,
         "server": identity.server,
         "database": identity.database,
-        "schema": identity.schema,
         "saved_at": saved_at,
     }
 
@@ -469,7 +462,6 @@ class ObjectLocationIndex:
 
     server: str
     database: str
-    schema: str
     cache_version: int
     stored_procedures: frozenset[str]
     tables: frozenset[str]
@@ -505,7 +497,6 @@ def build_object_location_index(identity: CacheIdentity, data: Dict) -> ObjectLo
     return ObjectLocationIndex(
         server=identity.server,
         database=identity.database,
-        schema=identity.schema,
         cache_version=_SQL_CACHE_VERSION,
         stored_procedures=frozenset(stored_procedures),
         tables=frozenset(tables),
@@ -516,7 +507,6 @@ def _index_payload(index: ObjectLocationIndex) -> Dict[str, object]:
     return {
         "server": index.server,
         "database": index.database,
-        "schema": index.schema,
         "cache_version": index.cache_version,
         "stored_procedures": sorted(index.stored_procedures),
         "tables": sorted(index.tables),
@@ -559,8 +549,6 @@ def load_object_location_index(identity: CacheIdentity) -> Optional[ObjectLocati
         return None
     if not _same_scope(payload.get("database"), identity.database):
         return None
-    if not _same_scope(payload.get("schema"), identity.schema):
-        return None
     stored_procedures = payload.get("stored_procedures")
     tables = payload.get("tables")
     if not isinstance(stored_procedures, list) or not isinstance(tables, list):
@@ -568,7 +556,6 @@ def load_object_location_index(identity: CacheIdentity) -> Optional[ObjectLocati
     return ObjectLocationIndex(
         server=identity.server,
         database=identity.database,
-        schema=identity.schema,
         cache_version=_SQL_CACHE_VERSION,
         stored_procedures=frozenset(str(name) for name in stored_procedures),
         tables=frozenset(str(name) for name in tables),
@@ -586,8 +573,6 @@ def _load(identity: CacheIdentity) -> Optional[Dict]:
         if info.get("cache_version") != _SQL_CACHE_VERSION:
             return None
         if not _same_scope(info.get("database"), identity.database):
-            return None
-        if not _same_scope(info.get("schema"), identity.schema):
             return None
         if info.get("server") and not _same_scope(info.get("server"), identity.server):
             return None
@@ -657,14 +642,13 @@ def get_or_dump(
     掃描用的連線身分永遠不從被掃應用程式的 Web.config 推導。
     """
     db = identity.database
-    schema = identity.schema
     if not refresh:
         cached = load_cached(identity)
         if cached is not None:
-            print(f"⚡ 使用 SQL 快取：{db}.{schema}")
+            print(f"⚡ 使用 SQL 快取：{db}")
             return cached
 
-    print(f"🔍 連線 SQL Server 重新撈取物件定義：{db}.{schema}")
+    print(f"🔍 連線 SQL Server 重新撈取物件定義：{db}")
     _report_progress(progress_callback, "connecting", 0, 1, db)
     from code_analyzer.sql_analyzer import SQLAnalyzer
 
@@ -693,7 +677,7 @@ def get_or_dump(
     )
     if not _is_valid_cache(data, identity):
         raise ValueError(
-            f"SQL cache payload database identity mismatch: {db}.{schema}"
+            f"SQL cache payload database identity mismatch: {db}"
         )
     _retain_in_mem_cache(identity, data)
     _report_progress(progress_callback, "saving", 0, 1, "SQL cache")

@@ -77,38 +77,32 @@
     {
       "server": "sqlsrv01",
       "database": "PUR",
-      "schema": "dbo",
-      "filename": "sqlsrv01.topmost.com.tw__PUR__dbo.json"
+      "filename": "sqlsrv01.topmost.com.tw__PUR.json"
     },
     {
       "server": "SQLSRV01\\INST01",
       "database": "PUR",
-      "schema": "dbo",
-      "filename": "sqlsrv01.topmost.com.tw__PUR__dbo.json"
+      "filename": "sqlsrv01.topmost.com.tw__PUR.json"
     },
     {
       "server": "tcp:sqlsrv01,1433",
       "database": "PUR",
-      "schema": "dbo",
-      "filename": "sqlsrv01.topmost.com.tw__PUR__dbo.json"
+      "filename": "sqlsrv01.topmost.com.tw__PUR.json"
     },
     {
       "server": "db01.example.org",
       "database": "Response",
-      "schema": "COMMON",
-      "filename": "db01.example.org__Response__COMMON.json"
+      "filename": "db01.example.org__Response.json"
     },
     {
       "server": "sqlsrv01",
       "database": "Y Docs",
-      "schema": "dbo",
-      "filename": "sqlsrv01.topmost.com.tw__Y_Docs__dbo.json"
+      "filename": "sqlsrv01.topmost.com.tw__Y_Docs.json"
     },
     {
       "server": "sqlsrv01",
       "database": "A__B",
-      "schema": "dbo",
-      "filename": "sqlsrv01.topmost.com.tw__A__B__dbo.json"
+      "filename": "sqlsrv01.topmost.com.tw__A__B.json"
     }
   ],
   "sample_cache": {
@@ -290,10 +284,9 @@
       }
     },
     "meta_file": {
-      "cache_version": 10,
+      "cache_version": 11,
       "server": "sqlsrv01.topmost.com.tw",
       "database": "SampleDb",
-      "schema": "dbo",
       "saved_at": "2026-08-04 13:29:13"
     }
   }

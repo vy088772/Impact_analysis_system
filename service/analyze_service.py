@@ -925,9 +925,9 @@ def _execution_sql_context(
     cached = None
     if database_alias:
         identity = (
-            sql_cache_store.CacheIdentity.of(db_server, database_alias, "dbo")
+            sql_cache_store.CacheIdentity.of(db_server, database_alias)
             if db_server
-            else sql_cache_store.find_cache_identity(database_alias, "dbo")
+            else sql_cache_store.find_cache_identity(database_alias)
         )
         if isinstance(identity, sql_cache_store.CacheIdentity):
             cached = sql_cache_store.load_cached(identity)
@@ -982,9 +982,9 @@ def _require_sql_execution_graph(database: str, db_server: str = "") -> Tuple[Di
             "database 不可為空；Gateway path analysis 需要指定 SQL execution graph cache。"
         )
     identity = (
-        sql_cache_store.CacheIdentity.of(db_server, database, "dbo")
+        sql_cache_store.CacheIdentity.of(db_server, database)
         if db_server
-        else sql_cache_store.find_cache_identity(database, "dbo")
+        else sql_cache_store.find_cache_identity(database)
     )
     cached = (
         sql_cache_store.load_cached(identity)
@@ -1083,7 +1083,7 @@ def _execution_connection_sources(
 
     # One /analyze request selects one SQL cache scope. An entry whose database name is one
     # of that scope's aliases is rewritten to the scope's own name. This matches on name
-    # alone, not on the (server, database, schema) identity ADR-0009 defines, because the
+    # alone, not on the (server, database) identity ADR-0009 defines, because the
     # selected scope reaches this function as a bare name. Multiple distinct labels are kept
     # separate so one file cannot silently map cross-database connections to the graph.
     known_databases = {
@@ -1398,9 +1398,9 @@ def _rated_invocations_validity_stamp(
     identity = None
     if scope.database:
         identity = (
-            sql_cache_store.CacheIdentity.of(scope.db_server, scope.database, "dbo")
+            sql_cache_store.CacheIdentity.of(scope.db_server, scope.database)
             if scope.db_server
-            else sql_cache_store.find_cache_identity(scope.database, "dbo")
+            else sql_cache_store.find_cache_identity(scope.database)
         )
     sql_cache = (
         sql_cache_store.load_cached(identity)
@@ -3087,10 +3087,11 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
     （缺失/讀不了/舊/版本不符/身分不符）→ unindexed；索引新鮮但不持有這個名稱 →
     兩份清單都不出現，那就是剪枝本身，是權威結果而非不確定。
 
-    快取以 (server, database, schema) 逐份存在，回報的身分卻只有 (server, database)，
-    所以同一個 Database 的多個 schema 可能給出不同答案。一份索引說「持有」就是持有，
-    因此 matched 蓋過 unindexed，每個 Database 只出現一次，兩份清單互斥。
-    indexes_consulted 仍逐份索引計數——它量的是成本，不是 Database 數。
+    一個 (server, database) 只有一份快取，所以每個 Database 只出現一次，兩份清單
+    互斥。下面依 (server, database) 合併各列、且 matched 蓋過 unindexed 的邏輯，
+    是快取曾按 schema 分開存放時留下的；現在不會再合併到任何東西，但不會給出錯誤
+    答案，由 Step 2b 的 located-database 形狀改寫時一併移除。
+    indexes_consulted 逐份索引計數——它量的是成本，不是 Database 數。
     """
     kind = (req.kind or "").strip().casefold()
     if kind not in _LOCATE_OBJECT_KINDS:
@@ -3106,7 +3107,7 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
 
     for row in sql_cache_store.list_caches():
         try:
-            identity = sql_cache_store.CacheIdentity.of(row.server, row.database, row.schema)
+            identity = sql_cache_store.CacheIdentity.of(row.server, row.database)
         except ValueError:
             # A file whose name no SQL Cache Identity writes, and whose Scan
             # Record names no server (see list_caches()): no identity to report
@@ -4246,7 +4247,6 @@ def refresh_sql_source(
     database: str,
     server: str,
     db_name: str,
-    schema: str = "dbo",
     user_id: str = "",
     password: str = "",
     progress_callback: Callable[[str, int, int, str], None] | None = None,
@@ -4259,13 +4259,13 @@ def refresh_sql_source(
     CacheIdentity.of() 會直接報錯，不嘗試連線。
     user_id/password：這台伺服器的掃描帳密覆寫，兩者都有值才生效（ADR-0010）。
 
-    回傳 {database, db_schema, procedures, views, functions, tables} 數量摘要；
+    回傳 {database, procedures, views, functions, tables} 數量摘要；
     SQL Execution Graph 會與 object definitions 一起落地到 SQL cache。
     """
     from .sql_cache_store import CacheIdentity, get_or_dump
 
     data = get_or_dump(
-        CacheIdentity.of(server, db_name, schema),
+        CacheIdentity.of(server, db_name),
         connection_server=server,
         refresh=True,
         user_id=user_id,
@@ -4274,7 +4274,6 @@ def refresh_sql_source(
     )
     return {
         "database": data.get("database", database),
-        "db_schema": schema,
         "procedures": len(data.get("procedures", [])),
         "views": len(data.get("views", [])),
         "functions": len(data.get("functions", [])),

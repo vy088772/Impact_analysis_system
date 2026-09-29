@@ -29,7 +29,7 @@ def _payload(database: str) -> dict:
 
 def test_backfill_writes_an_index_for_a_cache_that_never_had_one() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         write_cache(cache_root, identity, _payload("PUR"))
         assert not (cache_root / identity.index_filename).exists()
 
@@ -45,7 +45,7 @@ def test_backfill_writes_an_index_for_a_cache_that_never_had_one() -> None:
 def test_backfill_index_matches_the_shared_build_function_exactly() -> None:
     """No second way to build an index: the backfilled index must equal build_object_location_index()'s own output."""
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         payload = _payload("PUR")
         write_cache(cache_root, identity, payload)
 
@@ -65,7 +65,7 @@ def test_backfill_never_opens_a_sql_server_connection(monkeypatch: pytest.Monkey
     monkeypatch.setattr(pyodbc, "connect", _fail_connect)
 
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         write_cache(cache_root, identity, _payload("PUR"))
 
         results = backfill_all_caches()
@@ -75,7 +75,7 @@ def test_backfill_never_opens_a_sql_server_connection(monkeypatch: pytest.Monkey
 
 def test_backfill_does_not_modify_the_cache_content() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         write_cache(cache_root, identity, _payload("PUR"))
         data_path = cache_root / identity.filename
         raw_before = data_path.read_bytes()
@@ -87,10 +87,10 @@ def test_backfill_does_not_modify_the_cache_content() -> None:
 
 def test_backfill_reports_indexed_and_skipped_caches_separately() -> None:
     with CacheRoot() as cache_root:
-        good = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        good = CacheIdentity.of("vmsystest07", "PUR")
         write_cache(cache_root, good, _payload("PUR"))
 
-        stale = CacheIdentity.of("vmsystest07", "ETON", "dbo")
+        stale = CacheIdentity.of("vmsystest07", "ETON")
         write_cache(
             cache_root,
             stale,
@@ -106,7 +106,7 @@ def test_backfill_reports_indexed_and_skipped_caches_separately() -> None:
 
 def test_backfill_dry_run_writes_no_index_file() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         write_cache(cache_root, identity, _payload("PUR"))
 
         results = backfill_all_caches(dry_run=True)
@@ -118,7 +118,7 @@ def test_backfill_dry_run_writes_no_index_file() -> None:
 def test_rerunning_backfill_rebuilds_the_index() -> None:
     """Re-running is safe and rebuilds — there is no "already up to date" skip for the index itself."""
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         write_cache(cache_root, identity, _payload("PUR"))
 
         first = backfill_all_caches()
@@ -130,7 +130,7 @@ def test_rerunning_backfill_rebuilds_the_index() -> None:
 
 def test_deleting_a_backfilled_index_by_hand_falls_back_to_reading_the_cache_in_full() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         write_cache(cache_root, identity, _payload("PUR"))
         backfill_all_caches()
         assert sql_cache_store.load_object_location_index(identity) is not None
@@ -139,13 +139,13 @@ def test_deleting_a_backfilled_index_by_hand_falls_back_to_reading_the_cache_in_
 
         assert sql_cache_store.load_object_location_index(identity) is None
         # The cache itself is untouched by the index having existed and then been removed.
-        assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "PUR", "dbo")) is not None
+        assert sql_cache_store.load_cached(CacheIdentity.of("vmsystest07", "PUR")) is not None
 
 
 def test_backfill_cache_row_skips_a_row_whose_identity_cannot_be_constructed() -> None:
     with CacheRoot():
         row = sql_cache_store.ScanRecordListing(
-            server="", database="", schema="dbo", scanned_at=None
+            server="", database="", scanned_at=None
         )
 
         entry = backfill_cache_row(row)

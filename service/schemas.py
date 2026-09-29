@@ -525,7 +525,6 @@ class RefreshSqlRequest(BaseModel):
     database: str                            # 快取鍵／顯示簡稱，必填
     server: str                              # 資料庫主機位址，必填
     db_name: str                             # 實際資料庫名稱，必填
-    db_schema: str = "dbo"                    # SQL schema（欄位名稱不用 schema，避免與 BaseModel.schema() 名稱衝突）
     job_id: str = ""                          # 呼叫端提供的進度查詢識別碼，可留空
     db_user_id: str = ""                      # 掃描帳密覆寫的帳號；與 db_password 缺一即不生效
     db_password: str = ""                     # 掃描帳密覆寫的密碼；與 db_user_id 缺一即不生效
@@ -534,7 +533,6 @@ class RefreshSqlRequest(BaseModel):
 class RefreshSqlResponse(BaseModel):
     job_id: str = ""
     database: str = ""
-    db_schema: str = ""
     procedures: int = 0
     views: int = 0
     functions: int = 0
@@ -564,7 +562,6 @@ class ScanRecordEntry(BaseModel):
 
     server: str = ""
     database: str = ""
-    db_schema: str = ""               # 欄位名稱不用 schema，避免與 BaseModel.schema() 名稱衝突
     scanned_at: Optional[str] = None
 
 

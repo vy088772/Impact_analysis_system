@@ -42,7 +42,7 @@ def _stale_payload(database: str = "TestDb", graph_version: int = GRAPH_VERSION 
 
 
 def _write_stale_fixture(cache_root: Path, database: str = "TestDb") -> Path:
-    identity = sql_cache_store.CacheIdentity.of(TEST_SERVER, database, "dbo")
+    identity = sql_cache_store.CacheIdentity.of(TEST_SERVER, database)
     write_cache(cache_root, identity, _stale_payload(database))
     return cache_root / identity.filename
 
@@ -88,11 +88,11 @@ def test_repaired_cache_is_accepted_by_the_normal_load_path() -> None:
 
     with CacheRoot() as cache_root:
         _write_stale_fixture(cache_root)
-        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")) is None
+        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb")) is None
 
         repair_all_caches(host=host, project_root=PROJECT_ROOT)
 
-        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")) is not None
+        assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb")) is not None
 
 
 def test_repair_only_touches_the_graph_field() -> None:
@@ -162,7 +162,7 @@ def test_repair_runs_to_the_end_beside_an_object_location_index() -> None:
     host.ensure_ready()
 
     with CacheRoot() as cache_root:
-        identity = sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")
+        identity = sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb")
         payload = _stale_payload()
         write_cache(cache_root, identity, payload)
         sql_cache_store.write_object_location_index(
@@ -174,7 +174,7 @@ def test_repair_runs_to_the_end_beside_an_object_location_index() -> None:
         results = repair_all_caches(host=host, project_root=PROJECT_ROOT)
 
         assert [(Path(entry["path"]).name, entry["action"]) for entry in results] == [
-            ("vmsystest07.topmost.com.tw__TestDb__dbo.json", "repaired")
+            ("vmsystest07.topmost.com.tw__TestDb.json", "repaired")
         ]
         assert index_path.read_bytes() == index_before
 
@@ -201,7 +201,7 @@ def test_repair_cache_file_skips_an_already_current_cache() -> None:
 
     with CacheRoot() as cache_root:
         payload = _stale_payload(graph_version=GRAPH_VERSION)
-        identity = sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb", "dbo")
+        identity = sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb")
         write_cache(cache_root, identity, payload)
         data_path = cache_root / identity.filename
         raw_before = data_path.read_bytes()

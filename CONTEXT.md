@@ -5,7 +5,7 @@ This context defines the SQL execution-analysis vocabulary used to trace applica
 ## SQL Execution Analysis
 
 **SQL Cache Identity**:
-The normalized `(server, database, schema)` triple that names one SQL cache, independent of any System. The server part drops a named-instance suffix, gains the internal domain when it has none, and is lowercased, so one host never holds two identities. A Database shared by many Systems has exactly one identity, and so exactly one cache. The identity owns its three filenames: the data file, the Scan Record, and the Object Location Index. The cache store alone answers which files in the cache directory are caches. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
+The normalized `(server, database)` pair that names one SQL cache, independent of any System. One cache holds one Database and every schema inside it, and each object in the cache carries its own schema, so the identity has no schema part. The server part drops a named-instance suffix, gains the internal domain when it has none, and is lowercased, so one host never holds two identities. A Database shared by many Systems has exactly one identity, and so exactly one cache. The identity owns its three filenames: the data file, the Scan Record, and the Object Location Index. The cache store alone answers which files in the cache directory are caches. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
 _Avoid_: system_id cache key, per-System cache, database name alone
 
 **Object Location Index**:

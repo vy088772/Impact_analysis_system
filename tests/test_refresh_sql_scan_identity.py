@@ -21,7 +21,7 @@ from service import analyze_service, api, sql_cache_store
 from service.schemas import RefreshSqlRequest
 
 _TARGET = {
-    "alias": "vmsystest07.topmost.com.tw__SysErrorRecord__dbo",
+    "alias": "vmsystest07.topmost.com.tw__SysErrorRecord",
     "server": "vmsystest07.topmost.com.tw",
     "database_name": "SysErrorRecord",
 }
@@ -69,9 +69,7 @@ def test_get_or_dump_hands_the_override_to_the_analyzer(monkeypatch) -> None:
 
     try:
         sql_cache_store.get_or_dump(
-            sql_cache_store.CacheIdentity.of(
-                "vmsystest07.topmost.com.tw", "SysErrorRecord", "dbo"
-            ),
+            sql_cache_store.CacheIdentity.of("vmsystest07.topmost.com.tw", "SysErrorRecord"),
             connection_server="vmsystest07.topmost.com.tw",
             refresh=True,
             user_id="ScanUser",
@@ -86,15 +84,15 @@ def test_get_or_dump_hands_the_override_to_the_analyzer(monkeypatch) -> None:
 def test_the_refresh_sql_route_forwards_the_override(monkeypatch) -> None:
     seen: dict = {}
 
-    def _fake_refresh(database, server, db_name, schema, **kwargs):
+    def _fake_refresh(database, server, db_name, **kwargs):
         seen.update(kwargs)
-        return {"database": database, "db_schema": schema}
+        return {"database": database}
 
     monkeypatch.setattr(analyze_service, "refresh_sql_source", _fake_refresh)
 
     api.refresh_sql(
         RefreshSqlRequest(
-            database="vmsystest07.topmost.com.tw__SysErrorRecord__dbo",
+            database="vmsystest07.topmost.com.tw__SysErrorRecord",
             server="vmsystest07.topmost.com.tw",
             db_name="SysErrorRecord",
             db_user_id="ScanUser",
@@ -109,15 +107,15 @@ def test_the_refresh_sql_route_forwards_the_override(monkeypatch) -> None:
 def test_the_refresh_sql_route_sends_no_credentials_by_default(monkeypatch) -> None:
     seen: dict = {}
 
-    def _fake_refresh(database, server, db_name, schema, **kwargs):
+    def _fake_refresh(database, server, db_name, **kwargs):
         seen.update(kwargs)
-        return {"database": database, "db_schema": schema}
+        return {"database": database}
 
     monkeypatch.setattr(analyze_service, "refresh_sql_source", _fake_refresh)
 
     api.refresh_sql(
         RefreshSqlRequest(
-            database="vmsystest07.topmost.com.tw__SysErrorRecord__dbo",
+            database="vmsystest07.topmost.com.tw__SysErrorRecord",
             server="vmsystest07.topmost.com.tw",
             db_name="SysErrorRecord",
         )

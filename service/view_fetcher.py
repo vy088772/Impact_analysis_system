@@ -29,9 +29,9 @@ def _from_cache(
         return []  # 無資料庫可查，視為「無法判斷」，不當作快取缺漏去即時連線（避免誤連）
 
     identity = (
-        CacheIdentity.of(db_server, database_alias, "dbo")
+        CacheIdentity.of(db_server, database_alias)
         if db_server
-        else find_cache_identity(database_alias, "dbo")
+        else find_cache_identity(database_alias)
     )
     cached = load_cached(identity) if isinstance(identity, CacheIdentity) else None
     if not cached:

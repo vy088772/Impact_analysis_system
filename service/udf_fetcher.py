@@ -46,9 +46,9 @@ def fetch_udf_definitions(
         return []
 
     identity = (
-        CacheIdentity.of(db_server, database_alias, "dbo")
+        CacheIdentity.of(db_server, database_alias)
         if db_server
-        else find_cache_identity(database_alias, "dbo")
+        else find_cache_identity(database_alias)
     )
     cached = load_cached(identity) if isinstance(identity, CacheIdentity) else None
     if not cached:

@@ -28,7 +28,7 @@ def _payload(database: str, procedures=(), tables=(), graph_nodes=None) -> dict:
 
 def test_a_matching_fresh_index_reports_the_database_as_matched() -> None:
     with CacheRoot():
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(
             identity,
             _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
@@ -47,7 +47,7 @@ def test_a_matching_fresh_index_reports_the_database_as_matched() -> None:
 
 def test_a_fresh_index_that_does_not_hold_the_name_prunes_the_database_from_both_lists() -> None:
     with CacheRoot():
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(
             identity,
             _payload("PUR", procedures={"dbo.spSomethingElse": {"definition": ""}}),
@@ -64,7 +64,7 @@ def test_a_fresh_index_that_does_not_hold_the_name_prunes_the_database_from_both
 
 def test_a_missing_index_file_puts_the_database_in_unindexed() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         write_cache(cache_root, identity, _payload("PUR"))  # no .index.json written
 
         response = analyze_service.locate_object(
@@ -80,7 +80,7 @@ def test_a_missing_index_file_puts_the_database_in_unindexed() -> None:
 
 def test_a_stale_index_puts_the_database_in_unindexed() -> None:
     with CacheRoot() as cache_root:
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(
             identity,
             _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
@@ -100,9 +100,9 @@ def test_a_stale_index_puts_the_database_in_unindexed() -> None:
 
 def test_the_reply_answers_for_every_cache_on_disk_in_one_call() -> None:
     with CacheRoot() as cache_root:
-        matching = CacheIdentity.of("vmsystest07", "PUR", "dbo")
-        pruned = CacheIdentity.of("vmsystest08", "STC", "dbo")
-        missing_index = CacheIdentity.of("vmsystest09", "ETON", "dbo")
+        matching = CacheIdentity.of("vmsystest07", "PUR")
+        pruned = CacheIdentity.of("vmsystest08", "STC")
+        missing_index = CacheIdentity.of("vmsystest09", "ETON")
         sql_cache_store._save(
             matching,
             _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
@@ -128,7 +128,7 @@ def test_the_reply_answers_for_every_cache_on_disk_in_one_call() -> None:
 
 def test_table_kind_normalizes_and_matches_the_table_bucket() -> None:
     with CacheRoot():
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(
             identity, _payload("PUR", tables={"sales.Orders": {"columns": [], "primary_keys": []}})
         )
@@ -145,7 +145,7 @@ def test_table_kind_normalizes_and_matches_the_table_bucket() -> None:
 def test_table_kind_finds_a_table_reached_only_inside_a_stored_procedure_body() -> None:
     """The union bucket built by ticket 01 must survive through this endpoint too."""
     with CacheRoot():
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(
             identity,
             _payload(
@@ -167,67 +167,6 @@ def test_table_kind_finds_a_table_reached_only_inside_a_stored_procedure_body() 
         ]
 
 
-def test_two_schemas_of_one_database_never_land_in_both_lists() -> None:
-    with CacheRoot() as cache_root:
-        matching = CacheIdentity.of("vmsystest07", "PUR", "dbo")
-        sql_cache_store._save(
-            matching,
-            _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
-        )
-        unindexed = CacheIdentity.of("vmsystest07", "PUR", "sales")
-        write_cache(cache_root, unindexed, _payload("PUR"))
-
-        response = analyze_service.locate_object(
-            LocateObjectRequest(object_name="spAddRecordError", kind="sp")
-        )
-
-        assert [(d.server, d.database) for d in response.matched] == [
-            ("vmsystest07.topmost.com.tw", "PUR")
-        ]
-        assert response.unindexed == []
-        assert response.indexes_consulted == 2
-
-
-def test_two_schemas_that_both_hold_the_name_report_the_database_once() -> None:
-    with CacheRoot():
-        for schema in ("dbo", "sales"):
-            identity = CacheIdentity.of("vmsystest07", "PUR", schema)
-            sql_cache_store._save(
-                identity,
-                _payload(
-                    "PUR",
-                    procedures={f"{schema}.spAddRecordError": {"definition": ""}},
-                ),
-            )
-
-        response = analyze_service.locate_object(
-            LocateObjectRequest(object_name="spAddRecordError", kind="sp")
-        )
-
-        assert [(d.server, d.database) for d in response.matched] == [
-            ("vmsystest07.topmost.com.tw", "PUR")
-        ]
-        assert response.unindexed == []
-        assert response.indexes_consulted == 2
-
-
-def test_two_schemas_that_are_both_unindexed_report_the_database_once() -> None:
-    with CacheRoot() as cache_root:
-        for schema in ("dbo", "sales"):
-            identity = CacheIdentity.of("vmsystest07", "PUR", schema)
-            write_cache(cache_root, identity, _payload("PUR"))
-
-        response = analyze_service.locate_object(
-            LocateObjectRequest(object_name="spAddRecordError", kind="sp")
-        )
-
-        assert response.matched == []
-        assert [(d.server, d.database) for d in response.unindexed] == [
-            ("vmsystest07.topmost.com.tw", "PUR")
-        ]
-        assert response.indexes_consulted == 2
-
-
 def test_an_unknown_kind_is_rejected_rather_than_guessed() -> None:
     with pytest.raises(ValueError):
         analyze_service.locate_object(LocateObjectRequest(object_name="x", kind="view"))
@@ -235,7 +174,7 @@ def test_an_unknown_kind_is_rejected_rather_than_guessed() -> None:
 
 def test_kind_matching_is_case_insensitive() -> None:
     with CacheRoot():
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(
             identity,
             _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
@@ -255,7 +194,7 @@ def test_a_file_with_an_incomplete_cache_identity_is_tolerated_not_a_crash() -> 
     """list_caches() lists even a stray file that doesn't fit the naming shape;
     locate_object must not let that turn the whole request into an error."""
     with CacheRoot() as cache_root:
-        matching = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        matching = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(
             matching,
             _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),
@@ -275,7 +214,7 @@ def test_a_file_with_an_incomplete_cache_identity_is_tolerated_not_a_crash() -> 
 def test_the_endpoint_never_opens_a_sql_cache(monkeypatch) -> None:
     """A request that would require opening a cache is a bug here, not a fallback."""
     with CacheRoot():
-        identity = CacheIdentity.of("vmsystest07", "PUR", "dbo")
+        identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(
             identity,
             _payload("PUR", procedures={"dbo.spAddRecordError": {"definition": ""}}),

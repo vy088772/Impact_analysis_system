@@ -1359,11 +1359,6 @@
             "title": "Db Password",
             "type": "string"
           },
-          "db_schema": {
-            "default": "dbo",
-            "title": "Db Schema",
-            "type": "string"
-          },
           "db_user_id": {
             "default": "",
             "title": "Db User Id",
@@ -1392,11 +1387,6 @@
           "database": {
             "default": "",
             "title": "Database",
-            "type": "string"
-          },
-          "db_schema": {
-            "default": "",
-            "title": "Db Schema",
             "type": "string"
           },
           "functions": {
@@ -1696,11 +1686,6 @@
           "database": {
             "default": "",
             "title": "Database",
-            "type": "string"
-          },
-          "db_schema": {
-            "default": "",
-            "title": "Db Schema",
             "type": "string"
           },
           "scanned_at": {

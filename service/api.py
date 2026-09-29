@@ -289,7 +289,6 @@ def refresh_sql(req: RefreshSqlRequest) -> RefreshSqlResponse:
             req.database,
             req.server,
             req.db_name,
-            req.db_schema,
             user_id=req.db_user_id,
             password=req.db_password,
             progress_callback=lambda stage, current, total, item: refresh_progress.update_job(
@@ -334,7 +333,6 @@ def scan_records() -> ScanRecordListResponse:
             ScanRecordEntry(
                 server=row.server,
                 database=row.database,
-                db_schema=row.schema,
                 scanned_at=row.scanned_at,
             )
             for row in sql_cache_store.list_caches()

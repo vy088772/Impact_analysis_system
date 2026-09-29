@@ -32,18 +32,17 @@ def backfill_cache_row(
     entry: Dict[str, Any] = {
         "server": row.server,
         "database": row.database,
-        "schema": row.schema,
     }
 
     try:
-        identity = sql_cache_store.CacheIdentity.of(row.server, row.database, row.schema)
+        identity = sql_cache_store.CacheIdentity.of(row.server, row.database)
     except ValueError as exc:
         entry["action"] = "bad_identity"
         entry["error"] = str(exc)
         return entry
 
     # load_cached() 套用跟 find_by_sp/find_by_table 完全相同的有效性判斷（meta
-    # 版本、sql_execution_graph 版本、database/schema 是否相符）——backfill 出來的
+    # 版本、sql_execution_graph 版本、database 是否相符）——backfill 出來的
     # 索引才會跟正式查詢路徑「看到同一份快取」，不會有索引說「有」但正式查詢其實
     # 連這份快取都不採信的落差。這個函式本身不連線 SQL Server、只讀磁碟。
     data = sql_cache_store.load_cached(identity)
@@ -98,7 +97,7 @@ def main() -> None:
     for entry in results:
         action = str(entry["action"])
         label = labels.get(action, f"⚠️  未知結果（{action}）")
-        identity_text = f"{entry.get('server')}/{entry.get('database')}/{entry.get('schema')}"
+        identity_text = f"{entry.get('server')}/{entry.get('database')}"
         detail = ""
         if action in ("indexed", "would_index"):
             detail = f"（SP/View/Function {entry['stored_procedures']} 個、資料表 {entry['tables']} 個）"

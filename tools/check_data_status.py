@@ -6,7 +6,7 @@
   2. 向量索引     spec-rag/storage/<system_id>                 （已建索引的檔案數）
   3. 程式碼 clone data/repos/<project>/<repo>                  （是否已 clone）
   4. 靜態掃描快取 data/scan_cache/<hash>.pkl                   （是否已掃描過）
-  5. SQL 快取     data/sql_cache/<system_id>__dbo.json         （是否已更新過）
+  5. SQL 快取     data/sql_cache/<server>__<database>.json      （是否已更新過）
 
 用途：目前資料來源多（規格書、程式碼、SQL、各種 cache），容易漏掉某個系統忘記
 clone / refresh，這支工具一次列出所有系統目前的狀態，方便盤點。
@@ -102,9 +102,9 @@ def _sql_status(database: dict) -> str:
     name = (database or {}).get("name", "")
     if not server or not name:
         return f"{NA} 未設定DB"
-    # 快取鍵是 (server, database, schema)，不是 system_id：同一個資料庫被幾套系統
+    # 快取鍵是 (server, database)，不是 system_id：同一個資料庫被幾套系統
     # 參照都只掃描一次，這裡照樣用資料庫本身的身分去查有沒有建檔。
-    has_cache = sql_cache_store.has_cache(sql_cache_store.CacheIdentity.of(server, name, "dbo"))
+    has_cache = sql_cache_store.has_cache(sql_cache_store.CacheIdentity.of(server, name))
     return f"{OK} 已更新" if has_cache else f"{NO} 未更新"
 
 

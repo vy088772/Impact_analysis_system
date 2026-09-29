@@ -675,7 +675,7 @@ def _function_path_fixture(
 
     graph = build_sql_execution_graph(response_cache())
     payload = response_cache(graph)
-    write_cache(cache_root, CacheIdentity.of("vmsystest07", "Response", "dbo"), payload)
+    write_cache(cache_root, CacheIdentity.of("vmsystest07", "Response"), payload)
 
     source_file = tmp_path / "RatePage.cs"
     content = "class RatePage\n{\n    public void Load()\n    {\n        Run();\n    }\n}\n"
