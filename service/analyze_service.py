@@ -3164,6 +3164,10 @@ def _located_rows(
     if name_key not in bare_bucket:
         return []
     keys = sorted(key for key in full_bucket if key.split(".", 2)[2] == name_key)
+    if asked.database:
+        # A Database that the name states answers for itself: the fallback relaxes the
+        # schema and never the Database, so `PUR.dbo.Users` does not merge into `Response.dbo.Users`.
+        keys = [key for key in keys if key.split(".", 2)[0] == part_key(asked.database)]
     if asked.schema:
         # The name states a schema: the full bucket answers. A name that states no
         # Database takes the Database of the index that is asked.
@@ -3172,6 +3176,10 @@ def _located_rows(
         )
         exact = [key for key in keys if key == asked_key]
         keys = exact or keys
+    if not keys and not asked.database:
+        # The bare bucket holds the name but no full key does (a hand-edited index):
+        # the cache still answers, with no schema proven.
+        keys = [f"{part_key(index.database)}..{name_key}"]
     rows = []
     for key in keys:
         database, schema, _name = key.split(".", 2)

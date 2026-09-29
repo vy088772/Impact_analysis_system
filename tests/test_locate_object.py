@@ -307,9 +307,19 @@ def test_a_cross_database_reference_reports_stated_database_but_names_the_cache_
         local = _locate("Response.dbo.Users")
 
         assert _schemas(response) == [("vmsystest07.topmost.com.tw", "Response", "dbo", "PUR")]
-        # The cache holds a reference to PUR's table only, so the local full key misses
-        # and the bare bucket still reports the cache: an over-report, never an under-report.
-        assert [d.database for d in local.matched] == ["Response"]
+        # The cache holds a reference to PUR's table only, so the local table is not there.
+        assert local.matched == []
+
+
+def test_a_stated_database_is_never_relaxed_by_the_schema_fallback() -> None:
+    with CacheRoot():
+        identity = CacheIdentity.of("vmsystest07", "Response")
+        sql_cache_store._save(
+            identity, _payload("Response", tables={"dbo.Users": {"columns": []}})
+        )
+
+        assert _locate("PUR.dbo.Users").matched == []
+        assert [d.database for d in _locate("Response.COMMON.Users").matched] == ["Response"]
 
 
 def test_a_located_row_without_a_stated_database_omits_the_field_on_the_wire() -> None:
