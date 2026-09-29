@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
-from canonical_object_identity import bare_key, parse, part_key
+from canonical_object_identity import ObjectName, bare_key, parse, part_key
 
 UNPROVEN_SCHEMA = "unproven_schema"
 
@@ -67,25 +67,21 @@ class TableQuestion:
             name=bare_key(written),
         )
 
-    def match(
-        self,
-        database: Optional[str],
-        schema: Optional[str],
-        name: Optional[str],
-        own_database: Optional[str],
-    ) -> Optional[TableMatch]:
+    def match(self, target: ObjectName, own_database: Optional[str]) -> Optional[TableMatch]:
         """Return the match of one target, or None when the target does not answer.
 
         ``own_database`` is the Database of the cache, or of the C# connection,
-        that holds the target. A target that names another Database reports it
-        as ``stated_database``, in the case the source wrote it.
+        that holds the target. A target that states no Database takes it. A
+        target that names another Database reports it as ``stated_database``,
+        in the case the source wrote it.
         """
-        if not self.name or bare_key(name) != self.name:
+        if not self.name or bare_key(target) != self.name:
             return None
+        database = target.database or own_database
         target_database = part_key(database)
         if self.database and target_database and self.database != target_database:
             return None
-        target_schema = part_key(schema)
+        target_schema = part_key(target.schema)
         if self.schema and target_schema and self.schema != target_schema:
             return None
         # A connection or cache with no known Database states no other Database.

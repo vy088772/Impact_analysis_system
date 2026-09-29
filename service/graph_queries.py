@@ -392,7 +392,7 @@ class _LineageIndex:
         for table, operation_ids in self._ensure_built().get(question.name, {}).values():
             if operation_id not in operation_ids:
                 continue
-            match = question.match(table.database, table.schema, table.name, own_database)
+            match = question.match(ObjectName("", table.database, table.schema, table.name), own_database)
             if match is not None:
                 matches.append((table.name, match))
         return matches
@@ -428,7 +428,9 @@ def _matching_targets(
     for full_key in full_keys or []:
         schema = str(full_key.get("schema") or "")
         name = str(full_key.get("name") or "")
-        match = question.match(full_key.get("database"), schema, name, own_database)
+        match = question.match(
+            ObjectName("", str(full_key.get("database") or ""), schema, name), own_database
+        )
         if match is not None:
             matches.append((schema_qualified(ObjectName("", "", schema, name)), match))
     return matches

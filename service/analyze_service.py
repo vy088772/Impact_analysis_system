@@ -2900,9 +2900,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         # A relation that states no Database takes the Database of its C# connection,
         # and a connection the parser cannot resolve leaves the Database out of the match.
         database = rel.connection_database
-        table_match = question.match(
-            rel.table.database or database, rel.table.schema, rel.table.name, database
-        )
+        table_match = question.match(rel.table, database)
         if table_match is None:
             continue
         caller_class = str(getattr(rel, "class_name", "") or "")
