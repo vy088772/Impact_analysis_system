@@ -30,7 +30,7 @@ spec.
 - [x] One gateway test case: a caller states a schema, the catalog holds the name without one, and the result is a match with the Unproven Schema reason.
 - [x] No version rises. The `sample_cache` entry is regenerated.
 - [x] The whole suite of this repository passes.
-- [ ] This commit deploys together with ticket 09. No refresh runs between them. (Open: ticket 09 is not done.)
+- [ ] This commit deploys together with ticket 09. No refresh runs between them. (Ticket 09 is done, and both commits sit on this branch. The deployment itself is an operator step.)
 
 ## Notes (implementation, 2026-09-29)
 

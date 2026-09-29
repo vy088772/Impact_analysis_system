@@ -30,11 +30,11 @@ on another machine and copied here, and the Step 2a gate is met.
 - [x] Seam 1: the eight table match cases, the four inline C# SQL cases, and path evidence case 3 pass.
 - [x] The advanced manual sentence about a stripped `dbo.` prefix changes.
 - [x] One run of the index backfill tool on this machine returns the pruning.
-- [x] The whole suite of this repository passes.
+- [x] The whole suite of this repository shows no new failure. (Reworded by the code review after issue 13: 16 tests fail and 2 files fail to collect, and each fails the same way before this ticket.)
 
 ## Notes
 
-**2026-09-29: work did not start. The first checklist item fails.**
+**2026-09-29: work did not start. The first checklist item fails.** (Replaced by the "done" entry below. The operator refresh then met the first item.)
 
 The agent read `data/sql_cache` before any code change:
 

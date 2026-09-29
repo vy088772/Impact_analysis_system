@@ -25,7 +25,7 @@ commit changes.
 - [x] The `CONTEXT.md` SQL Cache Identity entry states a two-part identity.
 - [x] The `sample_cache` entry is regenerated.
 - [x] The whole suite of this repository passes.
-- [ ] After this ticket, an operator refreshes `EFNETDB` on another machine and copies the file here. The Step 2a gate is met when that file holds an object whose schema is not `dbo`. No agent runs a refresh.
+- [x] After this ticket, an operator refreshes `EFNETDB` on another machine and copies the file here. The Step 2a gate is met when that file holds an object whose schema is not `dbo`. No agent runs a refresh. (Met: the code review after issue 13 opened `data/sql_cache/vmsystest07.topmost.com.tw__EFNETDB.json`, cache version 11, saved 2026-09-29 14:07. It holds tables in `HR` (11), `COMMON` (3), and `Finance` (1). The file holds no procedure, View, or Function.)
 
 ## Notes
 

@@ -41,7 +41,9 @@ change in Step 1", and issue 3 in the spec.
   every issue done. No test guards this check.
 - **Site count drift.** `service/sp_call_fetcher.py` no longer exists. The
   flow-chain retire spec deleted it (`18737ff`, `383ebfe`). So 17 sites exist,
-  not 19. The case-preserving variant has no caller in this repository now.
+  not 19. (Corrected by the code review after issue 13: the case-preserving
+  variant does have callers. Issue 07 gave it seven, three in `csharp_parser.py`
+  and four in `sql_analyzer.py`.)
 - **`dbo` default count drift.** 15 sites exist, not 16: 13 in
   `code_analyzer/sql_analyzer.py`, the `SimplifiedSPInfo.schema` field, and
   `models.StoredProcedureAnalysis.schema`. The native dependency dictionary

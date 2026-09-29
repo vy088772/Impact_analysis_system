@@ -23,7 +23,7 @@ See "The extraction sites", Seam 2, and Seam 5 in the spec.
 - [x] Seam 2: a native row for `PUR.dbo.Users` gives one value with that database, schema, and name. With no native row, the regex reader gives the schema `COMMON` for `COMMON.AVM`.
 - [x] Seam 5: the expected values change to three values, `PUR.dbo.Users`, `[COMMON].[AVM]`, and `Orders`, each in its written case.
 - [x] The whole suite of this repository passes.
-- [ ] This commit deploys together with ticket 10. (Open: ticket 10 is not done.)
+- [ ] This commit deploys together with ticket 10. (Ticket 10 is done, and both commits sit on this branch. The deployment itself is ticket 10's open operator item.)
 
 ## Notes (implementation, 2026-09-24)
 
