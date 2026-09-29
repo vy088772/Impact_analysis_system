@@ -47,3 +47,5 @@ The agent read `data/sql_cache` before any code change:
 The operator action (refresh on another machine, copy here) is not done.
 The Status line stays `ready-for-agent`. No box is checked. No code changed.
 Start this ticket again after the refreshed files arrive.
+
+**2026-09-29 (temp-table-scope, ticket 05):** Step 2b starts from the new graph version (6 or higher), the node lookup must keep the scope of a scoped temp node (`scope_module_id`), and the calls helper (`_resolve_call_target`) is the one site that changes the call target rule. See ADR-0036.

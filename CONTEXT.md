@@ -32,6 +32,10 @@ _Avoid_: full analysis context
 A graph operation known to execute dynamically constructed SQL but whose target object or DML effect cannot be proven statically.
 _Avoid_: inferred table, guessed dependency
 
+**Temp Table Scope**:
+The one stored procedure that owns a `#name` temp table. The SQL Execution Graph holds one node for each temp table for each module that uses it, so two procedures that both use `#tmp` never share a node. A read of a temp table resolves to base tables through the writers in its own module and in the modules that share its session by a call: up to callers, or down to callees, never up then down. The expansion does not detect shadowing and takes the union of the visible writers, so it over-reports on purpose. A `##name` global temp table has no scope and stays one node for the Database. See [ADR-0036](docs/adr/0036-a-temp-table-belongs-to-the-procedure-that-uses-it.md).
+_Avoid_: session table, shared temp node
+
 ## C# Data Access Analysis
 
 **CSharpAnalysisGateway**:
