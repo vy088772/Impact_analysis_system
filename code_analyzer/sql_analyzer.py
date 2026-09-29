@@ -619,24 +619,31 @@ class SQLAnalyzer:
     # ========================================
     
     def quick_analyze_sp(
-        self, 
-        proc_name: str, 
-        schema: str
+        self,
+        proc_name: str,
+        schema: str = ""
     ) -> SimplifiedSPInfo:
         """
         快速分析單一預存程序
         只做靜態分析，不深入解析複雜邏輯
+
+        schema：名稱本身寫了 schema 就用名稱的；沒寫就用這個參數；兩者都沒有時，
+        取唯一擁有同名 SP 的 schema。沒有或有多個 schema 擁有時回報不存在，不猜 dbo。
         """
         print(f"\n🔍 快速分析: {proc_name}")
-        
+
+        written = parse(proc_name)
+        proc_name = written.name
+        schema = written.schema or schema or self._only_schema_holding(proc_name)
+
         info = SimplifiedSPInfo(
             procedure_name=proc_name,
             database=self.db_config.alias,
             schema=schema
         )
-        
+
         # 1. 檢查是否存在
-        info.exists = self._check_sp_exists(proc_name, schema)
+        info.exists = bool(schema) and self._check_sp_exists(proc_name, schema)
         
         if not info.exists:
             print(f"   ❌ 預存程序不存在")
@@ -678,52 +685,38 @@ class SQLAnalyzer:
         
         return info
     
+    def _only_schema_holding(self, proc_name: str) -> str:
+        """The one schema that holds a procedure with this name, or "" for none or several."""
+        self.cursor.execute(
+            """
+        SELECT ROUTINE_SCHEMA
+        FROM INFORMATION_SCHEMA.ROUTINES
+        WHERE ROUTINE_NAME = ? AND ROUTINE_TYPE = 'PROCEDURE'
+        """,
+            proc_name,
+        )
+        schemas = {row[0] for row in self.cursor.fetchall()}
+        if len(schemas) != 1:
+            if schemas:
+                print(f"   ⚠️ {len(schemas)} 個 schema 都有 {proc_name}，名稱沒寫 schema，不猜")
+            return ""
+        return schemas.pop()
+
     def _check_sp_exists(self, proc_name: str, schema: str) -> bool:
-        """檢查 SP 是否存在 (修正 schema 支援)"""
-        
-        # 1. 正常查詢 (使用指定 schema)
+        """檢查 schema.proc_name 這支 SP 是否存在；兩段都是已拆開、沒有方括號的名稱。"""
         query = """
         SELECT COUNT(*)
         FROM INFORMATION_SCHEMA.ROUTINES
         WHERE ROUTINE_NAME = ? AND ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'
         """
         self.cursor.execute(query, proc_name, schema)
-        if self.cursor.fetchone()[0] > 0:
-            return True
-            
-        # 2. 如果失敗，嘗試移除方括號 (處理像 [dbo].[spName] 或 [spName] 的情況)
-        clean_name = proc_name.replace('[', '').replace(']', '')
-        if '.' in clean_name:
-            # 如果包含 schema.name
-            parts = clean_name.split('.')
-            if len(parts) == 2:
-                sp_schema, sp_name = parts
-                self.cursor.execute(query, sp_name, sp_schema)
-                if self.cursor.fetchone()[0] > 0:
-                    return True
-        else:
-            # 只有名稱，用傳入的 schema 再試一次
-            self.cursor.execute(query, clean_name, schema)
-            if self.cursor.fetchone()[0] > 0:
-                return True
-                
-        return False
-    
+        return self.cursor.fetchone()[0] > 0
+
     def _get_sp_basic_info(self, proc_name: str, schema: str) -> Optional[Dict]:
-        """取得 SP 基本資訊 (修正 schema 支援)"""
-        
-        # 預處理名稱
-        target_name = proc_name
-        target_schema = schema
-        
-        clean_name = proc_name.replace('[', '').replace(']', '')
-        if '.' in clean_name:
-            parts = clean_name.split('.')
-            if len(parts) == 2:
-                target_schema = parts[0]
-                target_name = parts[1]
-        else:
-            target_name = clean_name
+        """取得 schema.proc_name 的基本資訊；名稱本身寫了 schema 時以名稱的為準。"""
+        written = parse(proc_name)
+        target_name = written.name
+        target_schema = written.schema or schema
 
         # 取得定義和時間
         query = """
@@ -1178,8 +1171,7 @@ def estimate_complexity_from_definition(definition: str) -> str:
     空殼實例即可安全呼叫。
     """
     definition = definition or ""
-    # 空殼沒有自己的 schema，明寫 dbo 取代原本的預設值；Step 2b 移除。
-    info = SimplifiedSPInfo(procedure_name="", database="", schema="dbo")
+    info = SimplifiedSPInfo(procedure_name="", database="", schema="")
     info.definition = definition
     info.definition_length = len(definition)
     info.line_count = definition.count("\n") + 1 if definition else 0
