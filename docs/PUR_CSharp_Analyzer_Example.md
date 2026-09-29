@@ -12,7 +12,7 @@
 D:\PUR\TTPUR\Orders\PUR_SOQry.aspx.cs
 ```
 
-SQL 對照來自本機的真實 cache：[data/sql_cache/Y-Docs_TTPUR__dbo.json](../data/sql_cache/Y-Docs_TTPUR__dbo.json)。
+SQL 對照來自本機的真實 cache：[data/sql_cache/vmsystest07.topmost.com.tw__PUR.json](../data/sql_cache/vmsystest07.topmost.com.tw__PUR.json)（一份快取涵蓋 PUR 的每個 schema）。
 
 ## 1. 實際分析流程
 

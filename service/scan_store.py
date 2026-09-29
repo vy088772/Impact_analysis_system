@@ -163,8 +163,8 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # `data_field`；字面 `Model` 不論參數叫什麼名字都仍照舊解析。舊快取對這些非
 # m/Model 參數的直接繫結一律只有 `text`，沒有 `data_field`，必須重新掃描才
 # 會補上。
-# v40：內嵌 C# SQL 的資料表改存 Canonical Object Identity 值
-# （`canonical_object_identity.ObjectName`，見 `.scratch/canonical-object-
+# v40：內嵌 C# SQL 的資料表改存四段名稱 `canonical_object_identity.ObjectName`
+# （Canonical Object Identity 規則讀的就是這四段，見 `.scratch/canonical-object-
 # identity/` ticket 07）：`SQLQuery.tables` 與 `CSharpTableRelation.table`
 # 保留寫出來的 database、schema 與大小寫，`CSharpTableRelation.table_name`
 # 移除。舊快取的關聯只有大寫的裸名稱，而且整個丟掉三段式名稱，必須重新掃描。
