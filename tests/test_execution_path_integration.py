@@ -15,7 +15,12 @@ from service import flow_chain_builder
 from service import scan_store
 from service.schemas import AnalyzeRequest
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
-from tests.sql_cache_fixtures import cache_payload, execution_graph, one_server_holds_every_database
+from tests.sql_cache_fixtures import (
+    analyzer_operation,
+    cache_payload,
+    execution_graph,
+    one_server_holds_every_database,
+)
 
 
 def _cached_sql_graph() -> dict:
@@ -514,6 +519,84 @@ def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_pat
     assert response["stored_procedures"] == []
     assert response["execution_paths"][0]["evidence"] == "unresolved"
     assert response["diagnostics"][0]["sp_chain"] == ["dbo.usp_Dynamic"]
+
+
+def test_forward_chain_sends_a_truncated_nested_sp_path_to_diagnostics_only(tmp_path: Path) -> None:
+    source_file = tmp_path / "OrderPage.cs"
+    file_result = FileAnalysisResult(
+        file_path=str(source_file),
+        file_type=FileType.CSHARP,
+        framework=FrameworkType.WEBFORMS,
+        classes=[
+            ClassInfo(
+                name="OrderPage",
+                namespace="",
+                file_path=str(source_file),
+                methods=[MethodInfo(name="SaveData", access_modifier="private", return_type="void")],
+            )
+        ],
+    )
+    # usp_Level0 calls usp_Level1, which calls usp_Level2, and so on. The chain
+    # is deeper than the default expansion limit. Only usp_Level0 and the last
+    # level write a table, so the last level's table has no path except the
+    # truncated one.
+    level_names = [f"usp_Level{level}" for level in range(8)]
+    nodes: list[dict] = [
+        {"id": f"stored_procedure:dbo.{name}", "type": "stored_procedure", "schema": "dbo", "name": name}
+        for name in level_names
+    ]
+    relationships: list[dict] = [
+        {
+            "type": "calls",
+            "source": f"stored_procedure:dbo.{caller}",
+            "target": f"stored_procedure:dbo.{callee}",
+        }
+        for caller, callee in zip(level_names, level_names[1:])
+    ]
+    for name, table in ((level_names[0], "ReachedTable"), (level_names[-1], "OnlyTruncatedTable")):
+        operation_id = f"dml_operation:stored_procedure:dbo.{name}:1"
+        nodes.append(
+            analyzer_operation(
+                "INSERT",
+                writes=[f"dbo.{table}"],
+                id=operation_id,
+                type="dml_operation",
+                module_id=f"stored_procedure:dbo.{name}",
+            )
+        )
+        nodes.append({"id": f"table:dbo.{table}", "type": "table", "schema": "dbo", "name": table})
+        relationships.append(
+            {"type": "contains", "source": f"stored_procedure:dbo.{name}", "target": operation_id}
+        )
+        relationships.append({"type": "writes", "source": operation_id, "target": f"table:dbo.{table}"})
+    graph = execution_graph("OrdersDb", nodes=nodes, relationships=relationships)
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="SaveData",
+        database="OrdersDb",
+        procedure_name=level_names[0],
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("OrderPage.cs", 10, 80),
+    )
+
+    response = flow_chain_builder.build_forward_chain(
+        [file_result],
+        "SaveData",
+        graph=graph,
+        invocations=[invocation],
+    )
+
+    assert response is not None
+    truncated = [
+        path for path in response["diagnostics"] if path["unresolved_reason"] == "call_expansion_truncated"
+    ]
+    assert len(truncated) == 1
+    truncated_path_id = truncated[0]["path_id"]
+    assert truncated_path_id not in {sp["path_id"] for sp in response["stored_procedures"]}
+    assert "OnlyTruncatedTable" not in {table.rsplit(".", 1)[-1] for table in response["tables"]}
+    # The path that resolves stays: the proof that the two asserts above are not empty.
+    assert {sp["name"] for sp in response["stored_procedures"]} == {"dbo.usp_Level0"}
+    assert response["tables"] == ["dbo.ReachedTable"]
 
 
 def test_forward_chain_without_graph_keeps_inline_sql(
