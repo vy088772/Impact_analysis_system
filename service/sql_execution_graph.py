@@ -11,6 +11,8 @@ from typing import Any, Callable
 from canonical_object_identity import ObjectName, parse, part_key
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 
+from .table_match import names_another_database
+
 
 # v2: nested CALL branches, unresolved dynamic SQL nodes, typed View/UDF uses,
 # and bounded CTE/temp-table lineage are persisted in the graph payload.
@@ -533,10 +535,6 @@ def _listed_nodes(
     return list(node_by_key.bare.get((object_type, name.casefold()), []))
 
 
-def _names_another_database(reference: ObjectName, cache_database: str) -> bool:
-    return bool(reference.database) and part_key(reference.database) != part_key(cache_database)
-
-
 def _ensure_referenced_nodes(
     nodes: list[dict[str, Any]],
     node_by_key: _NodeIndex,
@@ -565,7 +563,7 @@ def _ensure_referenced_nodes(
         return [str(_add_node(nodes, node_by_key, node)["id"])]
     # A reference to another Database matches no listed View or Function: this cache
     # holds no definition of that object, so a local node would be false evidence.
-    if not _names_another_database(reference, cache_database):
+    if not names_another_database(reference.database, cache_database):
         for object_type in ("view", "function"):
             listed = _listed_nodes(node_by_key, object_type, object_schema, name)
             if listed:
@@ -591,7 +589,7 @@ def _resolve_call_target(
     # cache does not list has no module node. A listed module with no definition is a node.
     # A call target that states no schema matches every listed procedure with that bare name.
     stated_id = _node_id("stored_procedure", target.schema, target.name)
-    if target.server or _names_another_database(target, cache_database):
+    if target.server or names_another_database(target.database, cache_database):
         return [(stated_id, None)]
     modules = _listed_nodes(node_by_key, "stored_procedure", target.schema, target.name)
     if not modules:
@@ -607,7 +605,7 @@ def _known_object_node_ids(
 ) -> list[str]:
     # A reference to another Database matches no node: this cache holds no
     # definition of that object, so a local node would be false evidence.
-    if _names_another_database(reference, cache_database):
+    if names_another_database(reference.database, cache_database):
         return []
     return [
         str(node["id"])

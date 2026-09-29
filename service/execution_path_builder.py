@@ -16,6 +16,8 @@ from code_analyzer.csharp_analysis_gateway import (
     invocation_wrapper_evidence_fields,
 )
 
+from .table_match import names_listed_node
+
 MAX_COMPACT_PATHS = 20
 MAX_COMPACT_PATHS_RECOVERY = 60
 
@@ -89,11 +91,7 @@ def build_execution_paths(
         matches = [
             node
             for node in module_nodes
-            if bare_key(node.get("name")) == bare_key(invocation.procedure_name)
-            and (
-                not invocation.procedure_schema
-                or part_key(node.get("schema")) == part_key(invocation.procedure_schema)
-            )
+            if names_listed_node(node, invocation.procedure_schema, invocation.procedure_name)
         ]
         if len(matches) != 1:
             reason = "stored_procedure_not_in_graph" if not matches else "ambiguous_stored_procedure_graph_target"

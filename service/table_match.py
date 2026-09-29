@@ -19,11 +19,27 @@ module and never fills an unstated schema with `dbo`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from canonical_object_identity import bare_key, parse, part_key
 
 UNPROVEN_SCHEMA = "unproven_schema"
+
+
+def names_another_database(database: Optional[str], own_database: Optional[str]) -> bool:
+    """Whether a reference states a Database, and that Database is not the cache's own."""
+    return bool(part_key(database)) and part_key(database) != part_key(own_database)
+
+
+def names_listed_node(node: Mapping[str, Any], schema: Optional[str], name: Optional[str]) -> bool:
+    """The two-bucket rule over one listed node, whose schema is always stated.
+
+    A reference that states a schema names the node of that schema. A reference
+    that states no schema names every node with the bare name.
+    """
+    return bare_key(str(node.get("name") or "")) == bare_key(name) and (
+        not part_key(schema) or part_key(str(node.get("schema") or "")) == part_key(schema)
+    )
 
 
 @dataclass(frozen=True)
@@ -72,10 +88,9 @@ class TableQuestion:
         target_schema = part_key(schema)
         if self.schema and target_schema and self.schema != target_schema:
             return None
-        names_another_database = bool(
-            target_database and part_key(own_database) and target_database != part_key(own_database)
-        )
+        # A connection or cache with no known Database states no other Database.
+        stated = bool(part_key(own_database)) and names_another_database(database, own_database)
         return TableMatch(
             unproven_schema=not target_schema,
-            stated_database=str(database) if names_another_database else None,
+            stated_database=str(database) if stated else None,
         )

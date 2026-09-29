@@ -67,7 +67,7 @@ from .execution_path_builder import (
     build_execution_paths,
 )
 from .graph_queries import filter_table_accesses
-from .table_match import UNPROVEN_SCHEMA, TableQuestion
+from .table_match import UNPROVEN_SCHEMA, TableQuestion, names_another_database, names_listed_node
 from .program_screen import (
     ProgramScreen,
     resolve_program_screens,
@@ -2232,17 +2232,14 @@ def _find_graph_object_ids(
     """
     # A reference to another Database matches no node: this cache holds no
     # definition of that object, so a local definition would be false evidence.
-    database = str(reference.get("database") or "")
-    if database and part_key(database) != part_key(cache_database):
+    if names_another_database(str(reference.get("database") or ""), cache_database):
         return []
-    schema = part_key(str(reference.get("schema") or ""))
-    name = bare_key(str(reference.get("name") or ""))
+    schema = str(reference.get("schema") or "")
+    name = str(reference.get("name") or "")
     return [
         node_id
         for node_id, node in nodes.items()
-        if node.get("type") == object_type
-        and bare_key(str(node.get("name") or "")) == name
-        and (not schema or part_key(str(node.get("schema") or "")) == schema)
+        if node.get("type") == object_type and names_listed_node(node, schema, name)
     ]
 
 
