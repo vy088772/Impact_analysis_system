@@ -363,6 +363,10 @@ Each of these eight passes `dbo` explicitly instead of relying on the default.
 A comment at each site names the step that removes it. The interactive menu's
 two paths name Step 2a, because the listing commit moves both onto the new
 listing method, under "The object listing". The other six name Step 2b.
+Step 2b removes them. The quick analyzer then takes the schema the name states,
+else the caller's, else the one schema that holds a procedure of that name.
+None or several means the procedure does not exist, and the analyzer does not
+guess. The quick-analysis shell holds an empty schema.
 
 Two more sites have no caller at all: the write-info lookup, and the schema
 field on the full analysis result. Their defaults are removed with no caller
@@ -402,6 +406,11 @@ caller a future edit misses, raises `TypeError` instead of reading `dbo`.
 - The module also exports a case-preserving variant of the bare name. One caller
   builds a regular expression from a procedure name and needs the original case.
   It currently re-derives half the rule to get it.
+- The module also exports a part key and a schema-qualified name. The part key
+  keys one part written alone, such as a schema or a Database. It replaces three
+  schema and Database normalizers. The schema-qualified name shows `schema.name`
+  in the written case, or the bare name when the schema is empty. It replaces
+  five local formatters (code review after issue 13).
 - All case folding uses `casefold`.
 - The module lands in issue 0, before any site calls it. The test fixture's
   payload builder parses a written name with it, and that builder lands in
@@ -440,8 +449,10 @@ This repository:
 - The path selection module's object leaf.
 
 The analysis merge module's name normalizer is not in this count. The third
-precondition deletes it, because the Database Invocation merge then keys on the
-call site and compares no SQL object name.
+precondition removes it from the Database Invocation merge, which then keys on
+the call site. The definition merge still compared definition names with it,
+so it survived issue 5. The code review after issue 13 moved the definition
+merge onto the mirror's bare key and deleted the normalizer.
 
 Two modules change their imports but keep their own logic. The SQL cache store
 today imports a private name across a module boundary. The migration report
@@ -543,6 +554,11 @@ Both serve path evidence.
   listing, so none carries the Unproven Schema mark. T-SQL requires a schema on
   a call to a scalar user-defined function. An unqualified function reference is
   almost always a built-in function, and it matches no node.
+- The graph builder follows the same rule for a procedure call and for a View
+  or Function read. A target that states no schema links to every listed node
+  with that bare name. One unqualified call can therefore reach two procedures
+  and give two Execution Paths, as ADR-0035 allows for several facts of which at
+  most one is true.
 - A function reference that states a Database other than the cache's own matches
   no node. The cache holds no definition of that object, so a local definition
   would be false evidence. The graph builder's function-reference resolution
@@ -575,10 +591,12 @@ Step 1 changes the container type at all three sites and changes no string. The
 native query and the regex reader keep what they read today, and each value
 holds an empty schema where the string held none. Each place that turns a value
 back into a string uses the case-preserving variant, so every displayed name
-stays the same. Those places are the stored-procedure summary's dictionary
-form, the terminal output, the spreadsheet export, and the table name of a C#
-table relation. A comment at each place names Step 2a as the step that removes
-it.
+stays the same. The conversion sits at each extraction caller: the three C#
+parser sites, the quick analyzer, and the two module-level helpers. The scan
+cache unpickler admits no new type in Step 1, so a value cannot reach the
+dictionary form, the terminal output, the spreadsheet export, or the C# table
+relation before Step 2a. A comment at each place names Step 2a as the step that
+removes it.
 
 Step 2a fixes the extraction itself. This is a behaviour change, so it does not
 join Step 1.
@@ -624,8 +642,17 @@ moves every site to `casefold`. The two differ only on characters outside ASCII.
 No name in the five current caches contains such a character, so no answer
 changes in practice.
 
-This is the one intended behaviour change in Step 1. Every other site keeps its
-exact behaviour.
+The operator accepted three more behaviour changes during issue 4, because each
+site now reads the one parse:
+
+- A name with an empty middle part, such as `PUR..usp_Load`, reads an empty
+  schema. It used to read `PUR` as the schema at the SP Catalog, the gateway,
+  both splitters, and the migration report.
+- The two splitters no longer strip a double quote. `"dbo"."Orders"` keeps its
+  quotes in the bare key.
+- Every part loses the whitespace around it.
+
+Every other site keeps its exact behaviour.
 
 ### The SQL Cache Identity module
 
@@ -641,8 +668,9 @@ is one edit in one value type.
   reader, the saved-at reader, the presence check, and the whole-database dump
   all lose their loose database, schema, and server arguments.
 - A caller that knows no server gets one from a separately named module
-  function. That function reads the cache directory, and it returns nothing when
-  no cache names that Database and when two servers both hold it. The identity's
+  function. That function reads the cache directory. It returns nothing when no
+  cache names that Database, and an ambiguous-server value when two servers both
+  hold it. Every caller treats that value as no cache. The identity's
   own constructor stays pure and never reads the disk. The two have different
   error modes, so they do not share a name.
 - The branch between the two lives at each call site, not inside one function
@@ -979,7 +1007,11 @@ a bare name inside a list of strings.
   to show.
 - The repair tool does not rewrite the Object Location Index. That index holds
   bare names, and no bare name enters or leaves it through this change.
-- The graph format version rises whenever the graph payload shape changes. The
+- The graph format version rises whenever the graph payload changes what a
+  reader concludes, not only when its shape changes. Step 2b stopped the `dbo`
+  fill and changed values alone, and the version rose to 7 (code review after
+  issue 13). A v6 graph read a no-schema target as a proven `dbo` target, so a
+  question that named another schema lost that target. The
   rule it replaces raised that version once per effort, and assumed an
   intermediate shape never reaches a file. Here an operator writes this shape to
   disk and reads it until Step 2b lands.
@@ -996,7 +1028,9 @@ One rule governs both, and `CONTEXT.md` carries it:
 - A name that states no schema is asked of the bare bucket.
 - A name that states a schema is asked of the full bucket.
 - A name that states a schema and misses the full bucket falls back to the bare
-  bucket. That is a match, and it carries an **Unproven Schema** mark.
+  bucket. That is a match, and it carries an **Unproven Schema** mark. On a
+  located-database row, the mark sits in `risk_flags`, the field the table
+  match record uses.
 - Neither catalog ever substitutes `dbo` for an unstated schema.
 
 The rule lives in prose, not in a shared module. The two catalogs differ in
@@ -1107,7 +1141,9 @@ Today it cuts both names down to the bare name, so `dbo.AVM` matches
   A schema that the caller supplied never appears as evidence.
 - The record gains `stated_database` when the matched key names a Database other
   than the cache's own. It is absent otherwise. The located-database row uses
-  the same field under the same rule.
+  the same field under the same rule. The index keeps only casefolded keys, so
+  the row gives the Database as the caller typed it, or as the lowercase key
+  when the caller typed none.
 - An Evidence Status stays `proven` when only the schema is unproven, as "The SP
   Catalog" states. A `write_only=True` answer therefore keeps a proven write
   that carries the mark.
@@ -1652,11 +1688,16 @@ The preparatory identity issue adds no seam. Its prior art is this repository's
 cache store test file, which already points the cache root at a temporary
 directory through the shared fixture's cache-root helper.
 
-Three cases join that file. The server reverse-derivation returns nothing when
-two servers hold one Database name; today that outcome is observable only as a
-reader returning nothing, so no test can name it. The reverse parse returns an
+Three cases join that file. The server reverse-derivation returns the
+ambiguous-server value when two servers hold one Database name; today that
+outcome is observable only as a reader returning nothing, so no test can name
+it. The reverse parse returns an
 identity for a three-part stem and nothing for a stem that names none; that
-second case is Step 2a's safety net, written before Step 2a needs it. The
+second case is Step 2a's safety net, written before Step 2a needs it. After
+Step 2a an old three-part stem names the valid Database `PUR__dbo`, so this net
+cannot catch it. The cache listing therefore takes the identity from a Scan
+Record only when that identity names the data file, and an old file lists
+under its own stem (code review after issue 13). The
 directory listing over a root holding all three files returns the data file
 alone, and it returns an empty identity for a file whose name states none.
 
