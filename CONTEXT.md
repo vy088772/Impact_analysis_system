@@ -5,11 +5,25 @@ This context defines the SQL execution-analysis vocabulary used to trace applica
 ## SQL Execution Analysis
 
 **SQL Cache Identity**:
-The normalized `(server, database)` pair that names one SQL cache, independent of any System. One cache holds one Database and every schema inside it, and each object in the cache carries its own schema, so the identity has no schema part. The server part drops a named-instance suffix, gains the internal domain when it has none, and is lowercased, so one host never holds two identities. A Database shared by many Systems has exactly one identity, and so exactly one cache. The identity owns its three filenames: the data file, the Scan Record, and the Object Location Index. The cache store alone answers which files in the cache directory are caches. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
+The normalized `(server, database)` pair that names one SQL cache, independent of any System. One cache holds one Database and every schema inside it, and each object in the cache carries its own schema, so the identity has no schema part. The server part drops a named-instance suffix, gains the internal domain when it has none, and is lowercased, so one host never holds two identities. A Database shared by many Systems has exactly one identity, and so exactly one cache. The identity owns its three filenames: the data file, the Scan Record, and the Object Location Index. The cache store alone answers which files in the cache directory are caches. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md) and [ADR-0033](docs/adr/0033-one-sql-cache-holds-one-database.md).
 _Avoid_: system_id cache key, per-System cache, database name alone
 
+**Canonical Object Identity**:
+The one rule that turns a written SQL object name into a comparison key. The top-level `canonical_object_identity` module holds it, and `llamaindex-spec-rag` holds a mirror module that passes the same shared cases. A written name has up to four parts: server, database, schema, and bare name. An empty part means "not stated", never "default", so the rule never fills an unstated schema with `dbo`. The bare key is the casefolded bare name, and the full key is the casefolded `database.schema.name`. No key reads the server part.
+Each lookup of a name obeys the two-bucket rule:
+- A name that states no schema asks the bare bucket.
+- A name that states a schema asks the full bucket.
+- A name that states a schema and misses the full bucket falls back to the bare bucket.
+
+The Object Location Index falls back to every entry with that bare name. The SP Catalog and the `/find_by_table` table match fall back only to an entry that states no schema, so `sales.X` never matches `HR.X`. Each of the three sites composes its keys with the bare-key and full-key functions of this module. The Unproven Schema entry states which matches carry a mark.
+_Avoid_: normalized name, stripped name, bare-name comparison
+
+**Unproven Schema**:
+The mark on a match whose target states no schema, so nothing proves that the target is in the schema of the question. The value `unproven_schema` carries the mark in two places. The SP Catalog gives it as the match reason when a question that states a schema falls back to a procedure that states none. The `/find_by_table` table match puts it in the `risk_flags` of every match record whose target states no schema. The mark describes the target, never the question, and it does not lower the Evidence Status. One target with an unproven schema produces one Execution Path, never one path per candidate schema. See [ADR-0035](docs/adr/0035-an-unproven-schema-marks-one-execution-path.md).
+_Avoid_: guessed schema, default schema, dbo fallback
+
 **Object Location Index**:
-The record of every object name one SQL cache can answer for, carried beside that cache under the same SQL Cache Identity. It holds the union of the declared object names and the SQL Execution Graph node names, so a table reached only inside a stored-procedure body stays findable. Each kind of object (stored procedures, tables) has two buckets. The bare bucket holds bare keys. The full bucket holds `database.schema.name` keys. Both buckets obey the two-bucket rule: a name that states no schema asks the bare bucket, a name that states a schema asks the full bucket, and a name that states a schema and misses the full bucket falls back to the bare bucket as an **Unproven Schema** match. Neither bucket ever fills an unstated schema with `dbo`. An index that reports no match is an authoritative negative: the reader skips that cache without opening it. The index states its own format version (`index_version`), separate from the cache format version. An index that is older than its cache, has no version, has another version, or misses a bucket counts as absent, and the reader falls back to reading the whole cache — a stale index makes a search slow, never wrong. The index backfill tool rebuilds every index from the caches on disk after an index version rise.
+The record of every object name one SQL cache can answer for, carried beside that cache under the same SQL Cache Identity. It holds the union of the declared object names and the SQL Execution Graph node names, so a table reached only inside a stored-procedure body stays findable. Each kind of object (stored procedures, tables) has two buckets. The bare bucket holds bare keys. The full bucket holds `database.schema.name` keys. Both buckets obey the two-bucket rule of the Canonical Object Identity. An index that reports no match is an authoritative negative: the reader skips that cache without opening it. The index states its own format version (`index_version`), separate from the cache format version. An index that is older than its cache, has no version, has another version, or misses a bucket counts as absent, and the reader falls back to reading the whole cache — a stale index makes a search slow, never wrong. The index backfill tool rebuilds every index from the caches on disk after an index version rise. See [ADR-0012](docs/adr/0012-object-location-index-authoritative-pruning.md) and [ADR-0034](docs/adr/0034-the-object-location-index-states-its-own-format-version.md).
 _Avoid_: name list, cache summary, object catalog
 
 **Derived Execution Evidence**:
@@ -57,12 +71,16 @@ _Avoid_: unresolved label, plain string, legacy string
 **Scan Record**:
 The record that one SQL Cache Identity was actually scanned, and when — written beside the scan results at save time. It is the only record that a scan happened; the caller's Database Registry records which Databases *should* exist, never whether any were scanned, so the two are read separately and can never disagree. See `llamaindex-spec-rag`'s [ADR-0005](../llamaindex-spec-rag/docs/adr/0005-registry-records-intent-cache-metadata-records-fact.md).
 
+**C# Scan Result**:
+The saved result of one C# project scan, which the scan store writes under `data/scan_cache`. `llamaindex-spec-rag` reads it with a restricted unpickler that admits only a fixed list of classes. It is not a Scan Record. A Scan Record describes one SQL cache, and a C# Scan Result describes one C# project.
+_Avoid_: scan record, scan cache entry
+
 **Uncataloged Database**:
 A resolved connection target whose database is identified but has no matching SP Catalog scan yet — its SQL Cache Identity names no cache on disk. Distinct from a connection target that cannot be identified at all — the two are never reported under the same reason. `llamaindex-spec-rag`'s `CONTEXT.md` carries the same concept under the same name, viewed from `refresh_cli`'s unresolved-summary layer instead of this gateway's classification layer. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md).
 _Avoid_: unresolved database, unknown database
 
 **Database Invocation**:
-An evidence-rated C# data-access call that represents stored-procedure execution, inline SQL execution, or an unresolved database operation, regardless of whether it crosses direct ADO.NET, a local wrapper, an external wrapper, Dapper, or Entity Framework.
+An evidence-rated C# data-access call that represents stored-procedure execution, inline SQL execution, or an unresolved database operation, regardless of whether it crosses direct ADO.NET, a local wrapper, an external wrapper, Dapper, or Entity Framework. One entry method through one call site is one Database Invocation, whichever SQL cache reports it.
 _Avoid_: assumed SP call
 
 **Embedded Procedure Target**:
@@ -237,3 +255,8 @@ _Avoid_: partial contribution, component SPs, included control
 The local, read-only mirror of one branch of one remote repository that a refresh keeps under `data/repos/<project>/<repo>`. It holds no person's and no program's work — a refresh discards whatever it finds inside and replaces the Clone whole, rather than merging into it. One Clone can serve several Systems, each scanning its own subdirectories. See [ADR-0023](docs/adr/0023-a-clone-is-a-read-only-mirror-reset-to-the-remote.md).
 _Avoid_: local copy, working copy, checkout, repo directory, workspace
 
+## Testing
+
+**Test Fixture Module**:
+The one module, `tests/sql_cache_fixtures.py`, that gives a test its SQL cache payload, its SQL Execution Graph payload, its graph or contract version, and its analyzer operation. An analyzer operation is one SQL operation in the shape that the StaticAnalyzerHost reports. A shape change then breaks this module, not every test that states the shape. The check `tests/test_fixture_shapes_have_one_source.py` enforces the rule over the test directory. It fails a payload key outside this module. It fails an operation key outside this module and the two tests whose subject is the operation shape. It fails a bare graph or contract version number that does not read its constant.
+_Avoid_: shared helpers, test factory
