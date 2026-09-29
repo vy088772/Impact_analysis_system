@@ -5,7 +5,7 @@ name. The parse reads them from the right, so `Orders` states only a bare name
 and `srv.PUR.dbo.Users` states all four. Brackets and the whitespace around
 each part are dropped.
 
-An empty field means "not stated", never "default". The parse never fills an
+An empty part means "not stated", never "default". The parse never fills an
 unstated schema with `dbo`, and it takes no default-schema argument.
 
 Two keys compare names:
@@ -16,7 +16,10 @@ Two keys compare names:
 
 A caller that holds one part alone, such as a schema, uses the part key.
 
-No key reads the server field. The field only keeps a four-part name's server.
+No key reads the server part. The part only keeps a four-part name's server.
+
+A caller that shows a name uses the schema-qualified name: `schema.name` in
+the written case, or the bare name when the schema is empty.
 
 This module imports nothing from this project, so every package can import it.
 The mirror module in `llamaindex-spec-rag` follows the same rule, and both pass
@@ -41,7 +44,7 @@ class ObjectName:
 
 def parse(written: Optional[str]) -> ObjectName:
     """Split a written name into its parts; a part the name does not state stays empty."""
-    parts = [part.strip() for part in (written or "").replace("[", "").replace("]", "").split(".")]
+    parts = [part.strip() for part in _unbracketed(written).split(".")]
     parts = [""] * (4 - len(parts)) + parts[-4:]
     server, database, schema, name = parts
     return ObjectName(server=server, database=database, schema=schema, name=name)
@@ -63,13 +66,22 @@ def full_key(name: Union[ObjectName, str, None]) -> str:
     return ".".join(part.casefold() for part in (parsed.database, parsed.schema, parsed.name))
 
 
+def schema_qualified(name: ObjectName) -> str:
+    """Return `schema.name` in the written case, or the bare name when the schema is empty."""
+    return f"{name.schema}.{name.name}" if name.schema and name.name else name.name
+
+
 def part_key(part: Optional[str]) -> str:
     """Return the key of one part written alone, such as a schema or a database.
 
     The part keeps its dots: a caller that holds one part never asks the parse
     to split it.
     """
-    return (part or "").replace("[", "").replace("]", "").strip().casefold()
+    return _unbracketed(part).strip().casefold()
+
+
+def _unbracketed(text: Optional[str]) -> str:
+    return (text or "").replace("[", "").replace("]", "")
 
 
 def _parsed(name: Union[ObjectName, str, None]) -> ObjectName:

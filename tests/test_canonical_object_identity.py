@@ -72,6 +72,12 @@ def test_the_case_preserving_variant_keeps_the_written_case() -> None:
     assert coi.bare_name(" dbo . fn_GetRate ") == "fn_GetRate"
 
 
+def test_the_schema_qualified_name_keeps_the_written_case_and_drops_an_empty_schema() -> None:
+    assert coi.schema_qualified(ObjectName("srv", "PUR", "COMMON", "AVM")) == "COMMON.AVM"
+    assert coi.schema_qualified(ObjectName("", "PUR", "", "AVM")) == "AVM"
+    assert coi.schema_qualified(ObjectName("", "", "dbo", "")) == ""
+
+
 def test_a_part_written_alone_keys_without_brackets_or_case() -> None:
     assert coi.part_key("[COMMON]") == "common"
     assert coi.part_key(" Straße ") == "strasse"
