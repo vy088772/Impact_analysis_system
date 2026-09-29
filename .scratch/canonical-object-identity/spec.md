@@ -557,8 +557,12 @@ Both serve path evidence.
 - The graph builder follows the same rule for a procedure call and for a View
   or Function read. A target that states no schema links to every listed node
   with that bare name. One unqualified call can therefore reach two procedures
-  and give two Execution Paths, as ADR-0035 allows for several facts of which at
-  most one is true.
+  and give two Execution Paths.
+- Open decision (code review after issue 13): ADR-0035 rejects one path per
+  candidate schema. Its reason is that one unknown fact becomes several facts,
+  and at most one of them is true. The call rule above produces that shape for
+  a procedure call. Either the call rule changes, or an ADR records why a call
+  differs from a table target.
 - A function reference that states a Database other than the cache's own matches
   no node. The cache holds no definition of that object, so a local definition
   would be false evidence. The graph builder's function-reference resolution
@@ -593,9 +597,9 @@ holds an empty schema where the string held none. Each place that turns a value
 back into a string uses the case-preserving variant, so every displayed name
 stays the same. The conversion sits at each extraction caller: the three C#
 parser sites, the quick analyzer, and the two module-level helpers. The scan
-cache unpickler admits no new type in Step 1, so a value cannot reach the
-dictionary form, the terminal output, the spreadsheet export, or the C# table
-relation before Step 2a. A comment at each place names Step 2a as the step that
+cache unpickler admits no new type in Step 1. So before Step 2a, no value
+reaches the dictionary form, the terminal output, the spreadsheet export, or
+the C# table relation. A comment at each place names Step 2a as the step that
 removes it.
 
 Step 2a fixes the extraction itself. This is a behaviour change, so it does not
@@ -1141,9 +1145,9 @@ Today it cuts both names down to the bare name, so `dbo.AVM` matches
   A schema that the caller supplied never appears as evidence.
 - The record gains `stated_database` when the matched key names a Database other
   than the cache's own. It is absent otherwise. The located-database row uses
-  the same field under the same rule. The index keeps only casefolded keys, so
-  the row gives the Database as the caller typed it, or as the lowercase key
-  when the caller typed none.
+  the same field under the same rule. The index keeps only casefolded keys. So
+  the row gives the Database as the caller typed it, or else as the lowercase
+  key.
 - An Evidence Status stays `proven` when only the schema is unproven, as "The SP
   Catalog" states. A `write_only=True` answer therefore keeps a proven write
   that carries the mark.
@@ -1695,9 +1699,9 @@ it. The reverse parse returns an
 identity for a three-part stem and nothing for a stem that names none; that
 second case is Step 2a's safety net, written before Step 2a needs it. After
 Step 2a an old three-part stem names the valid Database `PUR__dbo`, so this net
-cannot catch it. The cache listing therefore takes the identity from a Scan
-Record only when that identity names the data file, and an old file lists
-under its own stem (code review after issue 13). The
+cannot catch it. So the cache listing takes the identity from a Scan Record
+only when that identity names the data file. An old file then lists under its
+own stem (code review after issue 13). The
 directory listing over a root holding all three files returns the data file
 alone, and it returns an empty identity for a file whose name states none.
 
