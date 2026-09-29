@@ -959,10 +959,10 @@ def test_path_identities_that_differ_only_in_letter_case_are_equal() -> None:
     assert upper_identity.path_id == lower_identity.path_id
 
 
-def test_an_unresolved_path_identity_names_its_reason_and_falls_back_to_the_module() -> None:
+def test_an_unresolved_path_identity_names_its_reason_and_keeps_its_module_chain() -> None:
     invocation = _golden_invocation("usp_Missing")
 
-    identity = PathIdentity.unresolved(invocation, "procedure_not_found", "", "", "SP:dbo.usp_Missing")
+    identity = PathIdentity.unresolved(invocation, "procedure_not_found", module_chain=["SP:dbo.usp_Missing"])
 
     assert identity.operation_id == "unresolved:procedure_not_found"
     assert identity.module_chain == ("SP:dbo.usp_Missing",)

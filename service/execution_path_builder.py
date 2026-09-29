@@ -12,6 +12,7 @@ from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
     InvocationEvidence,
+    InvocationSourceSpan,
     SpCatalog,
     invocation_wrapper_evidence_fields,
 )
@@ -148,7 +149,7 @@ def _paths_from_module(
                 invocation,
                 "stored_procedure_call_cycle",
                 sp_chain_override=list(current_sp_chain),
-                path_identity="|".join(current_module_chain),
+                module_chain=current_module_chain,
                 path_conditions=call_conditions,
             )
         ]
@@ -158,7 +159,7 @@ def _paths_from_module(
                 invocation,
                 "call_expansion_truncated",
                 sp_chain_override=list(current_sp_chain),
-                path_identity="|".join(current_module_chain),
+                module_chain=current_module_chain,
                 path_conditions=call_conditions,
             )
         ]
@@ -182,7 +183,7 @@ def _paths_from_module(
                 "operation_not_in_graph",
                 sp_chain_override=list(current_sp_chain),
                 operation_id="missing_contains_target",
-                path_identity="|".join(current_module_chain),
+                module_chain=current_module_chain,
                 path_conditions=call_conditions,
                 unresolved_targets=["<missing-target>"],
             )
@@ -203,7 +204,7 @@ def _paths_from_module(
                     "operation_not_in_graph",
                     sp_chain_override=list(current_sp_chain),
                     operation_id=operation_id,
-                    path_identity="|".join(current_module_chain),
+                    module_chain=current_module_chain,
                     path_conditions=call_conditions,
                     unresolved_targets=[operation_id],
                 )
@@ -237,7 +238,7 @@ def _paths_from_module(
                     "called_procedure_not_in_graph",
                     sp_chain_override=list(current_sp_chain),
                     operation_id=f"missing_call_target:{target_id or 'unknown'}",
-                    path_identity="|".join(current_module_chain),
+                    module_chain=current_module_chain,
                     path_conditions=call_conditions,
                     unresolved_targets=[str(target_id or "<missing-target>")],
                 )
@@ -267,7 +268,7 @@ def _paths_from_module(
                 invocation,
                 "stored_procedure_has_no_terminal_dml",
                 sp_chain_override=list(current_sp_chain),
-                path_identity="|".join(current_module_chain),
+                module_chain=current_module_chain,
                 path_conditions=call_conditions,
             )
         )
@@ -501,7 +502,7 @@ def _unresolved_path(
     operation_id: str = "",
     sp_chain_override: Optional[list[str]] = None,
     path_conditions: tuple[str, ...] = (),
-    path_identity: str = "",
+    module_chain: tuple[str, ...] = (),
     unresolved_targets: Optional[list[str]] = None,
     evidence: str = InvocationEvidence.UNRESOLVED.value,
 ) -> dict[str, Any]:
@@ -512,15 +513,11 @@ def _unresolved_path(
     sp_chain = sp_chain_override or (
         [schema_qualified(_node_object_name(module))] if module else ([procedure_name] if procedure_name else [])
     )
-    module_id = path_identity or (str(module.get("id", "")) if module else "")
+    module_id = str(module.get("id", "")) if module else ""
+    module_chain = module_chain or ((module_id,) if module_id else ())
     path = {
         "path_id": PathIdentity.unresolved(
-            invocation,
-            reason,
-            operation_id,
-            path_identity,
-            str(module.get("id", "")) if module else "",
-            effective_conditions,
+            invocation, reason, operation_id, module_chain, effective_conditions
         ).path_id,
         "source_span": _source_span(invocation),
         "method_class_chain": list(invocation.method_class_chain),
@@ -541,7 +538,7 @@ def _unresolved_path(
         "procedure_schema": invocation.procedure_schema or "",
         "branch_context": list(invocation.branch_context),
         "sp_chain": sp_chain,
-        "module_chain_ids": list(module_id.split("|") if module_id else []),
+        "module_chain_ids": list(module_chain),
         "terminal_operation_id": operation_id,
         "terminal_operation": None,
         "target": "",
@@ -697,15 +694,6 @@ def _question_tokens(question: str) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True)
-class SourceSpan:
-    """The source file and the character range of one Database Invocation."""
-
-    file_path: str
-    start_offset: int
-    end_offset: int
-
-
-@dataclass(frozen=True)
 class PathIdentity:
     """The nine fields that make one Execution Path a distinct path.
 
@@ -715,7 +703,7 @@ class PathIdentity:
     """
 
     database: str
-    source_span: SourceSpan
+    source_span: InvocationSourceSpan
     entry_method: str
     procedure_schema: str
     procedure_name: str
@@ -741,20 +729,14 @@ class PathIdentity:
         invocation: DbInvocation,
         reason: str,
         operation_id: str = "",
-        module_chain_id: str = "",
-        fallback_module_id: str = "",
+        module_chain: Iterable[str] = (),
         conditions: Iterable[str] = (),
     ) -> "PathIdentity":
-        """Return the identity of a path that stops for `reason`.
-
-        The module chain arrives as one `|` joined id. An empty one falls back
-        to the module id, and an empty operation names the reason.
-        """
-        module_id = module_chain_id or fallback_module_id
+        """Return the identity of a path that stops for `reason`; an empty operation names the reason."""
         return cls._of(
             invocation,
             operation_id or f"unresolved:{reason}",
-            tuple(module_id.split("|")) if module_id else (),
+            tuple(module_chain),
             tuple(conditions),
         )
 
@@ -768,11 +750,7 @@ class PathIdentity:
     ) -> "PathIdentity":
         return cls(
             database=part_key(invocation.database),
-            source_span=SourceSpan(
-                file_path=invocation.source.relative_path,
-                start_offset=invocation.source.start_offset,
-                end_offset=invocation.source.end_offset,
-            ),
+            source_span=invocation.source,
             entry_method=_entry_method(invocation),
             procedure_schema=part_key(invocation.procedure_schema),
             procedure_name=bare_key(invocation.procedure_name),
@@ -787,7 +765,7 @@ class PathIdentity:
         identity = "\x1f".join(
             (
                 self.database,
-                self.source_span.file_path,
+                self.source_span.relative_path,
                 str(self.source_span.start_offset),
                 str(self.source_span.end_offset),
                 self.entry_method,
