@@ -491,6 +491,12 @@ class ObjectLocationIndex:
     table_bare_keys: frozenset[str]
     table_full_keys: frozenset[str]
 
+    def buckets(self, kind: str) -> tuple[frozenset[str], frozenset[str]]:
+        """The (bare, full) buckets of one kind: "sp" or "table"."""
+        if kind == "sp":
+            return self.stored_procedure_bare_keys, self.stored_procedure_full_keys
+        return self.table_bare_keys, self.table_full_keys
+
 
 def _listed_full_key(identity: CacheIdentity, item: object) -> Optional[str]:
     """The full key of one listed object, or None for an entry with no name."""

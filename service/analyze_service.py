@@ -3156,46 +3156,56 @@ def _located_rows(
     index: sql_cache_store.ObjectLocationIndex, kind: str, asked: ObjectName
 ) -> List[LocatedDatabase]:
     """The rows one fresh index gives for a name, under the two-bucket rule."""
-    if kind == "sp":
-        bare_bucket, full_bucket = index.stored_procedure_bare_keys, index.stored_procedure_full_keys
-    else:
-        bare_bucket, full_bucket = index.table_bare_keys, index.table_full_keys
+    bare_bucket, full_bucket = index.buckets(kind)
     name_key = bare_key(asked)
     if name_key not in bare_bucket:
         return []
-    keys = sorted(key for key in full_bucket if key.split(".", 2)[2] == name_key)
+    own_database = part_key(index.database)
+    keys = sorted(
+        (located for located in map(_full_key_parts, full_bucket) if located.name == name_key),
+        key=full_key,
+    )
     if asked.database:
         # A Database that the name states answers for itself: the fallback relaxes the
         # schema and never the Database, so `PUR.dbo.Users` does not merge into `Response.dbo.Users`.
-        keys = [key for key in keys if key.split(".", 2)[0] == part_key(asked.database)]
+        keys = [located for located in keys if located.database == part_key(asked.database)]
+    schema_fell_back = False
     if asked.schema:
         # The name states a schema: the full bucket answers. A name that states no
         # Database takes the Database of the index that is asked.
         asked_key = full_key(
             ObjectName("", asked.database or index.database, asked.schema, asked.name)
         )
-        exact = [key for key in keys if key == asked_key]
+        exact = [located for located in keys if full_key(located) == asked_key]
+        schema_fell_back = not exact
         keys = exact or keys
     if not keys and not asked.database:
         # The bare bucket holds the name but no full key does (a hand-edited index):
         # the cache still answers, with no schema proven.
-        keys = [f"{part_key(index.database)}..{name_key}"]
+        keys = [ObjectName("", own_database, "", name_key)]
     rows = []
-    for key in keys:
-        database, schema, _name = key.split(".", 2)
+    for located in keys:
         stated = None
-        if database != part_key(index.database):
+        if located.database != own_database:
             # The index keeps casefolded keys; a caller that typed the Database gets it back as typed.
-            stated = asked.database if part_key(asked.database) == database else database
+            stated = asked.database if part_key(asked.database) == located.database else located.database
+        unproven = schema_fell_back or not located.schema
         rows.append(
             LocatedDatabase(
                 server=index.server,
                 database=index.database,
-                schema=schema,
+                schema=located.schema,
                 stated_database=stated,
+                risk_flags=[UNPROVEN_SCHEMA] if unproven else [],
             )
         )
     return rows
+
+
+def _full_key_parts(key: str) -> ObjectName:
+    """Split one full key of an Object Location Index back into its three parts."""
+    database, schema, name = key.split(".", 2)
+    return ObjectName("", database, schema, name)
 
 
 def flow_chain(req: FlowChainRequest) -> FlowChainResponse:

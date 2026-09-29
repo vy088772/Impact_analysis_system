@@ -499,11 +499,15 @@ class LocatedDatabase(BaseModel):
     schema 描述比對到的 key：一個 Database 有三個 schema 就有三列，沒人證明 schema
     的 key 是空字串。stated_database 只在比對到的 full key 寫的是另一個 Database 時
     出現，內容是那個 Database 的名稱，呼叫端不必打開快取就能行動；它不參與交集。
+    索引只存正規化過的 key，所以呼叫端沒寫這個 Database 時，它是小寫的 key。
+    risk_flags 在比對沒證明 schema 時帶 `unproven_schema`：名稱寫的 schema 不在 full
+    桶、退回 bare 桶；或比對到的 key 本身 schema 是空的。它同樣不參與交集。
     """
     server: str = ""
     database: str = ""
     schema_name: str = Field(default="", alias="schema")
     stated_database: Optional[str] = None
+    risk_flags: List[str] = Field(default_factory=list)
 
     model_config = ConfigDict(populate_by_name=True)
 

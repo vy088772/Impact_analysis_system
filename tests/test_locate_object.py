@@ -288,7 +288,34 @@ def test_a_stated_schema_that_no_full_key_holds_still_matches_through_the_bare_b
 
         response = _locate("dbo.AVM")
 
-        assert [(d.database, d.schema_name) for d in response.matched] == [("Response", "common")]
+        assert [(d.database, d.schema_name, d.risk_flags) for d in response.matched] == [
+            ("Response", "common", ["unproven_schema"])
+        ]
+
+
+def test_a_stated_schema_that_the_full_bucket_holds_carries_no_mark() -> None:
+    with CacheRoot():
+        identity = CacheIdentity.of("vmsystest07", "Response")
+        sql_cache_store._save(
+            identity, _payload("Response", tables={"COMMON.AVM": {"columns": []}})
+        )
+
+        assert [d.risk_flags for d in _locate("COMMON.AVM").matched] == [[]]
+        assert [d.risk_flags for d in _locate("AVM").matched] == [[]]
+
+
+def test_a_key_with_no_proven_schema_carries_the_mark() -> None:
+    with CacheRoot():
+        identity = CacheIdentity.of("vmsystest07", "Response")
+        graph = execution_graph(
+            "Response",
+            nodes=[{"id": "table:.Users", "type": "table", "schema": "", "name": "Users"}],
+        )
+        sql_cache_store._save(identity, cache_payload("Response", graph=graph))
+
+        response = _locate("Users")
+
+        assert [(d.schema_name, d.risk_flags) for d in response.matched] == [("", ["unproven_schema"])]
 
 
 def test_a_cross_database_reference_reports_stated_database_but_names_the_cache_it_came_from() -> None:
@@ -330,7 +357,7 @@ def test_a_located_row_without_a_stated_database_omits_the_field_on_the_wire() -
         wire = _locate("spX", "sp").model_dump(exclude_none=True, by_alias=True)
 
         assert wire["matched"] == [
-            {"server": "vmsystest07.topmost.com.tw", "database": "PUR", "schema": "dbo"}
+            {"server": "vmsystest07.topmost.com.tw", "database": "PUR", "schema": "dbo", "risk_flags": []}
         ]
 
 
