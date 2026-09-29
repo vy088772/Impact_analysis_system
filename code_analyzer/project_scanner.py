@@ -80,6 +80,10 @@ class CSharpSPRelation:
         return f"{self.csharp_file} -> {exists} {self.sp_database}.{self.sp_name}"
 
 
+# The Database a relation carries when the parser cannot resolve its C# connection.
+UNRESOLVED_CONNECTION_DATABASE = "unknown"
+
+
 @dataclass
 class CSharpTableRelation:
     """C# 檔案與資料表的關聯（透過 SQL 查詢）"""
@@ -96,6 +100,13 @@ class CSharpTableRelation:
     
     # SQL 資訊
     sql_preview: str = ""
+
+    @property
+    def connection_database(self) -> str:
+        """The Database of the C# connection, or "" when the parser cannot resolve it."""
+        if (self.database or "").casefold() == UNRESOLVED_CONNECTION_DATABASE:
+            return ""
+        return self.database or ""
     
     def to_dict(self) -> Dict:
         return {
@@ -1195,7 +1206,7 @@ class ProjectScanner:
                     method_name=method_name,
                     line_number=sql_query.location.line_number,
                     table=table,
-                    database=sql_query.database_source or 'unknown',
+                    database=sql_query.database_source or UNRESOLVED_CONNECTION_DATABASE,
                     access_type=sql_query.query_type.value,
                     sql_preview=sql_query.query_text[:100]
                 )

@@ -504,9 +504,11 @@ def build_backward_chains(
     # stored-procedure relationships and is never used to reconstruct SQL calls.
     question = TableQuestion.of(table_name, database)
     for rel in scan.table_relations:
-        # A relation that states no Database takes the Database of its C# connection.
+        # A relation that states no Database takes the Database of its C# connection,
+        # and a connection the parser cannot resolve leaves the Database out of the match.
+        database = rel.connection_database
         if question.match(
-            rel.table.database or rel.database, rel.table.schema, rel.table.name, rel.database
+            rel.table.database or database, rel.table.schema, rel.table.name, database
         ) is None:
             continue
         add_chain(

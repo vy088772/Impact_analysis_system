@@ -2924,7 +2924,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     for rel in scan.table_relations:
         # A relation that states no Database takes the Database of its C# connection,
         # and a connection the parser cannot resolve leaves the Database out of the match.
-        database = str(getattr(rel, "database", "") or "")
+        database = rel.connection_database
         table_match = question.match(
             rel.table.database or database, rel.table.schema, rel.table.name, database
         )

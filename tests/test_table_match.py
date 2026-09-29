@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from canonical_object_identity import ObjectName
-from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
+from code_analyzer.project_scanner import UNRESOLVED_CONNECTION_DATABASE, CSharpTableRelation, ProjectScanResult
 from service import analyze_service
 from service.schemas import FindByTableRequest
 from tests.sql_cache_fixtures import (
@@ -300,7 +300,10 @@ def test_inline_case_3_a_relation_that_states_another_database_never_matches(mon
 def test_inline_case_4_an_unresolved_connection_leaves_the_database_out_of_the_match(
     monkeypatch, tmp_path
 ) -> None:
-    matches = _ask_inline(monkeypatch, tmp_path, ObjectName("", "", "dbo", "Users"), "", "Response.dbo.Users")
+    # The scanner writes this marker when it cannot resolve the connection.
+    matches = _ask_inline(
+        monkeypatch, tmp_path, ObjectName("", "", "dbo", "Users"), UNRESOLVED_CONNECTION_DATABASE, "Response.dbo.Users"
+    )
 
     assert [match.table for match in matches] == ["dbo.Users"]
     assert matches[0].stated_database is None
@@ -314,3 +317,13 @@ def test_an_inline_relation_that_states_another_database_than_its_connection_rep
     matches = _ask_inline(monkeypatch, tmp_path, table, "Response", "PUR.dbo.Users")
 
     assert [(match.table, match.stated_database) for match in matches] == [("PUR.dbo.Users", "PUR")]
+
+
+def test_the_backward_chain_keeps_an_inline_relation_whose_connection_is_unresolved(tmp_path) -> None:
+    from service import flow_chain_builder
+
+    scan = _inline_scan(tmp_path, ObjectName("", "", "dbo", "Users"), UNRESOLVED_CONNECTION_DATABASE)
+
+    chains = flow_chain_builder.build_backward_chains(scan, tmp_path, "dbo.Users", database="Response")
+
+    assert [(chain["via"], chain["method"]) for chain in chains] == [("direct_sql", "Load")]
