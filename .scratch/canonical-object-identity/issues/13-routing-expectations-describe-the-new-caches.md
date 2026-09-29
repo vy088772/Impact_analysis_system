@@ -13,7 +13,7 @@ See "Cross-repository coordination" and issue 6 in the spec.
 **Blocked by:** 10, and the operator action: each Database is refreshed on
 another machine with the Step 2a code, and the new cache files are copied here.
 
-**Status:** done (2026-09-29). One review item waits for a decision: see the sp-001 note.
+**Status:** done (2026-09-29)
 
 - [x] Before the regeneration, every cache file in the cache directory has a two-part filename.
 - [x] Every routing expectation is regenerated from the new cache files.
@@ -69,8 +69,13 @@ The regeneration commit sits in `llamaindex-spec-rag`, on branch
   `diagnostics`, not to `matches`, so `unproven_programs` does not show
   it. Also, `Response.Master.cs` declares the class `TTPUR`, and the
   Response project may inherit the parent site's `PUR` connection in IIS.
-  `routing_expectations_generated_vs_candidate.md` still describes the old
-  result. A decision is necessary.
+  **Decision (2026-09-29):** the owner confirmed that Response inherits the
+  parent site's `PUR` connection in IIS, so the caller is real. The result
+  of this regeneration stays, and nobody adds the caller back by hand: every
+  target still comes from the caches. The service fix is
+  `.scratch/inherited-web-config-connections/issues/01-a-call-in-a-nested-web-application-resolves-its-inherited-connection.md`.
+  `routing_expectations_generated_vs_candidate.md` records the change at
+  sp-001.
 - **`program` is a generic program identity.** `TaskSchedule/Program.cs`
   reads as program `program` under the suffix rule. Any other `Program.cs`
   in Y-Docs_TTPUR gets the same identity.
