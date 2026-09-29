@@ -1,10 +1,10 @@
 # Describe the Flow-Chain SP Expansion Limit Truthfully
 
-Status: ready-for-agent
+Status: done
 
 ## Problem Statement
 
-The descriptions of the forward relationship chain (`/flow_chain`, direction `forward`) say that the chain has no depth limit. The server has a depth limit.
+The descriptions of the forward relationship chain (`/flow_chain`, direction `forward`) say that the chain has no depth control. The server has an expansion limit.
 
 - The spec-rag client function for `/flow_chain` says "沒有深度控制：圖上記錄了幾層就回幾層". A mode 3 agent reads this sentence as a promise that the `stored_procedures` list is always complete. Thus the agent does not look for truncated paths in `diagnostics`.
 - The forward chain builds its Execution Paths with the default expansion limit of the execution path builder (`max_call_depth`, value 5). The builder stops at the seventh nested stored procedure and gives an unresolved path with the reason `call_expansion_truncated`. The builder also stops at a stored-procedure call cycle and gives the reason `stored_procedure_call_cycle`.
@@ -33,13 +33,13 @@ The result of `/flow_chain` does not change for any request.
 5. As a mode 3 agent that reads the spec-rag client description, I want it to name the reasons `call_expansion_truncated` and `stored_procedure_call_cycle`, so that I can match a diagnostic to its cause.
 6. As a mode 3 agent that reads the spec-rag client description, I want it to say that a truncated path does not add its tables to `tables`, so that I do not treat the table list as complete.
 7. As a mode 3 agent that reads the return-value line, I want it to list `diagnostics`, so that the field that the description points to is in the documented result.
-8. As a maintainer of spec-rag, I want the description not to state the numeric depth limit, so that a change of the server value does not make the spec-rag description wrong.
+8. As a maintainer of spec-rag, I want the description not to state the numeric expansion limit, so that a change of the server value does not make the spec-rag description wrong.
 9. As a maintainer of the server, I want a test that proves that a truncated forward path goes to `diagnostics` and not to `stored_procedures`, so that a change to this behavior fails a test before it makes the spec-rag description wrong.
 10. As a maintainer running the test suite after this change, I want the existing flow-chain tests in each repository to pass without modification, so that I have direct evidence that the result did not change.
 11. As a maintainer running mypy in each repository after this change, I want no new mypy error, so that I know the change touched no signature.
 12. As a future engineer who reads the `retire-dead-flow-chain-surface` spec, I want user story 11 to describe the real limit, so that I do not learn a wrong model of the forward chain.
-13. As a future engineer who considers a depth limit for the SP chain, I want the `retire-dead-flow-chain-surface` spec to say that the server already has an expansion limit, so that I do not believe that no limit exists.
-14. As a future engineer who considers a depth limit for the SP chain, I want the spec to explain the difference between the removed `max_sp_depth` and the existing expansion limit, so that I understand why one was removed and the other stays.
+13. As a future engineer who considers a new limit for the SP chain, I want the `retire-dead-flow-chain-surface` spec to say that the server already has an expansion limit, so that I do not believe that no limit exists.
+14. As a future engineer who considers a new limit for the SP chain, I want the spec to explain the difference between the removed `max_sp_depth` and the existing expansion limit, so that I understand why one was removed and the other stays.
 15. As a future engineer who wants to change the expansion limit, I want the spec to say that the change needs its own spec, so that I do not change it as part of a documentation fix.
 16. As a reader of ticket 03 of the `retire-dead-flow-chain-surface` spec, I want a comment that points to this spec, so that I know that the docstring sentence from that ticket was corrected later.
 17. As a code reviewer of a later docstring change, I want this spec to record that the earlier review compared a sentence only with a user story, so that I compare a behavior claim with the code.
@@ -56,7 +56,7 @@ The result of `/flow_chain` does not change for any request.
 - **`retire-dead-flow-chain-surface` spec.** Rewrite the original text in place. Do not append a separate correction section. The git history keeps the old text. The rewrite covers these parts:
   - User story 11: the forward chain lists the SP chain that the SQL Execution Graph records, up to the server expansion limit. The description tells the agent where a truncated path goes, so the agent does not expect a depth parameter.
   - User story 16: the future engineer learns why the field was removed and why the existing expansion limit stays.
-  - The Further Notes paragraph "Why remove `max_sp_depth` and not give it an effect": `max_sp_depth` was a caller-controlled field with no effect, so the spec removed it. The server has a separate expansion guard, `max_call_depth` with the value 5. The guard reports each truncated path as `call_expansion_truncated`, so no fact disappears without a report. A change to the guard needs its own spec. Keep the sentence that rejects the "no caller uses the field" argument.
+  - The Further Notes paragraph "Why remove `max_sp_depth` and not give it an effect": `max_sp_depth` was a caller-controlled field with no effect, so the spec removed it. The server has a separate expansion limit, `max_call_depth` with the value 5. The expansion limit reports each truncated path as `call_expansion_truncated`, so no fact disappears without a report. A change to the expansion limit needs its own spec. Keep the sentence that rejects the "no caller uses the field" argument.
   - The Implementation Decisions entry for the spec-rag client: make it agree with the corrected user story 11.
 - **Ticket 03 of `retire-dead-flow-chain-surface`.** Append one line to its Comments. The line points to this spec. Do not change its status or its checklist. Its checklist items are all true as written.
 - **Tickets for this spec.** The tickets go into this spec directory, under `issues/`. This reverses the earlier grilling decision to put a ticket 04 into the `retire-dead-flow-chain-surface` directory. The user chose this layout during the to-spec step, because the tracker convention puts one feature in one directory.
@@ -71,7 +71,7 @@ A good test here proves an external behavior of the forward chain. A test must n
   - `stored_procedures` does not contain the truncated path.
   - `diagnostics` contains a path with the reason `call_expansion_truncated`.
   - `tables` does not contain the tables that only the truncated path reaches.
-- The test uses the default limit of `build_forward_chain`. It does not pass a limit, because the forward chain passes none. Thus the test fails if the forward chain starts to pass a different limit.
+- The test uses the default limit of `build_forward_chain`. It does not pass a limit, because the forward chain passes none. Thus the test fails if the forward chain starts to pass a limit that expands the full chain. A lower limit also truncates the chain, so the test does not detect it. The test proves where a truncated path goes. It does not fix the value of the limit.
 - Prior art: the execution path integration test module has a forward-chain test that gives an unresolved path. That test asserts that `stored_procedures` is empty and that `diagnostics` holds the path. The execution path builder test module has a nested-graph fixture and a truncation test that sets the limit to 0.
 - **spec-rag flow-chain tests** (the declared-databases test module) do not change. They must pass without modification.
 - **Existing server flow-chain tests** do not change. They must pass without modification.
