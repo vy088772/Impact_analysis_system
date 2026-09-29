@@ -33,7 +33,15 @@ from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 # payload shape changes: an operator reads this shape from disk until Step 2b.
 # tools/repair_sql_execution_graphs.py rebuilds a v4 graph from the cache's
 # own definitions; nothing rebuilds one on the load path.
-GRAPH_VERSION = 5
+# v6: each `#name` temp table is one node for each module that uses it. The node
+# id is the plain table id plus `@` and the owning module id, and the node gains
+# `scope_module_id` (temp-table-scope, ticket 03). The node lookup key holds the
+# scope. A `##name` global temp table stays one node for the Database. A temp
+# table read expands to the base tables behind the writers of its own node with
+# a worklist fixed point, so a v5 graph, which joins every `#tmp` of the
+# Database into one node, is rejected until it is rebuilt.
+GRAPH_VERSION = 6
+NodeKey = tuple[str, str, str, str]
 _MODULE_COLLECTIONS = (
     ("procedures", "stored_procedure"),
     ("views", "view"),
@@ -50,7 +58,7 @@ def build_sql_execution_graph(
     """Analyze refreshed SQL modules and return a deterministic graph payload."""
     nodes: list[dict[str, Any]] = []
     relationships: list[dict[str, Any]] = []
-    node_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    node_by_key: dict[NodeKey, dict[str, Any]] = {}
     module_specs: list[tuple[str, str, str, str]] = []
 
     for collection, object_type in _MODULE_COLLECTIONS:
@@ -263,7 +271,7 @@ def _report_progress(
 def _add_operation(
     nodes: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
-    node_by_key: dict[tuple[str, str, str], dict[str, Any]],
+    node_by_key: dict[NodeKey, dict[str, Any]],
     raw_operation: dict[str, Any],
     module_type: str,
     module_schema: str,
@@ -344,7 +352,7 @@ def _add_operation(
 
     for read_table in operation.get("read_tables", []) or []:
         reference = _reference(read_table)
-        target_id = _ensure_referenced_node(nodes, node_by_key, reference)
+        target_id = _ensure_referenced_node(nodes, node_by_key, reference, module_id)
         _add_relationship(
             relationships,
             "reads",
@@ -368,7 +376,7 @@ def _add_operation(
 
     for write_table in operation.get("write_tables", []) or []:
         reference = _reference(write_table)
-        target_id = _ensure_referenced_node(nodes, node_by_key, reference)
+        target_id = _ensure_referenced_node(nodes, node_by_key, reference, module_id)
         _add_relationship(
             relationships,
             "writes",
@@ -411,13 +419,24 @@ def _reference(entry: dict[str, Any]) -> ObjectName:
 
 def _ensure_referenced_node(
     nodes: list[dict[str, Any]],
-    node_by_key: dict[tuple[str, str, str], dict[str, Any]],
+    node_by_key: dict[NodeKey, dict[str, Any]],
     reference: ObjectName,
+    module_id: str,
 ) -> str:
     # A reference that states no schema reads as dbo here. Step 2b removes this default.
     # The node takes no database: node identity is type, schema, and name, and the
     # relationship records the database its reference stated.
     object_schema, name = reference.schema or "dbo", reference.name
+    if _is_scoped_temp_table(name):
+        # A `#name` temp table belongs to the module that uses it.
+        node = {
+            "id": _node_id("table", object_schema, name, module_id),
+            "type": "table",
+            "schema": object_schema,
+            "name": name,
+            "scope_module_id": module_id,
+        }
+        return str(_add_node(nodes, node_by_key, node)["id"])
     view_key = _node_key("view", object_schema, name)
     function_key = _node_key("function", object_schema, name)
     if view_key in node_by_key:
@@ -436,7 +455,7 @@ def _ensure_referenced_node(
 
 
 def _resolve_call_target(
-    node_by_key: dict[tuple[str, str, str], dict[str, Any]],
+    node_by_key: dict[NodeKey, dict[str, Any]],
     target: ObjectName,
     cache_database: str,
 ) -> tuple[str, dict[str, Any] | None]:
@@ -452,7 +471,7 @@ def _resolve_call_target(
 
 
 def _known_object_node_id(
-    node_by_key: dict[tuple[str, str, str], dict[str, Any]],
+    node_by_key: dict[NodeKey, dict[str, Any]],
     object_type: str,
     reference: ObjectName,
     cache_database: str,
@@ -519,7 +538,7 @@ def _object_schema(item: dict[str, Any], written: ObjectName) -> str:
 
 def _add_node(
     nodes: list[dict[str, Any]],
-    node_by_key: dict[tuple[str, str, str], dict[str, Any]],
+    node_by_key: dict[NodeKey, dict[str, Any]],
     node: dict[str, Any],
 ) -> dict[str, Any]:
     """Add ``node`` unless a node already holds its case-insensitive key.
@@ -532,9 +551,10 @@ def _add_node(
     object_type = str(node.get("type", ""))
     schema = str(node.get("schema", "dbo"))
     name = str(node.get("name", ""))
-    key = _node_key(object_type, schema, name) if name else (
+    key = _node_key(object_type, schema, name, str(node.get("scope_module_id", ""))) if name else (
         object_type,
         str(node.get("id", "")).casefold(),
+        "",
         "",
     )
     if key in node_by_key:
@@ -544,12 +564,19 @@ def _add_node(
     return node
 
 
-def _node_key(object_type: str, schema: str, name: str) -> tuple[str, str, str]:
-    return object_type, schema.casefold(), name.casefold()
+def _node_key(object_type: str, schema: str, name: str, scope_module_id: str = "") -> NodeKey:
+    return object_type, schema.casefold(), name.casefold(), scope_module_id.casefold()
 
 
-def _node_id(object_type: str, schema: str, name: str) -> str:
-    return f"{object_type}:{schema}.{name}"
+def _node_id(object_type: str, schema: str, name: str, scope_module_id: str = "") -> str:
+    """The one node identity function: a scoped node adds `@` and its owning module id."""
+    node_id = f"{object_type}:{schema}.{name}"
+    return f"{node_id}@{scope_module_id}" if scope_module_id else node_id
+
+
+def _is_scoped_temp_table(name: str) -> bool:
+    """A `#name` temp table is scoped to its module; a `##name` global temp table is not."""
+    return name.startswith("#") and not name.startswith("##")
 
 
 def _safe_name(value: str) -> str:

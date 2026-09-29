@@ -148,11 +148,11 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
     """A cache built under any earlier graph version must be rejected.
 
     GRAPH_VERSION rises whenever the graph payload shape changes -- most
-    recently to 5, when each analyzer reference became four named parts
-    (canonical-object-identity, Step 2a), so a graph that holds written-name
-    strings fails this check until it is rebuilt.
+    recently to 6, when each `#name` temp table became one node for each
+    module that uses it (temp-table-scope, ticket 03), so a graph that shares
+    one temp table node fails this check until it is rebuilt.
     """
-    assert GRAPH_VERSION == 5
+    assert GRAPH_VERSION == 6
 
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(
@@ -571,6 +571,18 @@ def _lineage_reads(graph: dict) -> list[tuple[str, str]]:
     )
 
 
+def _lineage_targets(graph: dict, source_id: str) -> set[str]:
+    return {target for source, target in _lineage_reads(graph) if source == source_id}
+
+
+def _temp_procedure(base_table: str, temp_table: str = "#tmp") -> list[dict]:
+    """One procedure that fills a temp table from a base table, then reads it."""
+    return [
+        analyzer_operation("INSERT", sequence=1, reads=[base_table], writes=[temp_table]),
+        analyzer_operation("SELECT", sequence=2, reads=[temp_table]),
+    ]
+
+
 def test_the_temp_table_expansion_ends_when_many_procedures_share_a_chain() -> None:
     """Test case 1 (cost): forty procedures that each run `#t1` to `#t4` build in a few seconds.
 
@@ -589,6 +601,9 @@ def test_the_temp_table_expansion_ends_when_many_procedures_share_a_chain() -> N
     assert_relationships_resolve_to_known_nodes(graph)
     final_reads = {f"dml_operation:stored_procedure:dbo.usp_Chain{index:02d}:5" for index in range(40)}
     assert final_reads <= {source for source, _ in _lineage_reads(graph)}
+    for index in range(40):
+        final_read = f"dml_operation:stored_procedure:dbo.usp_Chain{index:02d}:5"
+        assert _lineage_targets(graph, final_read) == {f"table:dbo.Base{index:02d}"}
 
 
 def test_a_cycle_of_temp_table_writes_gives_one_stable_result() -> None:
@@ -637,6 +652,112 @@ def test_the_lineage_stage_reports_after_the_graph_stage() -> None:
     assert set(stages[first_lineage:]) == {"lineage"}
     _, current, total = reports[-1]
     assert current == total
+
+
+def test_two_procedures_that_use_one_temp_table_name_stay_separate() -> None:
+    """Test case 2 (isolation): each read of `#tmp` resolves only to its own procedure's base table."""
+    data, host = stubbed_procedures(
+        "PUR",
+        {"dbo.usp_A": _temp_procedure("dbo.BaseA"), "dbo.usp_B": _temp_procedure("dbo.BaseB")},
+    )
+
+    graph = build_sql_execution_graph(data, host=host)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:2") == {"table:dbo.BaseA"}
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_B:2") == {"table:dbo.BaseB"}
+
+
+def test_a_global_temp_table_stays_one_node_for_the_database() -> None:
+    """Test case 8 (global temp table): two procedures with no call between them share `##g`."""
+    data, host = stubbed_procedures(
+        "PUR",
+        {
+            "dbo.usp_A": _temp_procedure("dbo.BaseA", "##g"),
+            "dbo.usp_B": _temp_procedure("dbo.BaseB", "##g"),
+        },
+    )
+
+    graph = build_sql_execution_graph(data, host=host)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    global_nodes = [node for node in graph["nodes"] if node.get("name") == "##g"]
+    assert len(global_nodes) == 1
+    assert "scope_module_id" not in global_nodes[0]
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:2") == {
+        "table:dbo.BaseA",
+        "table:dbo.BaseB",
+    }
+
+
+def test_a_scoped_temp_table_node_keeps_its_written_name_and_names_its_module() -> None:
+    """Test case 10 (node shape): `name` stays as written, `scope_module_id` names the owner."""
+    data, host = stubbed_procedures(
+        "PUR",
+        {
+            "dbo.usp_A": [
+                analyzer_operation("INSERT", sequence=1, reads=["dbo.BaseA"], writes=["#Tmp"]),
+                analyzer_operation("SELECT", sequence=2, reads=["#tmp"]),
+            ],
+            "dbo.usp_B": _temp_procedure("dbo.BaseB"),
+        },
+    )
+
+    graph = build_sql_execution_graph(data, host=host)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    temp_nodes = [node for node in graph["nodes"] if node.get("name", "").startswith("#")]
+    assert {(node["name"], node["type"], node["scope_module_id"]) for node in temp_nodes} == {
+        ("#Tmp", "table", "stored_procedure:dbo.usp_A"),
+        ("#tmp", "table", "stored_procedure:dbo.usp_B"),
+    }
+    assert len({node["id"] for node in temp_nodes}) == 2
+    assert all(node["id"].startswith("table:dbo.#") for node in temp_nodes)
+    plain_nodes = [node for node in graph["nodes"] if node["type"] == "table" and node not in temp_nodes]
+    assert all("scope_module_id" not in node for node in plain_nodes)
+
+
+def test_the_object_location_index_keeps_the_temp_table_names() -> None:
+    """The index holds each temp table name once, whatever number of nodes carry it."""
+    data, host = stubbed_procedures(
+        "PUR",
+        {"dbo.usp_A": _temp_procedure("dbo.BaseA"), "dbo.usp_B": _temp_procedure("dbo.BaseB")},
+    )
+    graph = build_sql_execution_graph(data, host=host)
+
+    index = sql_cache_store.build_object_location_index(
+        sql_cache_store.CacheIdentity.of(TEST_SERVER, "PUR"), cache_payload("PUR", graph=graph)
+    )
+
+    assert {"#tmp", "basea", "baseb"} <= index.tables
+    assert len([name for name in index.tables if name.startswith("#")]) == 1
+
+
+def test_a_temp_table_filled_and_read_in_one_procedure_resolves_with_the_real_analyzer_host() -> None:
+    """`SELECT ... INTO #name` then `SELECT ... FROM #name` in one procedure, end to end."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+    data = cache_payload(
+        "TestDb",
+        procedures={
+            "dbo.usp_Stage": {
+                "definition": """CREATE PROCEDURE dbo.usp_Stage
+AS
+BEGIN
+    SELECT Id INTO #stage FROM dbo.Users;
+    SELECT Id FROM #stage;
+END;
+"""
+            },
+        },
+    )
+
+    graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    temp_nodes = [node for node in graph["nodes"] if node.get("name") == "#stage"]
+    assert [node["scope_module_id"] for node in temp_nodes] == ["stored_procedure:dbo.usp_Stage"]
+    assert [target for _, target in _lineage_reads(graph)] == ["table:dbo.Users"]
 
 
 if __name__ == "__main__":
