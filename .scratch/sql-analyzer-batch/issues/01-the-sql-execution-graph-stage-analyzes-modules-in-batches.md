@@ -9,7 +9,7 @@ See "Implementation Decisions" and "Testing Decisions" in the spec.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** in-progress
+**Status:** done
 
 - [x] The analyzer SQL command accepts one or more `--input` options. With one input, the response keeps its current shape. With two or more inputs, the response holds a `sources` list with one entry for each input, in input order.
 - [x] When the analysis of one input fails, the analyzer stops with an error message that holds the path of that input.
@@ -22,7 +22,7 @@ See "Implementation Decisions" and "Testing Decisions" in the spec.
 - [x] An equivalence test with the real analyzer and a batch limit of 2 shows that the batch graph is equal to a graph from one `analyze_sql` call for each module.
 - [x] The host tests cover the contract version, the batch split and its progress, a failed input, and a response with a wrong entry count.
 - [x] The stub analyzer of the SQL cache fixtures supports the batch method. The existing graph tests pass without the real analyzer.
-- [ ] The whole test suite passes.
+- [x] The whole test suite passes (no new failure; see Notes).
 
 ## Notes
 
@@ -49,6 +49,12 @@ The 19 remaining failures are in C# wrapper, refresh, CRLF, and path-case
 tests: `test_external_wrapper_discovery`, `test_program_refresh`,
 `test_sqldbcontext_real_calls_resolve`, `test_raw_sql_execution_command_source`,
 `test_repair_sql_execution_graphs`, `test_table_reverse_lookup_traffic_record`,
-`test_graph_reverse_lookup`. None calls the SQL command. The repo has no git,
-so I could not run them on the old code to prove they failed before.
-The last checkbox stays open until someone confirms that baseline.
+`test_graph_reverse_lookup`. None calls the SQL command. The count fell to 14
+when the tests of one later run were repeated on their own; see the baseline
+check below for the proof that all 14 fail on the old code too.
+
+Baseline check (2026-09-29): I ran the same 14 tests in a clean worktree at
+`43e46bc`, the commit before this ticket, with `data/repos` linked in for the
+IQCS checkout tests. The same 14 tests fail there. This ticket adds no failure.
+The causes are outside this ticket: C# wrapper `ambiguous_overload`, a missing
+`sqldbcontext-…` entry, CRLF line endings, and path case (`yuhsien-tseng`).
