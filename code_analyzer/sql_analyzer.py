@@ -621,7 +621,7 @@ class SQLAnalyzer:
     def quick_analyze_sp(
         self,
         proc_name: str,
-        schema: str = ""
+        schema: str
     ) -> SimplifiedSPInfo:
         """
         快速分析單一預存程序
@@ -629,12 +629,14 @@ class SQLAnalyzer:
 
         schema：名稱本身寫了 schema 就用名稱的；沒寫就用這個參數；兩者都沒有時，
         取唯一擁有同名 SP 的 schema。沒有或有多個 schema 擁有時回報不存在，不猜 dbo。
+        schema 沒有預設值：漏改的呼叫端丟 TypeError，不會安靜地讀到任何 schema。
+        procedure_name 保留呼叫端寫的名稱；查詢只用拆出來的名稱。
         """
         print(f"\n🔍 快速分析: {proc_name}")
 
         written = parse(proc_name)
-        proc_name = written.name
-        schema = written.schema or schema or self._only_schema_holding(proc_name)
+        name = written.name
+        schema = written.schema or schema or self._only_schema_holding(name)
 
         info = SimplifiedSPInfo(
             procedure_name=proc_name,
@@ -643,14 +645,14 @@ class SQLAnalyzer:
         )
 
         # 1. 檢查是否存在
-        info.exists = bool(schema) and self._check_sp_exists(proc_name, schema)
+        info.exists = bool(schema) and self._check_sp_exists(name, schema)
         
         if not info.exists:
             print(f"   ❌ 預存程序不存在")
             return info
         
         # 2. 取得基本資訊
-        basic_info = self._get_sp_basic_info(proc_name, schema)
+        basic_info = self._get_sp_basic_info(name, schema)
         if basic_info:
             info.parameters = basic_info['parameters']
             info.created_date = basic_info['created_date']
@@ -668,7 +670,7 @@ class SQLAnalyzer:
             # 4. 提取資料表：原生依賴查詢（sys.dm_sql_referenced_entities）優先，
             #    查不到（權限不足/動態SQL導致整包查詢失敗/查得到但結果是空集合）
             #    才 fallback 回 regex 版 _quick_extract_tables
-            native_tables = self._get_native_referenced_tables(proc_name, schema)
+            native_tables = self._get_native_referenced_tables(name, schema)
             if native_tables:
                 info.referenced_tables = native_tables
                 info.dependency_source = "native"

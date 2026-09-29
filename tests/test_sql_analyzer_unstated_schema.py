@@ -48,7 +48,7 @@ def _analyze(procedures: List[Tuple[str, str]], name: str):
     analyzer = SQLAnalyzer.__new__(SQLAnalyzer)
     analyzer.cursor = cursor
     analyzer.db_config = SimpleNamespace(alias="eFinance")
-    return analyzer.quick_analyze_sp(name), cursor
+    return analyzer.quick_analyze_sp(name, ""), cursor
 
 
 def test_a_name_with_no_schema_takes_the_one_schema_that_holds_it() -> None:
@@ -73,9 +73,16 @@ def test_a_name_that_no_schema_holds_does_not_exist() -> None:
     assert not info.exists
 
 
+def test_the_schema_argument_has_no_default() -> None:
+    import inspect
+
+    assert inspect.signature(SQLAnalyzer.quick_analyze_sp).parameters["schema"].default is inspect.Parameter.empty
+
+
 def test_a_name_that_states_its_schema_uses_it() -> None:
     info, cursor = _analyze([("COMMON", "usp_Load"), ("dbo", "usp_Load")], "[COMMON].[usp_Load]")
 
     assert info.exists
     assert info.schema == "COMMON"
+    assert info.procedure_name == "[COMMON].[usp_Load]"
     assert cursor.checked == [("COMMON", "usp_Load")]
