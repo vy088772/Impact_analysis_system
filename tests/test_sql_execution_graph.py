@@ -760,6 +760,156 @@ END;
     assert [target for _, target in _lineage_reads(graph)] == ["table:dbo.Users"]
 
 
+def _procedure_that_calls(*callees: str, temp_reads: bool = False, base_table: str = "") -> list[dict]:
+    """One procedure that optionally fills `#tmp` from a base table, calls each callee, and reads `#tmp`."""
+    operations: list[dict] = []
+    if base_table:
+        operations.append(analyzer_operation("INSERT", sequence=1, reads=[base_table], writes=["#tmp"]))
+    for index, callee in enumerate(callees, start=2):
+        operations.append(analyzer_operation("CALL", sequence=index, calls=[callee]))
+    if temp_reads:
+        operations.append(analyzer_operation("SELECT", sequence=len(callees) + 2, reads=["#tmp"]))
+    return operations
+
+
+def test_a_child_read_of_a_temp_table_resolves_to_the_parent_base_table() -> None:
+    """Test case 3 (caller to callee): A writes `#tmp` and calls B, and B reads `#tmp`."""
+    data, host = stubbed_procedures(
+        "PUR",
+        {
+            "dbo.usp_A": _procedure_that_calls("dbo.usp_B", base_table="dbo.BaseA"),
+            "dbo.usp_B": [analyzer_operation("SELECT", sequence=1, reads=["#tmp"])],
+        },
+    )
+
+    graph = build_sql_execution_graph(data, host=host)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_B:1") == {"table:dbo.BaseA"}
+
+
+def test_a_parent_read_of_a_temp_table_resolves_to_the_child_base_table() -> None:
+    """Test case 4 (callee to caller): A calls B, B fills `#tmp`, and A reads `#tmp`."""
+    data, host = stubbed_procedures(
+        "PUR",
+        {
+            "dbo.usp_A": _procedure_that_calls("dbo.usp_B", temp_reads=True),
+            "dbo.usp_B": [analyzer_operation("INSERT", sequence=1, reads=["dbo.BaseB"], writes=["#tmp"])],
+        },
+    )
+
+    graph = build_sql_execution_graph(data, host=host)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:3") == {"table:dbo.BaseB"}
+
+
+def test_two_callers_of_one_shared_procedure_keep_their_temp_tables_apart() -> None:
+    """Test case 5 (siblings): A and B call U, and A, B, and U all use `#tmp`."""
+    data, host = stubbed_procedures(
+        "PUR",
+        {
+            "dbo.usp_A": _procedure_that_calls("dbo.usp_U", temp_reads=True, base_table="dbo.BaseA"),
+            "dbo.usp_B": _procedure_that_calls("dbo.usp_U", temp_reads=True, base_table="dbo.BaseB"),
+            "dbo.usp_U": _procedure_that_calls(temp_reads=True, base_table="dbo.BaseU"),
+        },
+    )
+
+    graph = build_sql_execution_graph(data, host=host)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    # A sees its own writers and the writers of its callee U. It never sees B.
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:3") == {
+        "table:dbo.BaseA",
+        "table:dbo.BaseU",
+    }
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_B:3") == {
+        "table:dbo.BaseB",
+        "table:dbo.BaseU",
+    }
+    # U sees the writers of both callers: the expansion keeps the union.
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_U:2") == {
+        "table:dbo.BaseA",
+        "table:dbo.BaseB",
+        "table:dbo.BaseU",
+    }
+
+
+def test_a_temp_table_is_visible_through_a_chain_of_calls() -> None:
+    """Test case 6 (transitive chain): A calls B, B calls C, A writes `#tmp`, and C reads it.
+
+    B never names `#tmp`, so it has no node. The chain still passes through B.
+    """
+    data, host = stubbed_procedures(
+        "PUR",
+        {
+            "dbo.usp_A": _procedure_that_calls("dbo.usp_B", base_table="dbo.BaseA"),
+            "dbo.usp_B": [analyzer_operation("CALL", sequence=1, calls=["dbo.usp_C"])],
+            "dbo.usp_C": [analyzer_operation("SELECT", sequence=1, reads=["#tmp"])],
+        },
+    )
+
+    graph = build_sql_execution_graph(data, host=host)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    read_id = "dml_operation:stored_procedure:dbo.usp_C:1"
+    assert _lineage_targets(graph, read_id) == {"table:dbo.BaseA"}
+    derived = [
+        relationship
+        for relationship in graph["relationships"]
+        if relationship["source"] == read_id and relationship.get("lineage")
+    ]
+    assert len(derived) == 1
+    assert derived[0]["confidence"] == "proven"
+    # The lineage holds the scoped temp nodes from the read to the base read.
+    assert derived[0]["lineage"] == [
+        "table:dbo.#tmp@stored_procedure:dbo.usp_C",
+        "table:dbo.#tmp@stored_procedure:dbo.usp_A",
+    ]
+
+
+def test_a_call_to_a_procedure_the_graph_does_not_define_adds_no_lineage() -> None:
+    """Test case 9 (undefined callee): the call adds no temp table lineage."""
+    data, host = stubbed_procedures(
+        "PUR",
+        {
+            "dbo.usp_A": _procedure_that_calls("dbo.usp_Missing", temp_reads=True),
+            "dbo.usp_B": [analyzer_operation("INSERT", sequence=1, reads=["dbo.BaseB"], writes=["#tmp"])],
+        },
+    )
+
+    graph = build_sql_execution_graph(data, host=host)
+
+    # The calls relationship to the missing procedure keeps its target with no node,
+    # as before, so this test does not assert that every target resolves.
+    assert _lineage_reads(graph) == []
+
+
+def test_a_temp_read_inside_a_callee_writer_does_not_climb_back_to_the_caller_siblings() -> None:
+    """The direction of a state passes to the temp reads of its writers.
+
+    A calls U. U fills `#tmp` from `#b`. A reads `#tmp`. Another caller B of U
+    fills `#b` from its own base table. A's read went down to U, so it may not
+    go up again from U to B.
+    """
+    data, host = stubbed_procedures(
+        "PUR",
+        {
+            "dbo.usp_A": _procedure_that_calls("dbo.usp_U", temp_reads=True),
+            "dbo.usp_B": [
+                analyzer_operation("INSERT", sequence=1, reads=["dbo.BaseB"], writes=["#b"]),
+                analyzer_operation("CALL", sequence=2, calls=["dbo.usp_U"]),
+            ],
+            "dbo.usp_U": [analyzer_operation("INSERT", sequence=1, reads=["#b"], writes=["#tmp"])],
+        },
+    )
+
+    graph = build_sql_execution_graph(data, host=host)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:3") == set()
+
+
 if __name__ == "__main__":
     test_sql_host_emits_typed_operations_with_module_and_source_evidence()
     print("SQL execution graph tests passed")
