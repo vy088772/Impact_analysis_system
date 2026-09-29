@@ -486,11 +486,20 @@ class LocateObjectRequest(BaseModel):
 
 
 class LocatedDatabase(BaseModel):
-    """一個 Database 的完整身分：(server, database)。不含 schema——呼叫端拿它跟
+    """一個 Database 的完整身分：(server, database)，加上描述比對到那把 key 的欄位。
+
+    server 與 database 永遠是提供證據的那份快取的 SQL Cache Identity——呼叫端拿它跟
     Declared Database Dependency 比對時，只認這兩個欄位。
+    schema 描述比對到的 key：一個 Database 有三個 schema 就有三列，沒人證明 schema
+    的 key 是空字串。stated_database 只在比對到的 full key 寫的是另一個 Database 時
+    出現，內容是那個 Database 的名稱，呼叫端不必打開快取就能行動；它不參與交集。
     """
     server: str = ""
     database: str = ""
+    schema_name: str = Field(default="", alias="schema")
+    stated_database: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class LocateObjectResponse(BaseModel):
@@ -501,8 +510,8 @@ class LocateObjectResponse(BaseModel):
     Database，服務無法代答。
     一個索引新鮮但不持有這個名稱的 Database，兩份清單都不會出現——那就是剪枝本身，
     是權威結果，不是不確定。
-    每個 (server, database) 至多出現一次，且只會出現在其中一份清單裡：同一個
-    Database 的多個 schema 各有自己的索引，任何一份說「持有」就算 matched。
+    一個 Database 可以出現多列（每個比對到的 key 一列），列的 server 與 database
+    相同；呼叫端只用這兩個欄位取交集，多出來的列不會改變結果。
     """
     object_name: str = ""
     kind: str = ""

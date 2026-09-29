@@ -208,7 +208,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         raise HTTPException(status_code=500, detail=f"資料表反查失敗：{exc}")
 
 
-@app.post("/locate_object", response_model=LocateObjectResponse)
+@app.post("/locate_object", response_model=LocateObjectResponse, response_model_exclude_none=True)
 def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
     """從 Object Location Index 猜哪些 Database 可能持有指定物件名稱，不開任何 SQL 快取。"""
     try:

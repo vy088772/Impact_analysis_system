@@ -3,7 +3,10 @@ already on disk, without reconnecting to SQL Server."""
 
 from __future__ import annotations
 
+import json
+import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -38,8 +41,8 @@ def test_backfill_writes_an_index_for_a_cache_that_never_had_one() -> None:
         assert [entry["action"] for entry in results] == ["indexed"]
         loaded = sql_cache_store.load_object_location_index(identity)
         assert loaded is not None
-        assert loaded.stored_procedures == {"spaddrecorderror"}
-        assert loaded.tables == {"recorderror"}
+        assert loaded.stored_procedure_bare_keys == {"spaddrecorderror"}
+        assert loaded.table_bare_keys == {"recorderror"}
 
 
 def test_backfill_index_matches_the_shared_build_function_exactly() -> None:
@@ -126,6 +129,24 @@ def test_rerunning_backfill_rebuilds_the_index() -> None:
 
         assert [entry["action"] for entry in first] == ["indexed"]
         assert [entry["action"] for entry in second] == ["indexed"]
+
+
+def test_backfill_returns_an_index_that_had_no_version() -> None:
+    """The shape of every index on disk the day the index version starts."""
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR")
+        sql_cache_store._save(identity, _payload("PUR"))
+        index_path = cache_root / identity.index_filename
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        payload.pop("index_version")
+        index_path.write_text(json.dumps(payload), encoding="utf-8")
+        future = time.time() + 10
+        os.utime(index_path, (future, future))
+        assert sql_cache_store.load_object_location_index(identity) is None
+
+        backfill_all_caches()
+
+        assert sql_cache_store.load_object_location_index(identity) is not None
 
 
 def test_deleting_a_backfilled_index_by_hand_falls_back_to_reading_the_cache_in_full() -> None:

@@ -827,8 +827,8 @@ def test_the_object_location_index_keeps_the_temp_table_names() -> None:
         sql_cache_store.CacheIdentity.of(TEST_SERVER, "PUR"), cache_payload("PUR", graph=graph)
     )
 
-    assert {"#tmp", "basea", "baseb"} <= index.tables
-    assert len([name for name in index.tables if name.startswith("#")]) == 1
+    assert {"#tmp", "basea", "baseb"} <= index.table_bare_keys
+    assert len([name for name in index.table_bare_keys if name.startswith("#")]) == 1
 
 
 def test_a_temp_table_filled_and_read_in_one_procedure_resolves_with_the_real_analyzer_host() -> None:

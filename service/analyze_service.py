@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Opt
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
-from canonical_object_identity import bare_key, bare_name, parse, part_key
+from canonical_object_identity import ObjectName, bare_key, bare_name, full_key, parse, part_key
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
@@ -3078,31 +3078,31 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
     """從磁碟上每一份 SQL 快取的 Object Location Index 猜哪些 Database 可能持有這個
     物件名稱，一律不開任何 SQL 快取本體（見 ADR-0012）。
 
-    兩種 kind 都用 Canonical Object Identity 的 bare key 正規化查詢名稱：kind="sp"
-    比對索引的 stored_procedures 桶，kind="table" 比對 tables 桶——跟 find_by_sp()
-    比對 invocation、find_by_table() 經 SQL Execution Graph 比對表名用同一個函式。
-    索引因此不會剪掉一個對應端點其實找得到的名字。
+    查詢名稱遵守 two-bucket 規則（見 CONTEXT.md 的 Object Location Index）：沒寫 schema
+    的名稱問 bare 桶；寫了 schema 的名稱問 full 桶；寫了 schema 但 full 桶沒有，退回
+    bare 桶，那仍是比對成功（Unproven Schema）。名稱沒寫 database 時，full key 的
+    database 段取被問的那份索引自己的 Database。kind="sp" 問 stored_procedure 兩個桶，
+    kind="table" 問 table 兩個桶。
 
-    一份索引新鮮且持有這個名稱 → matched；快取存在但索引依 staleness 規則判定缺席
-    （缺失/讀不了/舊/版本不符/身分不符）→ unindexed；索引新鮮但不持有這個名稱 →
-    兩份清單都不出現，那就是剪枝本身，是權威結果而非不確定。
+    一份索引新鮮且持有這個名稱 → matched，比對到的每一把 full key 一列：server 與
+    database 永遠是這份快取的身分，schema 是那把 key 的 schema，stated_database 只在
+    那把 key 寫的是另一個 Database 時出現。快取存在但索引依 staleness 規則判定缺席
+    （缺失/讀不了/舊/版本不符/缺桶/身分不符）→ unindexed；索引新鮮但不持有這個名稱
+    → 兩份清單都不出現，那就是剪枝本身，是權威結果而非不確定。
 
-    一個 (server, database) 只有一份快取，所以每個 Database 只出現一次，兩份清單
-    互斥。下面依 (server, database) 合併各列、且 matched 蓋過 unindexed 的邏輯，
-    是快取曾按 schema 分開存放時留下的；現在不會再合併到任何東西，但不會給出錯誤
-    答案，由 Step 2b 的 located-database 形狀改寫時一併移除。
-    indexes_consulted 逐份索引計數——它量的是成本，不是 Database 數。
+    一個 Database 可以有多列；呼叫端只用 server 與 database 取交集，所以多出來的列
+    不會改變 Candidate Database Set。indexes_consulted 逐份索引計數——它量的是成本，
+    不是 Database 數。
     """
     kind = (req.kind or "").strip().casefold()
     if kind not in _LOCATE_OBJECT_KINDS:
         raise ValueError(f"kind 必須是 sp 或 table，收到：{req.kind!r}")
 
     object_name = (req.object_name or "").strip()
-    normalized = bare_key(object_name)
+    asked = parse(object_name)
 
-    databases: Dict[Tuple[str, str], LocatedDatabase] = {}
-    matched_keys: Set[Tuple[str, str]] = set()
-    unindexed_keys: Set[Tuple[str, str]] = set()
+    matched: List[LocatedDatabase] = []
+    unindexed: List[LocatedDatabase] = []
     indexes_consulted = 0
 
     for row in sql_cache_store.list_caches():
@@ -3116,30 +3116,59 @@ def locate_object(req: LocateObjectRequest) -> LocateObjectResponse:
             # answer for, in either direction.
             continue
         indexes_consulted += 1
-        key = (identity.server, identity.database)
-        databases.setdefault(
-            key, LocatedDatabase(server=identity.server, database=identity.database)
-        )
         index = sql_cache_store.load_object_location_index(identity)
         if index is None:
-            unindexed_keys.add(key)
+            unindexed.append(LocatedDatabase(server=identity.server, database=identity.database))
             continue
-        bucket = index.stored_procedures if kind == "sp" else index.tables
-        if normalized in bucket:
-            matched_keys.add(key)
+        matched.extend(_located_rows(index, kind, asked))
         # else: a fresh index that does not hold the name — pruned, appears in neither list.
 
+    matched_databases = {(row.server, row.database) for row in matched}
     return LocateObjectResponse(
         object_name=object_name,
         kind=kind,
-        matched=[db for key, db in databases.items() if key in matched_keys],
-        unindexed=[
-            db
-            for key, db in databases.items()
-            if key in unindexed_keys and key not in matched_keys
-        ],
+        matched=matched,
+        unindexed=[row for row in unindexed if (row.server, row.database) not in matched_databases],
         indexes_consulted=indexes_consulted,
     )
+
+
+def _located_rows(
+    index: sql_cache_store.ObjectLocationIndex, kind: str, asked: ObjectName
+) -> List[LocatedDatabase]:
+    """The rows one fresh index gives for a name, under the two-bucket rule."""
+    if kind == "sp":
+        bare_bucket, full_bucket = index.stored_procedure_bare_keys, index.stored_procedure_full_keys
+    else:
+        bare_bucket, full_bucket = index.table_bare_keys, index.table_full_keys
+    name_key = bare_key(asked)
+    if name_key not in bare_bucket:
+        return []
+    keys = sorted(key for key in full_bucket if key.split(".", 2)[2] == name_key)
+    if asked.schema:
+        # The name states a schema: the full bucket answers. A name that states no
+        # Database takes the Database of the index that is asked.
+        asked_key = full_key(
+            ObjectName("", asked.database or index.database, asked.schema, asked.name)
+        )
+        exact = [key for key in keys if key == asked_key]
+        keys = exact or keys
+    rows = []
+    for key in keys:
+        database, schema, _name = key.split(".", 2)
+        stated = None
+        if database != part_key(index.database):
+            # The index keeps casefolded keys; a caller that typed the Database gets it back as typed.
+            stated = asked.database if part_key(asked.database) == database else database
+        rows.append(
+            LocatedDatabase(
+                server=index.server,
+                database=index.database,
+                schema=schema,
+                stated_database=stated,
+            )
+        )
+    return rows
 
 
 def flow_chain(req: FlowChainRequest) -> FlowChainResponse:

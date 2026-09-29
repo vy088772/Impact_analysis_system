@@ -34,7 +34,7 @@ from typing import Callable, Dict, List, Optional, Union
 # 索引的兩個桶跟 /find_by_sp、/find_by_table 比對時用同一個 bare key
 # （Canonical Object Identity module），特意重用而不是自己另寫一份等價邏輯——否則
 # 索引跟真正的比對邏輯日後可能悄悄長歪，讓索引誤刪一個端點其實會找到的名字。
-from canonical_object_identity import bare_key
+from canonical_object_identity import ObjectName, bare_key, full_key, parse
 from config.settings import settings
 
 # 快取格式版本：dump_all_sql_objects() 回傳結構若變動則遞增，讓舊快取自動失效
@@ -56,6 +56,12 @@ from config.settings import settings
 # schema part, and the meta file and the Object Location Index lose their `schema`
 # field. A cache written under a three-part filename never loads again.
 _SQL_CACHE_VERSION = 11
+
+# Object Location Index 自己的格式版本，跟上面的快取版本各管各的檔案：索引的形狀
+# 換了、快取的形狀沒換時，只有這一個常數往上加。
+# v1：每種物件兩個桶——bare key 桶與 full key（database.schema.name）桶。
+# 沒有版本欄位的索引（Step 2b 之前寫的）與版本對不上的索引，一律算「沒有索引」。
+_INDEX_VERSION = 1
 
 # 同 process 內的記憶體快取。有界、LRU 淘汰（ticket 08，見
 # settings.SQL_CACHE_MEMORY_RETENTION_LIMIT 上方註解的動機）：淘汰只影響這份
@@ -453,18 +459,34 @@ def write_meta(identity: CacheIdentity, saved_at: str) -> None:
 class ObjectLocationIndex:
     """一份 SQL 快取的 Object Location Index：這份快取能回答哪些物件名稱。
 
-    分兩個桶，都用 Canonical Object Identity 的 bare key 正規化：stored_procedures
-    （procedures/views/functions）與 tables（快取宣告的 tables ∪ SQL Execution
-    Graph 裡的 table 節點）。兩個桶都已經去掉 schema——dbo.Orders 與 sales.Orders
-    收斂成同一個 key，這是今天既有的比對行為。
+    兩種物件（stored_procedures 含 procedures/views/functions；tables 含快取宣告的
+    tables ∪ SQL Execution Graph 裡的 table 節點），每種兩個桶，都用 Canonical
+    Object Identity 的 key 正規化：bare 桶只有 bare key，忽略 database 與 schema；
+    full 桶是 `database.schema.name`。bare 桶保留今天持有的每一個名稱。
+    快取列出的物件，database 取快取自己的 Database；graph 節點的 database 取 reference
+    寫出的那個，沒寫就是快取自己的 Database。schema 沒人證明的節點，full key 的
+    schema 段是空的，絕不補 dbo。
     寧可多報也不能少報：多報頂多多讀一次快取，少報會漏掉一個本該找到的答案。
+    索引的版本是檔案的屬性，不是索引內容的一部分，所以值裡不帶版本。
     """
 
     server: str
     database: str
-    cache_version: int
-    stored_procedures: frozenset[str]
-    tables: frozenset[str]
+    stored_procedure_bare_keys: frozenset[str]
+    stored_procedure_full_keys: frozenset[str]
+    table_bare_keys: frozenset[str]
+    table_full_keys: frozenset[str]
+
+
+def _listed_full_key(identity: CacheIdentity, item: object) -> Optional[str]:
+    """The full key of one listed object, or None for an entry with no name."""
+    entry = item if isinstance(item, dict) else {}
+    name = str(entry.get("name") or "").strip()
+    if not name:
+        return None
+    written = parse(name)
+    schema = str(entry.get("schema") or "").strip() or written.schema
+    return full_key(ObjectName("", identity.database, schema, written.name))
 
 
 def build_object_location_index(identity: CacheIdentity, data: Dict) -> ObjectLocationIndex:
@@ -472,44 +494,65 @@ def build_object_location_index(identity: CacheIdentity, data: Dict) -> ObjectLo
 
     refresh 路徑（_save()）與 backfill 工具共用這一個函式，不會有第二份實作。
     """
-    stored_procedures: set[str] = set()
+    stored_procedure_bare: set[str] = set()
+    stored_procedure_full: set[str] = set()
     for collection in ("procedures", "views", "functions"):
         for item in data.get(collection, []) or []:
-            name = str((item or {}).get("name") or "").strip()
-            if name:
-                stored_procedures.add(bare_key(name))
+            key = _listed_full_key(identity, item)
+            if key is not None:
+                stored_procedure_bare.add(bare_key(str((item or {}).get("name") or "")))
+                stored_procedure_full.add(key)
 
-    tables: set[str] = set()
+    table_bare: set[str] = set()
+    table_full: set[str] = set()
     for item in data.get("tables", []) or []:
-        name = str((item or {}).get("name") or "").strip()
-        if name:
-            tables.add(bare_key(name))
+        key = _listed_full_key(identity, item)
+        if key is not None:
+            table_bare.add(bare_key(str((item or {}).get("name") or "")))
+            table_full.add(key)
 
     graph = data.get("sql_execution_graph")
     if isinstance(graph, dict):
+        # 一個節點被哪些 Database 的 reference 指到，就有哪幾把 full key；沒有
+        # relationship 指到它的節點，只屬於快取自己的 Database。
+        databases_of_target: Dict[str, set[str]] = {}
+        for relationship in graph.get("relationships", []) or []:
+            if not isinstance(relationship, dict):
+                continue
+            stated = str(relationship.get("database") or "").strip()
+            databases_of_target.setdefault(str(relationship.get("target") or ""), set()).add(
+                stated or identity.database
+            )
         for node in graph.get("nodes", []) or []:
             if not isinstance(node, dict) or node.get("type") != "table":
                 continue
             name = str(node.get("name") or "").strip()
-            if name:
-                tables.add(bare_key(name))
+            if not name:
+                continue
+            table_bare.add(bare_key(name))
+            schema = str(node.get("schema") or "")
+            for database in databases_of_target.get(str(node.get("id") or ""), {identity.database}):
+                table_full.add(full_key(ObjectName("", database, schema, name)))
 
     return ObjectLocationIndex(
         server=identity.server,
         database=identity.database,
-        cache_version=_SQL_CACHE_VERSION,
-        stored_procedures=frozenset(stored_procedures),
-        tables=frozenset(tables),
+        stored_procedure_bare_keys=frozenset(stored_procedure_bare),
+        stored_procedure_full_keys=frozenset(stored_procedure_full),
+        table_bare_keys=frozenset(table_bare),
+        table_full_keys=frozenset(table_full),
     )
 
 
 def _index_payload(index: ObjectLocationIndex) -> Dict[str, object]:
     return {
+        "index_version": _INDEX_VERSION,
         "server": index.server,
         "database": index.database,
-        "cache_version": index.cache_version,
-        "stored_procedures": sorted(index.stored_procedures),
-        "tables": sorted(index.tables),
+        "stored_procedure_bare_keys": sorted(index.stored_procedure_bare_keys),
+        "stored_procedure_full_keys": sorted(index.stored_procedure_full_keys),
+        "table_bare_keys": sorted(index.table_bare_keys),
+        "table_full_keys": sorted(index.table_full_keys),
     }
 
 
@@ -524,9 +567,10 @@ def write_object_location_index(identity: CacheIdentity, index: ObjectLocationIn
 def load_object_location_index(identity: CacheIdentity) -> Optional[ObjectLocationIndex]:
     """讀取一份索引；staleness 規則只定義在這一處。
 
-    索引檔不存在、讀不了、修改時間早於它描述的快取資料檔、版本跟現在的
-    _SQL_CACHE_VERSION 對不上、或身分跟呼叫端要的 identity 對不上，都算「沒有
-    索引」——呼叫端接下來照舊打開整份快取，絕不會因為索引壞掉而少答一個答案。
+    索引檔不存在、讀不了、修改時間早於它描述的快取資料檔、沒有 index_version 或
+    版本跟現在的 _INDEX_VERSION 不相等（舊的、新的都算，新的可能來自被退版的部署）、
+    缺任何一個桶（四個桶都要是 list）、或身分跟呼叫端要的 identity 對不上，都算
+    「沒有索引」——呼叫端接下來照舊打開整份快取，絕不會因為索引壞掉而少答一個答案。
 
     這裡只取快取資料檔的修改時間（stat），從不 parse 它的內容——105 MB 的檔案
     不該在這裡被打開，那正是索引想省下的成本。
@@ -543,22 +587,34 @@ def load_object_location_index(identity: CacheIdentity) -> Optional[ObjectLocati
         return None
     if not isinstance(payload, dict):
         return None
-    if payload.get("cache_version") != _SQL_CACHE_VERSION:
+    version = payload.get("index_version")
+    if isinstance(version, bool) or version != _INDEX_VERSION:
         return None
     if not _same_scope(payload.get("server"), identity.server):
         return None
     if not _same_scope(payload.get("database"), identity.database):
         return None
-    stored_procedures = payload.get("stored_procedures")
-    tables = payload.get("tables")
-    if not isinstance(stored_procedures, list) or not isinstance(tables, list):
+    buckets = [
+        payload.get(field)
+        for field in (
+            "stored_procedure_bare_keys",
+            "stored_procedure_full_keys",
+            "table_bare_keys",
+            "table_full_keys",
+        )
+    ]
+    if not all(isinstance(bucket, list) for bucket in buckets):
         return None
+    stored_procedure_bare, stored_procedure_full, table_bare, table_full = (
+        frozenset(str(key) for key in bucket) for bucket in buckets
+    )
     return ObjectLocationIndex(
         server=identity.server,
         database=identity.database,
-        cache_version=_SQL_CACHE_VERSION,
-        stored_procedures=frozenset(str(name) for name in stored_procedures),
-        tables=frozenset(str(name) for name in tables),
+        stored_procedure_bare_keys=stored_procedure_bare,
+        stored_procedure_full_keys=stored_procedure_full,
+        table_bare_keys=table_bare,
+        table_full_keys=table_full,
     )
 
 

@@ -232,6 +232,98 @@ def test_the_endpoint_never_opens_a_sql_cache(monkeypatch) -> None:
         assert response.matched
 
 
+def _locate(name: str, kind: str = "table") -> LocateObjectResponse:
+    return analyze_service.locate_object(LocateObjectRequest(object_name=name, kind=kind))
+
+
+def _schemas(response: LocateObjectResponse) -> list[tuple[str, str, str, str | None]]:
+    return sorted(
+        (d.server, d.database, d.schema_name, d.stated_database) for d in response.matched
+    )
+
+
+def test_a_database_with_three_schemas_gives_three_rows_for_a_bare_name() -> None:
+    with CacheRoot():
+        identity = CacheIdentity.of("vmsystest07", "Response")
+        sql_cache_store._save(
+            identity,
+            _payload(
+                "Response",
+                tables={
+                    "dbo.AVM": {"columns": []},
+                    "COMMON.AVM": {"columns": []},
+                    "HR.AVM": {"columns": []},
+                },
+            ),
+        )
+
+        response = _locate("AVM")
+
+        assert _schemas(response) == [
+            ("vmsystest07.topmost.com.tw", "Response", "common", None),
+            ("vmsystest07.topmost.com.tw", "Response", "dbo", None),
+            ("vmsystest07.topmost.com.tw", "Response", "hr", None),
+        ]
+
+
+def test_a_name_that_states_a_schema_asks_the_full_bucket() -> None:
+    with CacheRoot():
+        identity = CacheIdentity.of("vmsystest07", "Response")
+        sql_cache_store._save(
+            identity,
+            _payload("Response", tables={"dbo.AVM": {"columns": []}, "COMMON.AVM": {"columns": []}}),
+        )
+
+        response = _locate("COMMON.AVM")
+
+        assert [d.schema_name for d in response.matched] == ["common"]
+
+
+def test_a_stated_schema_that_no_full_key_holds_still_matches_through_the_bare_bucket() -> None:
+    with CacheRoot():
+        identity = CacheIdentity.of("vmsystest07", "Response")
+        sql_cache_store._save(
+            identity, _payload("Response", tables={"COMMON.AVM": {"columns": []}})
+        )
+
+        response = _locate("dbo.AVM")
+
+        assert [(d.database, d.schema_name) for d in response.matched] == [("Response", "common")]
+
+
+def test_a_cross_database_reference_reports_stated_database_but_names_the_cache_it_came_from() -> None:
+    with CacheRoot():
+        identity = CacheIdentity.of("vmsystest07", "Response")
+        graph = execution_graph(
+            "Response",
+            nodes=[{"id": "table:dbo.Users", "type": "table", "schema": "dbo", "name": "Users"}],
+            relationships=[
+                {"id": "r", "type": "reads", "source": "op", "target": "table:dbo.Users", "database": "PUR"}
+            ],
+        )
+        sql_cache_store._save(identity, cache_payload("Response", graph=graph))
+
+        response = _locate("PUR.dbo.Users")
+        local = _locate("Response.dbo.Users")
+
+        assert _schemas(response) == [("vmsystest07.topmost.com.tw", "Response", "dbo", "PUR")]
+        # The cache holds a reference to PUR's table only, so the local full key misses
+        # and the bare bucket still reports the cache: an over-report, never an under-report.
+        assert [d.database for d in local.matched] == ["Response"]
+
+
+def test_a_located_row_without_a_stated_database_omits_the_field_on_the_wire() -> None:
+    with CacheRoot():
+        identity = CacheIdentity.of("vmsystest07", "PUR")
+        sql_cache_store._save(identity, _payload("PUR", procedures={"dbo.spX": {"definition": ""}}))
+
+        wire = _locate("spX", "sp").model_dump(exclude_none=True, by_alias=True)
+
+        assert wire["matched"] == [
+            {"server": "vmsystest07.topmost.com.tw", "database": "PUR", "schema": "dbo"}
+        ]
+
+
 # ------------------------------------------------------------------------- route
 
 

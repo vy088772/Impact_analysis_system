@@ -648,7 +648,12 @@ def test_the_stored_procedure_bucket_holds_procedures_views_and_functions_normal
 
     index = sql_cache_store.build_object_location_index(identity, data)
 
-    assert index.stored_procedures == {"spdothing", "vwsomething", "ufncalc"}
+    assert index.stored_procedure_bare_keys == {"spdothing", "vwsomething", "ufncalc"}
+    assert index.stored_procedure_full_keys == {
+        "pur.dbo.spdothing",
+        "pur.dbo.vwsomething",
+        "pur.dbo.ufncalc",
+    }
 
 
 def test_the_table_bucket_holds_the_declared_tables_normalized() -> None:
@@ -657,17 +662,25 @@ def test_the_table_bucket_holds_the_declared_tables_normalized() -> None:
 
     index = sql_cache_store.build_object_location_index(identity, data)
 
-    assert index.tables == {"customers"}
+    assert index.table_bare_keys == {"customers"}
+    assert index.table_full_keys == {"pur.dbo.customers"}
 
 
-def test_table_name_normalization_drops_the_schema() -> None:
-    """dbo.Orders and sales.Orders must collapse to the same key."""
+def test_the_bare_bucket_collapses_schemas_and_the_full_bucket_keeps_them() -> None:
+    """dbo.Orders and sales.Orders share a bare key and hold two full keys."""
     identity = CacheIdentity.of("vmsystest07", "PUR")
-    data = _payload("PUR", tables={"sales.Orders": {"columns": [], "primary_keys": []}})
+    data = _payload(
+        "PUR",
+        tables={
+            "sales.Orders": {"columns": [], "primary_keys": []},
+            "dbo.Orders": {"columns": [], "primary_keys": []},
+        },
+    )
 
     index = sql_cache_store.build_object_location_index(identity, data)
 
-    assert index.tables == {"orders"}
+    assert index.table_bare_keys == {"orders"}
+    assert index.table_full_keys == {"pur.sales.orders", "pur.dbo.orders"}
 
 
 def test_the_table_bucket_includes_a_table_reached_only_inside_a_stored_procedure_body() -> None:
@@ -677,18 +690,39 @@ def test_the_table_bucket_includes_a_table_reached_only_inside_a_stored_procedur
 
     index = sql_cache_store.build_object_location_index(identity, data)
 
-    assert "orders" in index.tables  # only a graph node, never in data["tables"]
-    assert "customers" in index.tables  # a declared table is still included too
+    assert "orders" in index.table_bare_keys  # only a graph node, never in data["tables"]
+    assert "customers" in index.table_bare_keys  # a declared table is still included too
 
 
-def test_the_index_carries_its_identity_and_the_cache_format_version() -> None:
+def test_a_graph_node_takes_the_database_each_reference_states() -> None:
+    identity = CacheIdentity.of("vmsystest07", "Response")
+    graph = execution_graph(
+        "Response",
+        nodes=[
+            {"id": "table:dbo.Users", "type": "table", "schema": "dbo", "name": "Users"},
+            {"id": "table:.Orders", "type": "table", "schema": "", "name": "Orders"},
+        ],
+        relationships=[
+            {"id": "r1", "type": "reads", "source": "op", "target": "table:dbo.Users", "database": "PUR"},
+            {"id": "r2", "type": "reads", "source": "op", "target": "table:.Orders"},
+        ],
+    )
+
+    index = sql_cache_store.build_object_location_index(
+        identity, cache_payload("Response", graph=graph)
+    )
+
+    assert index.table_full_keys == {"pur.dbo.users", "response..orders"}
+    assert index.table_bare_keys == {"users", "orders"}
+
+
+def test_the_index_carries_its_identity() -> None:
     identity = CacheIdentity.of("vmsystest07", "PUR")
 
     index = sql_cache_store.build_object_location_index(identity, _payload("PUR"))
 
     assert index.server == "vmsystest07.topmost.com.tw"
     assert index.database == "PUR"
-    assert index.cache_version == sql_cache_store._SQL_CACHE_VERSION
 
 
 def test_the_index_is_written_beside_the_cache_not_merged_into_the_scan_record() -> None:
@@ -725,7 +759,7 @@ def test_a_fresh_index_round_trips_through_load_object_location_index() -> None:
         loaded = sql_cache_store.load_object_location_index(identity)
 
         assert loaded is not None
-        assert "spaddrecorderror" in loaded.stored_procedures
+        assert "spaddrecorderror" in loaded.stored_procedure_bare_keys
 
 
 def test_a_missing_index_file_counts_as_absent() -> None:
@@ -757,19 +791,60 @@ def test_an_index_older_than_its_cache_counts_as_absent() -> None:
         assert sql_cache_store.load_object_location_index(identity) is None
 
 
-def test_an_index_built_against_a_different_cache_format_version_counts_as_absent() -> None:
+def _rewrite_index(cache_root, identity, edit) -> None:
+    """Edit a real index file, then set its modification time ahead of the cache's.
+
+    The newer time rules out the age rule alone as the reason for an absent index.
+    """
+    index_path = cache_root / identity.index_filename
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    edit(payload)
+    index_path.write_text(json.dumps(payload), encoding="utf-8")
+    future = time.time() + 10
+    os.utime(index_path, (future, future))
+
+
+def test_an_index_built_against_a_different_index_version_counts_as_absent() -> None:
+    for other_version in (sql_cache_store._INDEX_VERSION - 1, sql_cache_store._INDEX_VERSION + 1):
+        with CacheRoot() as cache_root:
+            identity = CacheIdentity.of("vmsystest07", "PUR")
+            sql_cache_store._save(identity, _payload("PUR"))
+
+            _rewrite_index(cache_root, identity, lambda p: p.update(index_version=other_version))
+
+            assert sql_cache_store.load_object_location_index(identity) is None
+
+
+def test_an_index_with_no_version_counts_as_absent() -> None:
+    """The shape of every index written before Step 2b."""
     with CacheRoot() as cache_root:
         identity = CacheIdentity.of("vmsystest07", "PUR")
         sql_cache_store._save(identity, _payload("PUR"))
 
-        index_path = cache_root / identity.index_filename
-        payload = json.loads(index_path.read_text(encoding="utf-8"))
-        payload["cache_version"] = sql_cache_store._SQL_CACHE_VERSION - 1
-        index_path.write_text(json.dumps(payload), encoding="utf-8")
-        future = time.time() + 10
-        os.utime(index_path, (future, future))  # rule out the mtime check alone
+        _rewrite_index(cache_root, identity, lambda p: p.pop("index_version"))
 
         assert sql_cache_store.load_object_location_index(identity) is None
+
+
+def test_an_index_missing_a_bucket_counts_as_absent() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR")
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        _rewrite_index(cache_root, identity, lambda p: p.pop("table_full_keys"))
+
+        assert sql_cache_store.load_object_location_index(identity) is None
+
+
+def test_the_index_file_states_its_version_and_not_the_cache_format_version() -> None:
+    with CacheRoot() as cache_root:
+        identity = CacheIdentity.of("vmsystest07", "PUR")
+        sql_cache_store._save(identity, _payload("PUR"))
+
+        payload = json.loads((cache_root / identity.index_filename).read_text(encoding="utf-8"))
+
+        assert payload["index_version"] == sql_cache_store._INDEX_VERSION
+        assert "cache_version" not in payload
 
 
 def test_an_index_moved_by_hand_to_a_different_identity_counts_as_absent() -> None:
