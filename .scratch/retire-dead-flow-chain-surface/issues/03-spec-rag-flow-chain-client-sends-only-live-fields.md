@@ -29,3 +29,5 @@
 - mypy `impact_orch/rag_client.py`: 9 errors before and after. The only difference is the line numbers, one lower.
 - Full suite: 2 failed, 1164 passed before and after. The two failures exist on c1425a3 and do not relate to this ticket: `test_path_evidence_wiring.py::test_clients_route_the_sql_cache_by_database_name_not_system_id` and `test_source_resolver_databases.py::test_the_shipped_catalog_declares_databases_as_full_identities`.
 - Repo-wide search for `max_sp_depth` (excluding `.scratch/`, `.venv/`): zero hits.
+
+**2026-09-29:** `../../flow-chain-depth-cap-descriptions/spec.md` records the correction of the docstring sentence "沒有深度控制：圖上記錄了幾層就回幾層", because the server has an expansion limit.

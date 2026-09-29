@@ -30,12 +30,12 @@ Delete the two dead functions and the unread `database_alias` parameter. Remove 
 8. As a caller of `/flow_chain`, I want the request model to list only fields that change the result, so that I do not set a field that has no effect.
 9. As a caller of `/flow_chain` that still sends `max_sp_depth`, I want the request to succeed after the field is removed, so that the two repositories can change in any order.
 10. As a reader of the OpenAPI document, I want it to list only request fields that exist, so that the document agrees with the live app.
-11. As a mode 3 agent that reads the spec-rag client description, I want it to say that the forward chain lists the SP chain that the SQL Execution Graph records, nested calls included, so that I do not expect a depth control.
+11. As a mode 3 agent that reads the spec-rag client description, I want it to say that the forward chain lists the SP chain that the SQL Execution Graph records, up to the server expansion limit, and where a truncated path goes, so that I do not expect a depth parameter and I find a truncated path.
 12. As a maintainer of spec-rag, I want the client function for `/flow_chain` to have no parameter that the server ignores, so that no new caller copies a dead parameter forward.
 13. As a maintainer running the test suite after this change, I want the existing backward-chain tests to pass without modification, so that I have direct evidence that the result did not change.
 14. As a maintainer running the spec-rag test suite after this change, I want the existing flow-chain tests to pass without modification, so that I know that the multi-database query and merge did not change.
 15. As a maintainer running mypy in each repository after this change, I want no new mypy error, so that I know every call site matches the new signatures.
-16. As a future engineer who considers a depth limit for the SP chain, I want this spec to record why the field was removed and not given an effect, so that I do not add a limit that hides facts that the graph holds.
+16. As a future engineer who considers a depth limit for the SP chain, I want this spec to record why the field was removed and why the existing expansion limit stays, so that I do not confuse the removed caller field with the server expansion limit.
 
 ## Implementation Decisions
 
@@ -47,7 +47,7 @@ Delete the two dead functions and the unread `database_alias` parameter. Remove 
 - `FlowChainRequest`: remove the `max_sp_depth` field. Do not add a `model_config` that changes the handling of extra fields. The model uses the Pydantic default, which ignores an unknown field. Thus a request that still sends `max_sp_depth` succeeds, and the server uses no value from it.
 - `FlowChainRequest.db_name` does not change. `DerivedExecutionEvidenceScope` reads it as part of the derived evidence store key, so it changes which stored evidence the request uses.
 - OpenAPI document: regenerate it with the export tool. Do not edit it by hand.
-- spec-rag client function for `/flow_chain`: remove the `max_sp_depth` parameter. Remove `max_sp_depth` from the request payload. Rewrite the forward-direction sentence of its docstring: the forward chain goes from the anchor method along the method call chain, lists the SP chain that the SQL Execution Graph records (nested calls included), and collects the tables of each SP. Keep the backward-direction sentence that calls column matching approximate. This change is in the `llamaindex-spec-rag` repository, so its commit goes there.
+- spec-rag client function for `/flow_chain`: remove the `max_sp_depth` parameter. Remove `max_sp_depth` from the request payload. Rewrite the forward-direction sentence of its docstring: the forward chain goes from the anchor method along the method call chain, lists the SP chain that the SQL Execution Graph records (nested calls included, up to the server expansion limit), and collects the tables of each SP. The docstring tells the agent that it has no depth parameter and that a truncated path goes to `diagnostics`. Keep the backward-direction sentence that calls column matching approximate. This change is in the `llamaindex-spec-rag` repository, so its commit goes there.
 - The two repositories can change in any order. Server first: the old client sends a field that the server ignores. Client first: the server applies the default of a field that it does not read.
 - No ADR. The field has no effect now, and a later spec can add a field back without a migration. This spec records the decision and its reason. See Further Notes.
 
@@ -72,7 +72,7 @@ A good test here proves that `/flow_chain` returns the same data for the same re
 
 ## Further Notes
 
-**Why remove `max_sp_depth` and not give it an effect.** The SQL Execution Graph gives the full nested SP chain for each path. A depth limit would cut facts that the graph already holds, and a caller could not get those facts back. The removal does not rest on "no caller uses the field". The system is still in development and has no usage evidence, so that argument is not valid. The removal rests on two facts: the server already ignores the field, and the field's description says that it limits a behavior that does not exist.
+**Why remove `max_sp_depth` and not give it an effect.** The removal does not rest on "no caller uses the field". The system is still in development and has no usage evidence, so that argument is not valid. The removal rests on two facts: the server ignores this caller field, and its description claims a depth control that the caller does not have. The server has a separate expansion limit, `max_call_depth` with the value 5, that no caller can set. The expansion limit stays, because the server reports each truncated path in `diagnostics` as `call_expansion_truncated`, so no fact disappears without a report. A change to the expansion limit needs its own spec.
 
 **Why the removal is safe for an old client.** `FlowChainRequest` has no `model_config`, so Pydantic ignores an unknown field. An old spec-rag client that sends `max_sp_depth` still gets a valid request.
 
