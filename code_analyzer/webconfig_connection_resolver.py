@@ -179,19 +179,21 @@ def parse_web_config_connections(content: str) -> WebConfigConnections:
     shared = _new_sections()
     own_only = _new_sections()
 
-    def read_sections(parent: ET.Element, target: Dict[tuple, _Section]) -> None:
-        for kind, section in target.items():
-            for element in parent.findall(kind[0]):
-                section.read(element)
+    sections_by_name = {kind[0]: kind for kind in (_APP_SETTINGS, _CONNECTION_STRINGS)}
 
-    read_sections(root, shared)
-    for location in root.findall("location"):
-        if not _own_location(location):
-            continue
-        if _passes_to_children(location):
-            read_sections(location, shared)
-        else:
-            read_sections(location, own_only)
+    def read_sections(parent: ET.Element, target: Dict[tuple, _Section]) -> None:
+        for element in parent:
+            kind = sections_by_name.get(element.tag)
+            if kind is not None:
+                target[kind].read(element)
+
+    # A section at the root and a section in a <location> share one document
+    # order, so a later <clear/> also clears an earlier <location> section.
+    for child in root:
+        if child.tag == "location" and _own_location(child):
+            read_sections(child, shared if _passes_to_children(child) else own_only)
+        elif child.tag in sections_by_name:
+            shared[sections_by_name[child.tag]].read(child)
 
     return WebConfigConnections(
         app_settings=shared[_APP_SETTINGS].entries,

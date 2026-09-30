@@ -924,3 +924,40 @@ def test_a_section_in_a_location_for_another_path_is_not_read(tmp_path: Path):
     source = _source_file(parent / "Default.cs")
 
     assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer(database="PUR")
+
+
+def test_a_location_section_before_a_clear_of_the_same_file_is_cleared(tmp_path: Path):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        f'<location path=".">{PARENT_PUR}</location>'
+        "<connectionStrings><clear/>"
+        '<add name="Kept" connectionString="Server=sql01;Database=KeptDb"/>'
+        "</connectionStrings>",
+    )
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "Kept").database == "KeptDb"
+
+
+def test_a_location_section_after_a_clear_of_the_same_file_survives(tmp_path: Path):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        "<connectionStrings><clear/></connectionStrings>"
+        f'<location path=".">{PARENT_PUR}</location>',
+    )
+
+    assert _lookup(tmp_path, source, "PUR").database == "PurDb"
+
+
+def test_a_remove_in_an_ancestor_stops_the_key_of_the_layers_above_it(tmp_path: Path):
+    _clone(tmp_path)
+    grandparent = _write_web_project(tmp_path / "Root", "http://localhost/Root")
+    _write_raw_web_config(grandparent, PARENT_PUR)
+    parent = _write_web_project(tmp_path / "Root" / "Mid", "http://localhost/Root/Mid")
+    _write_raw_web_config(parent, '<connectionStrings><remove name="PUR"/></connectionStrings>')
+    child = _write_web_project(tmp_path / "Root" / "Mid" / "Leaf", "http://localhost/Root/Mid/Leaf")
+    _write_raw_web_config(child, "<appSettings/>")
+    source = _source_file(child / "Leaf.cs")
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "ATV").declared_in == "Root/Web.config"
