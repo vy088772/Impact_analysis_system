@@ -7,6 +7,7 @@ from hashlib import sha256
 import re
 from typing import Any, Iterable, Mapping, Optional
 
+import schema_resolution
 from canonical_object_identity import ObjectName, bare_key, part_key, schema_qualified
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
@@ -576,6 +577,11 @@ def _relationship_targets(
     schema comes from the node, and stays empty when the node states none. The
     database comes from the relationship, because node identity holds none. A
     relationship that states no database takes the graph's own Database.
+
+    A full key also carries the ``schema_source`` of its relationship. A
+    relationship that records none reads as ``written`` when the node states a
+    schema, else ``unresolved``. Two relationships to one table keep the
+    strongest source.
     """
     names: list[str] = []
     full_keys: list[dict[str, str]] = []
@@ -589,13 +595,30 @@ def _relationship_targets(
             missing.append(target_id or "<missing-target>")
             continue
         names.append(schema_qualified(_node_object_name(target)))
+        schema = str(target.get("schema", "") or "")
         full_key = {
             "database": str(relationship.get("database") or "") or graph_database,
-            "schema": str(target.get("schema", "") or ""),
+            "schema": schema,
             "name": str(target.get("name", "") or ""),
+            "schema_source": str(
+                relationship.get("schema_source")
+                or (schema_resolution.WRITTEN if schema else schema_resolution.UNRESOLVED)
+            ),
         }
-        if full_key not in full_keys:
+        same_table = next(
+            (
+                kept
+                for kept in full_keys
+                if all(kept[part] == full_key[part] for part in ("database", "schema", "name"))
+            ),
+            None,
+        )
+        if same_table is None:
             full_keys.append(full_key)
+        else:
+            same_table["schema_source"] = min(
+                same_table["schema_source"], full_key["schema_source"], key=schema_source_rank
+            )
     return _ordered_unique(names), full_keys, _ordered_unique(missing)
 
 
@@ -824,3 +847,8 @@ def _ordered_unique(values: Iterable[Any]) -> list[str]:
             seen.add(text)
             result.append(text)
     return result
+
+def schema_source_rank(schema_source: str) -> int:
+    """The position of a schema source, strongest first; a value the rule does not know ranks last."""
+    sources = schema_resolution.SOURCES
+    return sources.index(schema_source) if schema_source in sources else len(sources)

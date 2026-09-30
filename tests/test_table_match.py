@@ -13,6 +13,7 @@ from pathlib import Path
 from canonical_object_identity import ObjectName
 from code_analyzer.project_scanner import UNRESOLVED_CONNECTION_DATABASE, CSharpTableRelation, ProjectScanResult
 from service import analyze_service
+from service.sql_cache_store import CacheIdentity, build_object_location_index
 from service.schemas import FindByTableRequest
 from tests.sql_cache_fixtures import (
     analyzer_operation,
@@ -31,8 +32,15 @@ def _procedure_id(name: str) -> str:
     return f"stored_procedure:dbo.{name}"
 
 
-def _graph(procedures: dict[str, list[Target]], views: dict[str, list[Target]] | None = None) -> dict:
-    """One operation per target. A procedure or a View holds the operations listed for it."""
+def _graph(
+    procedures: dict[str, list[Target]],
+    views: dict[str, list[Target]] | None = None,
+    schema_source: str = "",
+) -> dict:
+    """One operation per target. A procedure or a View holds the operations listed for it.
+
+    ``schema_source`` states how the graph found the schema of every target, as the graph builder records it.
+    """
     nodes: list[dict] = []
     relationships: list[dict] = []
     seen_tables: set[str] = set()
@@ -59,6 +67,8 @@ def _graph(procedures: dict[str, list[Target]], views: dict[str, list[Target]] |
             relationship = {"type": verb, "source": operation_id, "target": table_id}
             if database:
                 relationship["database"] = database
+            if schema_source:
+                relationship["schema_source"] = schema_source
             relationships.append(relationship)
         return module_id
 
@@ -228,12 +238,12 @@ def test_an_execution_path_states_a_full_key_for_each_target() -> None:
     paths = build_execution_paths([invocation], graph)
 
     assert [path["write_full_keys"] for path in paths] == [
-        [{"database": DATABASE, "schema": "", "name": "AVM"}],
+        [{"database": DATABASE, "schema": "", "name": "AVM", "schema_source": "unresolved"}],
         [],
     ]
     assert [path["read_full_keys"] for path in paths] == [
         [],
-        [{"database": "PUR", "schema": "dbo", "name": "Users"}],
+        [{"database": "PUR", "schema": "dbo", "name": "Users", "schema_source": "written"}],
     ]
 
 
@@ -264,10 +274,35 @@ def _inline_scan(
     )
 
 
-def _ask_inline(monkeypatch, tmp_path, table: ObjectName, connection_database: str, asked: str):
+def _ask_inline(
+    monkeypatch,
+    tmp_path,
+    table: ObjectName,
+    connection_database: str,
+    asked: str,
+    *,
+    listed_tables: list[str] | None = None,
+):
+    """Ask one inline C# SQL question.
+
+    ``listed_tables`` are the objects that the Object Location Index of the
+    connection's Database holds. None means that no index exists. No case may open a cache.
+    """
     scan = _inline_scan(tmp_path, table, connection_database)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+
+    def fail_to_open_a_cache(identity):
+        raise AssertionError("an inline C# SQL question must not open a cache")
+
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", fail_to_open_a_cache)
+    if listed_tables is None:
+        monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: None)
+    else:
+        identity = CacheIdentity.of("vmsystest07", connection_database)
+        index = build_object_location_index(identity, cache_payload(connection_database, tables=listed_tables))
+        monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: identity)
+        monkeypatch.setattr(analyze_service.sql_cache_store, "load_object_location_index", lambda given: index)
     return analyze_service.find_by_table(
         FindByTableRequest(
             source={"project": "orders", "repo": "orders"},
@@ -327,3 +362,96 @@ def test_the_backward_chain_keeps_an_inline_relation_whose_connection_is_unresol
     chains = flow_chain_builder.build_backward_chains(scan, tmp_path, "dbo.Users", database="Response")
 
     assert [(chain["via"], chain["method"]) for chain in chains] == [("direct_sql", "Load")]
+
+
+# ---------------------------------------------------------------- schema source (unstated-schema, ticket 06)
+
+
+def test_a_record_shows_the_schema_source_that_the_graph_resolved_to_the_module_schema(
+    monkeypatch, tmp_path
+) -> None:
+    graph = _graph({"usp_Save": [("writes", "COMMON", "AVM", None)]}, schema_source="module_schema")
+
+    matches = _ask(monkeypatch, tmp_path, graph, ["usp_Save"], "COMMON.AVM")
+
+    assert [(match.table, match.schema_source) for match in matches] == [("COMMON.AVM", "module_schema")]
+    assert "unproven_schema" not in matches[0].risk_flags
+
+
+def test_a_record_shows_a_written_schema_source(monkeypatch, tmp_path) -> None:
+    graph = _graph({"usp_Save": [("writes", "COMMON", "AVM", None)]}, schema_source="written")
+
+    matches = _ask(monkeypatch, tmp_path, graph, ["usp_Save"], "COMMON.AVM")
+
+    assert [match.schema_source for match in matches] == ["written"]
+
+
+def test_a_record_for_a_target_with_no_schema_shows_the_unresolved_source(monkeypatch, tmp_path) -> None:
+    graph = _graph({"usp_Save": [("writes", "", "AVM", None)]}, schema_source="unresolved")
+
+    matches = _ask(monkeypatch, tmp_path, graph, ["usp_Save"], "AVM")
+
+    assert [(match.schema_source, match.risk_flags) for match in matches] == [("unresolved", ["unproven_schema"])]
+
+
+def test_a_view_read_record_shows_the_schema_source_of_the_read_inside_the_view(monkeypatch, tmp_path) -> None:
+    graph = _graph({}, views={"vw_Avm": [("reads", "dbo", "AVM", None)]}, schema_source="default_schema")
+
+    matches = _ask(monkeypatch, tmp_path, graph, ["usp_Read_vw_Avm"], "dbo.AVM")
+
+    assert [match.schema_source for match in matches] == ["default_schema"]
+
+
+def test_a_graph_with_no_recorded_source_shows_written_for_a_stated_schema(monkeypatch, tmp_path) -> None:
+    graph = _graph({"usp_Save": [("writes", "COMMON", "AVM", None)]})
+
+    matches = _ask(monkeypatch, tmp_path, graph, ["usp_Save"], "COMMON.AVM")
+
+    assert [match.schema_source for match in matches] == ["written"]
+
+
+def test_an_inline_table_with_no_schema_takes_dbo_when_the_index_holds_it(monkeypatch, tmp_path) -> None:
+    matches = _ask_inline(
+        monkeypatch, tmp_path, ObjectName("", "", "", "AVM"), "Response", "dbo.AVM", listed_tables=["dbo.AVM"]
+    )
+
+    assert [(match.table, match.schema_source, match.risk_flags) for match in matches] == [
+        ("dbo.AVM", "default_schema", [])
+    ]
+
+
+def test_an_inline_table_that_dbo_holds_never_answers_another_schema(monkeypatch, tmp_path) -> None:
+    matches = _ask_inline(
+        monkeypatch, tmp_path, ObjectName("", "", "", "AVM"), "Response", "COMMON.AVM", listed_tables=["dbo.AVM"]
+    )
+
+    assert matches == []
+
+
+def test_an_inline_table_with_no_schema_keeps_the_mark_when_the_index_lacks_dbo(monkeypatch, tmp_path) -> None:
+    matches = _ask_inline(
+        monkeypatch, tmp_path, ObjectName("", "", "", "AVM"), "Response", "COMMON.AVM", listed_tables=["COMMON.AVM"]
+    )
+
+    assert [(match.table, match.schema_source, match.risk_flags) for match in matches] == [
+        ("AVM", "unresolved", ["unproven_schema"])
+    ]
+
+
+def test_an_inline_table_with_no_index_keeps_the_mark(monkeypatch, tmp_path) -> None:
+    matches = _ask_inline(monkeypatch, tmp_path, ObjectName("", "", "", "AVM"), "Response", "AVM")
+
+    assert [(match.schema_source, match.risk_flags) for match in matches] == [("unresolved", ["unproven_schema"])]
+
+
+def test_an_inline_table_with_a_written_schema_shows_written(monkeypatch, tmp_path) -> None:
+    matches = _ask_inline(monkeypatch, tmp_path, ObjectName("", "", "COMMON", "AVM"), "Response", "COMMON.AVM")
+
+    assert [(match.schema_source, match.risk_flags) for match in matches] == [("written", [])]
+
+
+def test_a_located_database_row_carries_no_schema_source() -> None:
+    from service.schemas import LocatedDatabase
+
+    assert "schema_source" not in LocatedDatabase.model_fields
+    assert "schema_source" not in LocatedDatabase().model_dump(by_alias=True)

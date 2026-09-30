@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple
 
+import schema_resolution
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
 from canonical_object_identity import ObjectName, bare_key, bare_name, full_key, parse, part_key, schema_qualified
@@ -2719,6 +2720,47 @@ def _prefer_table_match(
         existing[key] = candidate
 
 
+class _InlineSchemaResolver:
+    """Resolve the schema of an inline C# SQL table at question time.
+
+    The rule is Schema Resolution outside a module: a table that states no
+    schema takes `dbo` when the Object Location Index of the connection's
+    Database holds `dbo.name`. The index is the only source. This class opens no
+    cache, and an absent, stale, or ambiguous index leaves the schema empty.
+    """
+
+    def __init__(self) -> None:
+        self._indexes: Dict[str, Optional[sql_cache_store.ObjectLocationIndex]] = {}
+
+    def resolve(self, table: ObjectName, connection_database: Optional[str]) -> tuple[ObjectName, str]:
+        """Return the table with its resolved schema, and the schema source."""
+        index = self._index(connection_database) if not table.schema and connection_database else None
+        schema, source = schema_resolution.resolve(table, "", self._holds(index))
+        return replace(table, schema=schema), source
+
+    @staticmethod
+    def _holds(index: Optional[sql_cache_store.ObjectLocationIndex]) -> Callable[[str, str], bool]:
+        """Whether the index holds one object of any kind: tables, views, procedures, and functions."""
+
+        def holds(schema: str, name: str) -> bool:
+            if index is None:
+                return False
+            key = full_key(ObjectName("", index.database, schema, name))
+            return key in index.table_full_keys or key in index.stored_procedure_full_keys
+
+        return holds
+
+    def _index(self, database: str) -> Optional[sql_cache_store.ObjectLocationIndex]:
+        if database not in self._indexes:
+            identity = sql_cache_store.find_cache_identity(database)
+            self._indexes[database] = (
+                sql_cache_store.load_object_location_index(identity)
+                if isinstance(identity, sql_cache_store.CacheIdentity)
+                else None
+            )
+        return self._indexes[database]
+
+
 def _written_table_name(table: ObjectName) -> str:
     """The table as the source code writes it: the parts it states, joined by dots."""
     return ".".join(part for part in (table.server, table.database, table.schema, table.name) if part)
@@ -2916,6 +2958,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     _record_table_reverse_lookup(table_name, scope)
 
     question = TableQuestion.of(table_name, req.database or "")
+    inline_resolver = _InlineSchemaResolver()
     # Graph-derived facts key by Execution Path identity, not by file
     # (ADR-0016) -- see `_table_match_identity`. An inline C# SQL fact carries
     # no such identity of its own; it keeps the pre-ticket file-scoped rule
@@ -2928,7 +2971,8 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         # A relation that states no Database takes the Database of its C# connection,
         # and a connection the parser cannot resolve leaves the Database out of the match.
         database = rel.connection_database
-        table_match = question.match(rel.table, database)
+        table, schema_source = inline_resolver.resolve(rel.table, database)
+        table_match = question.match(table, database, schema_source)
         if table_match is None:
             continue
         caller_class = str(getattr(rel, "class_name", "") or "")
@@ -2951,9 +2995,10 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             ),
             caller_class=caller_class,
             caller_method=caller_method,
-            table=_written_table_name(rel.table),
+            table=_written_table_name(table),
             risk_flags=[UNPROVEN_SCHEMA] if table_match.unproven_schema else [],
             stated_database=table_match.stated_database,
+            schema_source=table_match.schema_source,
         )
         _prefer_table_match(inline_matches_by_file, candidate.file, candidate)
 
@@ -3027,6 +3072,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
                 table=str(access_record.get("table") or ""),
                 risk_flags=list(access_record.get("risk_flags") or []),
                 stated_database=access_record.get("stated_database"),
+                schema_source=str(access_record.get("schema_source") or ""),
                 evidence_status=str(access_record.get("evidence") or "unresolved"),
                 reason=str(access_record.get("reason") or ""),
                 database=str(access_record.get("database") or ""),

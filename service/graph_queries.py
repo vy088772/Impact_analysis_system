@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Iterable, Mapping, NamedTuple
 
+import schema_resolution
 from canonical_object_identity import ObjectName, part_key, schema_qualified
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 
-from .execution_path_builder import build_execution_paths
+from .execution_path_builder import build_execution_paths, schema_source_rank
 from .table_match import UNPROVEN_SCHEMA, TableMatch, TableQuestion
 
 
@@ -191,6 +192,7 @@ def _access_record(
         "evidence": path.get("evidence", "unresolved"),
         "reason": path.get("reason", ""),
         "confirmed": path.get("confirmed", False),
+        "schema_source": match.schema_source if match is not None else schema_resolution.UNRESOLVED,
         "risk_flags": _record_risk_flags(path, match),
         "unresolved_reason": path.get("unresolved_reason", ""),
         "unresolved_targets": list(path.get("unresolved_targets", []) or []),
@@ -211,6 +213,7 @@ class _Target(NamedTuple):
     database: str
     schema: str
     name: str
+    schema_source: str = ""
 
 
 _TargetKey = tuple[str, str, str]
@@ -277,7 +280,7 @@ class _LineageIndex:
             for node in self._graph.get("nodes", []) or []
             if node.get("id")
         }
-        reads_by_source: dict[str, list[tuple[str, str]]] = {}  # source -> (target id, Database)
+        reads_by_source: dict[str, list[tuple[str, str, str]]] = {}  # source -> (target id, Database, schema source)
         contains_by_source: dict[str, list[str]] = {}
         for relationship in self._graph.get("relationships", []) or []:
             source = relationship.get("source")
@@ -289,7 +292,9 @@ class _LineageIndex:
             if relationship.get("type") == "reads":
                 # A relationship that states no Database takes the graph's own Database.
                 database = str(relationship.get("database") or "") or graph_database
-                reads_by_source.setdefault(source, []).append((target, database))
+                reads_by_source.setdefault(source, []).append(
+                    (target, database, str(relationship.get("schema_source") or ""))
+                )
             elif relationship.get("type") == "contains":
                 contains_by_source.setdefault(source, []).append(target)
 
@@ -304,13 +309,13 @@ class _LineageIndex:
         successors: dict[str, set[str]] = {}
         predecessors: dict[str, set[str]] = {}
 
-        def _record_target(container_id: str, target_id: str, database: str) -> None:
+        def _record_target(container_id: str, target_id: str, database: str, schema_source: str) -> None:
             node = nodes.get(target_id)
             if not node:
                 return
             node_type = node.get("type")
             if node_type == "table":
-                table = _table_of(node, database)
+                table = _table_of(node, database, schema_source)
                 if table is not None:
                     _add_table(direct_tables.setdefault(container_id, {}), table)
             elif node_type in {"view", "function"}:
@@ -319,8 +324,8 @@ class _LineageIndex:
 
         for container_id, child_operation_ids in contains_by_source.items():
             for child_operation_id in child_operation_ids:
-                for target_id, database in reads_by_source.get(child_operation_id, []):
-                    _record_target(container_id, target_id, database)
+                for target_id, database, schema_source in reads_by_source.get(child_operation_id, []):
+                    _record_target(container_id, target_id, database, schema_source)
 
         # Worklist fixed point: each container starts at its own direct
         # tables and grows by folding in each successor's tables, until a
@@ -356,13 +361,13 @@ class _LineageIndex:
         reached_by_name: dict[str, dict[_TargetKey, tuple[_Target, set[str]]]] = {}
         for operation_id, targets in reads_by_source.items():
             reached: _Tables = {}
-            for target_id, database in targets:
+            for target_id, database, schema_source in targets:
                 node = nodes.get(target_id)
                 if not node:
                     continue
                 node_type = node.get("type")
                 if node_type == "table":
-                    table = _table_of(node, database)
+                    table = _table_of(node, database, schema_source)
                     if table is not None:
                         _add_table(reached, table)
                 elif node_type in {"view", "function"}:
@@ -392,30 +397,51 @@ class _LineageIndex:
         for table, operation_ids in self._ensure_built().get(question.name, {}).values():
             if operation_id not in operation_ids:
                 continue
-            match = question.match(ObjectName("", table.database, table.schema, table.name), own_database)
+            match = question.match(
+                ObjectName("", table.database, table.schema, table.name), own_database, table.schema_source
+            )
             if match is not None:
                 matches.append((table.name, match))
         return matches
 
 
-def _table_of(node: Mapping[str, Any], database: str) -> _Target | None:
+def _table_of(node: Mapping[str, Any], database: str, schema_source: str = "") -> _Target | None:
+    """One table node; a relationship that records no schema source reads as `written` or `unresolved`."""
     name = str(node.get("name") or "")
     if not name:
         return None
-    return _Target(database=database, schema=str(node.get("schema") or ""), name=name)
+    schema = str(node.get("schema") or "")
+    return _Target(
+        database=database,
+        schema=schema,
+        name=name,
+        schema_source=schema_source
+        or (schema_resolution.WRITTEN if schema else schema_resolution.UNRESOLVED),
+    )
+
+
+def _stronger(kept: _Target, other: _Target) -> _Target:
+    """The first spelling stays; the schema source becomes the stronger of the two."""
+    if schema_source_rank(other.schema_source) < schema_source_rank(kept.schema_source):
+        return kept._replace(schema_source=other.schema_source)
+    return kept
 
 
 def _add_table(reached: _Tables, table: _Target) -> None:
     """Record one table under its full key; the first spelling seen stays."""
-    reached.setdefault(_target_key(table), table)
+    key = _target_key(table)
+    reached[key] = _stronger(reached[key], table) if key in reached else table
 
 
 def _merge_reachable(target: _Tables, source: Mapping[_TargetKey, _Target]) -> bool:
-    """Fold `source`'s tables into `target`; report whether anything was new."""
+    """Fold `source`'s tables into `target`; report whether anything was new or stronger."""
     changed = False
     for key, table in source.items():
         if key not in target:
             target[key] = table
+            changed = True
+        elif (stronger := _stronger(target[key], table)) != target[key]:
+            target[key] = stronger
             changed = True
     return changed
 
@@ -429,7 +455,9 @@ def _matching_targets(
         schema = str(full_key.get("schema") or "")
         name = str(full_key.get("name") or "")
         match = question.match(
-            ObjectName("", str(full_key.get("database") or ""), schema, name), own_database
+            ObjectName("", str(full_key.get("database") or ""), schema, name),
+            own_database,
+            str(full_key.get("schema_source") or ""),
         )
         if match is not None:
             matches.append((schema_qualified(ObjectName("", "", schema, name)), match))

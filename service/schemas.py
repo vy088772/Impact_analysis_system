@@ -455,6 +455,10 @@ class TableMatchProgram(WrapperEvidenceFields):
     # "unproven_schema"：命中的目標沒寫 schema，靠 bare key 退回比對成功，schema 沒人證明。
     # 標記掛在這一筆命中，不掛在 Execution Path 上；Evidence Status 不因此降級。
     stated_database: Optional[str] = None     # 命中的 key 寫的是另一個 Database 時才有；否則不出現
+    schema_source: str = ""                   # 命中目標的 schema 怎麼找到的：written（原始碼寫的）、
+    # module_schema（模組自己的 schema）、default_schema（退回 dbo）、system（sys）、
+    # unresolved（沒人能決定，帶 unproven_schema）。Execution Graph 命中取自關係欄位；
+    # inline C# SQL 命中在問題當下由 Object Location Index 決定。
     operation_type: str = ""
     invocation_mode: str = ""
     terminal_sink: str = ""

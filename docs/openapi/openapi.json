@@ -1959,6 +1959,11 @@
             "title": "Scan Root",
             "type": "string"
           },
+          "schema_source": {
+            "default": "",
+            "title": "Schema Source",
+            "type": "string"
+          },
           "selection_source": {
             "default": "",
             "title": "Selection Source",

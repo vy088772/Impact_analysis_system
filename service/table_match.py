@@ -14,6 +14,7 @@ module and never fills an unstated schema with `dbo`.
 - A target that states no schema matches too, through the bare key. That match
   carries the Unproven Schema mark. The mark describes the target, never the
   question.
+- A match carries the schema source of its target: how the schema was found.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
+import schema_resolution
 from canonical_object_identity import ObjectName, bare_key, parse, part_key
 
 UNPROVEN_SCHEMA = "unproven_schema"
@@ -48,6 +50,7 @@ class TableMatch:
 
     unproven_schema: bool
     stated_database: Optional[str]
+    schema_source: str = ""
 
 
 @dataclass(frozen=True)
@@ -67,13 +70,17 @@ class TableQuestion:
             name=bare_key(written),
         )
 
-    def match(self, target: ObjectName, own_database: Optional[str]) -> Optional[TableMatch]:
+    def match(
+        self, target: ObjectName, own_database: Optional[str], schema_source: str = ""
+    ) -> Optional[TableMatch]:
         """Return the match of one target, or None when the target does not answer.
 
         ``own_database`` is the Database of the cache, or of the C# connection,
         that holds the target. A target that states no Database takes it. A
         target that names another Database reports it as ``stated_database``,
-        in the case the source wrote it.
+        in the case the source wrote it. ``schema_source`` states how the graph
+        or the caller found the schema of the target. An empty value reads as
+        ``written`` for a target that states a schema, else ``unresolved``.
         """
         if not self.name or bare_key(target) != self.name:
             return None
@@ -89,4 +96,6 @@ class TableQuestion:
         return TableMatch(
             unproven_schema=not target_schema,
             stated_database=str(database) if stated else None,
+            schema_source=schema_source
+            or (schema_resolution.WRITTEN if target_schema else schema_resolution.UNRESOLVED),
         )
