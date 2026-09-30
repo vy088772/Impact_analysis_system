@@ -35,14 +35,15 @@ Every relationship records its schema source: `written`, `module_schema`, `defau
 _Avoid_: dbo fill, schema guess, default schema fallback
 
 **Unproven Schema**:
-The mark on a match that proves no schema. Schema Resolution removes the mark from every reference that it resolves. The mark stays in three cases:
+The mark on a match, or on a call, that proves no schema. Schema Resolution removes the mark from every reference that it resolves. The mark stays in three cases:
 - The object listing does not hold the name.
 - The reference is `db..name`, and that Database has no local cache.
 - Neither the module's schema nor `dbo` holds the name.
 
-The value `unproven_schema` carries the mark in three places:
+The value `unproven_schema` carries the mark in four places:
 - The SP Catalog gives it as the match reason in two cases. A call that states no schema finds no `dbo` procedure, and the catalog holds the name in another schema. Or a question that states a schema falls back to a procedure that states none.
 - The `/find_by_table` table match puts it in the `risk_flags` of every match record whose target states no schema after resolution.
+- An Execution Path that stops at a call with the schema source `unresolved` carries it in its `risk_flags`. That path has the reason `called_procedure_not_in_graph`. A call that resolves to `sys` carries no mark.
 - The `/locate_object` row puts it in its `risk_flags` when the index falls back to the bare bucket. The row also carries it when the matched key states no schema.
 
 In a match record, the mark describes the target, never the question. The mark does not lower the Evidence Status. One target with an unproven schema produces one Execution Path, never one path per candidate schema. See [ADR-0035](docs/adr/0035-an-unproven-schema-marks-one-execution-path.md) and [ADR-0037](docs/adr/0037-an-unstated-schema-resolves-as-sql-server-resolves-it.md).

@@ -18,7 +18,7 @@ from code_analyzer.csharp_analysis_gateway import (
     invocation_wrapper_evidence_fields,
 )
 
-from .table_match import names_listed_node
+from .table_match import UNPROVEN_SCHEMA, names_listed_node
 
 MAX_COMPACT_PATHS = 20
 MAX_COMPACT_PATHS_RECOVERY = 60
@@ -242,6 +242,7 @@ def _paths_from_module(
                     module_chain=current_module_chain,
                     path_conditions=call_conditions,
                     unresolved_targets=[str(target_id or "<missing-target>")],
+                    unproven_schema=relationship.get("schema_source") == schema_resolution.UNRESOLVED,
                 )
             )
             continue
@@ -506,7 +507,13 @@ def _unresolved_path(
     module_chain: tuple[str, ...] = (),
     unresolved_targets: Optional[list[str]] = None,
     evidence: str = InvocationEvidence.UNRESOLVED.value,
+    unproven_schema: bool = False,
 ) -> dict[str, Any]:
+    """Return the one path that stops for ``reason``.
+
+    ``unproven_schema`` adds the Unproven Schema mark: the path stops at a call
+    whose schema Schema Resolution left unresolved.
+    """
     effective_conditions = tuple(
         _ordered_unique((*invocation.branch_context, *path_conditions))
     )
@@ -549,7 +556,7 @@ def _unresolved_path(
         "writes": [],
         "read_full_keys": [],
         "write_full_keys": [],
-        "risk_flags": [reason],
+        "risk_flags": [reason, UNPROVEN_SCHEMA] if unproven_schema else [reason],
         "evidence": evidence,
         "reason": reason,
         "confirmed": evidence == InvocationEvidence.PROVEN.value,

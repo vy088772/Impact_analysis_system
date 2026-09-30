@@ -53,3 +53,5 @@ The Unproven Schema mark stays for three cases:
 The Decision section stays valid for these cases. One target with an empty schema produces one Execution Path. The mark never multiplies that path.
 
 The rule for a procedure call now agrees with the rule for a table target. An unqualified call links to the one procedure that Schema Resolution names. It no longer links to every listed procedure with that bare name.
+
+A call that no listed procedure answers gives one Execution Path with the reason `called_procedure_not_in_graph`. That path carries `unproven_schema` in its own `risk_flags` when the schema source of the call is `unresolved`. This narrows the second bullet of the Decision section, which keeps the mark off the path. That bullet still holds for a table target. The path of such a call holds one target, the call, and it gives no table match record. So the mark of a call sits on the path, and it reaches no other target. A call that resolves to `sys` has a proven schema and carries no mark.

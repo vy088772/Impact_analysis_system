@@ -9,7 +9,8 @@ from code_analyzer.csharp_analysis_gateway import (
 )
 from service.execution_path_builder import build_execution_paths
 from service.graph_queries import query_table_accesses
-from tests.sql_cache_fixtures import analyzer_operation, execution_graph
+from service.sql_execution_graph import build_sql_execution_graph
+from tests.sql_cache_fixtures import analyzer_operation, execution_graph, stubbed_procedures
 
 
 def _invocation(method_name: str, procedure_name: str) -> DbInvocation:
@@ -253,6 +254,27 @@ def test_query_table_accesses_excludes_likely_invocations_from_formal_results() 
     )
 
     assert query_table_accesses(_graph(), [invocation], "dbo.SOrder") == []
+
+
+def test_a_call_path_with_the_unproven_schema_mark_gives_no_table_match_record() -> None:
+    """ADR-0035: the mark of a call sits on its path, and it reaches no other target."""
+    data, host = stubbed_procedures(
+        "OrdersDb",
+        {
+            "dbo.usp_Direct": [
+                analyzer_operation("UPDATE", sequence=1, reads=[], writes=["dbo.SOrder"]),
+                analyzer_operation("CALL", sequence=2, calls=["usp_Missing"]),
+            ]
+        },
+    )
+    graph = build_sql_execution_graph(data, host=host)
+    invocation = _invocation("SaveDirect", "usp_Direct")
+
+    assert query_table_accesses(graph, [invocation], "usp_Missing") == []
+    assert [
+        (record["table"], record["risk_flags"])
+        for record in query_table_accesses(graph, [invocation], "dbo.SOrder")
+    ] == [("dbo.SOrder", [])]
 
 
 def test_query_table_accesses_excludes_likely_reads_from_formal_results() -> None:

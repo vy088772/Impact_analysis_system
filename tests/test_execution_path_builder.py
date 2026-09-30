@@ -22,8 +22,8 @@ from service.execution_path_builder import (
     build_execution_paths_from_raw_invocations,
     PathIdentity,
 )
-from service.sql_execution_graph import GRAPH_VERSION
-from tests.sql_cache_fixtures import analyzer_operation
+from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
+from tests.sql_cache_fixtures import analyzer_operation, stubbed_procedures
 
 
 def _graph() -> dict:
@@ -848,6 +848,96 @@ def test_call_cycle_is_explicitly_unresolved_and_deterministic() -> None:
     assert cycle_paths[0]["terminal_operation_id"] == ""
     assert [(path["path_id"], path["unresolved_reason"]) for path in paths] == [
         (path["path_id"], path["unresolved_reason"]) for path in repeated
+    ]
+
+
+def _unanswered_call_graph(target_id: str, schema_source: str) -> dict:
+    """A graph whose one procedure calls a target that no node answers."""
+    return {
+        "graph_version": GRAPH_VERSION,
+        "nodes": [
+            {
+                "id": "stored_procedure:dbo.usp_SaveOrder",
+                "type": "stored_procedure",
+                "schema": "dbo",
+                "name": "usp_SaveOrder",
+            },
+        ],
+        "relationships": [
+            {
+                "type": "calls",
+                "source": "stored_procedure:dbo.usp_SaveOrder",
+                "target": target_id,
+                "schema_source": schema_source,
+            },
+        ],
+        "parse_errors": [],
+    }
+
+
+def _save_order_invocation() -> DbInvocation:
+    return DbInvocation(
+        class_name="OrderPage",
+        method_name="SaveData",
+        database="OrdersDb",
+        procedure_name="usp_saveorder",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("Ship/OrderPage.aspx.cs", 120, 220),
+    )
+
+
+def test_a_call_that_no_listed_procedure_answers_gives_one_path_with_the_unproven_schema_mark() -> None:
+    """User story 9: one unknown fact stays one fact."""
+    graph = _unanswered_call_graph("stored_procedure:.usp_Missing", "unresolved")
+
+    paths = build_execution_paths([_save_order_invocation()], graph)
+
+    assert len(paths) == 1
+    assert paths[0]["unresolved_reason"] == "called_procedure_not_in_graph"
+    assert paths[0]["unresolved_targets"] == ["stored_procedure:.usp_Missing"]
+    assert paths[0]["risk_flags"] == ["called_procedure_not_in_graph", "unproven_schema"]
+
+
+def test_a_call_that_resolves_to_the_sys_schema_gives_one_path_without_the_mark() -> None:
+    """User story 13: a system procedure has no node, and its schema is proven."""
+    graph = _unanswered_call_graph("stored_procedure:sys.sp_executesql", "system")
+
+    paths = build_execution_paths([_save_order_invocation()], graph)
+
+    assert len(paths) == 1
+    assert paths[0]["unresolved_targets"] == ["stored_procedure:sys.sp_executesql"]
+    assert paths[0]["risk_flags"] == ["called_procedure_not_in_graph"]
+
+
+def test_a_call_to_a_listed_procedure_keeps_its_paths_and_gains_no_mark() -> None:
+    graph = _nested_graph()
+    graph["relationships"][0]["schema_source"] = "module_schema"
+
+    paths = build_execution_paths([_save_order_invocation()], graph)
+
+    assert [(path["sp_chain"], path["risk_flags"]) for path in paths] == [
+        (["dbo.usp_SaveOrder", "dbo.usp_WriteAudit"], [])
+    ]
+
+
+def test_the_path_builder_reads_the_schema_source_that_the_graph_builder_records() -> None:
+    """The mark follows the graph the builder makes, not a hand-written relationship."""
+    data, host = stubbed_procedures(
+        "OrdersDb",
+        {
+            "dbo.usp_SaveOrder": [
+                analyzer_operation("CALL", sequence=1, calls=["usp_Missing"]),
+                analyzer_operation("CALL", sequence=2, calls=["sp_executesql"]),
+            ]
+        },
+    )
+    graph = build_sql_execution_graph(data, host=host)
+
+    paths = build_execution_paths([_save_order_invocation()], graph)
+
+    assert [(path["unresolved_targets"], path["risk_flags"]) for path in paths] == [
+        (["stored_procedure:.usp_Missing"], ["called_procedure_not_in_graph", "unproven_schema"]),
+        (["stored_procedure:sys.sp_executesql"], ["called_procedure_not_in_graph"]),
     ]
 
 
