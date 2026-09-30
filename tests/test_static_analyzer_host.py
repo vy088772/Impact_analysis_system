@@ -822,3 +822,20 @@ def test_a_subquery_that_reads_the_written_table_gives_no_read_of_it() -> None:
 
     assert operation["write_tables"] == [_reference("", "", "dbo", "T")]
     assert operation["read_tables"] == []
+
+
+def test_an_update_set_subquery_that_reads_the_written_table_gives_no_read_of_it() -> None:
+    operation = _write_test_statement(
+        "UPDATE t SET a = (SELECT MAX(b) FROM dbo.T) FROM dbo.T t;"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "T")]
+    assert operation["read_tables"] == []
+
+
+def test_a_cte_name_inside_a_delete_subquery_is_no_table_read() -> None:
+    operation = _write_test_statement(
+        "WITH C AS (SELECT Id FROM dbo.Src) DELETE FROM dbo.T WHERE id IN (SELECT Id FROM C);"
+    )
+
+    assert operation["read_tables"] == [_reference("", "", "dbo", "Src")]

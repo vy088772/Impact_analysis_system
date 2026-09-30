@@ -743,4 +743,4 @@ internal sealed record SqlOperation(
     List<SqlObjectReference> FunctionReferences,
     List<SqlObjectReference> CallTargets,
     bool DynamicSql,
-    SqlSourceLocation Source);
+    SqlSourceLocation Source);
