@@ -173,7 +173,11 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 存取型態（SELECT／INSERT／UPDATE／DELETE／SELECT_INTO），關聯多了 `reason`
 # （`inline_sql_parsed` 或 `inline_sql_regex`）與 `invocation_span`。舊快取的關聯
 # 只有正規表達式給的整句存取型態，沒有來源，必須重新掃描。
-_CACHE_VERSION = 41
+# v42：正規表達式備援的關聯一律標 `UNRESOLVED`（見同一份 spec 的 ticket 04），
+# 而且備援多找得到 `WITH`／`MERGE` 開頭的語句與 `INSERT INTO t (欄位)` 的目標，
+# 也不再從 SQL 註解取資料表。舊快取的備援關聯帶整句的存取型態（例如 `INSERT`），
+# `write_only` 會把它當成已證明的寫入，必須重新掃描。
+_CACHE_VERSION = 42
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

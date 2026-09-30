@@ -25,6 +25,49 @@ class _DisplayAttribute(NamedTuple):
     resource_key: Optional[str]
 
 
+# A line comment ends at a line end. A C# regular string holds the two characters
+# `\n` where the SQL has a line end, so those two characters end it too.
+_LINE_COMMENT_END = re.compile(r"\r|\n|\\r|\\n")
+
+
+def strip_sql_comments(sql: str) -> str:
+    """Remove `-- ...` and `/* ... */` comments. A string literal keeps its text.
+
+    A comment becomes one space, so the words around it stay apart.
+    """
+    out: List[str] = []
+    i, length = 0, len(sql)
+    while i < length:
+        pair = sql[i:i + 2]
+        if pair == "--":
+            end = _LINE_COMMENT_END.search(sql, i + 2)
+            out.append(" ")
+            if end is None:
+                break
+            i = end.start()
+        elif pair == "/*":
+            end_index = sql.find("*/", i + 2)
+            out.append(" ")
+            if end_index < 0:
+                break
+            i = end_index + 2
+        elif sql[i] == "'":
+            j = i + 1
+            while j < length:
+                if sql[j] == "'":
+                    if sql[j + 1:j + 2] == "'":
+                        j += 2
+                        continue
+                    break
+                j += 1
+            out.append(sql[i:j + 1])
+            i = j + 1
+        else:
+            out.append(sql[i])
+            i += 1
+    return "".join(out)
+
+
 class CSharpParser:
     """C# 程式碼解析器"""
     
@@ -63,13 +106,13 @@ class CSharpParser:
     # SQL 查詢（多種格式）
     SQL_PATTERNS = [
         # 逐字字串 @"..."
-        r'@"([^"]*?(?:SELECT|INSERT|UPDATE|DELETE|EXEC|EXECUTE|CREATE|ALTER|DROP)[^"]*?)"',
+        r'@"([^"]*?(?:SELECT|INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|CREATE|ALTER|DROP)[^"]*?)"',
         # 一般雙引號字串 "..."
-        r'"([^"]*?(?:SELECT|INSERT|UPDATE|DELETE|EXEC|EXECUTE|CREATE|ALTER|DROP)[^"]*?)"',
+        r'"([^"]*?(?:SELECT|INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|CREATE|ALTER|DROP)[^"]*?)"',
         # 單引號字串 '...'
-        r"'([^']*?(?:SELECT|INSERT|UPDATE|DELETE|EXEC|EXECUTE|CREATE|ALTER|DROP)[^']*?)'",
+        r"'([^']*?(?:SELECT|INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|CREATE|ALTER|DROP)[^']*?)'",
         # 多行字串（C# 11+ 的 raw string literals）
-        r'"""([^"]*?(?:SELECT|INSERT|UPDATE|DELETE|EXEC|EXECUTE|CREATE|ALTER|DROP)[^"]*?)"""',
+        r'"""([^"]*?(?:SELECT|INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|CREATE|ALTER|DROP)[^"]*?)"""',
     ]
     
     # API 路由
@@ -619,10 +662,11 @@ class CSharpParser:
             
             seen_queries.add(sql_text)
             
-            query_type = self._determine_sql_type(sql_text)
+            analysis_sql = sql_info.get('raw_sql', sql_text)
+            query_type = self._determine_sql_type(analysis_sql)
             
-            if query_type != SQLQueryType.UNKNOWN:
-                tables = self._extract_tables_from_sql(sql_text)
+            if self._is_kept_statement(analysis_sql, query_type):
+                tables = self._extract_tables_from_sql(analysis_sql)
                 is_parameterized = '@' in sql_text or '{' in sql_text
                 has_join = 'JOIN' in sql_text.upper()
                 has_subquery = sql_text.upper().count('SELECT') > 1
@@ -665,7 +709,7 @@ class CSharpParser:
                 
                 query_type = self._determine_sql_type(sql_text)
                 
-                if query_type == SQLQueryType.UNKNOWN:
+                if not self._is_kept_statement(sql_text, query_type):
                     continue
                 
                 seen_queries.add(sql_text)
@@ -708,10 +752,11 @@ class CSharpParser:
             
             seen_queries.add(sql_text)
             
-            query_type = self._determine_sql_type(sql_text)
+            analysis_sql = sql_info.get('raw_sql', sql_text)
+            query_type = self._determine_sql_type(analysis_sql)
             
-            if query_type != SQLQueryType.UNKNOWN:
-                tables = self._extract_tables_from_sql(sql_text)
+            if self._is_kept_statement(analysis_sql, query_type):
+                tables = self._extract_tables_from_sql(analysis_sql)
                 is_parameterized = '@' in sql_text or '{' in sql_text
                 has_join = 'JOIN' in sql_text.upper()
                 has_subquery = sql_text.upper().count('SELECT') > 1
@@ -792,10 +837,10 @@ class CSharpParser:
                 
                 for match in matches:
                     variable_name = match.group(1)  # 捕獲變數名稱
-                    sql_text = match.group(2).strip()
+                    raw_sql = match.group(2).strip()
                     
                     # 清理 SQL 文字
-                    sql_text = self._clean_sql_text(sql_text)
+                    sql_text = self._clean_sql_text(raw_sql)
                     
                     # 過濾太短的或明顯不是 SQL 的
                     if len(sql_text) < 10:
@@ -810,6 +855,9 @@ class CSharpParser:
                     
                     sql_queries.append({
                         'sql': sql_text,
+                        # 清理前的文字：清理把換行收成空白，`--` 註解會吞掉後面的 SQL，
+                        # 判斷類型與找資料表要用還有換行的文字。
+                        'raw_sql': raw_sql,
                         'line': line_num,
                         'method': method_name,
                         'variable': variable_name  # 儲存變數名稱
@@ -834,12 +882,8 @@ class CSharpParser:
         return sql
 
     def _determine_sql_type(self, sql: str) -> SQLQueryType:
-        """判斷 SQL 類型（保持不變）"""
-        sql_upper = sql.upper().strip()
-        
-        # 移除前導空白和註解
-        sql_upper = re.sub(r'^\s*--.*?\n', '', sql_upper, flags=re.MULTILINE)
-        sql_upper = sql_upper.strip()
+        """判斷 SQL 類型。`WITH` 與 `MERGE` 沒有自己的類型，回 UNKNOWN，由 `_is_kept_statement` 保留。"""
+        sql_upper = strip_sql_comments(sql).upper().strip()
         
         if sql_upper.startswith('SELECT'):
             return SQLQueryType.SELECT
@@ -860,21 +904,36 @@ class CSharpParser:
         else:
             return SQLQueryType.UNKNOWN
     
+    def _is_kept_statement(self, sql: str, query_type: SQLQueryType) -> bool:
+        """分類得出類型的語句保留；`WITH` 與 `MERGE` 開頭的語句也保留。
+
+        其他不認得的開頭（例如提示訊息裡剛好有 select 這個字）仍然丟掉。
+        """
+        if query_type != SQLQueryType.UNKNOWN:
+            return True
+        return strip_sql_comments(sql).lstrip().upper().startswith(('WITH', 'MERGE'))
+
     # 一段名稱：`[任意字元]` 或 `\w+`。一個物件名稱最多四段（server.database.schema.name），
     # 中間可以留空（`PUR..Users`）；整個名稱交給 parse() 決定哪一段是 schema。
     # 名稱後面接 `(` 的是函式（OPENQUERY、OPENJSON 等），不是資料表。
     _TABLE_NAME_PART = r'(?:\[[^\]]+\]|\w+)'
-    _TABLE_NAME = rf'({_TABLE_NAME_PART}(?:\.{_TABLE_NAME_PART}?){{0,3}})(?![\w.])(?!\s*\()'
+    _TABLE_NAME_ANY = rf'({_TABLE_NAME_PART}(?:\.{_TABLE_NAME_PART}?){{0,3}})(?![\w.])'
+    _TABLE_NAME = rf'{_TABLE_NAME_ANY}(?!\s*\()'
     _TABLE_PATTERNS = [
         rf'\bFROM\s+{_TABLE_NAME}',
         rf'\bJOIN\s+{_TABLE_NAME}',
-        rf'\bINSERT\s+INTO\s+{_TABLE_NAME}',
-        rf'\bUPDATE\s+{_TABLE_NAME}',
+        # INSERT INTO 的目標後面常接欄位清單 `t (a, b)`，所以不套用函式括號的排除。
+        rf'\bINSERT\s+INTO\s+{_TABLE_NAME_ANY}',
+        rf'\bMERGE\s+(?:INTO\s+)?{_TABLE_NAME}',
+        rf'\bUSING\s+{_TABLE_NAME}',
+        # `MERGE ... WHEN MATCHED THEN UPDATE SET` 的 UPDATE 後面沒有資料表。
+        rf'\bUPDATE\s+(?!SET\b){_TABLE_NAME}',
         rf'\bDELETE\s+FROM\s+{_TABLE_NAME}',
     ]
 
     def _extract_tables_from_sql(self, sql: str) -> Set[ObjectName]:
-        """從 SQL 提取資料表名稱：保留寫出來的每一段與大小寫。"""
+        """從 SQL 提取資料表名稱：保留寫出來的每一段與大小寫。SQL 註解先移除。"""
+        sql = strip_sql_comments(sql)
         tables: Set[ObjectName] = set()
         for pattern in self._TABLE_PATTERNS:
             for written in re.findall(pattern, sql, re.IGNORECASE):

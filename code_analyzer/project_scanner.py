@@ -16,7 +16,7 @@ import json
 
 from canonical_object_identity import ObjectName, bare_name
 
-from .csharp_parser import CSharpParser
+from .csharp_parser import CSharpParser, strip_sql_comments
 from .aspx_parser import ASPXParser
 from .razor_parser import RazorParser
 from .vue_parser import VueParser
@@ -89,6 +89,8 @@ UNRESOLVED_CONNECTION_DATABASE = "unknown"
 # command parsed the text, or a regular expression guessed the tables.
 INLINE_SQL_PARSED = "inline_sql_parsed"
 INLINE_SQL_REGEX = "inline_sql_regex"
+# The access type of a regular expression relation: a guess is never a proven read or write.
+UNRESOLVED_ACCESS_TYPE = "UNRESOLVED"
 
 
 @dataclass
@@ -104,7 +106,7 @@ class CSharpTableRelation:
     table: ObjectName
     database: str
     # 這張表自己的存取型態：解析來源給 SELECT／INSERT／UPDATE／DELETE／SELECT_INTO，
-    # 正規表達式來源仍是整句的型態。
+    # 正規表達式來源一律是 UNRESOLVED。
     access_type: str
 
     # SQL 資訊
@@ -404,8 +406,8 @@ class ProjectScanResult:
 # ============================================
 
 def _collapse_whitespace(sql_text: str) -> str:
-    """同一段 SQL 文字的比對鍵：空白收合，並去掉 `--`（C# 解析器的清理步驟會去掉它）。"""
-    return " ".join(sql_text.replace("--", "").split())
+    """同一段 SQL 文字的比對鍵：去掉 SQL 註解、空白收合，並去掉 `--`（C# 解析器的清理步驟會去掉它）。"""
+    return " ".join(strip_sql_comments(sql_text).replace("--", "").split())
 
 
 class ProjectScanner:
@@ -1232,7 +1234,8 @@ class ProjectScanner:
                         line_number=sql_query.location.line_number,
                         table=table,
                         database=sql_query.database_source or UNRESOLVED_CONNECTION_DATABASE,
-                        access_type=sql_query.query_type.value,
+                        # 正規表達式只猜表名，不證明讀寫，所以每張表都是 UNRESOLVED。
+                        access_type=UNRESOLVED_ACCESS_TYPE,
                         sql_preview=sql_query.query_text[:100],
                         reason=INLINE_SQL_REGEX,
                     )
