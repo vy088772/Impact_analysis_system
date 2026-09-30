@@ -62,3 +62,20 @@ the scan. We did not find the commit.
 `llamaindex-spec-rag/evaluation/Impact_analysis/results/routing_expectations_generated_vs_candidate.md`
 (sp-001); ADR-0008 (Web.config connection string resolution); ADR-0018
 (connection lookup tables are scoped to the project file).
+
+## Comments
+
+### 2026-09-30 — Q1 result and link to the spec
+
+- Spec: `../spec.md` (inherited-web-config-connections). Tickets 02 to 10 of
+  that effort answer Q2 and Q3 of this issue.
+- Q1 result: the commit that changed the sp-001 result was not found. The
+  ADR-0018 commit did not change the `Web.config` path. The `find_by_sp` filter
+  that keeps a non-proven call out of `matches` has not changed since
+  2026-08-12. The grilling session stopped the search (spec, "Out of Scope").
+- Q2: the analyzer reads the IIS URL of each project file and resolves a key
+  through the Parent Application chain (ADR-0038).
+- Q3: `/find_by_sp` lists a `likely` caller in `likely_matches`, and
+  `llamaindex-spec-rag` lists it under `unproven_programs` (tickets 08, 09).
+- Ticket 10 proved the call and restored `response.master` in sp-001 by
+  regeneration.
