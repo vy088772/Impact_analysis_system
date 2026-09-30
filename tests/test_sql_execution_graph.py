@@ -1014,13 +1014,14 @@ if __name__ == "__main__":
     print("SQL execution graph tests passed")
 
 
-def _call_graph(
-    caller: str, called: str, **listing: dict | list[str]
-) -> dict:
-    """Build a `PUR` graph where the procedure `caller` makes one call that states `called`."""
-    procedures = {caller: {"definition": "caller"}, **listing.pop("procedures", {})}
+def _call_graph(caller: str, called: str, listed: dict[str, dict] | None = None) -> dict:
+    """Build a `PUR` graph where the procedure `caller` makes one call that states `called`.
+
+    `listed` names the other procedures the listing holds, each with its entry fields.
+    """
+    procedures = {caller: {"definition": "caller"}, **(listed or {})}
     host = StubAnalyzerHost({"caller": [analyzer_operation("CALL", sequence=1, calls=[called])]})
-    return build_sql_execution_graph(cache_payload("PUR", procedures=procedures, **listing), host=host)
+    return build_sql_execution_graph(cache_payload("PUR", procedures=procedures), host=host)
 
 
 def test_an_unqualified_call_reaches_the_one_procedure_in_the_module_schema() -> None:
@@ -1028,7 +1029,7 @@ def test_an_unqualified_call_reaches_the_one_procedure_in_the_module_schema() ->
     graph = _call_graph(
         "COMMON.usp_Caller",
         "GetBudgetVersion",
-        procedures={"COMMON.GetBudgetVersion": {}, "Mitoosi.GetBudgetVersion": {}},
+        listed={"COMMON.GetBudgetVersion": {}, "Mitoosi.GetBudgetVersion": {}},
     )
 
     assert_relationships_resolve_to_known_nodes(graph)
@@ -1039,7 +1040,7 @@ def test_an_unqualified_call_from_a_dbo_module_reaches_the_dbo_procedure() -> No
     graph = _call_graph(
         "dbo.usp_Caller",
         "usp_Child",
-        procedures={"dbo.usp_Child": {}, "COMMON.usp_Child": {}},
+        listed={"dbo.usp_Child": {}, "COMMON.usp_Child": {}},
     )
 
     assert _targets(graph, "calls") == {("stored_procedure:dbo.usp_Child", "module_schema")}
@@ -1047,14 +1048,14 @@ def test_an_unqualified_call_from_a_dbo_module_reaches_the_dbo_procedure() -> No
 
 def test_an_unqualified_call_falls_back_to_dbo_when_the_module_schema_lacks_the_name() -> None:
     graph = _call_graph(
-        "COMMON.usp_Caller", "usp_Child", procedures={"dbo.usp_Child": {}, "HR.usp_Child": {}}
+        "COMMON.usp_Caller", "usp_Child", listed={"dbo.usp_Child": {}, "HR.usp_Child": {}}
     )
 
     assert _targets(graph, "calls") == {("stored_procedure:dbo.usp_Child", "default_schema")}
 
 
 def test_a_call_that_no_listed_procedure_answers_gives_one_unresolved_relationship() -> None:
-    graph = _call_graph("COMMON.usp_Caller", "usp_Missing", procedures={"HR.usp_Missing": {}})
+    graph = _call_graph("COMMON.usp_Caller", "usp_Missing", listed={"HR.usp_Missing": {}})
 
     assert _targets(graph, "calls") == {("stored_procedure:.usp_Missing", "unresolved")}
 
@@ -1082,19 +1083,23 @@ def test_an_unlisted_system_procedure_call_resolves_to_sys_and_makes_no_user_nod
 
 def test_a_listed_user_procedure_with_the_sp_prefix_still_gets_the_link() -> None:
     """User story 14: a listed name wins over the `sys` rule."""
-    graph = _call_graph("COMMON.usp_Caller", "sp_Custom", procedures={"dbo.sp_Custom": {}})
+    graph = _call_graph("COMMON.usp_Caller", "sp_Custom", listed={"dbo.sp_Custom": {}})
 
     assert_relationships_resolve_to_known_nodes(graph)
     assert _targets(graph, "calls") == {("stored_procedure:dbo.sp_Custom", "default_schema")}
 
 
-def test_a_written_schema_call_keeps_its_schema_and_a_qualified_system_name_is_not_rewritten() -> None:
+def test_a_call_that_states_a_schema_keeps_it() -> None:
     graph = _call_graph(
-        "COMMON.usp_Caller", "HR.usp_Child", procedures={"HR.usp_Child": {}, "dbo.usp_Child": {}}
+        "COMMON.usp_Caller", "HR.usp_Child", listed={"HR.usp_Child": {}, "dbo.usp_Child": {}}
     )
+
     assert _targets(graph, "calls") == {("stored_procedure:HR.usp_Child", "written")}
 
+
+def test_a_call_that_states_a_database_is_not_rewritten_to_sys() -> None:
     graph = _call_graph("COMMON.usp_Caller", "master..sp_who")
+
     assert {source for _, source in _targets(graph, "calls")} == {"unresolved"}
 
 

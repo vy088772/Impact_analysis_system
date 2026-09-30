@@ -423,7 +423,7 @@ def _add_operation(
             if not target.name:
                 continue
             target, schema_source = _resolved_call_target(node_by_key, target, module_schema, cache_database)
-            for target_id, target_module in _resolve_call_target(node_by_key, target, cache_database):
+            for target_id, target_module in _call_target_nodes(node_by_key, target, cache_database):
                 if target_module is not None:
                     # The temp table expansion reads calls only from these edges.
                     call_edges.add((module_id, str(target_module["id"])))
@@ -553,9 +553,7 @@ def _resolved_reference(
     node_by_key: _NodeIndex, entry: dict[str, Any], module_schema: str
 ) -> tuple[ObjectName, str]:
     """Read one analyzer reference and give it the schema SQL Server resolves, with its schema source."""
-    reference = _reference(entry)
-    schema, schema_source = schema_resolution.resolve(reference, module_schema, node_by_key.holds)
-    return dataclasses.replace(reference, schema=schema), schema_source
+    return _with_resolved_schema(node_by_key, _reference(entry), module_schema, schema_resolution.resolve)
 
 
 def _resolved_call_target(
@@ -568,24 +566,18 @@ def _resolved_call_target(
     """
     if target.server or names_another_database(target.database, cache_database):
         return target, schema_resolution.WRITTEN if target.schema else schema_resolution.UNRESOLVED
-    schema, schema_source = schema_resolution.resolve_call(target, module_schema, node_by_key.holds)
-    return dataclasses.replace(target, schema=schema), schema_source
+    return _with_resolved_schema(node_by_key, target, module_schema, schema_resolution.resolve_call)
 
 
-def _listed_nodes(
-    node_by_key: _NodeIndex, object_type: str, schema: str, name: str
-) -> list[dict[str, Any]]:
-    """The listed nodes one reference names.
-
-    A reference arrives with the schema that the resolution rule gave it, and it
-    matches the node of that full key. One that the rule left empty matches no
-    listed node. Listed nodes always carry a schema, so none of them carries the
-    Unproven Schema mark.
-    """
-    if schema:
-        node = node_by_key.get(_node_key(object_type, schema, name))
-        return [node] if node else []
-    return []
+def _with_resolved_schema(
+    node_by_key: _NodeIndex,
+    reference: ObjectName,
+    module_schema: str,
+    rule: Callable[[ObjectName, str, Callable[[str, str], bool]], tuple[str, str]],
+) -> tuple[ObjectName, str]:
+    """Give ``reference`` the schema that ``rule`` resolves against the cache listing, with its schema source."""
+    schema, schema_source = rule(reference, module_schema, node_by_key.holds)
+    return dataclasses.replace(reference, schema=schema), schema_source
 
 
 def _ensure_referenced_nodes(
@@ -619,9 +611,9 @@ def _ensure_referenced_nodes(
     # An unresolved reference names no listed object either.
     if object_schema and not names_another_database(reference.database, cache_database):
         for object_type in ("view", "function"):
-            listed = _listed_nodes(node_by_key, object_type, object_schema, name)
+            listed = node_by_key.get(_node_key(object_type, object_schema, name))
             if listed:
-                return [str(node["id"]) for node in listed]
+                return [str(listed["id"])]
 
     node = {
         "id": _node_id("table", object_schema, name),
@@ -633,7 +625,7 @@ def _ensure_referenced_nodes(
     return [str(kept_node["id"])]
 
 
-def _resolve_call_target(
+def _call_target_nodes(
     node_by_key: _NodeIndex,
     target: ObjectName,
     cache_database: str,
@@ -641,14 +633,15 @@ def _resolve_call_target(
     """Return each node id a calls relationship names, with the module node the graph defines for it or None."""
     # A call through a linked server, to another Database, or to a module that this
     # cache does not list has no module node. A listed module with no definition is a node.
-    # The target arrives with the schema the resolution rule gave it; an empty schema matches no node.
+    # The target arrives with the schema the resolution rule gave it; an empty schema matches no
+    # listed node, because a listed node always carries a schema.
     stated_id = _node_id("stored_procedure", target.schema, target.name)
     if target.server or names_another_database(target.database, cache_database):
         return [(stated_id, None)]
-    modules = _listed_nodes(node_by_key, "stored_procedure", target.schema, target.name)
-    if not modules:
+    module = node_by_key.get(_node_key("stored_procedure", target.schema, target.name)) if target.schema else None
+    if module is None:
         return [(stated_id, None)]
-    return [(str(module["id"]), module) for module in modules]
+    return [(str(module["id"]), module)]
 
 
 def _known_object_node_ids(
@@ -662,10 +655,8 @@ def _known_object_node_ids(
     # unresolved reference names no listed function either.
     if not reference.schema or names_another_database(reference.database, cache_database):
         return []
-    return [
-        str(node["id"])
-        for node in _listed_nodes(node_by_key, object_type, reference.schema, reference.name)
-    ]
+    node = node_by_key.get(_node_key(object_type, reference.schema, reference.name))
+    return [str(node["id"])] if node else []
 
 
 def _add_relationship(
