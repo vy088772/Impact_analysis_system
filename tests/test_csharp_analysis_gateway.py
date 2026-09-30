@@ -1388,6 +1388,36 @@ def test_a_match_on_the_full_key_carries_no_unproven_schema_reason() -> None:
     assert invocation.reason == ""
 
 
+def test_a_call_with_no_schema_matches_dbo_when_the_catalog_holds_it() -> None:
+    catalog = SpCatalog.from_databases({
+        "Y-Docs_TTPUR": ["dbo.usp_Load", "COMMON.usp_Load"],
+    })
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "Y-Docs_TTPUR"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "f.cs",
+        [_raw_invocation(command_text="usp_Load")],
+    )[0]
+
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.reason == ""
+    assert invocation.procedure_schema == "dbo"
+
+
+def test_a_call_with_no_schema_keeps_the_unproven_schema_reason_without_dbo() -> None:
+    catalog = SpCatalog.from_databases({"Y-Docs_TTPUR": ["COMMON.usp_Load"]})
+    gateway = CSharpAnalysisGateway(catalog, connection_sources={"conn": "Y-Docs_TTPUR"})
+
+    invocation = gateway.resolve_direct_invocations(
+        "f.cs",
+        [_raw_invocation(command_text="usp_Load")],
+    )[0]
+
+    assert invocation.evidence is InvocationEvidence.PROVEN
+    assert invocation.reason == "unproven_schema"
+    assert invocation.procedure_schema is None
+
+
 def test_a_name_that_states_no_schema_enters_the_bare_bucket_only() -> None:
     catalog = SpCatalog.from_databases({"PUR": ["usp_Load", "COMMON.usp_Save"]})
 

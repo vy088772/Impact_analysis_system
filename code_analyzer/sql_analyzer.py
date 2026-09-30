@@ -14,6 +14,7 @@ import json
 
 from canonical_object_identity import ObjectName, bare_key, bare_name, parse
 from config.settings import settings, DatabaseConfig
+from schema_resolution import DEFAULT_SCHEMA
 
 
 # ============================================
@@ -627,8 +628,8 @@ class SQLAnalyzer:
         快速分析單一預存程序
         只做靜態分析，不深入解析複雜邏輯
 
-        schema：名稱本身寫了 schema 就用名稱的；沒寫就用這個參數；兩者都沒有時，
-        取唯一擁有同名 SP 的 schema。沒有或有多個 schema 擁有時回報不存在，不猜 dbo。
+        schema：名稱本身寫了 schema 就用名稱的；沒寫就用這個參數；兩者都沒有時取 dbo，
+        與 SQL Server 對模組外呼叫端的解析相同。dbo 沒有的名稱就是不存在。
         schema 沒有預設值：漏改的呼叫端丟 TypeError，不會安靜地讀到任何 schema。
         procedure_name 保留呼叫端寫的名稱；查詢只用拆出來的名稱。
         """
@@ -636,7 +637,7 @@ class SQLAnalyzer:
 
         written = parse(proc_name)
         name = written.name
-        schema = written.schema or schema or self._only_schema_holding(name)
+        schema = written.schema or schema or DEFAULT_SCHEMA
 
         info = SimplifiedSPInfo(
             procedure_name=proc_name,
@@ -687,23 +688,6 @@ class SQLAnalyzer:
         
         return info
     
-    def _only_schema_holding(self, proc_name: str) -> str:
-        """The one schema that holds a procedure with this name, or "" for none or several."""
-        self.cursor.execute(
-            """
-        SELECT ROUTINE_SCHEMA
-        FROM INFORMATION_SCHEMA.ROUTINES
-        WHERE ROUTINE_NAME = ? AND ROUTINE_TYPE = 'PROCEDURE'
-        """,
-            proc_name,
-        )
-        schemas = {row[0] for row in self.cursor.fetchall()}
-        if len(schemas) != 1:
-            if schemas:
-                print(f"   ⚠️ {len(schemas)} 個 schema 都有 {proc_name}，名稱沒寫 schema，不猜")
-            return ""
-        return schemas.pop()
-
     def _check_sp_exists(self, proc_name: str, schema: str) -> bool:
         """檢查 schema.proc_name 這支 SP 是否存在；兩段都是已拆開、沒有方括號的名稱。"""
         query = """
@@ -1335,4 +1319,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()

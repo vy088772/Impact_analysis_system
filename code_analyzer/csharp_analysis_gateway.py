@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set
 
 from canonical_object_identity import bare_key, parse, part_key
+from schema_resolution import DEFAULT_SCHEMA
 
 from .external_wrapper_contracts import (
     CONTRACT_SIGNATURE_SCHEMA_VERSION,
@@ -2213,8 +2214,9 @@ class SpCatalog:
     Two buckets answer a question. The bare bucket holds the bare key of every
     name. The full bucket holds `schema.name` for every name that states a
     schema. A third set records the names that state none, because a qualified
-    question falls back to those and to no others. The catalog never fills `dbo`
-    for a name that states no schema.
+    question falls back to those and to no others. A call that states no schema
+    resolves to `dbo` when the full bucket holds `dbo.name`
+    (unstated-schema-resolves-as-sql-server-does).
     """
 
     procedures_by_database: Dict[str, Set[str]]
@@ -2286,22 +2288,42 @@ class SpCatalog:
     ) -> Optional[str]:
         """Answer one question: `None` for a miss, otherwise the reason of the match.
 
-        A name that states no schema is asked of the bare bucket. A name that
-        states a schema is asked of the full bucket. A qualified question that
-        misses the full bucket falls back to the catalog names that state no
-        schema. That match returns `UNPROVEN_SCHEMA_REASON`. Every other match
-        returns an empty reason.
+        A name that states no schema asks for `dbo.name` in the full bucket. A
+        hit returns an empty reason. A miss falls back to the bare bucket and
+        returns `UNPROVEN_SCHEMA_REASON`. A name that states a schema is asked
+        of the full bucket. A qualified question that misses the full bucket
+        falls back to the catalog names that state no schema. That match
+        returns `UNPROVEN_SCHEMA_REASON`. Every other match returns an empty
+        reason.
         """
         database_key = self._database_key(database)
         if not schema:
+            if self.resolved_schema(database, normalized_name, schema):
+                return ""
             bare_names = self.procedures_by_database.get(database_key, set())
-            return "" if normalized_name in bare_names else None
+            return UNPROVEN_SCHEMA_REASON if normalized_name in bare_names else None
         qualified_names = self.qualified_procedures_by_database.get(database_key, set())
         if f"{schema}.{normalized_name}" in qualified_names:
             return ""
         schemaless_names = self.schemaless_procedures_by_database.get(database_key, set())
         if normalized_name in schemaless_names:
             return UNPROVEN_SCHEMA_REASON
+        return None
+
+    def resolved_schema(
+        self,
+        database: str,
+        normalized_name: str,
+        schema: Optional[str] = None,
+    ) -> Optional[str]:
+        """The schema a call reaches: the stated one, else `dbo` when the catalog holds it."""
+        if schema:
+            return schema
+        qualified_names = self.qualified_procedures_by_database.get(
+            self._database_key(database), set()
+        )
+        if f"{DEFAULT_SCHEMA}.{normalized_name}" in qualified_names:
+            return DEFAULT_SCHEMA
         return None
 
     def databases_containing(
@@ -3344,7 +3366,7 @@ class CSharpAnalysisGateway:
             if match_reason is not None:
                 return EmbeddedProcedureTarget(
                     normalized_name,
-                    procedure_schema,
+                    self._catalog.resolved_schema(database, normalized_name, procedure_schema),
                     database,
                     InvocationEvidence.PROVEN,
                     match_reason or "catalog_match",
@@ -4148,7 +4170,9 @@ class CSharpAnalysisGateway:
                     InvocationEvidence.PROVEN,
                     source,
                     reason=match_reason,
-                    procedure_schema=procedure_schema,
+                    procedure_schema=self._catalog.resolved_schema(
+                        database, normalized_name, procedure_schema
+                    ),
                     method_chain=method_chain,
                     branch_context=branch_context,
                     method_class_chain=method_class_chain,

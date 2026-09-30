@@ -6,10 +6,22 @@ See "The C# side" and user stories 21 and 22 in the spec.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A failing gateway test comes first: a C# call to `usp_Load` with no schema, over a catalog that holds `dbo.usp_Load` and `COMMON.usp_Load`, matches `dbo.usp_Load` with no Unproven Schema reason.
-- [ ] The same call over a catalog without `dbo.usp_Load` keeps the Unproven Schema match reason.
-- [ ] The quick analyzer's unstated schema tests change to "stated, else `dbo`". A name that `dbo` does not hold does not exist.
-- [ ] The quick analyzer's `schema` argument keeps no default, and its test still checks that.
-- [ ] The whole suite shows no new failure.
+- [x] A failing gateway test comes first: a C# call to `usp_Load` with no schema, over a catalog that holds `dbo.usp_Load` and `COMMON.usp_Load`, matches `dbo.usp_Load` with no Unproven Schema reason.
+- [x] The same call over a catalog without `dbo.usp_Load` keeps the Unproven Schema match reason.
+- [x] The quick analyzer's unstated schema tests change to "stated, else `dbo`". A name that `dbo` does not hold does not exist.
+- [x] The quick analyzer's `schema` argument keeps no default, and its test still checks that.
+- [x] The whole suite shows no new failure.
+
+**Notes:**
+
+Files this ticket changed (other tickets run in parallel; these are the only ones):
+
+- `code_analyzer/csharp_analysis_gateway.py`: `SpCatalog.match_reason()` asks a call with no schema for `dbo.name` in the full bucket. A hit gives an empty reason. A miss that the bare bucket holds gives `unproven_schema`. New `SpCatalog.resolved_schema()` returns the stated schema, else `dbo` when the catalog holds `dbo.name`, else `None`. The two catalog match sites (`EmbeddedProcedureTarget` and `DbInvocation`) record that schema, so a resolved call shows `procedure_schema == "dbo"`.
+- `code_analyzer/sql_analyzer.py`: `quick_analyze_sp()` takes the stated schema, else the `schema` argument, else `DEFAULT_SCHEMA` (`dbo`, from `schema_resolution`). `_only_schema_holding()` is removed. The `schema` argument keeps no default.
+- `tests/test_csharp_analysis_gateway.py`: 2 new tests (dbo match with no reason; no `dbo` keeps `unproven_schema`).
+- `tests/test_sql_analyzer_unstated_schema.py`: the unstated schema tests now say "stated, else `dbo`".
+
+Suite: 16 tests fail before and after this ticket (wrapper registry, sqldbcontext and `program_refresh` tests). No new failure. `tests/test_search_roles.py` and `tests/test_sp_tables.py` need a live database and fail at collection, before and after.
+The two edited source files and one test file use CRLF line endings. Keep them.
