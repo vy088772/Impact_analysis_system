@@ -1409,8 +1409,13 @@ def _rated_invocations_validity_stamp(
         if isinstance(identity, sql_cache_store.CacheIdentity)
         else None
     )
+    # The repair tool rebuilds the graph and keeps the Scan Record's saved_at,
+    # so the graph version joins the save time: a rebuilt graph invalidates.
     sql_cache_freshness = (
-        _freshness_or_sentinel(sql_cache_store.cached_saved_at(identity))
+        (
+            _freshness_or_sentinel(sql_cache_store.cached_saved_at(identity)),
+            (sql_cache.get("sql_execution_graph") or {}).get("graph_version"),
+        )
         if sql_cache is not None and isinstance(identity, sql_cache_store.CacheIdentity)
         else None
     )

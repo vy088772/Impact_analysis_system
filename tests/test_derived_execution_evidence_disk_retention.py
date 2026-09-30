@@ -529,3 +529,28 @@ def test_records_served_from_disk_are_identical_to_those_derived_in_memory(monke
         from_disk = analyze_service.find_by_sp(_sp_request())
 
         assert [m.model_dump() for m in in_memory.matches] == [m.model_dump() for m in from_disk.matches]
+
+
+def test_a_rebuilt_graph_of_a_new_version_causes_a_derivation(monkeypatch, tmp_path: Path) -> None:
+    """The repair tool rewrites the graph and leaves the Scan Record's saved_at alone.
+
+    Evidence derived from the old graph must not be served after the rebuild.
+    """
+    from service.sql_execution_graph import GRAPH_VERSION
+
+    with RatedInvocationsRetention():
+        scan = _scan(tmp_path)
+        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha"))
+        old_payload = cache_payload("OrdersDb", graph=dict(_graph("usp_Alpha"), graph_version=GRAPH_VERSION - 1))
+        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: old_payload)
+        calls = _count_real_rating_derivations(monkeypatch)
+
+        analyze_service.find_by_sp(_sp_request())
+        assert len(calls) == 1
+
+        new_payload = cache_payload("OrdersDb", graph=_graph("usp_Alpha"))
+        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: new_payload)
+        _simulate_restart()
+        analyze_service.find_by_sp(_sp_request())
+
+        assert len(calls) == 2
