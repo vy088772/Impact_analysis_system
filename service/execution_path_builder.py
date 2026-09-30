@@ -9,6 +9,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 import schema_resolution
 from canonical_object_identity import ObjectName, bare_key, part_key, schema_qualified
+from code_analyzer.connection_source_entry import ConnectionSourceEntry
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
@@ -282,7 +283,7 @@ def build_execution_paths_from_raw_invocations(
     raw_invocations: Iterable[Mapping[str, Any]],
     catalog: SpCatalog,
     graph: Mapping[str, Any],
-    connection_sources: Optional[Mapping[str, str]] = None,
+    connection_sources: Optional[Mapping[str, ConnectionSourceEntry]] = None,
     *,
     max_call_depth: int = 5,
 ) -> list[dict[str, Any]]:

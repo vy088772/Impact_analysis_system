@@ -17,6 +17,7 @@ from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set
 from canonical_object_identity import bare_key, parse, part_key
 from schema_resolution import DEFAULT_SCHEMA
 
+from .connection_source_entry import database_of, server_of
 from .external_wrapper_contracts import (
     CONTRACT_SIGNATURE_SCHEMA_VERSION,
     compute_contract_fingerprint,
@@ -4266,11 +4267,9 @@ class CSharpAnalysisGateway:
     ) -> tuple[Optional[str], Optional[str]]:
         """Resolve a connection expression to its (database, server) pair.
 
-        ``self._connection_sources`` values may be a plain database-name string
-        (the legacy shape, still accepted so every existing caller keeps
-        working unchanged) or a ``{"database": ..., "server": ...}`` mapping
-        produced by the Web.config connection-string resolver -- in which case
-        the server travels alongside the database instead of being dropped.
+        The connection source entry module reads each ``self._connection_sources``
+        value, so a Legacy Connection Label gives a database with no server and
+        a Resolved Connection Source gives the two together.
         """
         if not connection_expression:
             return None, None
@@ -4289,16 +4288,10 @@ class CSharpAnalysisGateway:
                 ),
                 None,
             )
-        if isinstance(entry, Mapping):
-            database = entry.get("database")
-            server = entry.get("server")
-        else:
-            database = entry
-            server = None
-        if not database or str(database).strip().casefold() in {"unknown", "unresolved"}:
+        database = database_of(entry)
+        if not database or database.casefold() in {"unknown", "unresolved"}:
             return None, None
-        server_text = str(server).strip() if server else None
-        return str(database).strip(), (server_text or None)
+        return database, server_of(entry)
 
     @staticmethod
     def _branch_context(raw: dict) -> tuple[str, ...]:

@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Opt
 import schema_resolution
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
+from code_analyzer.connection_source_entry import database_of, has_resolved_shape, with_database
 from canonical_object_identity import ObjectName, bare_key, bare_name, full_key, parse, part_key, schema_qualified
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
@@ -1007,44 +1008,6 @@ def _require_sql_execution_graph(database: str, db_server: str = "") -> Tuple[Di
     return cached, dict(graph)
 
 
-def _connection_source_database(value: Any) -> str:
-    """One connection_sources entry's database name, whichever shape it is in.
-
-    An entry is either the legacy plain database-name string, or a
-    {"database": ..., "server": ...} mapping produced by the Web.config
-    connection-string resolver (ticket 01) -- both shapes can coexist within
-    the same ProjectScanResult (a freshly re-scanned file gets the new shape;
-    an untouched file keeps whatever an older scan wrote), so every reader of
-    connection_sources must tolerate both.
-    """
-    if isinstance(value, Mapping):
-        return str(value.get("database") or "")
-    return str(value or "")
-
-
-def _is_resolved_connection_source(value: Any) -> bool:
-    """True when a connection_sources entry carries a database the resolver worked out.
-
-    The {"database": ..., "server": ...} mapping shape comes from the Web.config
-    connection-string resolver and names the database the connection really opens. The
-    legacy plain-string shape is a system_id-shaped label an older scan wrote, which says
-    nothing about which database the connection reaches.
-    """
-    return isinstance(value, Mapping)
-
-
-def _remap_connection_source(value: Any, database: str) -> Any:
-    """Rebuild one connection_sources entry with a new resolved database.
-
-    Preserves the entry's server when it carried one, so remapping a file's
-    ambiguous multi-database sources onto the selected graph scope never
-    drops the server ticket 01 threaded through connection_sources.
-    """
-    if isinstance(value, Mapping):
-        return {"database": database, "server": value.get("server")}
-    return database
-
-
 def _referenced_databases(scans: Iterable[ProjectScanResult]) -> List[str]:
     """Distinct real database names a system's own connection strings resolve to.
 
@@ -1065,7 +1028,7 @@ def _referenced_databases(scans: Iterable[ProjectScanResult]) -> List[str]:
         for source_file in raw_by_file:
             sources = _execution_connection_sources(scan, str(source_file), "")
             for value in sources.values():
-                name = _connection_source_database(value).strip()
+                name = database_of(value)
                 if name:
                     names.setdefault(name, None)
     return list(names)
@@ -1095,9 +1058,9 @@ def _execution_connection_sources(
         if value and value.strip()
     }
     source_values = {
-        _connection_source_database(value).strip().casefold()
+        database_of(value).casefold()
         for value in sources.values()
-        if _connection_source_database(value).strip()
+        if database_of(value)
     }
     if not source_values:
         return sources
@@ -1110,11 +1073,9 @@ def _execution_connection_sources(
     holds_one_label = len(source_values) <= 1
 
     def remapped_onto_scope(value: Any) -> Any:
-        names_the_scope = (
-            _connection_source_database(value).strip().casefold() in known_databases
-        )
-        if names_the_scope or (holds_one_label and not _is_resolved_connection_source(value)):
-            return _remap_connection_source(value, graph_database)
+        names_the_scope = database_of(value).casefold() in known_databases
+        if names_the_scope or (holds_one_label and not has_resolved_shape(value)):
+            return with_database(value, graph_database)
         return value
 
     return {
