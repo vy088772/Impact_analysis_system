@@ -57,7 +57,7 @@ The code review of 2026-09-30 found four wrong explanations in the first version
 - `written` fell from 7612 to 6866 (-746). The parts:
   - -657: the procedure, View, and Function references above. They moved from `written` to `module_schema`. Their targets did not change.
   - +67 table `writes` (748 to 815): an alias write is now a write of the real table, and the procedure text states that table's schema.
-  - -153 table `reads` (5398 to 5245): 234 left and 81 came, counted per statement. 232 of the 234 sit on a statement that held an alias write in v7. The statement now writes the real object and no longer reads it. When the real object is a temp table, the reads that its lineage carried leave too. One case was checked in full: `dbo.usp_ATV_Manifest_Qry` in PUR, two `Update L ... From #List as L` statements.
+  - -153 table `reads` (5398 to 5245): 234 left and 81 came, counted per statement. 232 of the 234 sit on a statement that held an alias write in v7. The statement now writes the real object and no longer reads it. When the real object is a temp table, the reads that its lineage carried leave too. One case was checked in full: `dbo.usp_ATV_Manifest_Qry` in PUR, two `Update L ... From #List as L` statements. These two numbers count per statement. The second review below counts per relationship, and its split replaces this one: 235 left, 78 came, and 4 changed their source.
   - The cause of the reads that came: a temp table now has the alias write as a writer, so a read of that temp table expands to more base tables. The second review below counts each one.
   - -4 Function `reads` and +1 View `reads`. All are lineage reads in PUR. The second review below gives their cause.
 - All references: 20629 to 19756 (-873): `reads` 16096 to 15356 (-740), `writes` 4143 to 4010 (-133). This is a different number from the -746 above. The relationship types `contains` (9631), `calls` (390), `uses` (826), and `unresolved` (15) keep their counts.
@@ -69,7 +69,7 @@ The code review of 2026-09-30 found four wrong explanations in the first version
   - 24 `reads` name a plain table that the listing of its Database does not hold: `syscomments` (10, in PUR and Response), `FAQTable` (7) and `RoleFAQ` (6) in STC `dbo.spFAQQry_V2`, and `ETONLog` (1) in PUR `dbo.spSelETONPODLQry`. These are unlisted or broken references. They keep the Unproven Schema mark, as user story 6 says.
   - 2 name an object of another Database: `master..xp_cmdshell` (PUR) and `Common..Users` (Response).
   - No reference names a table variable.
-- The spec's 3107 unlisted names use the same unit as this report. Its three numbers (9845 + 3107 + 3) give 12955, and the v7 baseline holds 13017. The gap is 62: the 61 no-schema calls of v7, and 1 table reference that states another Database (`Common..Users`). The second review below proves it.
+- The spec's 3107 unlisted names use the same unit as this report. Its three numbers (9845 + 3107 + 3) give 12955, and the v7 baseline holds 13017. The gap is 62: the 61 no-schema calls of v7, and 1 table reference that states another Database (`Common..Users`). The second review below gives the count.
 - `system`: 60 `calls` to an `sp_` or `xp_` name that no listing holds now name `sys`, as the spec says.
 
 Spot checks (eFinance graph, v7 to v8):
@@ -123,9 +123,26 @@ The 130 reads that came are all lineage reads. Each one goes through a temp tabl
 
 The four differences:
 
-- The `written` table reads fell by 153: -67 (alias, direct), -166 (alias, lineage), -2 (a writer lost a read), +78 (came), and +4. The 4 are reads of `IVWork` through `#List` in `dbo.usp_ATV_Manifest_Qry` (PUR). Two alias writes are new writers of `#List`, and they read `dbo.IVWork` with a written schema. The read keeps the strongest source.
+- The `written` table reads fell by 153. The parts:
+  - -67: alias, direct.
+  - -166: alias, lineage.
+  - -2: a writer lost a read.
+  - +78: the reads that came.
+  - +4: reads of `IVWork` through `#List` in `dbo.usp_ATV_Manifest_Qry` (PUR). Two alias writes are new writers of `#List`, and they read `dbo.IVWork` with a written schema. The read keeps the strongest source.
 - The Function `reads` fell by 4: 5 left, and 1 came. The View `reads` rose by 1: 4 left, and 5 came. All are lineage reads in PUR, with the causes above. One case of each: `dbo.usp_CDCU_RMCDDetail_Calculate` lost `dbo.fun_GetStatusForRMCD` through `#SourceData`, and `dbo.usp_SO_Publish_NoPriceV2` gained `dbo.view_GetPrice` through `#Data` and `#PriceOrder`.
-- The no-schema table reads fell by 584: -234 (CTE names), -130 (alias, direct), -99 (alias, lineage), -136 (a writer lost a read), -27 (two nodes became one), -4 (now `written`), and +46 (came).
-- The gap of 62: the rule, applied to each v7 `reads` or `writes` reference with no schema, gives 9845 resolved, 3107 unlisted, and 3 in neither schema. That is the spec's 12955. The other 62 are the 61 calls with no schema and 1 table reference that states another Database (`Common..Users`).
+- The no-schema table reads fell by 584. The parts:
+  - -234: CTE names.
+  - -130: alias, direct.
+  - -99: alias, lineage.
+  - -136: a writer lost a read.
+  - -27: two nodes became one.
+  - -4: the `IVWork` reads above, which are now `written`.
+  - +46: the reads that came.
+- The gap of 62. This review applied the rule to each v7 `reads` or `writes` reference with no schema. The listing is the four object lists of each v7 cache, and the module schema comes from the operation node. The count:
+  - 9845 resolve: 7491 direct reads or writes, and 2354 lineage reads.
+  - 3107 name an unlisted object: 2974 direct, and 133 lineage.
+  - 3 name an object that neither schema holds: 1 direct, and 2 lineage.
+  - Those three numbers are the spec's 12955.
+  - The other 62 are the 61 calls with no schema and 1 table reference that states another Database (`Common..Users`).
 
 Each sum agrees with the totals above. No difference stays open.

@@ -35,7 +35,7 @@ Review: `/code-review` found no defect. Open points, not done here: the default 
 
 **Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
 
-- The open point above is closed: the default source rule is `schema_resolution.recorded_source()`, and the four sites call it (commit `aa323d7`).
+- This review closes the open point above: the default source rule is `schema_resolution.recorded_source()`, and the four sites call it (commit `aa323d7`).
 - `schema_source_rank()` left `service/execution_path_builder.py`. The three sites that compared two sources call `schema_resolution.strongest_source()`.
 - The spec now states that the record of a resolved inline C# SQL table shows `dbo.name`. User story 18 and the second box above already asked for it.
 - ADR-0037 now states one limit of the inline rule. The Object Location Index can over-report a name (ADR-0012), so `dbo.name` in the index proves the schema and not that the table exists.

@@ -42,3 +42,4 @@ Verification: the analyzer host test file passes (38 tests). The whole suite giv
 - Fix (commit `ec25045`): `FindFromClauseAlias()` reads the table references of the `FROM` clause only. It goes through a join and through a join in parentheses. It does not enter a derived table.
 - 3 new tests in `tests/test_static_analyzer_host.py`. Two failed before the fix.
 - The seven caches hold no such statement, so no graph needs a rebuild.
+- The review of that fix found one more shape. The new walk stopped at an ODBC escape join (`{ oj A LEFT OUTER JOIN B ... }`), so an alias inside it wrote its own name. The walk now enters that join. One more test covers it. No cache holds `{ oj`.

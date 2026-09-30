@@ -57,4 +57,4 @@ Review (`/code-review`, Standards and Spec): no hard violation and no behaviour 
 **Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
 
 - The evidence stamp check that ticket 09 asked for: `_STORE_VERSION` is 4 (commit `7be9368`). The validity stamp reads the inputs, not the code. So a file that a version 8 graph gave before this ticket had no `unproven_schema` flag, and the store served it. Such a file is now a miss.
-- The open finding above is closed: `tests/sql_cache_fixtures.py` holds `with_schema_source()`. The hand-written relationships of `tests/test_execution_path_builder.py` and `tests/test_table_match.py` state their schema source through it. An unknown value raises `ValueError`.
+- This review closes the open finding above: `tests/sql_cache_fixtures.py` holds `with_schema_source()`. The hand-written relationships of `tests/test_execution_path_builder.py` and `tests/test_table_match.py` state their schema source through it. An unknown value raises `ValueError`.

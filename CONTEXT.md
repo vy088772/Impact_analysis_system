@@ -37,7 +37,7 @@ _Avoid_: dbo fill, schema guess, default schema fallback
 **Unproven Schema**:
 The mark on a match, or on a call, that proves no schema. Schema Resolution removes the mark from every reference that it resolves. The mark stays in three cases:
 - The object listing does not hold the name.
-- The reference is `db..name`. The rule reads no object listing for it, also when that Database is the cache's own Database.
+- The reference is `db..name`. Schema Resolution reads no object listing for it, also when that Database is the cache's own Database.
 - Neither the module's schema nor `dbo` holds the name.
 
 The value `unproven_schema` carries the mark in four places:

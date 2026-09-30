@@ -37,7 +37,7 @@ Open points, not done here:
 **Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
 
 - ADR-0035 and the glossary said that a `db..name` reference keeps the mark when "that Database has no local cache". The code, ADR-0037, and ticket 04 keep the mark for every `db..name` reference. Both texts now say so.
-- STE100: two paragraphs held 7 sentences (the Canonical Object Identity entry, and the last paragraph of the ADR-0035 amendment). Three sentences used the passive voice. Each is fixed.
+- STE100: two paragraphs held 7 sentences (the Canonical Object Identity entry, and the last paragraph of the ADR-0035 amendment). Three sentences used the passive voice. This review fixed each one.
 - One term for one concept: "a reference that states no schema" replaces "with no stated schema" and "unqualified call" in the glossary and the two ADRs. "The object listing" replaces "the listing".
 - The `## Comments` heading replaces `**Notes:**` and `## Implementation note` in the ten tickets, as `docs/agents/issue-tracker.md` asks.
-- Not changed: the 16 commit subjects of this feature are English, and the commit message rule asks for Traditional Chinese. History is not rewritten. The commits of this review follow the rule.
+- Not changed: the 16 commit subjects of this feature are English, and the commit message rule asks for Traditional Chinese. This review does not rewrite history. The commits of this review follow the rule.

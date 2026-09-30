@@ -229,8 +229,9 @@ point already landed before this spec (commit `08dd048`).
   reverses: the canonical-object-identity decision never to fill an unstated
   schema.
 - ADR-0035 gains an amendment. The Unproven Schema mark stays for three cases
-  only: a name the listing does not hold, a `db..name` reference, and a name
-  that neither the module's schema nor `dbo` holds.
+  only. The first is a name that the object listing does not hold. The second
+  is a `db..name` reference. The third is a name that neither the module's
+  schema nor `dbo` holds.
 - `CONTEXT.md` gains a Schema Resolution entry. The Canonical Object Identity
   entry keeps its keys and states that a reference is resolved before it is
   keyed. The Unproven Schema entry lists the three cases.
