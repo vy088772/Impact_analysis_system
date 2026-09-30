@@ -168,7 +168,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # identity/` ticket 07）：`SQLQuery.tables` 與 `CSharpTableRelation.table`
 # 保留寫出來的 database、schema 與大小寫，`CSharpTableRelation.table_name`
 # 移除。舊快取的關聯只有大寫的裸名稱，而且整個丟掉三段式名稱，必須重新掃描。
-_CACHE_VERSION = 40
+# v41：內嵌 C# SQL 的資料表關聯改由 analyzer host 的 SQL 命令解析（見
+# `.scratch/inline-sql-tables-come-from-the-parser/` ticket 03）：每張表有自己的
+# 存取型態（SELECT／INSERT／UPDATE／DELETE／SELECT_INTO），關聯多了 `reason`
+# （`inline_sql_parsed` 或 `inline_sql_regex`）與 `invocation_span`。舊快取的關聯
+# 只有正規表達式給的整句存取型態，沒有來源，必須重新掃描。
+_CACHE_VERSION = 41
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

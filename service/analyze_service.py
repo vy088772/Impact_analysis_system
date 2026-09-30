@@ -2915,9 +2915,10 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             program=_normalize_program(Path(rel.csharp_file).name),
             file=_rel(rel.csharp_file, root),
             # Inline C# SQL remains a direct source fact; SQL-module relationships
-            # are queried from the Execution Graph below.
+            # are queried from the Execution Graph below. The relation names its
+            # own source (parsed or regular expression) and its own access type.
             access_type=rel.access_type,
-            reason="inline_sql_source_fact",
+            reason=rel.reason,
             evidence_status="not_applicable",
             evidence_reason="inline_sql",
             database=answer.database,

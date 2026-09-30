@@ -25,6 +25,7 @@ from .sql_analyzer import SQLAnalyzer, SimplifiedSPInfo
 from .db_connection_tracker import DBConnectionTracker
 from .models import FileAnalysisResult, StoredProcedureCall, SQLQuery, FrameworkType, MethodSourceSpan, SourceSnapshot
 from .static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
+from .sql_text_analysis import HostSqlTextAnalysis, SqlTextAnalysis, SqlTextAnalysisError
 from .smart_file_finder import SmartFileFinder, FileSearchResult
 from .config_parser import WebConfigParser
 from .project_connection_scope import ProjectConnectionScopeIndex
@@ -84,6 +85,11 @@ class CSharpSPRelation:
 # The Database a relation carries when the parser cannot resolve its C# connection.
 UNRESOLVED_CONNECTION_DATABASE = "unknown"
 
+# The two sources of an inline SQL table relation. The analyzer host's SQL
+# command parsed the text, or a regular expression guessed the tables.
+INLINE_SQL_PARSED = "inline_sql_parsed"
+INLINE_SQL_REGEX = "inline_sql_regex"
+
 
 @dataclass
 class CSharpTableRelation:
@@ -93,14 +99,23 @@ class CSharpTableRelation:
     class_name: str
     method_name: str
     line_number: int
-    
+
     # 資料表資訊
     table: ObjectName
     database: str
-    access_type: str  # READ, INSERT, UPDATE, DELETE
-    
+    # 這張表自己的存取型態：解析來源給 SELECT／INSERT／UPDATE／DELETE／SELECT_INTO，
+    # 正規表達式來源仍是整句的型態。
+    access_type: str
+
     # SQL 資訊
     sql_preview: str = ""
+
+    # 關聯的來源（INLINE_SQL_PARSED 或 INLINE_SQL_REGEX），以及解析來源的
+    # Database Invocation 之原始碼範圍 (start_offset, end_offset)；正規表達式
+    # 來源沒有 Database Invocation，範圍是空的。欄位只用內建型別，讓同伴
+    # repository 的受限 unpickler 不必認得新類別。
+    reason: str = INLINE_SQL_REGEX
+    invocation_span: Tuple[int, ...] = ()
 
     @property
     def connection_database(self) -> str:
@@ -388,9 +403,17 @@ class ProjectScanResult:
 # 專案掃描器
 # ============================================
 
+def _collapse_whitespace(sql_text: str) -> str:
+    """同一段 SQL 文字的比對鍵：空白收合，並去掉 `--`（C# 解析器的清理步驟會去掉它）。"""
+    return " ".join(sql_text.replace("--", "").split())
+
+
 class ProjectScanner:
     """專案掃描器"""
-    
+
+    # 測試用 object.__new__ 建立的掃描器沒有跑 __init__；第一次要用時再建 host 轉接器。
+    sql_text_analysis: Optional[SqlTextAnalysis] = None
+
     def __init__(self, project_root: str = None, project_name: str = None):
         """
         初始化專案掃描器
@@ -433,6 +456,7 @@ class ProjectScanner:
         # 保留向下相容
         self.csharp_parser = self.parsers.get('csharp')
         self.static_analyzer_host = StaticAnalyzerHost.for_project(Path(__file__).resolve().parent.parent)
+        self.sql_text_analysis = HostSqlTextAnalysis(self.static_analyzer_host)
 
         # 解析專案的 Web.config，讓 db_tracker 能把程式碼裡的 AppSettings/
         # ConnectionStrings 查找鍵解析成真正的 {server, database}，而不是把
@@ -981,8 +1005,7 @@ class ProjectScanner:
         self.scan_result.csharp_results.sort(
             key=lambda result: str(Path(result.file_path).resolve())
         )
-        for result in refreshed_results:
-            self._build_table_relations(result.sql_queries)
+        self._build_table_relations(refreshed_results)
         resolve_razor_display_fields(
             self.scan_result.razor_results, self.scan_result.csharp_results, Path(self.project_root)
         )
@@ -1107,9 +1130,8 @@ class ProjectScanner:
         if all_sp_calls:
             self._build_legacy_sp_relations(all_sp_calls, analyze_sp)
         
-        # 建立資料表關聯
-        if all_sql_queries:
-            self._build_table_relations(all_sql_queries)
+        # 建立資料表關聯（host 解析過的文字不需要有 SQL 查詢：host 看得到正規表達式看不到的文字）
+        self._build_table_relations(self.scan_result.csharp_results)
     
     def _build_legacy_sp_relations(self, sp_calls: List[StoredProcedureCall], analyze_sp: bool):
         """Retain legacy regex detections for migration comparison only."""
@@ -1162,35 +1184,166 @@ class ProjectScanner:
             
             self.scan_result.legacy_sp_relations.append(relation)
     
-    def _build_table_relations(self, sql_queries: List[SQLQuery]):
-        """建立資料表關聯"""
+    def _build_table_relations(self, results: List[FileAnalysisResult]):
+        """建立資料表關聯。
+
+        每個 Database Invocation 的字面命令文字先交給 SQL Text Analysis。host 解析
+        得出讀寫的文字，每張表各得一筆 `inline_sql_parsed` 關聯，同檔案、同文字
+        （空白收合後相同）的正規表達式關聯由它取代；其餘的文字留著正規表達式的
+        關聯，理由是 `inline_sql_regex`。host 對某段文字失敗時整個掃描停止，
+        不退回正規表達式。
+        """
         print(f"\n   建立資料表關聯...")
-        
-        for sql_query in sql_queries:
-            # 找出對應的 C# 檔案資訊
-            csharp_file = sql_query.location.file_path
-            
-            # 找出類別和方法
-            class_name, method_name = self._find_class_and_method(
-                csharp_file,
-                sql_query.location.line_number
-            )
-            
-            # 對每個涉及的資料表建立關聯
-            for table in sql_query.tables:
-                relation = CSharpTableRelation(
-                    csharp_file=csharp_file,
-                    class_name=class_name,
-                    method_name=method_name,
-                    line_number=sql_query.location.line_number,
-                    table=table,
-                    database=sql_query.database_source or UNRESOLVED_CONNECTION_DATABASE,
-                    access_type=sql_query.query_type.value,
-                    sql_preview=sql_query.query_text[:100]
+
+        sites = self._literal_command_sites(results)
+        parsed_by_text = self._parse_command_texts(sites)
+
+        for result in results:
+            file_key = str(Path(result.file_path).resolve())
+            queries_by_text: Dict[str, SQLQuery] = {}
+            for sql_query in result.sql_queries:
+                queries_by_text.setdefault(_collapse_whitespace(sql_query.query_text), sql_query)
+
+            parsed_sites = [
+                (record, text)
+                for record, text in sites.get(file_key, [])
+                if text in parsed_by_text
+            ]
+            replaced_texts = {_collapse_whitespace(text) for _record, text in parsed_sites}
+
+            for sql_query in result.sql_queries:
+                if _collapse_whitespace(sql_query.query_text) in replaced_texts:
+                    continue
+                # 找出對應的 C# 檔案資訊
+                csharp_file = sql_query.location.file_path
+
+                # 找出類別和方法
+                class_name, method_name = self._find_class_and_method(
+                    csharp_file,
+                    sql_query.location.line_number
                 )
-                
-                self.scan_result.table_relations.append(relation)
-    
+
+                # 對每個涉及的資料表建立關聯
+                for table in sql_query.tables:
+                    relation = CSharpTableRelation(
+                        csharp_file=csharp_file,
+                        class_name=class_name,
+                        method_name=method_name,
+                        line_number=sql_query.location.line_number,
+                        table=table,
+                        database=sql_query.database_source or UNRESOLVED_CONNECTION_DATABASE,
+                        access_type=sql_query.query_type.value,
+                        sql_preview=sql_query.query_text[:100],
+                        reason=INLINE_SQL_REGEX,
+                    )
+
+                    self.scan_result.table_relations.append(relation)
+
+            source_lines: Optional[str] = None
+            for record, text in parsed_sites:
+                matched_query = queries_by_text.get(_collapse_whitespace(text))
+                if matched_query is not None:
+                    line_number = matched_query.location.line_number
+                else:
+                    if source_lines is None:
+                        source_lines = self._read_source_text(result.file_path)
+                    line_number = source_lines.count("\n", 0, int(record.get("start_offset") or 0)) + 1
+                class_name = str(record.get("class_name") or "")
+                method_name = str(record.get("method_name") or "")
+                if not method_name:
+                    class_name, method_name = self._find_class_and_method(result.file_path, line_number)
+                span = (int(record.get("start_offset") or 0), int(record.get("end_offset") or 0))
+                for table, access_type in parsed_by_text[text]:
+                    self.scan_result.table_relations.append(
+                        CSharpTableRelation(
+                            csharp_file=result.file_path,
+                            class_name=class_name,
+                            method_name=method_name,
+                            line_number=line_number,
+                            table=table,
+                            # 解析器沒找到同一段文字時，Database 不是已解析的。
+                            database=(
+                                matched_query.database_source if matched_query is not None else None
+                            ) or UNRESOLVED_CONNECTION_DATABASE,
+                            access_type=access_type,
+                            sql_preview=text[:100],
+                            reason=INLINE_SQL_PARSED,
+                            invocation_span=span,
+                        )
+                    )
+
+    def _literal_command_sites(
+        self, results: List[FileAnalysisResult]
+    ) -> Dict[str, List[Tuple[Dict, str]]]:
+        """每個 Database Invocation 的字面命令文字，依原始檔（解析後的絕對路徑）分組。"""
+        sites: Dict[str, List[Tuple[Dict, str]]] = {}
+        for result in results:
+            file_key = str(Path(result.file_path).resolve())
+            for record in self.scan_result.db_invocations.get(file_key) or []:
+                # 預存程序呼叫的字面文字是程序名稱，不是 SQL；它的關聯走 SP 路徑。
+                if record.get("command_text_kind") != "literal" or ProjectScanResult._is_formal_sp_invocation(record):
+                    continue
+                text = str(record.get("command_text") or "")
+                if text.strip():
+                    sites.setdefault(file_key, []).append((record, text))
+        return sites
+
+    def _parse_command_texts(
+        self, sites: Dict[str, List[Tuple[Dict, str]]]
+    ) -> Dict[str, List[Tuple[ObjectName, str]]]:
+        """回傳 host 解析得出讀寫的每一段文字，以及它的（資料表，存取型態）。
+
+        沒有出現在結果裡的文字由正規表達式接手：host 解析失敗（有 parse error）、
+        或解析了卻沒有讀也沒有寫（例如 `MERGE`）。
+        """
+        first_file: Dict[str, str] = {}
+        for file_key, file_sites in sites.items():
+            for _record, text in file_sites:
+                first_file.setdefault(text, file_key)
+        texts = list(first_file)
+        if not texts:
+            return {}
+
+        try:
+            answers = self._sql_text_analysis().analyze(texts)
+        except SqlTextAnalysisError as error:
+            # host 失敗不是備援條件：備援只涵蓋 host 有回答的文字。
+            raise StaticAnalyzerHostError(
+                f"SQL Text Analysis 分析失敗，來源檔 {first_file[texts[error.index]]}，"
+                f"SQL 文字 {texts[error.index]!r}：{error}"
+            ) from error
+
+        parsed: Dict[str, List[Tuple[ObjectName, str]]] = {}
+        for text, answer in zip(texts, answers):
+            operations = answer.operations
+            if answer.parse_errors or not any(
+                operation.read_tables or operation.write_tables for operation in operations
+            ):
+                continue
+            tables: Dict[Tuple[ObjectName, str], None] = {}
+            for operation in operations:
+                # 一個 operation 寫入的表只帶寫入；host 已經把寫入的表從讀取表拿掉。
+                accesses = [(table, operation.operation_type) for table in operation.write_tables]
+                accesses += [(table, "SELECT") for table in operation.read_tables]
+                for table, access_type in accesses:
+                    # #temp 表與 @table 變數不是資料表關聯。
+                    if table.name and not table.name.startswith(("#", "@")):
+                        tables[(table, access_type)] = None
+            parsed[text] = list(tables)
+        return parsed
+
+    def _sql_text_analysis(self) -> SqlTextAnalysis:
+        if self.sql_text_analysis is None:
+            self.sql_text_analysis = HostSqlTextAnalysis(self.static_analyzer_host)
+        return self.sql_text_analysis
+
+    @staticmethod
+    def _read_source_text(file_path: str) -> str:
+        try:
+            return decode_source_bytes(Path(file_path).read_bytes())
+        except OSError:
+            return ""
+
     def _find_class_and_method(
         self, 
         file_path: str, 
