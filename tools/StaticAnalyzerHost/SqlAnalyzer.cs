@@ -348,15 +348,25 @@ internal sealed class SqlOperationExtractor
     private static bool IsBare(SqlObjectReference reference)
         => reference.Server.Length == 0 && reference.Database.Length == 0 && reference.Schema.Length == 0;
 
-    private TSqlFragment? FindFromClauseAlias(TSqlFragment? fromClause, string aliasName)
+    private static TSqlFragment? FindFromClauseAlias(TSqlFragment? fromClause, string aliasName)
+        => Fragments(GetPropertyValue(fromClause, "TableReferences"))
+            .SelectMany(JoinedTableReferences)
+            .FirstOrDefault(reference =>
+                string.Equals(
+                    ReadIdentifierText(GetPropertyValue(reference, "Alias")),
+                    aliasName,
+                    StringComparison.OrdinalIgnoreCase));
+
+    // The table references that one item of a FROM clause joins. A join holds two table
+    // references, and a join in parentheses holds one join. Any other table reference is one
+    // source with its own alias. A derived table is a scope of its own, so the walk stops there.
+    private static IEnumerable<TSqlFragment> JoinedTableReferences(TSqlFragment tableReference)
     {
-        if (fromClause is null)
-            return null;
-        return Descendants(fromClause).FirstOrDefault(child =>
-            string.Equals(
-                ReadIdentifierText(GetPropertyValue(child, "Alias")),
-                aliasName,
-                StringComparison.OrdinalIgnoreCase));
+        var joined = new[] { "FirstTableReference", "SecondTableReference", "Join" }
+            .Select(property => GetFragmentProperty(tableReference, property))
+            .OfType<TSqlFragment>()
+            .ToList();
+        return joined.Count == 0 ? new[] { tableReference } : joined.SelectMany(JoinedTableReferences);
     }
 
     private ISet<string> ReadCteNames(TSqlFragment statement)

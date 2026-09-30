@@ -750,3 +750,30 @@ join BSPL.BudgetBalanceSheet_Src B2 on B2.Id = B1.Id;
     (operation,) = result["operations"]
     assert operation["write_tables"] == [_reference("", "", "BSPL", "BudgetBalanceSheet")]
     assert operation["read_tables"] == [_reference("", "", "BSPL", "BudgetBalanceSheet_Src")]
+
+
+def test_an_alias_inside_a_derived_table_does_not_answer_for_an_alias_of_the_from_clause() -> None:
+    operation = _write_test_statement(
+        "UPDATE t SET a = 1 FROM (SELECT a FROM dbo.Other t) d JOIN dbo.Real t ON t.a = d.a;"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "Real")]
+    assert operation["read_tables"] == [_reference("", "", "dbo", "Other")]
+    assert operation["unresolved_write_targets"] == []
+
+
+def test_a_target_that_only_a_derived_table_uses_as_an_alias_still_writes_its_own_name() -> None:
+    operation = _write_test_statement("UPDATE t SET a = 1 FROM (SELECT a FROM dbo.Other t) d;")
+
+    assert operation["write_tables"] == [_reference("", "", "", "t")]
+    assert operation["read_tables"] == [_reference("", "", "dbo", "Other")]
+    assert operation["unresolved_write_targets"] == []
+
+
+def test_an_alias_inside_a_parenthesised_join_is_an_alias_of_the_from_clause() -> None:
+    operation = _write_test_statement(
+        "UPDATE t SET a = 1 FROM (dbo.Other o JOIN dbo.Real t ON t.a = o.a) JOIN dbo.Third x ON x.a = t.a;"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "Real")]
+    assert [ref["name"] for ref in operation["read_tables"]] == ["Other", "Third"]
