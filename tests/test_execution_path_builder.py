@@ -23,7 +23,7 @@ from service.execution_path_builder import (
     PathIdentity,
 )
 from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
-from tests.sql_cache_fixtures import analyzer_operation, stubbed_procedures
+from tests.sql_cache_fixtures import analyzer_operation, stubbed_procedures, with_schema_source
 
 
 def _graph() -> dict:
@@ -864,12 +864,10 @@ def _unanswered_call_graph(target_id: str, schema_source: str) -> dict:
             },
         ],
         "relationships": [
-            {
-                "type": "calls",
-                "source": "stored_procedure:dbo.usp_SaveOrder",
-                "target": target_id,
-                "schema_source": schema_source,
-            },
+            with_schema_source(
+                {"type": "calls", "source": "stored_procedure:dbo.usp_SaveOrder", "target": target_id},
+                schema_source,
+            ),
         ],
         "parse_errors": [],
     }
@@ -911,7 +909,7 @@ def test_a_call_that_resolves_to_the_sys_schema_gives_one_path_without_the_mark(
 
 def test_a_call_to_a_listed_procedure_keeps_its_paths_and_gains_no_mark() -> None:
     graph = _nested_graph()
-    graph["relationships"][0]["schema_source"] = "module_schema"
+    graph["relationships"][0] = with_schema_source(graph["relationships"][0], "module_schema")
 
     paths = build_execution_paths([_save_order_invocation()], graph)
 

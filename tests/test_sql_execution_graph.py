@@ -1185,7 +1185,7 @@ def test_an_unqualified_call_from_a_dbo_module_reaches_the_dbo_procedure() -> No
     assert _targets(graph, "calls") == {("stored_procedure:dbo.usp_Child", "module_schema")}
 
 
-def test_an_unqualified_call_falls_back_to_dbo_when_the_module_schema_lacks_the_name() -> None:
+def test_an_unqualified_call_resolves_to_dbo_when_the_module_schema_lacks_the_name() -> None:
     graph = _call_graph(
         "COMMON.usp_Caller", "usp_Child", listed={"dbo.usp_Child": {}, "HR.usp_Child": {}}
     )

@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Iterable, Mapping, NamedTuple
 
-import schema_resolution
+from schema_resolution import SchemaSource, recorded_source, strongest_source
 from canonical_object_identity import ObjectName, part_key, schema_qualified
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 
-from .execution_path_builder import build_execution_paths, schema_source_rank
+from .execution_path_builder import build_execution_paths
 from .table_match import UNPROVEN_SCHEMA, TableMatch, TableQuestion
 
 
@@ -192,7 +192,7 @@ def _access_record(
         "evidence": path.get("evidence", "unresolved"),
         "reason": path.get("reason", ""),
         "confirmed": path.get("confirmed", False),
-        "schema_source": match.schema_source if match is not None else schema_resolution.UNRESOLVED,
+        "schema_source": match.schema_source if match is not None else str(SchemaSource.UNRESOLVED),
         "risk_flags": _record_risk_flags(path, match),
         "unresolved_reason": path.get("unresolved_reason", ""),
         "unresolved_targets": list(path.get("unresolved_targets", []) or []),
@@ -406,7 +406,7 @@ class _LineageIndex:
 
 
 def _table_of(node: Mapping[str, Any], database: str, schema_source: str = "") -> _Target | None:
-    """One table node; a relationship that records no schema source reads as `written` or `unresolved`."""
+    """One table node; a relationship that records no schema source takes the default of `recorded_source()`."""
     name = str(node.get("name") or "")
     if not name:
         return None
@@ -415,16 +415,13 @@ def _table_of(node: Mapping[str, Any], database: str, schema_source: str = "") -
         database=database,
         schema=schema,
         name=name,
-        schema_source=schema_source
-        or (schema_resolution.WRITTEN if schema else schema_resolution.UNRESOLVED),
+        schema_source=recorded_source(schema_source, schema),
     )
 
 
 def _stronger(kept: _Target, other: _Target) -> _Target:
     """The first spelling stays; the schema source becomes the stronger of the two."""
-    if schema_source_rank(other.schema_source) < schema_source_rank(kept.schema_source):
-        return kept._replace(schema_source=other.schema_source)
-    return kept
+    return kept._replace(schema_source=strongest_source(kept.schema_source, other.schema_source))
 
 
 def _add_table(reached: _Tables, table: _Target) -> None:

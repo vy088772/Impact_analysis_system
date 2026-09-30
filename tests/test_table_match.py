@@ -21,6 +21,7 @@ from tests.sql_cache_fixtures import (
     cache_payload,
     execution_graph,
     one_server_holds_every_database,
+    with_schema_source,
 )
 from tests.test_graph_reverse_lookup import _file, _scan_with_calls
 
@@ -69,7 +70,7 @@ def _graph(
             if database:
                 relationship["database"] = database
             if schema_source:
-                relationship["schema_source"] = schema_source
+                relationship = with_schema_source(relationship, schema_source)
             relationships.append(relationship)
         return module_id
 

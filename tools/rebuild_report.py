@@ -6,8 +6,8 @@
 （graph_version 8）之前先跑一次留下 v7 基準，重建之後再跑一次比較。每份快取數：
 
 - empty_schema_references：目標沒有 schema 的 reads / writes / calls 關係數；
-- references_by_schema_source：上述關係按 schema 來源分組。關係尚未帶
-  `schema_source` 欄位時（v7），目標有 schema 算 `written`，沒有算 `""`；
+- references_by_schema_source：上述關係按 schema 來源分組。關係沒有帶
+  `schema_source` 欄位時，照 `schema_resolution.recorded_source()` 的預設讀；
 - cte_reads：把 CTE 名稱當成資料表的讀取數。同一個陳述式讀同一個名稱多次只算一次（數（operation, 目標）組合）；
 - alias_writes：UPDATE / DELETE 的目標其實是同一個陳述式 FROM 子句別名的寫入數，計法同上；
 - unproven_schema_targets：帶 Unproven Schema 標記的目標節點數（沒有 schema，每個節點算一次）。
@@ -34,14 +34,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from canonical_object_identity import bare_key, parse, part_key  # noqa: E402
+from schema_resolution import recorded_source  # noqa: E402
 from service import sql_cache_store  # noqa: E402
+from service.sql_execution_graph import MODULE_COLLECTIONS  # noqa: E402
 
 _REFERENCE_TYPES = frozenset({"reads", "writes", "calls"})
-_MODULE_LISTS = (
-    ("stored_procedure", "procedures"),
-    ("view", "views"),
-    ("function", "functions"),
-)
 # 一個 FROM / JOIN 項目的物件寫法：名稱（可含括號、#、@、點），或子查詢的右括號。
 _FROM_ITEM_OBJECT = r"(?:[\w#@\[\]\.]+|\))"
 
@@ -71,8 +68,7 @@ class _Reference:
 
     @property
     def schema_source(self) -> str:
-        # 關係尚未帶 `schema_source` 欄位時（v7），目標有 schema 算 written。
-        return str(self.relationship.get("schema_source") or ("written" if self.schema else ""))
+        return recorded_source(self.relationship.get("schema_source"), self.schema)
 
 
 def _module_definitions(payload: Dict[str, Any], nodes: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
@@ -84,8 +80,8 @@ def _module_definitions(payload: Dict[str, Any], nodes: Dict[str, Dict[str, Any]
     for node_id, node in nodes.items():
         ids[(str(node.get("type")), part_key(node.get("schema")), part_key(node.get("name")))] = node_id
     definitions: Dict[str, str] = {}
-    for node_type, key in _MODULE_LISTS:
-        for item in payload.get(key) or []:
+    for collection, node_type in MODULE_COLLECTIONS:
+        for item in payload.get(collection) or []:
             written = parse(str(item.get("name") or ""))
             definition = item.get("definition")
             module_id = ids.get((node_type, part_key(item.get("schema") or written.schema), bare_key(written)))
@@ -203,7 +199,7 @@ def report_all_caches() -> List[Dict[str, Any]]:
 
 
 def _counts_text(counts: Dict[str, Any], by_source: Dict[str, int]) -> str:
-    sources = ", ".join(f"{source or '(empty)'}={count}" for source, count in sorted(by_source.items()))
+    sources = ", ".join(f"{source}={count}" for source, count in sorted(by_source.items()))
     return (
         f"empty_schema={counts['empty_schema_references']} cte_reads={counts['cte_reads']} "
         f"alias_writes={counts['alias_writes']} unproven_targets={counts['unproven_schema_targets']} "

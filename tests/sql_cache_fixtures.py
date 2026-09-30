@@ -31,6 +31,7 @@ from code_analyzer.sql_text_analysis import (
     SqlSourceLocation,
 )
 from config.settings import settings
+from schema_resolution import SchemaSource
 from service import sql_cache_store
 from service.sql_cache_store import CacheIdentity
 from service.sql_execution_graph import GRAPH_VERSION
@@ -142,6 +143,15 @@ def execution_graph(
         "relationships": list(relationships),
         "parse_errors": list(parse_errors),
     }
+
+
+def with_schema_source(relationship: Mapping[str, Any], schema_source: str) -> dict:
+    """State the schema source of one hand-built relationship, as the graph builder records it.
+
+    The value is one of the schema sources that Schema Resolution names. Another
+    value raises ``ValueError``.
+    """
+    return {**relationship, "schema_source": str(SchemaSource(schema_source))}
 
 
 def analyzer_operation(

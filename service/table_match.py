@@ -86,8 +86,8 @@ class TableQuestion:
         that holds the target. A target that states no Database takes it. A
         target that names another Database reports it as ``stated_database``,
         in the case the source wrote it. ``schema_source`` states how the graph
-        or the caller found the schema of the target. An empty value reads as
-        ``written`` for a target that states a schema, else ``unresolved``.
+        or the caller found the schema of the target. An empty value takes the
+        default of ``schema_resolution.recorded_source()``.
         """
         if not self.name or bare_key(target) != self.name:
             return None
@@ -103,6 +103,5 @@ class TableQuestion:
         return TableMatch(
             unproven_schema=not target_schema,
             stated_database=str(database) if stated else None,
-            schema_source=schema_source
-            or (schema_resolution.WRITTEN if target_schema else schema_resolution.UNRESOLVED),
+            schema_source=schema_resolution.recorded_source(schema_source, target_schema),
         )

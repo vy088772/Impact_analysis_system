@@ -82,7 +82,8 @@ class _NodeIndex(dict):
         return (schema.casefold(), name.casefold()) in self._listed
 
 
-_MODULE_COLLECTIONS = (
+# Each collection of listed modules in a cache payload, with the node type of its modules.
+MODULE_COLLECTIONS = (
     ("procedures", "stored_procedure"),
     ("views", "view"),
     ("functions", "function"),
@@ -102,7 +103,7 @@ def build_sql_execution_graph(
     call_edges: set[tuple[str, str]] = set()
     module_specs: list[tuple[str, str, str, str]] = []
 
-    for collection, object_type in _MODULE_COLLECTIONS:
+    for collection, object_type in MODULE_COLLECTIONS:
         for item in data.get(collection, []) or []:
             written = parse(str(item.get("name") or ""))
             object_schema, name = _object_schema(item, written), written.name
@@ -300,7 +301,7 @@ def _expand_temp_table_lineage(
                     kept_source = own[base][1] if base in own else schema_source
                     own[base] = (
                         (own_node_id,),
-                        min(kept_source, schema_source, key=schema_resolution.SOURCES.index),
+                        schema_resolution.strongest_source(kept_source, schema_source),
                     )
         if scope:
             if direction != _DOWN:
@@ -336,39 +337,27 @@ def _expand_temp_table_lineage(
                     queue.append(predecessor)
                     queued.add(predecessor)
 
-    derived: list[tuple[str, str, ObjectName, str, dict[str, Any], list[str], list[str]]] = []
+    # `temp_reads` is its own list, so a lineage read that joins `relationships` here is not read again.
     for index, relationship in enumerate(temp_reads, start=1):
         source_id = str(relationship.get("source") or "")
         temp_id = str(relationship.get("target") or "")
         state = state_of(temp_id, _NO_DIRECTION)
         for (base_id, server, database), (chain, schema_source) in sorted(base_tables.get(state, {}).items()):
-            derived.append(
-                (
-                    source_id,
-                    base_id,
-                    ObjectName(server=server, database=database, schema="", name=""),
-                    schema_source,
-                    dict(relationship.get("source_location") or {}),
-                    list(relationship.get("branch_path") or []),
-                    list(chain),
-                )
+            branch_path = list(relationship.get("branch_path") or [])
+            _add_relationship(
+                relationships,
+                "reads",
+                source_id,
+                base_id,
+                dict(relationship.get("source_location") or {}),
+                branch_path,
+                conditions=branch_path,
+                identity_suffix=f"lineage:{chain[0]}",
+                stated=ObjectName(server=server, database=database, schema="", name=""),
+                schema_source=schema_source,
             )
+            relationships[-1]["lineage"] = list(chain)
         _report_progress(progress_callback, "lineage", index, len(temp_reads), source_id)
-
-    for source_id, target_id, stated, schema_source, source_location, branch_path, lineage in derived:
-        _add_relationship(
-            relationships,
-            "reads",
-            source_id,
-            target_id,
-            source_location,
-            branch_path,
-            conditions=branch_path,
-            identity_suffix=f"lineage:{lineage[0]}",
-            stated=stated,
-            schema_source=schema_source,
-        )
-        relationships[-1]["lineage"] = lineage
 
 
 def _report_progress(
@@ -416,23 +405,25 @@ def _add_operation(
         for target in operation.call_targets:
             if not target.name:
                 continue
-            target, schema_source = _resolved_call_target(node_by_key, target, module_schema, cache_database)
-            for target_id, target_module in _call_target_nodes(node_by_key, target, cache_database):
-                if target_module is not None:
-                    # The temp table expansion reads calls only from these edges.
-                    call_edges.add((module_id, str(target_module["id"])))
-                _add_relationship(
-                    relationships,
-                    "calls",
-                    module_id,
-                    target_id,
-                    source,
-                    branch_path,
-                    conditions=list(conditions),
-                    identity_suffix=str(sequence),
-                    stated=target,
-                    schema_source=schema_source,
-                )
+            target, schema_source, target_module = _call_target(node_by_key, target, module_schema, cache_database)
+            if target_module is not None:
+                # The temp table expansion reads calls only from these edges.
+                call_edges.add((module_id, str(target_module["id"])))
+            _add_relationship(
+                relationships,
+                "calls",
+                module_id,
+                # A call that no listed procedure answers keeps the id of the name it resolved to.
+                str(target_module["id"])
+                if target_module is not None
+                else _node_id("stored_procedure", target.schema, target.name),
+                source,
+                branch_path,
+                conditions=list(conditions),
+                identity_suffix=str(sequence),
+                stated=target,
+                schema_source=schema_source,
+            )
         return
 
     node_type = "unresolved_dynamic_sql" if (
@@ -491,62 +482,53 @@ def _add_operation(
 
     for read_table in operation.read_tables:
         reference, schema_source = _resolved_reference(node_by_key, read_table, module_schema)
-        for target_id in _ensure_referenced_nodes(
-            nodes, node_by_key, reference, module_id, cache_database
-        ):
-            _add_relationship(
-                relationships,
-                "reads",
-                operation_id,
-                target_id,
-                source,
-                branch_path,
-                columns=list(operation.read_columns),
-                stated=reference,
-                schema_source=schema_source,
-            )
-            if target_id.split(":", 1)[0] in {"view", "function"}:
-                _add_relationship(
-                    relationships,
-                    "uses",
-                    module_id,
-                    target_id,
-                    source,
-                    branch_path,
-                    conditions=list(conditions),
-                    schema_source=schema_source,
-                )
-
-    for write_table in operation.write_tables:
-        reference, schema_source = _resolved_reference(node_by_key, write_table, module_schema)
-        for target_id in _ensure_referenced_nodes(
-            nodes, node_by_key, reference, module_id, cache_database
-        ):
-            _add_relationship(
-                relationships,
-                "writes",
-                operation_id,
-                target_id,
-                source,
-                branch_path,
-                columns=list(operation.written_columns),
-                stated=reference,
-                schema_source=schema_source,
-            )
-
-    for function_reference in operation.function_references:
-        reference, schema_source = _resolved_reference(node_by_key, function_reference, module_schema)
-        for target_id in _known_object_node_ids(
-            node_by_key,
-            "function",
-            reference,
-            cache_database,
-        ):
+        target_id = _referenced_node_id(nodes, node_by_key, reference, module_id, cache_database)
+        _add_relationship(
+            relationships,
+            "reads",
+            operation_id,
+            target_id,
+            source,
+            branch_path,
+            columns=list(operation.read_columns),
+            stated=reference,
+            schema_source=schema_source,
+        )
+        if target_id.split(":", 1)[0] in {"view", "function"}:
             _add_relationship(
                 relationships,
                 "uses",
                 module_id,
                 target_id,
+                source,
+                branch_path,
+                conditions=list(conditions),
+                schema_source=schema_source,
+            )
+
+    for write_table in operation.write_tables:
+        reference, schema_source = _resolved_reference(node_by_key, write_table, module_schema)
+        _add_relationship(
+            relationships,
+            "writes",
+            operation_id,
+            _referenced_node_id(nodes, node_by_key, reference, module_id, cache_database),
+            source,
+            branch_path,
+            columns=list(operation.written_columns),
+            stated=reference,
+            schema_source=schema_source,
+        )
+
+    for function_reference in operation.function_references:
+        reference, schema_source = _resolved_reference(node_by_key, function_reference, module_schema)
+        function_id = _listed_function_id(node_by_key, reference, cache_database)
+        if function_id is not None:
+            _add_relationship(
+                relationships,
+                "uses",
+                module_id,
+                function_id,
                 source,
                 branch_path,
                 conditions=list(conditions),
@@ -561,17 +543,29 @@ def _resolved_reference(
     return _with_resolved_schema(node_by_key, reference, module_schema, schema_resolution.resolve)
 
 
-def _resolved_call_target(
+def _call_target(
     node_by_key: _NodeIndex, target: ObjectName, module_schema: str, cache_database: str
-) -> tuple[ObjectName, str]:
-    """Give a call target the schema SQL Server resolves, with its schema source.
+) -> tuple[ObjectName, str, dict[str, Any] | None]:
+    """Give a call target the schema SQL Server resolves, its schema source, and its module node.
 
-    A call through a linked server or to another Database is resolved by no listing
-    of this cache, so it keeps what it states.
+    This is the one site that holds the call target rule (ADR-0036, ADR-0037).
+    A call through a linked server or to another Database is resolved by no
+    listing of this cache, so it keeps what it states and has no module node. A
+    call to a module that this cache does not list has no module node either. A
+    listed module with no definition is a node.
     """
     if target.server or names_another_database(target.database, cache_database):
-        return target, schema_resolution.WRITTEN if target.schema else schema_resolution.UNRESOLVED
-    return _with_resolved_schema(node_by_key, target, module_schema, schema_resolution.resolve_call)
+        return target, schema_resolution.recorded_source("", target.schema), None
+    resolved, schema_source = _with_resolved_schema(
+        node_by_key, target, module_schema, schema_resolution.resolve_call
+    )
+    # An empty schema matches no listed node, because a listed node always carries a schema.
+    module = (
+        node_by_key.get(_node_key("stored_procedure", resolved.schema, resolved.name))
+        if resolved.schema
+        else None
+    )
+    return resolved, schema_source, module
 
 
 def _with_resolved_schema(
@@ -585,14 +579,14 @@ def _with_resolved_schema(
     return dataclasses.replace(reference, schema=schema), schema_source
 
 
-def _ensure_referenced_nodes(
+def _referenced_node_id(
     nodes: list[dict[str, Any]],
     node_by_key: _NodeIndex,
     reference: ObjectName,
     module_id: str,
     cache_database: str,
-) -> list[str]:
-    """Return the ids of the nodes one resolved table, View, or Function reference names.
+) -> str:
+    """Return the id of the node that one resolved table, View, or Function reference names.
 
     A reference that names a listed View or Function returns its id. Any other
     reference is a table node that keeps the resolved schema, and an empty schema
@@ -610,7 +604,7 @@ def _ensure_referenced_nodes(
             "name": name,
             "scope_module_id": module_id,
         }
-        return [str(_add_node(nodes, node_by_key, node)["id"])]
+        return str(_add_node(nodes, node_by_key, node)["id"])
     # A reference to another Database matches no listed View or Function: this cache
     # holds no definition of that object, so a local node would be false evidence.
     # An unresolved reference names no listed object either.
@@ -618,7 +612,7 @@ def _ensure_referenced_nodes(
         for object_type in ("view", "function"):
             listed = node_by_key.get(_node_key(object_type, object_schema, name))
             if listed:
-                return [str(listed["id"])]
+                return str(listed["id"])
 
     node = {
         "id": _node_id("table", object_schema, name),
@@ -627,41 +621,22 @@ def _ensure_referenced_nodes(
         "name": name,
     }
     kept_node = _add_node(nodes, node_by_key, node)
-    return [str(kept_node["id"])]
+    return str(kept_node["id"])
 
 
-def _call_target_nodes(
+def _listed_function_id(
     node_by_key: _NodeIndex,
-    target: ObjectName,
-    cache_database: str,
-) -> list[tuple[str, dict[str, Any] | None]]:
-    """Return each node id a calls relationship names, with the module node the graph defines for it or None."""
-    # A call through a linked server, to another Database, or to a module that this
-    # cache does not list has no module node. A listed module with no definition is a node.
-    # The target arrives with the schema the resolution rule gave it; an empty schema matches no
-    # listed node, because a listed node always carries a schema.
-    stated_id = _node_id("stored_procedure", target.schema, target.name)
-    if target.server or names_another_database(target.database, cache_database):
-        return [(stated_id, None)]
-    module = node_by_key.get(_node_key("stored_procedure", target.schema, target.name)) if target.schema else None
-    if module is None:
-        return [(stated_id, None)]
-    return [(str(module["id"]), module)]
-
-
-def _known_object_node_ids(
-    node_by_key: _NodeIndex,
-    object_type: str,
     reference: ObjectName,
     cache_database: str,
-) -> list[str]:
+) -> str | None:
+    """Return the id of the listed Function that one resolved reference names, or None."""
     # A reference to another Database matches no node: this cache holds no
     # definition of that object, so a local node would be false evidence. An
     # unresolved reference names no listed function either.
     if not reference.schema or names_another_database(reference.database, cache_database):
-        return []
-    node = node_by_key.get(_node_key(object_type, reference.schema, reference.name))
-    return [str(node["id"])] if node else []
+        return None
+    node = node_by_key.get(_node_key("function", reference.schema, reference.name))
+    return str(node["id"]) if node else None
 
 
 def _add_relationship(
@@ -704,7 +679,8 @@ def _add_relationship(
     if stated is not None and stated.server:
         relationship["server"] = stated.server
     if schema_source:
-        relationship["schema_source"] = schema_source
+        # The payload holds plain text, not the enum member.
+        relationship["schema_source"] = str(schema_source)
     relationships.append(relationship)
 
 
