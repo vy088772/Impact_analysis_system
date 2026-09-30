@@ -22,6 +22,7 @@ from code_analyzer.connection_lookup import (
     ContextRegistration,
     ROOT_CONFIGURATION,
 )
+from code_analyzer.parent_application import AMBIGUOUS_PARENT_APPLICATION
 
 
 def _write_project(directory: Path) -> Path:
@@ -581,7 +582,9 @@ def test_two_candidate_parents_with_the_same_path_give_no_inheritance(tmp_path: 
     _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
     source = _source_file(child / "Page.cs")
 
-    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer(
+        reason=AMBIGUOUS_PARENT_APPLICATION
+    )
 
 
 def test_a_scan_root_below_the_repository_root_finds_a_parent_outside_the_scan_root(
@@ -961,3 +964,123 @@ def test_a_remove_in_an_ancestor_stops_the_key_of_the_layers_above_it(tmp_path: 
 
     assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
     assert _lookup(tmp_path, source, "ATV").declared_in == "Root/Web.config"
+
+
+# ---------------------------------------------------------------------------
+# Ticket 07: an ambiguous Parent Application gives a visible reason
+# ---------------------------------------------------------------------------
+
+
+def test_two_projects_with_the_same_iis_url_give_no_parent_application_to_each_other(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    root = _write_web_project(tmp_path / "Site", "http://host/Site")
+    _write_web_config(root, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    for name in ("TwinA", "TwinB"):
+        twin = _write_web_project(tmp_path / name, "http://host/Site/App")
+        _write_web_config(twin, connection_strings={"Mine": "Server=s;Database=MineDb"})
+
+    answer = _lookup(tmp_path, _source_file(tmp_path / "TwinA" / "Page.cs"), "PUR")
+
+    assert answer == ConnectionAnswer(reason=AMBIGUOUS_PARENT_APPLICATION)
+
+
+def test_the_own_declaration_of_an_ambiguous_application_answers_with_no_reason(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    for name in ("SiteA", "SiteB"):
+        _write_web_project(tmp_path / name, "http://host/Site")
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
+
+    answer = _lookup(tmp_path, _source_file(child / "Page.cs"), "Mine")
+
+    assert (answer.database, answer.reason) == ("MineDb", "")
+
+
+def test_an_ambiguous_grandparent_gives_the_reason_for_a_key_that_no_nearer_ancestor_declares(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    for name in ("RootA", "RootB"):
+        root = _write_web_project(tmp_path / name, "http://host/Root")
+        _write_web_config(root, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    parent = _write_web_project(tmp_path / "Mid", "http://host/Root/Mid")
+    _write_web_config(parent, connection_strings={"ATV": "Server=s;Database=AtvDb"})
+    child = _write_web_project(tmp_path / "Leaf", "http://host/Root/Mid/Leaf")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    source = _source_file(child / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR").reason == AMBIGUOUS_PARENT_APPLICATION
+    assert _lookup(tmp_path, source, "ATV").database == "AtvDb"
+    assert _lookup(tmp_path, source, "ATV").reason == ""
+
+
+def test_an_ambiguous_parent_application_gives_the_reason_in_the_app_settings_namespace_too(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    for name in ("SiteA", "SiteB"):
+        parent = _write_web_project(tmp_path / name, "http://host/Site")
+        _write_web_config(parent, app_settings={"Db": "PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    _write_web_config(child, app_settings={"Mine": "MineDb"})
+
+    answer = _lookup(tmp_path, _source_file(child / "Page.cs"), "Db", APP_SETTINGS)
+
+    assert answer.reason == AMBIGUOUS_PARENT_APPLICATION
+
+
+def test_an_ambiguous_parent_application_keeps_the_key_as_name_guess_with_the_reason(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    for name in ("SiteA", "SiteB"):
+        _write_web_project(tmp_path / name, "http://host/Site")
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    _write_web_config(child)
+
+    answer = _lookup(tmp_path, _source_file(child / "Page.cs"), "PUR")
+
+    assert answer == ConnectionAnswer(database="PUR", reason=AMBIGUOUS_PARENT_APPLICATION)
+
+
+def test_a_failed_lookup_with_no_ambiguity_stays_silent(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://host/Site")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
+
+    assert _lookup(tmp_path, _source_file(child / "Page.cs"), "Nowhere") == ConnectionAnswer()
+
+
+def test_a_remove_before_the_ambiguous_link_gives_the_guess_and_no_reason(tmp_path: Path):
+    _clone(tmp_path)
+    for name in ("RootA", "RootB"):
+        root = _write_web_project(tmp_path / name, "http://host/Root")
+        _write_web_config(root, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Root/Child")
+    _write_raw_web_config(child, '<connectionStrings><remove name="PUR"/></connectionStrings>')
+
+    # A file with only a `<remove>` gives the guess, as ticket 06 decided.
+    answer = _lookup(tmp_path, _source_file(child / "Page.cs"), "PUR")
+
+    assert answer == ConnectionAnswer(database="PUR")
+
+
+def test_a_clear_before_the_ambiguous_link_gives_no_reason(tmp_path: Path):
+    _clone(tmp_path)
+    for name in ("RootA", "RootB"):
+        root = _write_web_project(tmp_path / name, "http://host/Root")
+        _write_web_config(root, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Root/Child")
+    _write_raw_web_config(
+        child,
+        '<connectionStrings><clear/><add name="Mine" connectionString="Server=s;Database=MineDb"/>'
+        "</connectionStrings>",
+    )
+
+    assert _lookup(tmp_path, _source_file(child / "Page.cs"), "PUR") == ConnectionAnswer()

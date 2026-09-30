@@ -469,3 +469,47 @@ def test_project_scanner_writes_no_declaring_file_for_a_key_as_name_guess(tmp_pa
         "server": None,
         "declared_in": None,
     }
+
+
+def test_project_scanner_records_an_ambiguous_parent_application_and_adds_no_connection_source(
+    tmp_path: Path,
+):
+    """Two projects with one IIS URL make the Parent Application ambiguous. The
+    unresolved connections of the C# Scan Result hold the reason. The
+    key stays unresolved as before, so the rating of a call does not change."""
+    (tmp_path / ".git").mkdir()
+    web_project = (
+        "<Project><ProjectExtensions><VisualStudio><FlavorProperties>"
+        "<WebProjectProperties><IISUrl>{url}</IISUrl></WebProjectProperties>"
+        "</FlavorProperties></VisualStudio></ProjectExtensions></Project>"
+    )
+    for name in ("SiteA", "SiteB"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / f"{name}.csproj").write_text(
+            web_project.format(url="http://localhost/Site"), encoding="utf-8"
+        )
+    child = tmp_path / "Child"
+    source = _write_web_application(child, database="ChildDb", server="sql02")
+    (child / "Child.csproj").write_text(
+        web_project.format(url="http://localhost/Site/Child"), encoding="utf-8"
+    )
+    (child / "Web.config").write_text(
+        "<configuration><connectionStrings>"
+        '<add name="Other" connectionString="Data Source=sql02;Initial Catalog=OtherDb"/>'
+        "</connectionStrings></configuration>",
+        encoding="utf-8",
+    )
+
+    scanner = ProjectScanner(project_root=str(child), project_name="Child")
+    scan_result = ProjectScanResult(
+        project_root=str(child), project_name="Child", scan_time=datetime.now()
+    )
+    scan_result = scanner.refresh_csharp_files(scan_result, [str(source)])
+
+    file_key = str(source.resolve())
+    assert [
+        (entry["lookup_key"], entry["reason"])
+        for entry in scan_result.unresolved_connections[file_key]
+    ] == [("Main", "ambiguous_parent_application")]
+    # The reason adds no connection source, so the rating of a call stays as it was.
+    assert "cn" not in scan_result.connection_sources[file_key]

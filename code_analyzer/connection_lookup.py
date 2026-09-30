@@ -48,7 +48,7 @@ from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple, Un
 
 from .clone_root import find_clone_root
 from .connection_string_value import ResolvedConnection
-from .parent_application import ParentApplications
+from .parent_application import AMBIGUOUS_PARENT_APPLICATION, ParentApplications
 from .project_connection_scope import (
     BASE_SETTINGS_FILE_NAME,
     CONNECTION_KEY_NOT_IN_PROJECT_SCOPE,
@@ -170,7 +170,13 @@ class FileConnections:
         context_lookup_keys: Optional[Mapping[str, str]] = None,
         root_configuration_keys: FrozenSet[str] = frozenset(),
         root_connection_keys: FrozenSet[str] = frozenset(),
+        ambiguous_parent: bool = False,
+        blocking_layers: Optional[Sequence[TableLayer]] = None,
     ):
+        self._ambiguous_parent = ambiguous_parent
+        # A view that gives the guess holds no layer, but a `<clear/>` or a
+        # `<remove>` in one of them still keeps the key from the ambiguous link.
+        self._blocking_layers = blocking_layers if blocking_layers is not None else layers
         self._layers = layers
         self._reads_application_settings_file = reads_application_settings_file
         self._no_table_reason = no_table_reason
@@ -197,10 +203,13 @@ class FileConnections:
         if self._no_table_reason:
             return ConnectionAnswer(reason=self._no_table_reason)
         if self._layers is None:
-            return ConnectionAnswer(database=key)
+            return ConnectionAnswer(database=key, reason=self._ambiguous_reason(key, namespace))
         if not self._reads_application_settings_file:
-            # A failed lookup on the `Web.config` path has no reason.
-            return self._answer_from_table(key, namespace) or ConnectionAnswer()
+            # The only reason on the `Web.config` path is an ambiguous Parent
+            # Application. Each other failed lookup has no reason.
+            return self._answer_from_table(key, namespace) or ConnectionAnswer(
+                reason=self._ambiguous_reason(key, namespace)
+            )
         if namespace == ROOT_CONFIGURATION:
             return ConnectionAnswer(reason=ROOT_CONFIGURATION_NAMESPACE)
         return self._answer_from_table(key, namespace) or ConnectionAnswer(
@@ -210,6 +219,18 @@ class FileConnections:
                 else CONNECTION_KEY_NOT_IN_PROJECT_SCOPE
             )
         )
+
+    def _ambiguous_reason(self, key: str, namespace: str) -> str:
+        """The reason for a key that only an ambiguous Parent Application could declare.
+
+        A layer that stops the key ends the search before the ambiguous link,
+        so the key gets no reason then.
+        """
+        if not self._ambiguous_parent:
+            return ""
+        if any(layer.stops(namespace, key) for layer in self._blocking_layers or ()):
+            return ""
+        return AMBIGUOUS_PARENT_APPLICATION
 
     def _answer_from_table(self, key: str, namespace: str) -> Optional[ConnectionAnswer]:
         for layer in self._layers or ():
@@ -356,8 +377,9 @@ class ConnectionLookup:
         """
         if web_config is None:
             return FileConnections()
+        parent_web_configs, ambiguous = self._parent_web_configs(web_config)
         layers = []
-        for position, path in enumerate([web_config, *self._parent_web_configs(web_config)]):
+        for position, path in enumerate([web_config, *parent_web_configs]):
             parsed = self._parse_web_config(path)
             # The own layer serves its own application, so it also holds the
             # sections that a `<location>` keeps from child applications.
@@ -382,11 +404,11 @@ class ConnectionLookup:
             if any(layer.tables.values()) or parsed.blocks_inheritance:
                 layers.append(layer)
         if not any(any(layer.tables.values()) for layer in layers):
-            return FileConnections()
-        return FileConnections(layers=layers)
+            return FileConnections(ambiguous_parent=ambiguous, blocking_layers=layers)
+        return FileConnections(layers=layers, ambiguous_parent=ambiguous)
 
-    def _parent_web_configs(self, web_config: Path) -> List[Path]:
-        """The `Web.config` of each Parent Application, nearest first.
+    def _parent_web_configs(self, web_config: Path) -> Tuple[List[Path], bool]:
+        """The `Web.config` of each Parent Application, nearest first, and if the chain is ambiguous.
 
         The chain starts from the project file beside the `Web.config` that
         supplied the table. An ancestor with no `Web.config` adds no layer, and
@@ -395,12 +417,10 @@ class ConnectionLookup:
         """
         project_file = self._project_file_beside(web_config.parent)
         if project_file is None:
-            return []
-        found = (
-            _find_file(parent.parent, WEB_CONFIG_FILE_NAME)
-            for parent in self._parent_applications.chain_of(project_file)
-        )
-        return [path for path in found if path is not None]
+            return [], False
+        chain, ambiguous = self._parent_applications.ancestry_of(project_file)
+        found = (_find_file(parent.parent, WEB_CONFIG_FILE_NAME) for parent in chain)
+        return [path for path in found if path is not None], ambiguous
 
     def _parse_web_config(self, web_config: Path) -> WebConfigConnections:
         if web_config not in self._parsed_web_configs:

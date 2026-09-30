@@ -10,7 +10,8 @@ Project A is the Parent Application of project B when both IIS URLs have the
 same scheme, host, and port, and the path of A is a proper prefix of the path
 of B at a segment boundary. The comparison ignores case and a trailing slash.
 The nearest ancestor has the longest path. When two projects have that longest
-path, the result is ambiguous and gives no Parent Application.
+path, the result is ambiguous and gives no Parent Application. Two projects
+with the same IIS URL are also ambiguous for each other.
 
 This module reads the project files only. It never reads the code of an
 ancestor. It uses no System name, no path, and no Database name.
@@ -28,6 +29,9 @@ from urllib.parse import urlsplit
 from .project_connection_scope import IGNORED_DIRECTORY_NAMES, PROJECT_FILE_SUFFIXES
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
+
+# The reason that a lookup records when the Parent Application is ambiguous.
+AMBIGUOUS_PARENT_APPLICATION = "ambiguous_parent_application"
 
 
 @dataclass(frozen=True)
@@ -108,32 +112,51 @@ class ParentApplications:
         clone root, when no project qualifies, and when the nearest ancestor is
         ambiguous.
         """
-        if self._clone_root is None:
-            return None
-        own = self.iis_url_of(project_file)
-        if own is None:
-            return None
-        candidates = [
-            (url, path)
-            for path, url in self._web_applications().items()
-            if path != project_file and _is_proper_prefix(url, own)
-        ]
-        if not candidates:
-            return None
-        longest = max(len(url.segments) for url, _ in candidates)
-        nearest = sorted(path for url, path in candidates if len(url.segments) == longest)
-        return nearest[0] if len(nearest) == 1 else None
+        return self._nearest_ancestor(project_file)[0]
 
     def chain_of(self, project_file: Path) -> List[Path]:
         """The Parent Applications of a project, nearest first."""
+        return self.ancestry_of(project_file)[0]
+
+    def ancestry_of(self, project_file: Path) -> Tuple[List[Path], bool]:
+        """The Parent Applications of a project, nearest first, and if the chain is ambiguous.
+
+        The chain ends at the first link with no single Parent Application. The
+        flag is true when that link is ambiguous, not when it has no candidate.
+        """
         chain: List[Path] = []
-        current: Optional[Path] = project_file
-        while current is not None:
-            current = self.parent_of(current)
-            if current is None or current in chain or current == project_file:
-                break
-            chain.append(current)
-        return chain
+        current = project_file
+        while True:
+            parent, ambiguous = self._nearest_ancestor(current)
+            if ambiguous:
+                return chain, True
+            if parent is None or parent in chain or parent == project_file:
+                return chain, False
+            chain.append(parent)
+            current = parent
+
+    def _nearest_ancestor(self, project_file: Path) -> Tuple[Optional[Path], bool]:
+        """The nearest ancestor of a project, and if the answer is ambiguous."""
+        if self._clone_root is None:
+            return None, False
+        own = self.iis_url_of(project_file)
+        if own is None:
+            return None, False
+        others = [
+            (url, path)
+            for path, url in self._web_applications().items()
+            if path != project_file
+        ]
+        if any(url == own for url, _ in others):
+            return None, True
+        candidates = [(url, path) for url, path in others if _is_proper_prefix(url, own)]
+        if not candidates:
+            return None, False
+        longest = max(len(url.segments) for url, _ in candidates)
+        nearest = sorted(path for url, path in candidates if len(url.segments) == longest)
+        if len(nearest) > 1:
+            return None, True
+        return nearest[0], False
 
     def _web_applications(self) -> Dict[Path, IisUrl]:
         if self._applications is None:

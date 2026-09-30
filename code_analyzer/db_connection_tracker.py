@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 
 from . import connection_lookup
 from .connection_lookup import FileConnections
+from .parent_application import AMBIGUOUS_PARENT_APPLICATION
 from .project_connection_scope import (
     FIELD_HELD_CONNECTION_NOT_TRACED,
     RECEIVER_DECLARATION_UNRESOLVED,
@@ -107,15 +108,18 @@ class DBConnectionTracker:
     def _record_unresolved(
         self, variable_name: str, key: str, namespace: str, reason: str, line_number: int
     ) -> None:
-        self.unresolved.append(
-            UnresolvedConnection(
-                variable_name=variable_name,
-                lookup_key=key,
-                namespace=namespace,
-                reason=reason,
-                line_number=line_number,
-            )
+        entry = UnresolvedConnection(
+            variable_name=variable_name,
+            lookup_key=key,
+            namespace=namespace,
+            reason=reason,
+            line_number=line_number,
         )
+        # Web.config 路徑上同一行的同一次讀取可能被不只一個樣式比對到；這個理由只記一次。
+        # 其他理由的紀錄數不變，避免動到現有 System 的涵蓋率數字。
+        if reason == AMBIGUOUS_PARENT_APPLICATION and entry in self.unresolved:
+            return
+        self.unresolved.append(entry)
 
     def _resolve(
         self,

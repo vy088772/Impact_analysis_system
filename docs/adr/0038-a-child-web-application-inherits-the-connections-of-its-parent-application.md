@@ -38,6 +38,6 @@ The IIS Express `applicationhost.config` under `.vs` is not a source. In Y-DOCs 
 
 The C# Scan Result shape changes, so the scan cache version rises.
 
-An ambiguous Parent Application gives a visible reason. This is later work of the same spec.
+An ambiguous Parent Application gives no inheritance and a visible reason. Two candidate parents with the same longest path are ambiguous. Two projects with the same IIS URL are ambiguous for each other. A lookup that reaches the ambiguous link without a declaration records the reason `ambiguous_parent_application` in the unresolved connections of the C# Scan Result. It is the only reason that the `Web.config` path records. The reason does not reach the rating of a Database Invocation, so a `likely` call stays `likely`.
 
 See [ADR-0008](0008-web-config-connection-string-resolution.md) and [ADR-0018](0018-connection-lookup-tables-are-scoped-to-the-project-file.md).
