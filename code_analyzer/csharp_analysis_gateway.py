@@ -17,7 +17,7 @@ from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set
 import schema_resolution
 from canonical_object_identity import ObjectName, bare_key, parse, part_key
 
-from .connection_source_entry import database_of, server_of
+from .connection_source_entry import ConnectionSourceEntry, database_of, server_of
 from .external_wrapper_contracts import (
     CONTRACT_SIGNATURE_SCHEMA_VERSION,
     compute_contract_fingerprint,
@@ -2358,7 +2358,7 @@ class CSharpAnalysisGateway:
     def __init__(
         self,
         catalog: SpCatalog,
-        connection_sources: Optional[Dict[str, Any]] = None,
+        connection_sources: Optional[Mapping[str, ConnectionSourceEntry]] = None,
         external_wrapper_contract: Optional[Mapping[str, Any]] = None,
         external_wrapper_contracts: Optional[Mapping[str, Any]] = None,
         wrapper_review_exclusions: Optional[Iterable[Mapping[str, Any]]] = None,
@@ -4280,6 +4280,7 @@ class CSharpAnalysisGateway:
         expression = str(connection_expression).strip()
         if not expression:
             return None, None
+        entry: Optional[ConnectionSourceEntry]
         if expression in self._connection_sources:
             entry = self._connection_sources[expression]
         else:

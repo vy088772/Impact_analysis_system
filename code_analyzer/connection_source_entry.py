@@ -14,11 +14,15 @@ shape.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, TypedDict, Union
+from typing import Mapping, Optional, TypedDict, Union, cast
 
 
 class ResolvedConnectionSource(TypedDict):
-    """The fields of the stored mapping. The run-time value is a plain dict."""
+    """The fields of the stored mapping that this module knows.
+
+    The run-time value is a plain dict. A stored mapping can hold a field that
+    this description does not list. `with_database` keeps each such field.
+    """
 
     database: str
     server: Optional[str]
@@ -27,16 +31,16 @@ class ResolvedConnectionSource(TypedDict):
 ConnectionSourceEntry = Union[ResolvedConnectionSource, str]
 
 
-def database_of(entry: Any) -> str:
+def database_of(entry: Optional[ConnectionSourceEntry]) -> str:
     """The Database name of an entry, with no space at each end.
 
-    Gives empty text when the entry has no Database.
+    Gives empty text when the entry has no Database, or when there is no entry.
     """
     value = entry.get("database") if isinstance(entry, Mapping) else entry
     return str(value or "").strip()
 
 
-def server_of(entry: Any) -> Optional[str]:
+def server_of(entry: Optional[ConnectionSourceEntry]) -> Optional[str]:
     """The server of an entry, with no space at each end.
 
     Gives None when the server is absent or blank. A Legacy Connection Label
@@ -47,7 +51,7 @@ def server_of(entry: Any) -> Optional[str]:
     return str(entry.get("server") or "").strip() or None
 
 
-def has_resolved_shape(entry: Any) -> bool:
+def has_resolved_shape(entry: ConnectionSourceEntry) -> bool:
     """True when the entry is a mapping, false when it is a bare string.
 
     This examines the shape only. A key-as-name guess also has the mapping
@@ -57,7 +61,7 @@ def has_resolved_shape(entry: Any) -> bool:
     return isinstance(entry, Mapping)
 
 
-def with_database(entry: Any, database: str) -> Any:
+def with_database(entry: ConnectionSourceEntry, database: str) -> ConnectionSourceEntry:
     """An entry of the same shape for another Database.
 
     For a mapping, copies each field and replaces only the Database, so the
@@ -65,7 +69,9 @@ def with_database(entry: Any, database: str) -> Any:
     Connection Label, gives the new Database name as a bare string.
     """
     if isinstance(entry, Mapping):
-        return {**entry, "database": database}
+        # The cast is necessary because the copy can hold a field that the
+        # typed description does not list.
+        return cast(ResolvedConnectionSource, {**entry, "database": database})
     return database
 
 

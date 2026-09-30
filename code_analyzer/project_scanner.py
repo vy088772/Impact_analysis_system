@@ -30,7 +30,7 @@ from .config_parser import WebConfigParser
 from .project_connection_scope import ProjectConnectionScopeIndex
 from .source_text import decode_source_bytes
 from .webconfig_connection_resolver import parse_web_config_connections, WebConfigConnections
-from .connection_source_entry import database_of, resolved_entry
+from .connection_source_entry import ConnectionSourceEntry, database_of, resolved_entry
 from .razor_display_field_resolver import resolve_razor_display_fields
 from config.settings import settings, DatabaseConfig
 
@@ -145,7 +145,7 @@ class ProjectScanResult:
     # 每個變數解析後的連線來源；值為舊制的純資料庫名稱字串，或
     # {"database": ..., "server": ...} 這種由 Web.config 解析器產生的新形狀
     # （兩種形狀只有 connection_source_entry 模組認得，讀寫都經過它）。
-    connection_sources: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    connection_sources: Dict[str, Dict[str, ConnectionSourceEntry]] = field(default_factory=dict)
     contract_preflight_proposals: List[Dict] = field(default_factory=list)
     contract_proposals: List[Dict] = field(default_factory=list)
     verified_implementation_snapshots: List[Dict] = field(default_factory=list)
