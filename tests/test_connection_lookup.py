@@ -379,3 +379,324 @@ def test_the_view_finds_a_lookup_key_and_a_web_config_with_no_regard_to_case(
     answer = ConnectionLookup(tmp_path).for_file(source).lookup("PUR", APP_SETTINGS)
 
     assert (answer.database, answer.declared_in) == ("PurchaseDb", "Shop/web.config")
+
+
+# ---------------------------------------------------------------------------
+# Step 2: the Parent Application rule (ticket 05)
+# ---------------------------------------------------------------------------
+
+
+def _write_web_project(directory: Path, iis_url: str = "") -> Path:
+    """Write a project file that declares an IIS URL. Give back the directory."""
+    directory.mkdir(parents=True, exist_ok=True)
+    extension = (
+        "<ProjectExtensions><VisualStudio><FlavorProperties GUID=\"x\">"
+        f"<WebProjectProperties><IISUrl>{iis_url}</IISUrl></WebProjectProperties>"
+        "</FlavorProperties></VisualStudio></ProjectExtensions>"
+        if iis_url
+        else ""
+    )
+    (directory / f"{directory.name}.csproj").write_text(
+        '<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">'
+        f"{extension}</Project>",
+        encoding="utf-8",
+    )
+    return directory
+
+
+def _clone(tmp_path: Path) -> Path:
+    """Mark a temporary directory as the root of a repository clone."""
+    (tmp_path / ".git").mkdir(parents=True, exist_ok=True)
+    return tmp_path
+
+
+def _lookup(scan_root: Path, source: Path, key: str, namespace: str = CONNECTION_STRINGS):
+    return ConnectionLookup(scan_root).for_file(source).lookup(key, namespace)
+
+
+def test_a_child_application_resolves_a_key_that_only_its_parent_declares(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://localhost/Site")
+    _write_web_config(parent, connection_strings={"PUR": "Server=sql01;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Site" / "Response", "http://localhost/Site/Response")
+    _write_web_config(child, connection_strings={"Other": "Server=sql01;Database=OtherDb"})
+    source = _source_file(child / "Response.Master.cs")
+
+    answer = _lookup(tmp_path, source, "PUR")
+
+    assert answer == ConnectionAnswer(
+        database="PurDb", server="sql01", declared_in="Site/Web.config"
+    )
+
+
+def test_a_child_application_with_no_web_config_inherits_from_its_parent(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://localhost/Site")
+    _write_web_config(parent, connection_strings={"PUR": "Server=sql01;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://localhost/Site/Child")
+    source = _source_file(child / "Page.cs")
+
+    # The child has no Web.config, so the Web.config of the scan root is the
+    # table. The scan root is the parent here.
+    answer = _lookup(parent, source, "PUR")
+
+    assert (answer.database, answer.declared_in) == ("PurDb", "Site/Web.config")
+
+
+def test_the_own_declaration_wins_over_the_declaration_of_the_parent(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://localhost/Site")
+    _write_web_config(parent, connection_strings={"PUR": "Server=sql01;Database=ParentDb"})
+    child = _write_web_project(tmp_path / "Site" / "Response", "http://localhost/Site/Response")
+    _write_web_config(child, connection_strings={"PUR": "Server=sql02;Database=ChildDb"})
+    source = _source_file(child / "Response.Master.cs")
+
+    answer = _lookup(tmp_path, source, "PUR")
+
+    assert answer == ConnectionAnswer(
+        database="ChildDb", server="sql02", declared_in="Site/Response/Web.config"
+    )
+
+
+def test_a_three_level_chain_resolves_through_the_grandparent(tmp_path: Path):
+    _clone(tmp_path)
+    root = _write_web_project(tmp_path / "Root", "http://host/Root")
+    _write_web_config(root, connection_strings={"PUR": "Server=s;Database=RootDb"})
+    middle = _write_web_project(tmp_path / "Middle", "http://host/Root/Middle")
+    _write_web_config(middle, connection_strings={"Other": "Server=s;Database=MiddleDb"})
+    leaf = _write_web_project(tmp_path / "Leaf", "http://host/Root/Middle/Leaf")
+    source = _source_file(leaf / "Page.cs")
+    _write_web_config(leaf, connection_strings={"Mine": "Server=s;Database=LeafDb"})
+
+    answer = _lookup(tmp_path, source, "PUR")
+
+    assert (answer.database, answer.declared_in) == ("RootDb", "Root/Web.config")
+
+
+def test_the_nearest_ancestor_wins_when_two_ancestors_declare_the_same_key(tmp_path: Path):
+    _clone(tmp_path)
+    root = _write_web_project(tmp_path / "Root", "http://host/Root")
+    _write_web_config(root, connection_strings={"PUR": "Server=s;Database=RootDb"})
+    middle = _write_web_project(tmp_path / "Middle", "http://host/Root/Middle")
+    _write_web_config(middle, connection_strings={"PUR": "Server=s;Database=MiddleDb"})
+    leaf = _write_web_project(tmp_path / "Leaf", "http://host/Root/Middle/Leaf")
+    _write_web_config(leaf, connection_strings={"Mine": "Server=s;Database=LeafDb"})
+    source = _source_file(leaf / "Page.cs")
+
+    answer = _lookup(tmp_path, source, "PUR")
+
+    assert (answer.database, answer.declared_in) == ("MiddleDb", "Middle/Web.config")
+
+
+def test_an_ancestor_with_no_web_config_does_not_stop_the_chain(tmp_path: Path):
+    _clone(tmp_path)
+    root = _write_web_project(tmp_path / "Root", "http://host/Root")
+    _write_web_config(root, connection_strings={"PUR": "Server=s;Database=RootDb"})
+    _write_web_project(tmp_path / "Middle", "http://host/Root/Middle")
+    leaf = _write_web_project(tmp_path / "Leaf", "http://host/Root/Middle/Leaf")
+    _write_web_config(leaf, connection_strings={"Mine": "Server=s;Database=LeafDb"})
+    source = _source_file(leaf / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR").database == "RootDb"
+
+
+def test_connection_strings_inherit_only_from_connection_strings(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://host/Site")
+    _write_web_config(parent, app_settings={"PUR": "Server=s;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=ChildDb"})
+    source = _source_file(child / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR", CONNECTION_STRINGS) == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "PUR", APP_SETTINGS).database == "PurDb"
+
+
+def test_app_settings_inherit_only_from_app_settings(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://host/Site")
+    _write_web_config(parent, connection_strings={"STC": "Server=s;Database=StcDb"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    _write_web_config(child, app_settings={"Mine": "Server=s;Database=ChildDb"})
+    source = _source_file(child / "Page.cs")
+
+    assert _lookup(tmp_path, source, "STC", APP_SETTINGS) == ConnectionAnswer()
+
+
+def test_a_project_on_a_different_port_or_host_has_no_parent_application(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://localhost:8080/Site")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    other_port = _write_web_project(tmp_path / "A", "http://localhost:9090/Site/A")
+    other_host = _write_web_project(tmp_path / "B", "http://example.com:8080/Site/B")
+    other_scheme = _write_web_project(tmp_path / "C", "https://localhost:8080/Site/C")
+    for project in (other_port, other_host, other_scheme):
+        _write_web_config(project, connection_strings={"Mine": "Server=s;Database=MineDb"})
+        source = _source_file(project / "Page.cs")
+
+        assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer(), project.name
+
+
+def test_the_url_comparison_ignores_case_and_a_trailing_slash_and_a_default_port(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "HTTP://LocalHost:80/SITE/")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://localhost/site/child")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    source = _source_file(child / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR").database == "PurDb"
+
+
+def test_a_path_prefix_must_end_at_a_segment_boundary(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://host/App")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    sibling = _write_web_project(tmp_path / "Sibling", "http://host/Application")
+    _write_web_config(sibling, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    source = _source_file(sibling / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+
+
+def test_a_site_root_is_the_parent_of_an_application_below_it(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://host/")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Child")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    source = _source_file(child / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR").database == "PurDb"
+
+
+def test_two_candidate_parents_with_the_same_path_give_no_inheritance(tmp_path: Path):
+    _clone(tmp_path)
+    for name, database in (("SiteA", "DbA"), ("SiteB", "DbB")):
+        parent = _write_web_project(tmp_path / name, "http://host/Site")
+        _write_web_config(parent, connection_strings={"PUR": f"Server=s;Database={database}"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    source = _source_file(child / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+
+
+def test_a_scan_root_below_the_repository_root_finds_a_parent_outside_the_scan_root(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "TTPUR", "http://localhost/TTPUR")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    child = _write_web_project(tmp_path / "TTPUR" / "Response", "http://localhost/TTPUR/Response")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    source = _source_file(child / "Response.Master.cs")
+
+    answer = _lookup(child, source, "PUR")
+
+    assert (answer.database, answer.declared_in) == ("PurDb", "TTPUR/Web.config")
+
+
+def test_a_project_with_no_iis_url_has_no_parent_application(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://host/Site")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    job = _write_web_project(tmp_path / "Job")
+    _write_web_config(job, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    source = _source_file(job / "Job.cs")
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+
+
+def test_a_project_with_an_application_settings_file_does_not_inherit(tmp_path: Path):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://host/Site")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    core = _write_web_project(tmp_path / "Core", "http://host/Site/Core")
+    _write_application_settings(core, connection_strings={"Main": "Server=s;Database=CoreDb"})
+    source = _source_file(core / "Program.cs")
+
+    answer = _lookup(tmp_path, source, "PUR")
+
+    assert answer.database is None
+    assert answer.reason == "connection_key_not_in_project_scope"
+
+
+def test_a_class_library_file_inherits_through_the_project_beside_the_scan_root_web_config(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "TTPUR", "http://host/TTPUR")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    response = _write_web_project(tmp_path / "Response", "http://host/TTPUR/Response")
+    _write_web_config(response, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    library = _write_web_project(response / "Lib")
+    page = _source_file(response / "Page.cs")
+    helper = _source_file(library / "Helper.cs")
+
+    lookup = ConnectionLookup(response)
+
+    for source in (page, helper):
+        answer = lookup.for_file(source).lookup("PUR", CONNECTION_STRINGS)
+        assert (answer.database, answer.declared_in) == ("PurDb", "TTPUR/Web.config")
+
+
+def test_the_view_gives_the_guess_only_when_the_own_table_and_each_inherited_table_are_empty(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://host/Site")
+    _write_web_config(parent)
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    _write_web_config(child)
+    source = _source_file(child / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer(database="PUR")
+
+    _write_web_config(parent, connection_strings={"Other": "Server=s;Database=OtherDb"})
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+
+
+def test_the_search_for_the_nearest_project_file_stops_at_the_clone_root(tmp_path: Path):
+    _write_web_project(tmp_path, "http://host/Outside")
+    _write_web_config(tmp_path, connection_strings={"PUR": "Server=s;Database=OutsideDb"})
+    repository = _clone(tmp_path / "repo")
+    source = _source_file(repository / "src" / "Order.cs")
+
+    answer = _lookup(repository, source, "PUR")
+
+    assert answer == ConnectionAnswer(database="PUR")
+
+
+def test_a_repository_with_no_clone_root_gets_no_parent_application(tmp_path: Path):
+    parent = _write_web_project(tmp_path / "Site", "http://host/Site")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    source = _source_file(child / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+
+
+def test_the_declaring_file_is_relative_to_the_clone_root_when_one_exists(tmp_path: Path):
+    _clone(tmp_path)
+    shop = _write_web_project(tmp_path / "Shop")
+    _write_web_config(shop, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    scan_root = shop / "Pages"
+    source = _source_file(scan_root / "Order.cs")
+
+    assert _lookup(scan_root, source, "PUR").declared_in == "Shop/Web.config"
+
+
+def test_an_application_settings_file_names_itself_relative_to_the_clone_root(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    core = _write_web_project(tmp_path / "Core")
+    _write_application_settings(core, connection_strings={"Main": "Server=s;Database=CoreDb"})
+    source = _source_file(core / "Program.cs")
+
+    assert _lookup(core, source, "Main", CONNECTION_STRINGS).declared_in == "Core/appsettings.json"

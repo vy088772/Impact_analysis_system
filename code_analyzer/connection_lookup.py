@@ -21,6 +21,13 @@ The view selects a table by these rules, in this order:
 6. When the selected `Web.config` table is empty in the two namespaces, or no
    `Web.config` exists, the view gives the key-as-name guess.
 
+A `Web.config` table also holds the entries of each Parent Application of the
+web application, nearest first (ADR-0038). The chain starts from the project
+file beside the `Web.config` that supplied the table. The own entry of the
+application wins over an inherited entry. Each namespace inherits only from the
+same namespace. After the inheritance, rule 6 gives the guess only when the own
+table and each inherited table are empty.
+
 Rules 3 to 5 extend ADR-0018: a `Web.config` table also covers one Project
 Connection Scope, and a project with no configuration file uses the
 `Web.config` of the scan root. The amendment of ADR-0018 records these rules.
@@ -34,9 +41,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Mapping, Optional, Tuple, Union
+from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple, Union
 
+from .clone_root import find_clone_root
 from .connection_string_value import ResolvedConnection
+from .parent_application import ParentApplications
 from .project_connection_scope import (
     BASE_SETTINGS_FILE_NAME,
     CONNECTION_KEY_NOT_IN_PROJECT_SCOPE,
@@ -48,7 +57,7 @@ from .project_connection_scope import (
     ProjectConnectionScope,
     build_project_connection_scope,
 )
-from .webconfig_connection_resolver import parse_web_config_file
+from .webconfig_connection_resolver import WebConfigConnections, parse_web_config_file
 
 # The namespaces of a lookup key. ADR-0008 keeps them apart.
 APP_SETTINGS = "app_settings"
@@ -60,6 +69,18 @@ ROOT_CONFIGURATION = "root_configuration"
 WEB_CONFIG_FILE_NAME = "web.config"
 
 LookupTable = Mapping[str, ResolvedConnection]
+
+
+@dataclass(frozen=True)
+class TableLayer:
+    """The two lookup tables of one configuration file, and the file that declared them.
+
+    `declared_in` is a path relative to the clone root, or to the scan root
+    when the analyzer finds no clone root.
+    """
+
+    tables: Mapping[str, LookupTable]
+    declared_in: str
 
 
 @dataclass(frozen=True)
@@ -119,21 +140,23 @@ class FileConnections:
 
     A view with no table and no reason gives the key-as-name guess: the lookup
     key as the Database, no server, and no declaring file.
+
+    `layers` holds the own table of the source file first, then the table of
+    each Parent Application, nearest first. The first layer that declares a key
+    in a namespace answers it.
     """
 
     def __init__(
         self,
         *,
-        tables: Optional[Mapping[str, LookupTable]] = None,
-        declared_in: Optional[str] = None,
+        layers: Optional[Sequence[TableLayer]] = None,
         reads_application_settings_file: bool = False,
         no_table_reason: str = "",
         context_lookup_keys: Optional[Mapping[str, str]] = None,
         root_configuration_keys: FrozenSet[str] = frozenset(),
         root_connection_keys: FrozenSet[str] = frozenset(),
     ):
-        self._tables = tables
-        self._declared_in = declared_in
+        self._layers = layers
         self._reads_application_settings_file = reads_application_settings_file
         self._no_table_reason = no_table_reason
         self._context_lookup_keys = dict(context_lookup_keys or {})
@@ -158,7 +181,7 @@ class FileConnections:
         """The connection that a lookup key opens in one namespace."""
         if self._no_table_reason:
             return ConnectionAnswer(reason=self._no_table_reason)
-        if self._tables is None:
+        if self._layers is None:
             return ConnectionAnswer(database=key)
         if not self._reads_application_settings_file:
             # A failed lookup on the `Web.config` path has no reason.
@@ -174,14 +197,15 @@ class FileConnections:
         )
 
     def _answer_from_table(self, key: str, namespace: str) -> Optional[ConnectionAnswer]:
-        resolved = _find_key((self._tables or {}).get(namespace, {}), key)
-        if resolved is None:
-            return None
-        return ConnectionAnswer(
-            database=resolved.database,
-            server=resolved.server,
-            declared_in=self._declared_in,
-        )
+        for layer in self._layers or ():
+            resolved = _find_key(layer.tables.get(namespace, {}), key)
+            if resolved is not None:
+                return ConnectionAnswer(
+                    database=resolved.database,
+                    server=resolved.server,
+                    declared_in=layer.declared_in,
+                )
+        return None
 
     def context_registration(self, context_type: str) -> ContextRegistration:
         """The Context Connection Registration of a context type."""
@@ -203,7 +227,11 @@ class FileConnections:
         """
         if not self._reads_application_settings_file:
             return False
-        connection_strings = (self._tables or {}).get(CONNECTION_STRINGS, {})
+        connection_strings = {
+            name: value
+            for layer in self._layers or ()
+            for name, value in layer.tables.get(CONNECTION_STRINGS, {}).items()
+        }
         folded = key.casefold()
         return any(
             name.casefold() == folded
@@ -216,6 +244,11 @@ class ConnectionLookup:
 
     def __init__(self, scan_root: Union[str, Path]):
         self._scan_root = Path(scan_root).resolve()
+        self._clone_root = find_clone_root(self._scan_root)
+        # Declaring files are relative to the clone root when one exists.
+        self._path_base = self._clone_root or self._scan_root
+        self._parent_applications = ParentApplications(self._clone_root)
+        self._parsed_web_configs: Dict[Path, WebConfigConnections] = {}
         self._project_files: Dict[Path, Optional[Path]] = {}
         self._project_views: Dict[Path, FileConnections] = {}
         self._environment_overrides: Dict[Tuple[str, str], Dict[str, object]] = {}
@@ -259,8 +292,12 @@ class ConnectionLookup:
                 (override.settings_file, override.lookup_key)
             ] = override.to_dict()
         return FileConnections(
-            tables={CONNECTION_STRINGS: scope.connection_strings},
-            declared_in=self._relative_to_scan_root(Path(str(scope.settings_file))),
+            layers=[
+                TableLayer(
+                    tables={CONNECTION_STRINGS: scope.connection_strings},
+                    declared_in=self._relative_path(Path(str(scope.settings_file))),
+                )
+            ],
             reads_application_settings_file=True,
             context_lookup_keys=scope.context_connection_keys,
             root_configuration_keys=scope.root_configuration_keys,
@@ -293,29 +330,58 @@ class ConnectionLookup:
         return None
 
     def _web_config_view(self, web_config: Optional[Path]) -> FileConnections:
-        """The view of one `Web.config` table.
+        """The view of one `Web.config` table and the tables it inherits.
 
-        When the table is empty in the two namespaces, or no `Web.config`
-        exists, the view gives the key-as-name guess.
+        The layers are the own `Web.config` first, then the `Web.config` of
+        each Parent Application, nearest first. A layer that is empty in the
+        two namespaces does not count. When no layer is left, or no
+        `Web.config` exists, the view gives the key-as-name guess.
         """
         if web_config is None:
             return FileConnections()
-        try:
-            parsed = parse_web_config_file(web_config)
-        except (OSError, UnicodeDecodeError) as error:
-            # This module reads the `Web.config` of each project, so one file
-            # that is not readable must not stop the scan.
-            print(f"⚠️ The analyzer cannot read {web_config}: {error}")
-            return FileConnections()
-        if not parsed:
-            return FileConnections()
-        return FileConnections(
-            tables={
-                APP_SETTINGS: parsed.app_settings,
-                CONNECTION_STRINGS: parsed.connection_strings,
-            },
-            declared_in=self._relative_to_scan_root(web_config),
+        layers = []
+        for path in [web_config, *self._parent_web_configs(web_config)]:
+            parsed = self._parse_web_config(path)
+            if parsed:
+                layers.append(
+                    TableLayer(
+                        tables={
+                            APP_SETTINGS: parsed.app_settings,
+                            CONNECTION_STRINGS: parsed.connection_strings,
+                        },
+                        declared_in=self._relative_path(path),
+                    )
+                )
+        return FileConnections(layers=layers) if layers else FileConnections()
+
+    def _parent_web_configs(self, web_config: Path) -> List[Path]:
+        """The `Web.config` of each Parent Application, nearest first.
+
+        The chain starts from the project file beside the `Web.config` that
+        supplied the table. An ancestor with no `Web.config` adds no layer, and
+        the chain goes on above it. The analyzer reads the project file and the
+        `Web.config` of an ancestor, and no code.
+        """
+        project_file = self._project_file_beside(web_config.parent)
+        if project_file is None:
+            return []
+        found = (
+            _find_file(parent.parent, WEB_CONFIG_FILE_NAME)
+            for parent in self._parent_applications.chain_of(project_file)
         )
+        return [path for path in found if path is not None]
+
+    def _parse_web_config(self, web_config: Path) -> WebConfigConnections:
+        if web_config not in self._parsed_web_configs:
+            try:
+                parsed = parse_web_config_file(web_config)
+            except (OSError, UnicodeDecodeError) as error:
+                # This module reads the `Web.config` of each project, so one file
+                # that is not readable must not stop the scan.
+                print(f"⚠️ The analyzer cannot read {web_config}: {error}")
+                parsed = WebConfigConnections()
+            self._parsed_web_configs[web_config] = parsed
+        return self._parsed_web_configs[web_config]
 
     def _scan_root_holds_application_settings_file(self) -> bool:
         """True when an Application Settings File is in or below the scan root.
@@ -337,35 +403,48 @@ class ConnectionLookup:
                     break
         return self._holds_application_settings_file
 
-    def _relative_to_scan_root(self, path: Path) -> str:
-        return Path(os.path.relpath(path, self._scan_root)).as_posix()
+    def _relative_path(self, path: Path) -> str:
+        """A declaring file as a path relative to the clone root.
+
+        The base is the scan root when the analyzer finds no clone root.
+        """
+        return Path(os.path.relpath(path, self._path_base)).as_posix()
+
+    @staticmethod
+    def _project_file_beside(directory: Path) -> Optional[Path]:
+        try:
+            project_files = sorted(
+                found
+                for suffix in PROJECT_FILE_SUFFIXES
+                for found in directory.glob(f"*{suffix}")
+            )
+        except OSError:
+            return None
+        return project_files[0] if project_files else None
 
     def _project_file_for(self, source_file: Union[str, Path]) -> Optional[Path]:
         """The nearest project file above a source file.
 
-        The search has no upper bound. One scan asks this question for
+        The search stops at the clone root. When the analyzer finds no clone
+        root, the search has no upper bound. One scan asks this question for
         thousands of source files that share their parent directories, so each
         directory is examined one time.
         """
         path = Path(source_file).resolve()
         directory = path if path.is_dir() else path.parent
+        candidates = [directory, *directory.parents]
+        if self._clone_root in candidates:
+            candidates = candidates[: candidates.index(self._clone_root) + 1]
         unknown: List[Path] = []
         answer: Optional[Path] = None
-        for candidate in [directory, *directory.parents]:
+        for candidate in candidates:
             if candidate in self._project_files:
                 answer = self._project_files[candidate]
                 break
             unknown.append(candidate)
-            try:
-                project_files = sorted(
-                    found
-                    for suffix in PROJECT_FILE_SUFFIXES
-                    for found in candidate.glob(f"*{suffix}")
-                )
-            except OSError:
-                continue
-            if project_files:
-                answer = project_files[0]
+            found = self._project_file_beside(candidate)
+            if found is not None:
+                answer = found
                 break
         for candidate in unknown:
             self._project_files[candidate] = answer

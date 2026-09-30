@@ -25,6 +25,9 @@ class ConnectionInfo:
     line_number: int            # 宣告行號
     scope: str = "class"        # 作用域 (class, method, local)
     server: Optional[str] = None  # 伺服器位址 (例如: "vmsystest07")；未知時為 None
+    # 宣告這個連線查找鍵的設定檔，相對於 repository clone；把查找鍵當資料庫名稱的
+    # 猜測沒有宣告檔，為 None。
+    declared_in: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -120,8 +123,8 @@ class DBConnectionTracker:
         kind: str,
         variable_name: str = "",
         line_number: int = 0,
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """把一個連線查找鍵解析成 (database, server)，解不出來時記下 view 給的理由。
+    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """把一個連線查找鍵解析成 (database, server, declared_in)，解不出來時記下 view 給的理由。
 
         kind 是查找鍵所屬的命名空間（APP_SETTINGS、CONNECTION_STRINGS 或
         ROOT_CONFIGURATION）。view 只在那個命名空間裡找——絕不讓 AppSettings 的
@@ -130,12 +133,12 @@ class DBConnectionTracker:
         answer = self.file_connections.lookup(key, kind)
         if answer.reason:
             self._record_unresolved(variable_name, key, kind, answer.reason, line_number)
-        return answer.database, answer.server
+        return answer.database, answer.server, answer.declared_in
 
     def _resolve_context_type(
         self, context_type: str, variable_name: str, line_number: int
-    ) -> Tuple[Optional[str], Optional[str], str]:
-        """把一個資料庫內容型別解析成 (database, server, 連線查找鍵)。
+    ) -> Tuple[Optional[str], Optional[str], Optional[str], str]:
+        """把一個資料庫內容型別解析成 (database, server, declared_in, 連線查找鍵)。
 
         型別名稱本身不是資料庫名稱，就像連線查找鍵不是資料庫名稱一樣
         （ADR-0008）。答案只來自組合根裡的註冊。
@@ -150,12 +153,12 @@ class DBConnectionTracker:
                 line_number,
             )
         if not registration.lookup_key:
-            return None, None, ""
+            return None, None, None, ""
 
-        database, server = self._resolve(
+        database, server, declared_in = self._resolve(
             registration.lookup_key, self.CONNECTION_STRINGS, variable_name, line_number
         )
-        return database, server, registration.lookup_key
+        return database, server, declared_in, registration.lookup_key
 
     def analyze_connections(self, content: str) -> Dict[str, ConnectionInfo]:
         """
@@ -196,7 +199,7 @@ class DBConnectionTracker:
             var_name = match.group(1)
             key = match.group(2)
             line_num = content[:match.start()].count('\n') + 1
-            database_name, server = self._resolve(key, self.APP_SETTINGS, var_name, line_num)
+            database_name, server, declared_in = self._resolve(key, self.APP_SETTINGS, var_name, line_num)
             if not database_name:
                 continue
 
@@ -207,6 +210,7 @@ class DBConnectionTracker:
                 line_number=line_num,
                 scope="class",
                 server=server,
+                declared_in=declared_in,
             )
 
         # 模式 2: 簡化格式（可能有不同的類別名稱）
@@ -240,7 +244,7 @@ class DBConnectionTracker:
             class_name = match.group(3)   # 建構子類別名稱
             key = match.group(4)          # 連線字串名稱（例如：PUR）
             line_num = content[:match.start()].count('\n') + 1
-            database_name, server = self._resolve(key, self.CONNECTION_STRINGS, var_name, line_num)
+            database_name, server, declared_in = self._resolve(key, self.CONNECTION_STRINGS, var_name, line_num)
 
             if var_name not in self.connections and database_name:
                 self.connections[var_name] = ConnectionInfo(
@@ -250,6 +254,7 @@ class DBConnectionTracker:
                     line_number=line_num,
                     scope="class",
                     server=server,
+                    declared_in=declared_in,
                 )
 
     def _extract_mvc_connections(self, content: str):
@@ -279,7 +284,7 @@ class DBConnectionTracker:
                 )
                 continue
 
-            database_name, server = self._resolve(
+            database_name, server, declared_in = self._resolve(
                 key, self.CONNECTION_STRINGS, var_name, line_num
             )
             if database_name:
@@ -290,6 +295,7 @@ class DBConnectionTracker:
                     line_number=line_num,
                     scope="class",
                     server=server,
+                    declared_in=declared_in,
                 )
 
         # 模式 2: ConfigurationManager.ConnectionStrings
@@ -300,7 +306,7 @@ class DBConnectionTracker:
             var_name = match.group(1)
             key = match.group(2)
             line_num = content[:match.start()].count('\n') + 1
-            database_name, server = self._resolve(key, self.CONNECTION_STRINGS, var_name, line_num)
+            database_name, server, declared_in = self._resolve(key, self.CONNECTION_STRINGS, var_name, line_num)
 
             if var_name not in self.connections and database_name:
                 self.connections[var_name] = ConnectionInfo(
@@ -310,6 +316,7 @@ class DBConnectionTracker:
                     line_number=line_num,
                     scope="class",
                     server=server,
+                    declared_in=declared_in,
                 )
 
         # 模式 3: DbContext 注入（ASP.NET Core MVC）
@@ -343,7 +350,7 @@ class DBConnectionTracker:
                 line_num = content[:match.start()].count('\n') + 1
                 if var_name in self.connections:
                     continue
-                database_name, server, key = self._resolve_context_type(
+                database_name, server, declared_in, key = self._resolve_context_type(
                     context_type, var_name, line_num
                 )
                 if not database_name:
@@ -355,6 +362,7 @@ class DBConnectionTracker:
                     line_number=line_num,
                     scope="class",
                     server=server,
+                    declared_in=declared_in,
                 )
 
         # 這一步只問曾經真的被叫用過的接收者（見 __init__ 的
@@ -512,7 +520,7 @@ class DBConnectionTracker:
 
                 section, separator, key = raw_key.partition(":")
                 if separator and section.casefold() == "connectionstrings":
-                    database_name, server = self._resolve(
+                    database_name, server, declared_in = self._resolve(
                         key, self.CONNECTION_STRINGS, var_name, line_num
                     )
                     if database_name:
@@ -523,6 +531,7 @@ class DBConnectionTracker:
                             line_number=line_num,
                             scope="class",
                             server=server,
+                            declared_in=declared_in,
                         )
                     continue
 
@@ -551,7 +560,7 @@ class DBConnectionTracker:
             var_name = match.group(1)
             key = match.group(2)
             line_num = content[:match.start()].count('\n') + 1
-            database_name, server = self._resolve(key, self.APP_SETTINGS, var_name, line_num)
+            database_name, server, declared_in = self._resolve(key, self.APP_SETTINGS, var_name, line_num)
             if database_name:
                 self.connections[var_name] = ConnectionInfo(
                     variable_name=var_name,
@@ -560,6 +569,7 @@ class DBConnectionTracker:
                     line_number=line_num,
                     scope="local",
                     server=server,
+                    declared_in=declared_in,
                 )
 
         # 直接從 ConnectionStrings 建構（同上，行內直接開連線，不經中介變數）
@@ -571,7 +581,7 @@ class DBConnectionTracker:
             var_name = match.group(1)
             key = match.group(2)
             line_num = content[:match.start()].count('\n') + 1
-            database_name, server = self._resolve(key, self.CONNECTION_STRINGS, var_name, line_num)
+            database_name, server, declared_in = self._resolve(key, self.CONNECTION_STRINGS, var_name, line_num)
             if database_name:
                 self.connections[var_name] = ConnectionInfo(
                     variable_name=var_name,
@@ -580,6 +590,7 @@ class DBConnectionTracker:
                     line_number=line_num,
                     scope="local",
                     server=server,
+                    declared_in=declared_in,
                 )
 
         # 找出所有 SqlConnection(source_var) 宣告。source_var 是持有連線字串的
@@ -605,6 +616,7 @@ class DBConnectionTracker:
                     line_number=line_num,
                     scope="local",
                     server=source_info.server,
+                    declared_in=source_info.declared_in,
                 )
                 continue
 

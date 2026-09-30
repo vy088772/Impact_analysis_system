@@ -327,6 +327,7 @@ def test_project_scanner_resolves_stc_global_asax_connection_source():
     assert scan_result.connection_sources[file_key]["cn"] == {
         "database": "SysErrorRecord",
         "server": "vmsystest07",
+        "declared_in": "STC/Web.config",
     }
 
 
@@ -364,7 +365,7 @@ def test_project_scanner_gives_two_web_applications_under_one_scan_root_their_ow
     """一張 Web.config 查找表涵蓋一個 Project Connection Scope（ADR-0018 的增
     補）：同一個掃描根底下的兩個 web application 用同一個鍵名，各自解析到自己
     的 Web.config 宣告的資料庫，不共用掃描根的那一張表。寫進 C# Scan Result
-    的項目只有 database 與 server。"""
+    的項目有 database、server 與宣告它的檔案 declared_in。"""
     shop_source = _write_web_application(tmp_path / "Shop", database="ShopDb", server="sql01")
     depot_source = _write_web_application(
         tmp_path / "Depot", database="DepotDb", server="sql02"
@@ -383,9 +384,88 @@ def test_project_scanner_gives_two_web_applications_under_one_scan_root_their_ow
     assert scan_result.connection_sources[str(shop_source.resolve())]["cn"] == {
         "database": "ShopDb",
         "server": "sql01",
+        "declared_in": "Shop/Web.config",
     }
     assert scan_result.connection_sources[str(depot_source.resolve())]["cn"] == {
         "database": "DepotDb",
         "server": "sql02",
+        "declared_in": "Depot/Web.config",
     }
     assert scan_result.unresolved_connections == {}
+
+
+def test_project_scanner_writes_the_declaring_file_of_an_inherited_connection(
+    tmp_path: Path,
+):
+    """一個子 web application 解析到它的 Parent Application 宣告的連線時，
+    C# Scan Result 的連線來源帶 declared_in，指向宣告它的那份 Web.config；
+    declared_in 相對於 repository clone，不含這台機器的目錄。掃描根只是
+    repository 的一個子路徑。"""
+    (tmp_path / ".git").mkdir()
+    parent = tmp_path / "Site"
+    parent.mkdir()
+    (parent / "Site.csproj").write_text(
+        "<Project><ProjectExtensions><VisualStudio><FlavorProperties>"
+        "<WebProjectProperties><IISUrl>http://localhost/Site</IISUrl>"
+        "</WebProjectProperties></FlavorProperties></VisualStudio>"
+        "</ProjectExtensions></Project>",
+        encoding="utf-8",
+    )
+    (parent / "Web.config").write_text(
+        "<configuration><connectionStrings>"
+        '<add name="Main" connectionString="Data Source=sql01;Initial Catalog=SiteDb"/>'
+        "</connectionStrings></configuration>",
+        encoding="utf-8",
+    )
+    child = tmp_path / "Site" / "Child"
+    source = _write_web_application(child, database="ChildDb", server="sql02")
+    (child / "Child.csproj").write_text(
+        "<Project><ProjectExtensions><VisualStudio><FlavorProperties>"
+        "<WebProjectProperties><IISUrl>http://localhost/Site/Child</IISUrl>"
+        "</WebProjectProperties></FlavorProperties></VisualStudio>"
+        "</ProjectExtensions></Project>",
+        encoding="utf-8",
+    )
+    (child / "Web.config").write_text(
+        "<configuration><connectionStrings>"
+        '<add name="Other" connectionString="Data Source=sql02;Initial Catalog=OtherDb"/>'
+        "</connectionStrings></configuration>",
+        encoding="utf-8",
+    )
+
+    scanner = ProjectScanner(project_root=str(child), project_name="Child")
+    scan_result = ProjectScanResult(
+        project_root=str(child), project_name="Child", scan_time=datetime.now()
+    )
+    scan_result = scanner.refresh_csharp_files(scan_result, [str(source)])
+
+    assert scan_result.connection_sources[str(source.resolve())]["cn"] == {
+        "database": "SiteDb",
+        "server": "sql01",
+        "declared_in": "Site/Web.config",
+    }
+
+
+def test_project_scanner_writes_no_declaring_file_for_a_key_as_name_guess(tmp_path: Path):
+    source = tmp_path / "Order.cs"
+    source.write_text(
+        "public class Order {\n"
+        "    void Load() {\n"
+        "        SqlConnection cn = new SqlConnection("
+        'ConfigurationManager.ConnectionStrings["PUR"].ConnectionString);\n'
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    scanner = ProjectScanner(project_root=str(tmp_path), project_name="Bare")
+    scan_result = ProjectScanResult(
+        project_root=str(tmp_path), project_name="Bare", scan_time=datetime.now()
+    )
+    scan_result = scanner.refresh_csharp_files(scan_result, [str(source)])
+
+    assert scan_result.connection_sources[str(source.resolve())]["cn"] == {
+        "database": "PUR",
+        "server": None,
+        "declared_in": None,
+    }

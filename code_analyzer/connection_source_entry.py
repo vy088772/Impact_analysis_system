@@ -3,8 +3,9 @@
 
 A connection source entry is the value that the C# Scan Result holds for one
 connection variable of one source file. It has two shapes. A Resolved
-Connection Source is a mapping with a database and a server. A Legacy
-Connection Label is a bare string that an older scan wrote.
+Connection Source is a mapping with a database, a server, and the file that
+declared the lookup key. A Legacy Connection Label is a bare string that an
+older scan wrote.
 
 One C# Scan Result can hold the two shapes together, because a refresh rescans
 only the files that changed. This module is the only place that knows the two
@@ -26,6 +27,7 @@ class ResolvedConnectionSource(TypedDict):
 
     database: str
     server: Optional[str]
+    declared_in: Optional[str]
 
 
 ConnectionSourceEntry = Union[ResolvedConnectionSource, str]
@@ -75,6 +77,13 @@ def with_database(entry: ConnectionSourceEntry, database: str) -> ConnectionSour
     return database
 
 
-def resolved_entry(database: str, server: Optional[str]) -> ResolvedConnectionSource:
-    """The stored form of a Resolved Connection Source."""
-    return {"database": database, "server": server}
+def resolved_entry(
+    database: str, server: Optional[str], declared_in: Optional[str]
+) -> ResolvedConnectionSource:
+    """The stored form of a Resolved Connection Source.
+
+    `declared_in` names the configuration file that declared the lookup key, as
+    a path relative to the repository clone. It is None for a key-as-name
+    guess, because no file declares that Database.
+    """
+    return {"database": database, "server": server, "declared_in": declared_in}

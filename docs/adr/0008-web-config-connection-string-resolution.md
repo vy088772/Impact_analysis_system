@@ -14,3 +14,5 @@ Connection-source resolution must parse the actual connection-string *value*, ne
 ## Consequences
 
 The existing `db_connection_tracker.py` "flexible pattern" (模式4) that uppercases the AppSettings key and uses it directly as the database name is a known-wrong shortcut and must be replaced, not extended.
+
+See also [ADR-0038](0038-a-child-web-application-inherits-the-connections-of-its-parent-application.md): a child web application also inherits the connections of its Parent Application.

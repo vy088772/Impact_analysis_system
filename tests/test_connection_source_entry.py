@@ -71,9 +71,17 @@ def test_has_resolved_shape_is_true_for_a_mapping_and_false_for_a_bare_string():
 
 
 def test_resolved_entry_gives_the_fields_the_project_scanner_writes():
-    entry = resolved_entry("OrdersDb", "sql01")
+    entry = resolved_entry("OrdersDb", "sql01", "Shop/Web.config")
 
-    assert entry == {"database": "OrdersDb", "server": "sql01"}
+    assert entry == {
+        "database": "OrdersDb",
+        "server": "sql01",
+        "declared_in": "Shop/Web.config",
+    }
     assert type(entry) is dict
-    assert list(entry) == ["database", "server"]
-    assert resolved_entry("OrdersDb", None) == {"database": "OrdersDb", "server": None}
+    assert list(entry) == ["database", "server", "declared_in"]
+    assert resolved_entry("OrdersDb", None, None) == {
+        "database": "OrdersDb",
+        "server": None,
+        "declared_in": None,
+    }

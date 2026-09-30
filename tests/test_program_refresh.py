@@ -354,7 +354,7 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
 
     class FakeParser:
         db_tracker = SimpleNamespace(
-            connections={"conn": SimpleNamespace(database_name="NewDb", server=None)},
+            connections={"conn": SimpleNamespace(database_name="NewDb", server=None, declared_in=None)},
             unresolved=[],
         )
 
@@ -380,7 +380,7 @@ def test_project_scanner_refresh_replaces_file_evidence(tmp_path) -> None:
     ]
     assert scan.db_invocations[str(selected_file.resolve())] == [{"new": True}]
     assert scan.connection_sources[str(selected_file.resolve())] == {
-        "conn": {"database": "NewDb", "server": None}
+        "conn": {"database": "NewDb", "server": None, "declared_in": None}
     }
     assert scan.db_invocations[str(untouched_file.resolve())] == [{"untouched": True}]
     assert scan.connection_sources[str(untouched_file.resolve())] == {"conn": "UntouchedDb"}

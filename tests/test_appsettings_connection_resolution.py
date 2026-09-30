@@ -597,6 +597,7 @@ def test_project_scanner_records_resolved_and_unresolved_connections(tmp_path: P
     assert scan_result.connection_sources[file_key]["_payroll"] == {
         "database": "PayrollDb",
         "server": "srvA",
+        "declared_in": "appsettings.json",
     }
     reasons = {
         entry["variable_name"]: entry["reason"]

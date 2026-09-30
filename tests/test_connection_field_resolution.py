@@ -408,6 +408,7 @@ def test_project_scanner_records_a_field_held_connection(tmp_path: Path):
     assert scan_result.connection_sources[file_key]["con"] == {
         "database": "PayrollDb",
         "server": "srvA",
+        "declared_in": "appsettings.json",
     }
     assert "cnLedger" not in scan_result.connection_sources[file_key]
     reasons = {

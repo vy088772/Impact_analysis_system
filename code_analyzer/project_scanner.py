@@ -509,7 +509,7 @@ class ProjectScanner:
         result = self.csharp_parser.parse_file(file_path)
 
         self.scan_result.connection_sources[file_key] = {
-            name: resolved_entry(info.database_name, info.server)
+            name: resolved_entry(info.database_name, info.server, info.declared_in)
             for name, info in tracker.connections.items()
             if info.database_name
         }

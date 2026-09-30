@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from config.settings import settings
+from code_analyzer.clone_root import find_clone_root
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 
 # 快取格式版本：模型結構若變動可遞增，使舊快取自動失效
@@ -177,7 +178,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 而且備援多找得到 `WITH`／`MERGE` 開頭的語句與 `INSERT INTO t (欄位)` 的目標，
 # 也不再從 SQL 註解取資料表。舊快取的備援關聯帶整句的存取型態（例如 `INSERT`），
 # `write_only` 會把它當成已證明的寫入，必須重新掃描。
-_CACHE_VERSION = 42
+# v43：C# Scan Result 的 Resolved Connection Source 多了 `declared_in`，指出宣告
+# 這個連線查找鍵的設定檔（相對於 repository clone；見
+# `.scratch/inherited-web-config-connections/` ticket 05）。子 web application 也
+# 會解析它的 Parent Application 宣告的連線。舊快取的連線來源沒有這個欄位，也沒
+# 有繼承來的連線，必須重新掃描。
+_CACHE_VERSION = 43
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
@@ -259,25 +265,21 @@ def _git_head_commit(path: Path) -> Optional[str]:
     只讀取本機已 clone 的 repo 現況（`git rev-parse HEAD`），不連網路、不觸發
     任何 fetch/pull。找不到 .git（例如尚未 clone）或指令失敗時回傳 None。
     """
-    cur = path.resolve()
-    for _ in range(6):  # 最多往上找 6 層，避免子路徑巢狀過深時無止盡往上尋找
-        if (cur / ".git").exists():
-            try:
-                result = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    cwd=str(cur),
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode == 0:
-                    return result.stdout.strip()
-            except Exception:
-                pass
-            return None
-        if cur.parent == cur:
-            break
-        cur = cur.parent
+    clone_root = find_clone_root(path)
+    if clone_root is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(clone_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
     return None
 
 

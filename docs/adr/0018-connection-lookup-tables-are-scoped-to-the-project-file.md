@@ -48,3 +48,5 @@ Rule 4 has a known limit. When a scan root holds more than one web application, 
 The exception in rule 5 keeps the third consequence above. That consequence now applies only to a scan root that holds an Application Settings File.
 
 One module holds these rules: the Connection Lookup (`code_analyzer/connection_lookup.py`).
+
+See also [ADR-0038](0038-a-child-web-application-inherits-the-connections-of-its-parent-application.md): a child web application also inherits the connections of its Parent Application.
