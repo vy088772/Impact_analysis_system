@@ -40,6 +40,7 @@ from code_analyzer.external_wrapper_contracts import validate_implementation_sna
 from code_analyzer.project_scanner import ProjectScanResult
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 from service import analyze_service
+from service.contract_preflight import load_system_contract_selector
 
 requires_dotnet = pytest.mark.skipif(
     shutil.which("dotnet") is None,
@@ -494,6 +495,15 @@ def test_real_iqcs_refresh_creates_and_commits_a_contract(monkeypatch, tmp_path)
     monkeypatch.setattr(analyze_service, "cached_commit", lambda scan_root: "deadbeef")
     monkeypatch.setattr(analyze_service, "CONTRACT_TRANSACTION_REGISTRY_PATH", registry_path)
     monkeypatch.setattr(analyze_service, "CONTRACT_TRANSACTION_CATALOG_PATH", catalog_path)
+    # The selector of a system comes from the shared system catalog of the
+    # companion repository. That file names a contract for IQCS once an operator
+    # has onboarded it, and this test starts from a system with none. So the
+    # selector reads the catalog of this test.
+    monkeypatch.setattr(
+        analyze_service,
+        "load_system_contract_selector",
+        lambda system_id: load_system_contract_selector(system_id, catalog_path),
+    )
 
     result = analyze_service.refresh_source(
         {"project": "p", "repo": "r"},

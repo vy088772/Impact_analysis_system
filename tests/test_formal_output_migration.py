@@ -39,7 +39,7 @@ def test_dependency_graph_renderer_ignores_legacy_sp_relations(tmp_path) -> None
     payload = json.loads(output_path.read_text(encoding="utf-8"))
 
     assert {node["label"] for node in payload["nodes"]} == {"OrderPage", "usp_Save"}
-    assert payload["edges"] == [{"from": "OrderPage", "to": "usp_Save", "weight": 1}]
+    assert payload["edges"] == [{"source": "OrderPage", "target": "usp_Save"}]
     assert renderer.visualize_sp_to_table(str(tmp_path / "sp_to_table.png")) is None
 
 

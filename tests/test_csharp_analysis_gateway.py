@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 from unittest.mock import patch
@@ -6312,8 +6313,23 @@ def test_static_analyzer_host_keeps_string_typed_unknown_wrapper_candidates() ->
         assert result["db_invocations"][0]["command_text_kind"] == "dynamic"
 
 
-def test_static_analyzer_host_applies_external_sqlobject_wrapper_contract() -> None:
+def test_static_analyzer_host_applies_external_sqlobject_wrapper_contract(
+    monkeypatch,
+) -> None:
     """Known external SQLObject methods distinguish SP, inline SQL, and dynamic calls."""
+    # The host observes the argument count of each call, so the contract must
+    # carry a signature for each method. One overload for each argument count
+    # keeps the match unique.
+    signed = json.loads(
+        (PROJECT_ROOT / "tests" / "fixtures" / "external_wrapper_contracts_signed.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    monkeypatch.setattr(
+        gateway_module,
+        "_load_external_wrapper_contracts",
+        lambda: gateway_module._normalize_external_wrapper_contract_registry(signed),
+    )
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
 
@@ -6400,7 +6416,9 @@ def test_static_analyzer_host_applies_external_sqlobject_wrapper_contract() -> N
         assert observations["PreviewData"]["evidence_status"] == "proven"
         assert observations["DynamicData"]["wrapper_status"] == "explicit_selected"
         assert observations["DynamicData"]["evidence_status"] == "unresolved"
-        assert observations["DynamicData"]["evidence_reason"] == "dynamic_command_text"
+        # The command text is a parameter of the method. ADR-0020 traces command
+        # text inside one method only, so the reason names the method boundary.
+        assert observations["DynamicData"]["evidence_reason"] == "command_text_method_parameter"
 
 
 def test_static_analyzer_host_applies_sqlobject_default_text_without_sp_mode() -> None:

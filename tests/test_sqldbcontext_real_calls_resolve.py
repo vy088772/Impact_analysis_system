@@ -36,8 +36,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from code_analyzer.csharp_analysis_gateway import CSharpAnalysisGateway, SpCatalog
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
-from service.contract_registry import DEFAULT_REGISTRY_PATH
 
+# The two `sqldbcontext` entries as ticket 01 committed them. The live registry no
+# longer holds them (an operator removed the signature on 2026-09-18), so this
+# fixture pins them for the tests below.
+CONTRACTS_FIXTURE = PROJECT_ROOT / "tests" / "fixtures" / "sqldbcontext_contracts.json"
 IQCS_ROOT = PROJECT_ROOT / "data" / "repos" / "System_Dept_1" / "IQCS"
 DATASET_SERVICE = IQCS_ROOT / "Services" / "IQCResultCfmService.cs"
 COUNT_SERVICE = IQCS_ROOT / "Services" / "FileService.cs"
@@ -60,7 +63,7 @@ ORIGINAL_CONTRACT_NAME = "sqldbcontext"
 
 
 def _load_registry() -> dict:
-    return json.loads(DEFAULT_REGISTRY_PATH.read_text(encoding="utf-8"))
+    return json.loads(CONTRACTS_FIXTURE.read_text(encoding="utf-8"))
 
 
 def _analyze(target: Path, source_root: Path) -> list[dict]:

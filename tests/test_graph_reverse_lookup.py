@@ -500,6 +500,32 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
         "unresolved_reason",
     )
 
+    def has(item, key):
+        return key in item if isinstance(item, dict) else hasattr(item, key)
+
+    # The response schemas share one base model (ticket 04), which renamed some
+    # keys of this list. The parity check covers each key that every surface
+    # still has, and the exact set of dropped keys is pinned below.
+    surfaces = (invocation, path, sp_match, table_match, flow_match)
+    dropped = {key for key in parity_keys if not all(has(s, key) for s in surfaces)}
+    # The alias keys that ticket 04 removed. A key that drops from one surface and
+    # is not in this set fails the test.
+    assert dropped == {
+        "classification_status",
+        "contract_status",
+        "selected_contract",
+        "signature_version",
+        "source_snapshot_identity",
+        "wrapper_classification_status",
+        "wrapper_contract",
+        "wrapper_contract_mode",
+        "wrapper_contract_sink",
+        "wrapper_selection_source",
+        "wrapper_status",
+        "wrapper_stored_procedure_mode",
+    }
+    parity_keys = tuple(key for key in parity_keys if key not in dropped)
+
     def values(item):
         return {
             key: item.get(key) if isinstance(item, dict) else getattr(item, key)
