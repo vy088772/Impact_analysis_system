@@ -17,21 +17,21 @@ The graph builder resolves every reference that states no schema. This is Schema
 
 1. The module's own schema holds the name. The reference resolves to that schema. This step applies inside a procedure, a view, or a function.
 2. The `dbo` schema holds the name. The reference resolves to `dbo`. A reference outside a module starts at this step.
-3. The name is an unqualified call, it starts with `sp_` or `xp_`, and steps 1 and 2 found nothing. The call resolves to the `sys` schema.
+3. The reference is a call that states no schema, its name starts with `sp_` or `xp_`, and steps 1 and 2 found nothing. The call resolves to the `sys` schema.
 
-SQL Server checks `sys` first for a system name. The listing holds no `sys` object, so a listed user procedure with that prefix wins in both orders. The rule therefore checks `sys` last.
+SQL Server checks `sys` first for a system name. The object listing holds no `sys` object, so a listed user procedure with that prefix wins in both orders. The rule therefore checks `sys` last.
 
 Five more points define the rule:
 
 - The default schema is one constant, `dbo`. No per-Database or per-System setting exists.
 - The lookup reads the object listing of the cache. It crosses object kinds. One schema holds one namespace for tables, views, procedures, and functions.
-- A name that the listing holds in neither schema keeps an empty schema. This covers a temp table, a table variable, an object of another Database, and a broken reference.
+- A name that the object listing holds in neither schema keeps an empty schema. This covers a temp table, a table variable, an object of another Database, and a broken reference.
 - A `db..name` reference keeps an empty schema. This holds also when the Database is the cache's own Database.
 - A resolved schema is proven. It carries no Unproven Schema mark and does not lower the Evidence Status.
 
 Every read, write, call, and function relationship records its schema source. The values are `written`, `module_schema`, `default_schema`, `system`, and `unresolved`. A module in `dbo` that reads a name held by `dbo` records `module_schema`. The value `default_schema` means one of two cases. Either the rule fell back from another schema to `dbo`, or the reference sits outside a module.
 
-An unqualified call now links to the one procedure that the rule names. It no longer links to every listed procedure with that bare name. This closes the open decision that the canonical-object-identity spec recorded against [ADR-0035](0035-an-unproven-schema-marks-one-execution-path.md). One call gives one Execution Path.
+A call that states no schema now links to the one procedure that the rule names. It no longer links to every listed procedure with that bare name. This closes the open decision that the canonical-object-identity spec recorded against [ADR-0035](0035-an-unproven-schema-marks-one-execution-path.md). One call gives one Execution Path.
 
 ## What this reverses
 
@@ -57,8 +57,9 @@ The evidence comes from the seven local caches. The date is 2026-09-30. The grap
 - Name comparison ignores case. SQL Server compares names under the Database collation. A case-sensitive collation is out of scope. A future case-sensitive Database shows where to change.
 - Dynamic SQL resolves against the default schema of the login, not the schema of the module. The tool resolves no dynamic SQL target today. A future resolver follows this rule.
 - The Microsoft text on a static `EXEC` inside a module is ambiguous. It excludes "dynamic SQL, a.k.a. EXECUTE statements". This rule reads that phrase as dynamic SQL only. A static `EXEC` resolves against the schema of the module first.
-- The seven caches hold no unqualified static call from a module outside `dbo`. Both readings of the text give the same answer today. If the shop sees another behavior, one site changes.
-- A `db..name` reference uses the default schema of the module schema owner in the other Database. That is `dbo` in this shop. The rule reads no listing of that Database, so nothing proves it.
+- The seven caches hold no static call that states no schema from a module outside `dbo`. Both readings of the text give the same answer today. If the shop sees another behavior, one site changes.
+- A `db..name` reference uses the default schema of the module schema owner in the other Database. That is `dbo` in this shop. The rule reads no object listing of that Database, so nothing proves it.
+- The inline C# SQL rule reads the Object Location Index, not the object listing. [ADR-0012](0012-object-location-index-authoritative-pruning.md) lets that index over-report a name. The index holds each table that a reference in the graph names, also a broken reference. So `dbo.name` in the index proves the schema of an inline C# SQL table. It does not prove that the table exists. The schema is still `dbo`, because a reference outside a module has no other step.
 
 ## Consequences
 

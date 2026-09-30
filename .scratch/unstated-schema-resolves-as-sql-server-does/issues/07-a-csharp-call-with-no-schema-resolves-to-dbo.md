@@ -9,12 +9,12 @@ See "The C# side" and user stories 21 and 22 in the spec.
 **Status:** done
 
 - [x] A failing gateway test comes first: a C# call to `usp_Load` with no schema, over a catalog that holds `dbo.usp_Load` and `COMMON.usp_Load`, matches `dbo.usp_Load` with no Unproven Schema reason.
-- [x] The same call over a catalog without `dbo.usp_Load` keeps the Unproven Schema match reason.
+- [x] The same call over a catalog without `dbo.usp_Load` gets the Unproven Schema match reason. Before this ticket, that match gave an empty reason.
 - [x] The quick analyzer's unstated schema tests change to "stated, else `dbo`". A name that `dbo` does not hold does not exist.
 - [x] The quick analyzer's `schema` argument keeps no default, and its test still checks that.
 - [x] The whole suite shows no new failure.
 
-**Notes:**
+## Comments
 
 Files this ticket changed (other tickets run in parallel; these are the only ones):
 
@@ -25,3 +25,9 @@ Files this ticket changed (other tickets run in parallel; these are the only one
 
 Suite: 16 tests fail before and after this ticket (wrapper registry, sqldbcontext and `program_refresh` tests). No new failure. `tests/test_search_roles.py` and `tests/test_sp_tables.py` need a live database and fail at collection, before and after.
 The two edited source files and one test file use CRLF line endings. Keep them.
+
+**Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
+
+- The spec said that the call "keeps" the Unproven Schema match reason. That premise was wrong: before this ticket, a call with no schema that matched the bare bucket gave an empty reason. The spec and the second box above now say "gets".
+- `SpCatalog.resolved_schema()` calls `schema_resolution.resolve()` (commit `601b997`). It restated the `dbo` step before. Behaviour does not change.
+- `quick_analyze_sp()` keeps its own line (`written.schema or schema or DEFAULT_SCHEMA`). It has no object listing, and its `schema` argument sits between the two steps, so `resolve()` does not fit it.

@@ -17,7 +17,7 @@ See "Documents", "Further Notes", and user stories 42 to 48 in the spec.
 - [x] Every document fits STE100: one term per concept, description sentences of 25 words or fewer, paragraphs of six sentences or fewer.
 - [x] Each behaviour claim is checked against the code before it is written.
 
-**Notes:**
+## Comments
 Files this ticket changed (other tickets run in parallel; these are the only ones):
 - `docs/adr/0037-an-unstated-schema-resolves-as-sql-server-resolves-it.md` (new): the rule, sources, evidence, reversal, assumptions.
 - `docs/adr/0035-an-unproven-schema-marks-one-execution-path.md`: one amendment at the end, with the three cases of the mark.
@@ -33,3 +33,11 @@ Open points, not done here:
 - Ticket 10 adds the `unproven_schema` flag to a `called_procedure_not_in_graph` path. The documents do not claim that flag. Re-read the Unproven Schema entry after ticket 10.
 - ADR-0037 says the graph format version rises to 8. Ticket 09 makes the code do it (`GRAPH_VERSION` is still 7 now). The `tools/repair_sql_execution_graphs.py` docstring still says v7; ticket 09 owns it.
 - No `/code-review` finding to record: only documents changed.
+
+**Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
+
+- ADR-0035 and the glossary said that a `db..name` reference keeps the mark when "that Database has no local cache". The code, ADR-0037, and ticket 04 keep the mark for every `db..name` reference. Both texts now say so.
+- STE100: two paragraphs held 7 sentences (the Canonical Object Identity entry, and the last paragraph of the ADR-0035 amendment). Three sentences used the passive voice. Each is fixed.
+- One term for one concept: "a reference that states no schema" replaces "with no stated schema" and "unqualified call" in the glossary and the two ADRs. "The object listing" replaces "the listing".
+- The `## Comments` heading replaces `**Notes:**` and `## Implementation note` in the ten tickets, as `docs/agents/issue-tracker.md` asks.
+- Not changed: the 16 commit subjects of this feature are English, and the commit message rule asks for Traditional Chinese. History is not rewritten. The commits of this review follow the rule.

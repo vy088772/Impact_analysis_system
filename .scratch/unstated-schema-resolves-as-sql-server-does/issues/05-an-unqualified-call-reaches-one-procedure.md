@@ -17,7 +17,7 @@ See "The resolution rule" (the `sys` rule and the static `EXEC` reading), "The g
 - [x] The golden `path_id` test stays unedited and passes.
 - [x] The whole suite shows no new failure.
 
-**Notes:**
+## Comments
 
 Files this ticket changed (other tickets run in parallel; these are the only ones):
 
@@ -36,3 +36,7 @@ Behaviour to know:
 - The path builder sets no `unproven_schema` flag for a `called_procedure_not_in_graph` path today, and this ticket does not add one. The `schema_source` on the relationship is the record of the mark. If ticket 06 or the review wants the flag on the path, it is a new change.
 
 Verification: `pytest tests/test_sql_execution_graph.py tests/test_rebuild_report.py tests/test_execution_path_builder.py` gives 101 passed. The golden `path_id` test passes, unedited. mypy on the two changed modules shows no issue. The whole suite (with `test_search_roles.py` and `test_sp_tables.py` ignored) shows 16 failures, the same 16 as the baseline of ticket 01.
+
+**Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
+
+- The call target rule sat in two helpers that repeated one test (`target.server or names_another_database(...)`). ADR-0036 says that one site holds the rule. `_call_target()` is now that site (commit `aa323d7`). Behaviour does not change.

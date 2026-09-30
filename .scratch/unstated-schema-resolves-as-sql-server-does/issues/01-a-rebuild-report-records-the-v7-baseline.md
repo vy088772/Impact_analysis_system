@@ -15,7 +15,7 @@ See "Testing Decisions" (the rebuild report) and the Problem Statement in the sp
 - [x] The tool's output for the seven local v7 caches is recorded in this ticket's notes, with the date. Expected scale: about 9845 references that resolve, 231 CTE reads, 330 alias writes.
 - [x] The whole suite shows no new failure.
 
-**Notes:**
+## Comments
 
 Files this ticket changed (other tickets run in parallel; these are the only ones):
 
@@ -49,3 +49,9 @@ How the tool counts:
 The CTE total (231) and the alias total (330) match the spec. The empty-schema total (13017) counts relationships. The spec's 9845 counts the ones that the listing resolves, and 3107 unlisted names. The two figures agree in scale: this tool does not apply the rule, so it does not split them.
 
 Verification: `pytest tests/test_rebuild_report.py` gives 14 passed. The whole suite (with `test_search_roles.py` and `test_sp_tables.py` ignored, as both need a live SQL Server at collection) shows 16 failures, the same 16 that a clean checkout shows. Ticket 09 compares the rebuilt caches with this table.
+
+**Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
+
+- `tools/rebuild_report.py` reads a relationship with no `schema_source` through `schema_resolution.recorded_source()`. A target with no schema then counts as `unresolved`, not as `""`. The v7 baseline table above keeps its `empty` label: it is a record of that run.
+- The tool reads the module collections from the graph builder (`MODULE_COLLECTIONS`). It holds no list of its own.
+- The CTE regex misses a CTE name that follows a comment (`), --comment` then `List2(...) as`). PUR holds 3 such reads. Ticket 09 counts them.

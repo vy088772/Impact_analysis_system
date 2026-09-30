@@ -16,7 +16,7 @@ See "The schema source", "The C# side" (the inline C# SQL table match), and user
 - [x] The OpenAPI document is regenerated.
 - [x] The whole suite shows no new failure.
 
-**Notes:**
+## Comments
 
 Files this ticket changed (other tickets run in parallel; these are the only ones):
 
@@ -33,3 +33,10 @@ Verification: `pytest tests/test_table_match.py` gives 27 passed. The golden `pa
 
 Review: `/code-review` found no defect. Open points, not done here: the default source rule appears in four places and could move into `schema_resolution` (a parallel session edits that file); no test runs the real graph builder into `/find_by_table`; `test_a_located_database_row...` checks the model fields, not the endpoint output.
 
+**Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
+
+- The open point above is closed: the default source rule is `schema_resolution.recorded_source()`, and the four sites call it (commit `aa323d7`).
+- `schema_source_rank()` left `service/execution_path_builder.py`. The three sites that compared two sources call `schema_resolution.strongest_source()`.
+- The spec now states that the record of a resolved inline C# SQL table shows `dbo.name`. User story 18 and the second box above already asked for it.
+- ADR-0037 now states one limit of the inline rule. The Object Location Index can over-report a name (ADR-0012), so `dbo.name` in the index proves the schema and not that the table exists.
+- A test states a schema source through `with_schema_source()` of the fixture module.

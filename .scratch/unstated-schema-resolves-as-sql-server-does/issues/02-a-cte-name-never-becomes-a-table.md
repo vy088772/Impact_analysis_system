@@ -16,7 +16,7 @@ See "The analyzer host" and user stories 23 to 27 in the spec.
 - [x] The graph format version does not change here; ticket 09 raises it once.
 - [x] The whole suite shows no new failure.
 
-## Implementation note
+## Comments
 
 Changed files (this ticket only):
 

@@ -11,7 +11,7 @@ A Database shared by many Systems has exactly one identity, and so exactly one c
 _Avoid_: system_id cache key, per-System cache, database name alone
 
 **Canonical Object Identity**:
-The one rule that turns a written SQL object name into a comparison key. The top-level `canonical_object_identity` module holds it. The `llamaindex-spec-rag` repository holds a mirror module that passes the same shared cases. A written name has up to four parts: server, database, schema, and bare name. An empty part means "not stated", never "default". The rule itself never fills an unstated schema with `dbo`. Schema Resolution fills it before the key is made.
+The one rule that turns a written SQL object name into a comparison key. The top-level `canonical_object_identity` module holds it. The `llamaindex-spec-rag` repository holds a mirror module that passes the same shared cases. A written name has up to four parts: server, database, schema, and bare name. An empty part means "not stated", never "default". The rule itself never fills an unstated schema with `dbo`: Schema Resolution fills it, and then this rule makes the key.
 
 The bare key is the casefolded bare name. The full key is the casefolded `database.schema.name`. No key reads the server part. The schema-qualified name shows a name as `schema.name` in the written case, or as the bare name when the schema is empty.
 
@@ -20,16 +20,16 @@ Each lookup of a name obeys the two-bucket rule:
 - A name that states a schema asks the full bucket.
 - A name that states a schema and misses the full bucket falls back to the bare bucket.
 
-The Object Location Index falls back to every entry with that bare name, inside the Database that the name states. The SP Catalog and the `/find_by_table` table match fall back only to an entry that states no schema. So there, `sales.X` never matches `HR.X`. Each of the three sites composes its keys with the bare-key and full-key functions of this module. A reference is resolved before it is keyed. The Unproven Schema entry states which matches carry a mark.
+The Object Location Index falls back to every entry with that bare name, inside the Database that the name states. The SP Catalog and the `/find_by_table` table match fall back only to an entry that states no schema. So there, `sales.X` never matches `HR.X`. Each of the three sites composes its keys with the bare-key and full-key functions of this module. Schema Resolution resolves a reference before this module makes its key. The Unproven Schema entry states which matches carry a mark.
 _Avoid_: normalized name, stripped name, bare-name comparison
 
 **Schema Resolution**:
-The rule that gives a reference with no stated schema the schema SQL Server gives it. The graph builder applies the rule when it adds an operation. The top-level `schema_resolution` module holds the rule. It has three steps, in this order:
+The rule that gives a reference that states no schema the schema SQL Server gives it. The graph builder applies the rule when it adds an operation. The top-level `schema_resolution` module holds the rule. It has three steps, in this order:
 - The schema of the module that holds the reference, when the object listing holds the name there. This step applies inside a procedure, a view, or a function.
 - The schema `dbo`, when the object listing holds the name there. A reference outside a module, such as inline C# SQL, starts at this step.
-- The schema `sys`, for an unqualified call to a name that starts with `sp_` or `xp_`, when the first two steps find nothing.
+- The schema `sys`, for a call that states no schema and whose name starts with `sp_` or `xp_`, when the first two steps find nothing.
 
-The default schema is one constant, `dbo`, for every Database and System. The lookup crosses object kinds, because one schema holds one namespace for tables, views, procedures, and functions. Name comparison ignores case. A `db..name` reference is not resolved.
+The default schema is one constant, `dbo`, for every Database and System. The lookup crosses object kinds, because one schema holds one namespace for tables, views, procedures, and functions. Name comparison ignores case. The rule does not resolve a `db..name` reference.
 
 Every relationship records its schema source: `written`, `module_schema`, `default_schema`, `system`, or `unresolved`. A `/find_by_table` record carries the same field. A resolved schema is proven. See [ADR-0037](docs/adr/0037-an-unstated-schema-resolves-as-sql-server-resolves-it.md).
 _Avoid_: dbo fill, schema guess, default schema fallback
@@ -37,7 +37,7 @@ _Avoid_: dbo fill, schema guess, default schema fallback
 **Unproven Schema**:
 The mark on a match, or on a call, that proves no schema. Schema Resolution removes the mark from every reference that it resolves. The mark stays in three cases:
 - The object listing does not hold the name.
-- The reference is `db..name`, and that Database has no local cache.
+- The reference is `db..name`. The rule reads no object listing for it, also when that Database is the cache's own Database.
 - Neither the module's schema nor `dbo` holds the name.
 
 The value `unproven_schema` carries the mark in four places:

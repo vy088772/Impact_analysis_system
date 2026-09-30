@@ -198,14 +198,17 @@ point already landed before this spec (commit `08dd048`).
 ### The C# side
 
 - The SP Catalog resolves a C# call that states no schema to `dbo` when the
-  catalog holds `dbo.name`. Otherwise the call keeps the Unproven Schema match
-  reason.
+  catalog holds `dbo.name`. Otherwise, when the catalog holds the name in
+  another schema, the call gets the Unproven Schema match reason. Before this
+  spec, that match gave an empty reason.
 - The quick single-procedure analyzer takes the schema the name states, else
   `dbo`. Its query for "the one schema that holds the name" is removed. The
   `schema` argument keeps no default, so a missed caller raises `TypeError`.
 - The inline C# SQL table match resolves a target that states no schema at
   question time. It asks the Object Location Index of the connection's Database
-  whether `dbo.name` exists. It opens no cache.
+  whether `dbo.name` exists. It opens no cache. The record of a resolved
+  target shows the table as `dbo.name`, as the record of a graph target shows
+  its resolved schema.
 
 ### Rollout
 
@@ -226,8 +229,8 @@ point already landed before this spec (commit `08dd048`).
   reverses: the canonical-object-identity decision never to fill an unstated
   schema.
 - ADR-0035 gains an amendment. The Unproven Schema mark stays for three cases
-  only: a name the listing does not hold, a `db..name` reference to a Database
-  with no cache, and a name that neither the module's schema nor `dbo` holds.
+  only: a name the listing does not hold, a `db..name` reference, and a name
+  that neither the module's schema nor `dbo` holds.
 - `CONTEXT.md` gains a Schema Resolution entry. The Canonical Object Identity
   entry keeps its keys and states that a reference is resolved before it is
   keyed. The Unproven Schema entry lists the three cases.

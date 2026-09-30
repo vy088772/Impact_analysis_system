@@ -14,7 +14,7 @@ See user story 9 in the spec, and ticket 05, which left this box open.
 - [x] The golden `path_id` test stays unedited and passes.
 - [x] The whole suite shows no new failure.
 
-**Notes:**
+## Comments
 
 - Check that `stored_procedure:sys.name` (no node) is tolerated by every consumer of a `calls` target; ticket 05 verified only the path builder.
 
@@ -53,3 +53,8 @@ One defect that this ticket found and did not change:
 Verification: `pytest tests/test_execution_path_builder.py tests/test_graph_queries.py tests/test_fixture_shapes_have_one_source.py` gives 53 passed. The first new test failed before the change (`risk_flags` held the reason only). The `system` test fails when the mark is unconditional. The golden `path_id` test passes, unedited. mypy shows no issue in `service/execution_path_builder.py`. The whole suite (with `test_search_roles.py` and `test_sp_tables.py` ignored) shows 16 failed, 1251 passed. The 16 names are the same with and without the change to `service/execution_path_builder.py`.
 
 Review (`/code-review`, Standards and Spec): no hard violation and no behaviour defect. The review changed the wording of the two documents and added the `tests/test_graph_queries.py` test. One finding stays open by choice: the spec says "A test that needs a schema source states it through the fixture module", and three new tests state it in a hand-written relationship. `tests/test_table_match.py` does the same, and the fourth new test goes through the fixture module.
+
+**Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
+
+- The evidence stamp check that ticket 09 asked for: `_STORE_VERSION` is 4 (commit `7be9368`). The validity stamp reads the inputs, not the code. So a file that a version 8 graph gave before this ticket had no `unproven_schema` flag, and the store served it. Such a file is now a miss.
+- The open finding above is closed: `tests/sql_cache_fixtures.py` holds `with_schema_source()`. The hand-written relationships of `tests/test_execution_path_builder.py` and `tests/test_table_match.py` state their schema source through it. An unknown value raises `ValueError`.

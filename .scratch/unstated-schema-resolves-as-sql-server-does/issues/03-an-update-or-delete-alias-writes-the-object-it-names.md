@@ -18,7 +18,7 @@ See "The analyzer host" and user stories 28 to 34 in the spec.
 - [x] The graph format version does not change here.
 - [x] The whole suite shows no new failure.
 
-## Implementation note
+## Comments
 
 Changed files (this ticket only):
 
@@ -35,3 +35,10 @@ Decisions:
 - Nothing reads `unresolved_write_targets` yet. It only travels on the operation node.
 
 Verification: the analyzer host test file passes (38 tests). The whole suite gives 1226 passed and 16 failed. The 16 failures are the same set as ticket 02 recorded (wrapper and real checkout tests). `tests/test_search_roles.py` and `tests/test_sp_tables.py` need a live database, so the run skipped them.
+
+**Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
+
+- Defect: the alias lookup walked every descendant of the `FROM` clause. An alias inside a derived table then answered first by position. `UPDATE t ... FROM (SELECT a FROM dbo.Other t) d JOIN dbo.Real t` wrote `dbo.Other`.
+- Fix (commit `ec25045`): `FindFromClauseAlias()` reads the table references of the `FROM` clause only. It goes through a join and through a join in parentheses. It does not enter a derived table.
+- 3 new tests in `tests/test_static_analyzer_host.py`. Two failed before the fix.
+- The seven caches hold no such statement, so no graph needs a rebuild.

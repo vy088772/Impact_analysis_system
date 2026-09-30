@@ -19,7 +19,7 @@ See "The resolution rule", "The schema source", "The graph builder", and user st
 - [x] The graph format version does not change here.
 - [x] The whole suite shows no new failure.
 
-**Notes:**
+## Comments
 
 Files this ticket changed (other tickets run in parallel; these are the only ones):
 
@@ -42,3 +42,10 @@ Decisions to carry into ticket 08 (the ADR):
 - `CONTEXT.md` lists "default schema" under *Avoid* for Unproven Schema. The code uses the term in the SQL Server sense. The Schema Resolution entry (ticket 08) must settle this.
 
 Verification: `pytest tests/test_sql_execution_graph.py tests/test_rebuild_report.py` gives 64 passed. The golden `path_id` test (`tests/test_execution_path_builder.py`) passes, unedited. mypy on the two changed modules shows no issue. The whole suite (with `test_search_roles.py` and `test_sp_tables.py` ignored) shows 16 failures, the same 16 as ticket 01's baseline: C# wrapper and real-checkout tests, none of them on the SQL graph. One run showed 53 failures while a parallel session rebuilt the analyzer host; a rerun gave the 16 again.
+
+**Whole-feature review, 2026-09-30** (`/code-review` from `b865587` to `154ad57`, then the fixes).
+
+- `schema_resolution` now holds the schema source as one type, `SchemaSource`. It also holds `recorded_source()` (the default of a record that states none) and `strongest_source()` (the order of strength). Commit `aa323d7`.
+- The graph payload does not change. A relationship still holds the schema source as plain text.
+- `_ensure_referenced_nodes()` and `_known_object_node_ids()` returned a list of one element. They are now `_referenced_node_id()` and `_listed_function_id()`, and each returns one value.
+- The test `..._falls_back_to_dbo_...` is now `..._resolves_to_dbo_...`. The glossary avoids "default schema fallback".
