@@ -409,7 +409,10 @@ class SPMatchProgram(WrapperEvidenceFields):
 
 class FindBySPResponse(BaseModel):
     sp_name: str = ""
-    matches: List[SPMatchProgram] = Field(default_factory=list)
+    matches: List[SPMatchProgram] = Field(default_factory=list)  # 只有 evidence_status 為 proven 的呼叫端
+    # evidence_status 為 likely 的呼叫端：形狀跟 matches 的一筆相同，reason 說明為何只到 likely。
+    # 找不到原始檔的 likely 呼叫不進這裡；unresolved 的呼叫也不進這裡。兩者都只留在 diagnostics。
+    likely_matches: List[SPMatchProgram] = Field(default_factory=list)
     diagnostics: List[Dict] = Field(default_factory=list)
     skipped: bool = False                     # True：該 repo 尚未 clone/分析過，本次未比對
     source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）

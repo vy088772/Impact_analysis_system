@@ -291,6 +291,13 @@
             "title": "Diagnostics",
             "type": "array"
           },
+          "likely_matches": {
+            "items": {
+              "$ref": "#/components/schemas/SPMatchProgram"
+            },
+            "title": "Likely Matches",
+            "type": "array"
+          },
           "matches": {
             "items": {
               "$ref": "#/components/schemas/SPMatchProgram"

@@ -2788,6 +2788,7 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
 
     sp_lower = bare_key(sp_name)
     matches: List[SPMatchProgram] = []
+    likely_matches: List[SPMatchProgram] = []
     diagnostics: List[Dict] = []
     seen_invocations: set[tuple[str, int, int]] = set()
     if not req.database:
@@ -2828,14 +2829,22 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         if identity in seen_invocations:
             continue
         seen_invocations.add(identity)
-        if invocation.evidence is not InvocationEvidence.PROVEN:
+        if invocation.evidence is InvocationEvidence.PROVEN:
+            callers = matches
+        else:
             diagnostics.append(
                 _invocation_diagnostic(
                     invocation,
                     requested_sp=sp_name,
                 )
             )
-            continue
+            # Only a `likely` call gains a list. An `unresolved` call stays in
+            # `diagnostics` only.
+            if invocation.evidence is not InvocationEvidence.LIKELY:
+                continue
+            callers = likely_matches
+        # Each entry of a list names a program, so a call with no source file
+        # goes into no list.
         if not csharp_file:
             continue
         match_fields = _invocation_response_fields(invocation)
@@ -2851,11 +2860,16 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
                 "procedure_name_source": invocation.executed_procedure_name_source,
             }
         )
-        matches.append(SPMatchProgram(**match_fields))
+        # An absent value takes the default of the schema. A `likely` call has no
+        # Database and no connection source; a `proven` call has both.
+        callers.append(
+            SPMatchProgram(**{key: value for key, value in match_fields.items() if value is not None})
+        )
 
     return FindBySPResponse(
         sp_name=sp_name,
         matches=matches,
+        likely_matches=likely_matches,
         diagnostics=diagnostics,
         source_root=str(root),
     )
