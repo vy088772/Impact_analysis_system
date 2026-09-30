@@ -2,6 +2,8 @@
 
 Status: ready-for-agent
 
+Schema Resolution replaces the "never fill `dbo`" rule of Step 2b. See `.scratch/unstated-schema-resolves-as-sql-server-does/spec.md` and ADR-0037.
+
 This spec covers two repositories. This repository holds the analysis service.
 The companion repository, `llamaindex-spec-rag`, holds the orchestrator and the
 evaluation code. Both repositories change together.

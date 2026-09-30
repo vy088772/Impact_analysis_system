@@ -39,3 +39,17 @@ The reasons:
 - The producer and the two sites in `llamaindex-spec-rag` that key on the whole stored-procedure chain count the same facts. No producer step merges two schemas.
 - A field that joins the Path Identity value later changes every `path_id`. That change needs its own ADR.
 - ADR-0015 and ADR-0016 gain no amendment note. Neither decision changes.
+
+## Amendment (2026-09-30): the mark stays for three cases only
+
+[ADR-0037](0037-an-unstated-schema-resolves-as-sql-server-resolves-it.md) adds Schema Resolution. The graph builder now resolves a target that states no schema, when the listing decides. A resolved schema is proven and carries no mark. The Context section above describes the state before that change.
+
+The Unproven Schema mark stays for three cases:
+
+1. The listing does not hold the name. A temp table, a table variable, and an object of another Database are examples.
+2. The reference is `db..name`, and that Database has no local cache.
+3. Neither the module's schema nor `dbo` holds the name.
+
+The Decision section stays valid for these cases. One target with an empty schema produces one Execution Path. The mark never multiplies that path.
+
+The rule for a procedure call now agrees with the rule for a table target. An unqualified call links to the one procedure that Schema Resolution names. It no longer links to every listed procedure with that bare name.

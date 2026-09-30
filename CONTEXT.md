@@ -11,7 +11,7 @@ A Database shared by many Systems has exactly one identity, and so exactly one c
 _Avoid_: system_id cache key, per-System cache, database name alone
 
 **Canonical Object Identity**:
-The one rule that turns a written SQL object name into a comparison key. The top-level `canonical_object_identity` module holds it. The `llamaindex-spec-rag` repository holds a mirror module that passes the same shared cases. A written name has up to four parts: server, database, schema, and bare name. An empty part means "not stated", never "default", so the rule never fills an unstated schema with `dbo`.
+The one rule that turns a written SQL object name into a comparison key. The top-level `canonical_object_identity` module holds it. The `llamaindex-spec-rag` repository holds a mirror module that passes the same shared cases. A written name has up to four parts: server, database, schema, and bare name. An empty part means "not stated", never "default". The rule itself never fills an unstated schema with `dbo`. Schema Resolution fills it before the key is made.
 
 The bare key is the casefolded bare name. The full key is the casefolded `database.schema.name`. No key reads the server part. The schema-qualified name shows a name as `schema.name` in the written case, or as the bare name when the schema is empty.
 
@@ -20,17 +20,33 @@ Each lookup of a name obeys the two-bucket rule:
 - A name that states a schema asks the full bucket.
 - A name that states a schema and misses the full bucket falls back to the bare bucket.
 
-The Object Location Index falls back to every entry with that bare name, inside the Database that the name states. The SP Catalog and the `/find_by_table` table match fall back only to an entry that states no schema. So there, `sales.X` never matches `HR.X`. Each of the three sites composes its keys with the bare-key and full-key functions of this module. The Unproven Schema entry states which matches carry a mark.
+The Object Location Index falls back to every entry with that bare name, inside the Database that the name states. The SP Catalog and the `/find_by_table` table match fall back only to an entry that states no schema. So there, `sales.X` never matches `HR.X`. Each of the three sites composes its keys with the bare-key and full-key functions of this module. A reference is resolved before it is keyed. The Unproven Schema entry states which matches carry a mark.
 _Avoid_: normalized name, stripped name, bare-name comparison
 
+**Schema Resolution**:
+The rule that gives a reference with no stated schema the schema SQL Server gives it. The graph builder applies the rule when it adds an operation. The top-level `schema_resolution` module holds the rule. It has three steps, in this order:
+- The schema of the module that holds the reference, when the object listing holds the name there. This step applies inside a procedure, a view, or a function.
+- The schema `dbo`, when the object listing holds the name there. A reference outside a module, such as inline C# SQL, starts at this step.
+- The schema `sys`, for an unqualified call to a name that starts with `sp_` or `xp_`, when the first two steps find nothing.
+
+The default schema is one constant, `dbo`, for every Database and System. The lookup crosses object kinds, because one schema holds one namespace for tables, views, procedures, and functions. Name comparison ignores case. A `db..name` reference is not resolved.
+
+Every relationship records its schema source: `written`, `module_schema`, `default_schema`, `system`, or `unresolved`. A `/find_by_table` record carries the same field. A resolved schema is proven. See [ADR-0037](docs/adr/0037-an-unstated-schema-resolves-as-sql-server-resolves-it.md).
+_Avoid_: dbo fill, schema guess, default schema fallback
+
 **Unproven Schema**:
-The mark on a match that proves no schema. The value `unproven_schema` carries the mark in three places:
-- The SP Catalog gives it as the match reason when a question that states a schema falls back to a procedure that states none.
-- The `/find_by_table` table match puts it in the `risk_flags` of every match record whose target states no schema.
+The mark on a match that proves no schema. Schema Resolution removes the mark from every reference that it resolves. The mark stays in three cases:
+- The object listing does not hold the name.
+- The reference is `db..name`, and that Database has no local cache.
+- Neither the module's schema nor `dbo` holds the name.
+
+The value `unproven_schema` carries the mark in three places:
+- The SP Catalog gives it as the match reason in two cases. A call that states no schema finds no `dbo` procedure, and the catalog holds the name in another schema. Or a question that states a schema falls back to a procedure that states none.
+- The `/find_by_table` table match puts it in the `risk_flags` of every match record whose target states no schema after resolution.
 - The `/locate_object` row puts it in its `risk_flags` when the index falls back to the bare bucket. The row also carries it when the matched key states no schema.
 
-In a match record, the mark describes the target, never the question. The mark does not lower the Evidence Status. One target with an unproven schema produces one Execution Path, never one path per candidate schema. See [ADR-0035](docs/adr/0035-an-unproven-schema-marks-one-execution-path.md).
-_Avoid_: guessed schema, default schema, dbo fallback
+In a match record, the mark describes the target, never the question. The mark does not lower the Evidence Status. One target with an unproven schema produces one Execution Path, never one path per candidate schema. See [ADR-0035](docs/adr/0035-an-unproven-schema-marks-one-execution-path.md) and [ADR-0037](docs/adr/0037-an-unstated-schema-resolves-as-sql-server-resolves-it.md).
+_Avoid_: guessed schema
 
 **Object Location Index**:
 The record of every object name one SQL cache can answer for. It sits beside that cache under the same SQL Cache Identity. It holds the union of the declared object names and the SQL Execution Graph node names. So a table reached only inside a stored-procedure body stays findable. Each kind of object (stored procedures, tables) has two buckets: bare keys and `database.schema.name` keys. Both buckets obey the two-bucket rule of the Canonical Object Identity.
