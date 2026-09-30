@@ -179,8 +179,10 @@ internal sealed class SqlOperationExtractor
                 CollectFunctionReferences(fromClause, functionReferences);
                 var whereClause = GetFragmentProperty(specification, "WhereClause");
                 where = ExtractWhereClause(whereClause);
+                CollectReferences(whereClause, readTables, cteNames);
                 CollectColumns(whereClause, readColumns);
                 CollectFunctionReferences(whereClause, functionReferences);
+                CollectReferences(GetPropertyValue(specification, "SetClauses"), readTables, cteNames);
                 CollectColumns(GetPropertyValue(specification, "SetClauses"), readColumns);
                 CollectFunctionReferences(GetPropertyValue(specification, "SetClauses"), functionReferences);
                 var updateCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
@@ -201,6 +203,7 @@ internal sealed class SqlOperationExtractor
                 CollectFunctionReferences(fromClause, functionReferences);
                 var whereClause = GetFragmentProperty(specification, "WhereClause");
                 where = ExtractWhereClause(whereClause);
+                CollectReferences(whereClause, readTables, cteNames);
                 CollectColumns(whereClause, readColumns);
                 CollectFunctionReferences(whereClause, functionReferences);
                 var deleteCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
@@ -385,10 +388,7 @@ internal sealed class SqlOperationExtractor
         ICollection<SqlObjectReference> references,
         ISet<string> cteNames)
     {
-        if (value is not TSqlFragment fragment)
-            return;
-
-        foreach (var child in Descendants(fragment))
+        foreach (var child in Fragments(value).SelectMany(Descendants))
         {
             var typeName = child.GetType().Name;
             if (typeName == "NamedTableReference")
@@ -743,4 +743,4 @@ internal sealed record SqlOperation(
     List<SqlObjectReference> FunctionReferences,
     List<SqlObjectReference> CallTargets,
     bool DynamicSql,
-    SqlSourceLocation Source);
+    SqlSourceLocation Source);

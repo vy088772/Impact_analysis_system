@@ -172,7 +172,7 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
     (unstated-schema-resolves-as-sql-server-does), so a v7 graph, which leaves
     that schema empty and marked, fails this check until it is rebuilt.
     """
-    assert GRAPH_VERSION == 8
+    assert GRAPH_VERSION == 9
 
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(

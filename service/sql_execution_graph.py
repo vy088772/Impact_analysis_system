@@ -60,7 +60,11 @@ from .table_match import names_another_database
 # (unstated-schema-resolves-as-sql-server-does). A v7 graph gives a no-schema
 # target an empty schema and the Unproven Schema mark, reads CTE names as
 # tables, and writes aliases, so it is rejected until it is rebuilt.
-GRAPH_VERSION = 8
+# v9: an UPDATE or DELETE reads the tables of the subqueries in its WHERE clause
+# and in its SET clause (unstated-schema-resolves-as-sql-server-does, ticket 11).
+# A v8 graph misses those reads, so a procedure that reads a table only inside
+# such a subquery is absent from the read answer; it is rejected until rebuilt.
+GRAPH_VERSION = 9
 NodeKey = tuple[str, str, str, str]
 
 

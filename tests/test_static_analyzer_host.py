@@ -786,3 +786,39 @@ def test_an_alias_inside_an_odbc_escape_join_is_an_alias_of_the_from_clause() ->
 
     assert operation["write_tables"] == [_reference("", "", "dbo", "Real")]
     assert operation["read_tables"] == [_reference("", "", "dbo", "Other")]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE dbo.T SET a = 1 WHERE EXISTS (SELECT 1 FROM dbo.S s WHERE s.id = dbo.T.id);",
+        "UPDATE dbo.T SET a = 1 WHERE id IN (SELECT id FROM dbo.S);",
+        "UPDATE dbo.T SET a = (SELECT MAX(b) FROM dbo.S);",
+        "UPDATE t SET a = 1 FROM dbo.T t WHERE EXISTS (SELECT 1 FROM dbo.S s WHERE s.id = t.id);",
+        "DELETE FROM dbo.T WHERE EXISTS (SELECT 1 FROM dbo.S s WHERE s.id = dbo.T.id);",
+        "DELETE FROM dbo.T WHERE id IN (SELECT id FROM dbo.S);",
+        "DELETE t FROM dbo.T t WHERE EXISTS (SELECT 1 FROM dbo.S s WHERE s.id = t.id);",
+    ],
+)
+def test_an_update_or_delete_reads_the_tables_of_its_subqueries(statement: str) -> None:
+    operation = _write_test_statement(statement)
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "T")]
+    assert operation["read_tables"] == [_reference("", "", "dbo", "S")]
+
+
+def test_a_cte_name_inside_an_update_subquery_is_no_table_read() -> None:
+    operation = _write_test_statement(
+        "WITH C AS (SELECT Id FROM dbo.Src) UPDATE dbo.T SET a = 1 WHERE id IN (SELECT Id FROM C);"
+    )
+
+    assert operation["read_tables"] == [_reference("", "", "dbo", "Src")]
+
+
+def test_a_subquery_that_reads_the_written_table_gives_no_read_of_it() -> None:
+    operation = _write_test_statement(
+        "DELETE FROM dbo.T WHERE id IN (SELECT MAX(id) FROM dbo.T);"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "T")]
+    assert operation["read_tables"] == []
