@@ -99,3 +99,18 @@ and "Testing Decisions" (Seam D).
   Database name with no space at each end, and each reader uses the module.
 - The code review had two axes (Standards and Spec). It found no hard
   violation and no missing requirement.
+
+### 2026-09-30 — the typed description after the code review
+
+- The Standards review found that the typed description and `with_database`
+  did not agree. The description listed two fields, but `with_database` keeps
+  each field of a mapping.
+- `ResolvedConnectionSource` now states that it lists the fields that the
+  module knows, and that a stored mapping can hold more fields.
+- The five functions declare `ConnectionSourceEntry`. `database_of` and
+  `server_of` also accept no entry, because a lookup can find none.
+- The C# Scan Result and the gateway declare the same entry type.
+- The change is in the type declarations and the descriptions only. No
+  run-time result changes. The type check gives no new error.
+- A ticket that adds a field to the stored mapping (for example `declared_in`)
+  adds that field to `ResolvedConnectionSource`.
