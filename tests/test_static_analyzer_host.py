@@ -655,3 +655,98 @@ END;
     first, second = result["operations"]
     assert first["read_tables"] == [_reference("", "", "dbo", "Src")]
     assert second["read_tables"] == [_reference("", "", "", "X")]
+
+
+def _write_test_statement(statement: str) -> dict:
+    result = _analyze_sql_text(f"CREATE PROCEDURE dbo.usp_Alias AS\n{statement}\n")
+    (operation,) = result["operations"]
+    return operation
+
+
+def test_an_update_alias_of_a_real_table_writes_that_table_and_no_longer_reads_it() -> None:
+    operation = _write_test_statement(
+        "UPDATE u SET Name = p.Name FROM dbo.Users u JOIN PUR.dbo.Other p ON p.Id = u.Id;"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "Users")]
+    assert operation["read_tables"] == [_reference("", "PUR", "dbo", "Other")]
+    assert operation["unresolved_write_targets"] == []
+
+
+def test_a_delete_alias_of_a_real_table_writes_that_table_and_no_longer_reads_it() -> None:
+    operation = _write_test_statement(
+        "DELETE u FROM dbo.Users u JOIN dbo.Other p ON p.Id = u.Id;"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "Users")]
+    assert operation["read_tables"] == [_reference("", "", "dbo", "Other")]
+    assert operation["unresolved_write_targets"] == []
+
+
+def test_an_alias_matches_without_regard_to_case_and_keeps_the_parts_the_from_clause_writes() -> None:
+    operation = _write_test_statement(
+        "UPDATE B1 SET Amount = 0 FROM [PUR].[BSPL].[BudgetBalanceSheet] AS b1;"
+    )
+
+    assert operation["write_tables"] == [_reference("", "PUR", "BSPL", "BudgetBalanceSheet")]
+    assert operation["read_tables"] == []
+
+
+def test_an_alias_of_a_temp_table_writes_that_temp_table() -> None:
+    operation = _write_test_statement("UPDATE t SET Id = 1 FROM #work t;")
+
+    assert operation["write_tables"] == [_reference("", "", "", "#work")]
+    assert operation["read_tables"] == []
+
+
+def test_an_alias_of_a_table_variable_writes_nothing() -> None:
+    operation = _write_test_statement("UPDATE v SET Id = 1 FROM @rows v;")
+
+    assert operation["write_tables"] == []
+    assert operation["read_tables"] == []
+    assert operation["unresolved_write_targets"] == []
+
+
+@pytest.mark.parametrize(
+    ("statement", "expected_alias"),
+    [
+        ("UPDATE s SET Id = 1 FROM (SELECT Id FROM dbo.Src) s;", "s"),
+        ("WITH C AS (SELECT Id FROM dbo.Src) UPDATE c SET Id = 1 FROM C c;", "c"),
+        ("WITH C AS (SELECT Id FROM dbo.Src) DELETE c FROM C c;", "c"),
+    ],
+)
+def test_an_alias_of_a_subquery_or_a_cte_records_an_unresolved_target_and_guesses_no_table(
+    statement: str, expected_alias: str
+) -> None:
+    operation = _write_test_statement(statement)
+
+    assert operation["write_tables"] == []
+    assert [ref["name"] for ref in operation["read_tables"]] == ["Src"]
+    assert operation["unresolved_write_targets"] == [expected_alias]
+
+
+def test_a_target_that_is_no_alias_still_writes_its_own_name() -> None:
+    operation = _write_test_statement(
+        "UPDATE dbo.Users SET Name = 'x' FROM dbo.Users u JOIN dbo.Other o ON o.Id = u.Id;"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "Users")]
+    assert operation["read_tables"] == [_reference("", "", "dbo", "Other")]
+    assert operation["unresolved_write_targets"] == []
+
+
+def test_the_bs_process_statement_writes_bspl_budget_balance_sheet() -> None:
+    """`BSPL.sp_BSprocess` updates `BSPL.BudgetBalanceSheet` through the alias `B1`."""
+    result = _analyze_sql_text(
+        """CREATE PROCEDURE BSPL.sp_BSprocess
+AS
+update B1
+set B1.Amount = B2.Amount
+from BSPL.BudgetBalanceSheet B1
+join BSPL.BudgetBalanceSheet_Src B2 on B2.Id = B1.Id;
+"""
+    )
+
+    (operation,) = result["operations"]
+    assert operation["write_tables"] == [_reference("", "", "BSPL", "BudgetBalanceSheet")]
+    assert operation["read_tables"] == [_reference("", "", "BSPL", "BudgetBalanceSheet_Src")]

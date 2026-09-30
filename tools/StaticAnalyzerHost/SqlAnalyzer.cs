@@ -125,6 +125,7 @@ internal sealed class SqlOperationExtractor
         };
         var readTables = new List<SqlObjectReference>();
         var writeTables = new List<SqlObjectReference>();
+        var unresolvedWriteTargets = new List<string>();
         var readColumns = new List<string>();
         var writtenColumns = new List<string>();
         var functionReferences = new List<SqlObjectReference>();
@@ -171,8 +172,8 @@ internal sealed class SqlOperationExtractor
             case "UPDATE":
             {
                 var specification = GetFragmentProperty(fragment, "UpdateSpecification");
-                AddObjectName(GetFragmentProperty(specification, "Target"), writeTables);
                 var fromClause = GetFragmentProperty(specification, "FromClause");
+                AddWriteTarget(GetFragmentProperty(specification, "Target"), fromClause, cteNames, writeTables, unresolvedWriteTargets);
                 CollectReferences(fromClause, readTables, cteNames);
                 CollectColumns(fromClause, readColumns);
                 CollectFunctionReferences(fromClause, functionReferences);
@@ -193,8 +194,8 @@ internal sealed class SqlOperationExtractor
             case "DELETE":
             {
                 var specification = GetFragmentProperty(fragment, "DeleteSpecification");
-                AddObjectName(GetFragmentProperty(specification, "Target"), writeTables);
                 var fromClause = GetFragmentProperty(specification, "FromClause");
+                AddWriteTarget(GetFragmentProperty(specification, "Target"), fromClause, cteNames, writeTables, unresolvedWriteTargets);
                 CollectReferences(fromClause, readTables, cteNames);
                 CollectColumns(fromClause, readColumns);
                 CollectFunctionReferences(fromClause, functionReferences);
@@ -220,7 +221,8 @@ internal sealed class SqlOperationExtractor
             writeTables,
             readColumns,
             writtenColumns,
-            functionReferences: functionReferences);
+            functionReferences: functionReferences,
+            unresolvedWriteTargets: unresolvedWriteTargets);
     }
 
     private SqlOperationCandidate CreateExecuteCandidate(
@@ -301,6 +303,60 @@ internal sealed class SqlOperationExtractor
             foreach (var descendant in Descendants(child))
                 yield return descendant;
         }
+    }
+
+    // The target of an UPDATE or DELETE can name an alias of the FROM clause. A bare target
+    // that matches an alias becomes the object behind that alias. A subquery or a CTE gives
+    // no table, so the alias goes to the unresolved targets and the analyzer guesses nothing.
+    private void AddWriteTarget(
+        TSqlFragment? target,
+        TSqlFragment? fromClause,
+        ISet<string> cteNames,
+        ICollection<SqlObjectReference> writeTables,
+        ICollection<string> unresolvedWriteTargets)
+    {
+        var targetName = ReadObjectName(GetFragmentProperty(target, "SchemaObject"));
+        if (target?.GetType().Name != "NamedTableReference" || !IsBare(targetName))
+        {
+            AddObjectName(target, writeTables);
+            return;
+        }
+
+        var aliased = FindFromClauseAlias(fromClause, targetName.Name);
+        if (aliased is null)
+        {
+            // A bare target that names a CTE writes through the CTE, so no table is known.
+            if (cteNames.Contains(targetName.Name))
+                AddUnique(unresolvedWriteTargets, targetName.Name);
+            else
+                AddObjectName(target, writeTables);
+            return;
+        }
+
+        // A direct write to an @table variable writes nothing, and so does its alias.
+        if (aliased.GetType().Name == "VariableTableReference")
+            return;
+        var behind = aliased.GetType().Name == "NamedTableReference"
+            ? ReadObjectName(GetFragmentProperty(aliased, "SchemaObject"))
+            : null;
+        if (behind is null || (IsBare(behind) && cteNames.Contains(behind.Name)))
+            AddUnique(unresolvedWriteTargets, targetName.Name);
+        else if (behind.Name.Length > 0)
+            AddUnique(writeTables, behind);
+    }
+
+    private static bool IsBare(SqlObjectReference reference)
+        => reference.Server.Length == 0 && reference.Database.Length == 0 && reference.Schema.Length == 0;
+
+    private TSqlFragment? FindFromClauseAlias(TSqlFragment? fromClause, string aliasName)
+    {
+        if (fromClause is null)
+            return null;
+        return Descendants(fromClause).FirstOrDefault(child =>
+            string.Equals(
+                ReadIdentifierText(GetPropertyValue(child, "Alias")),
+                aliasName,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     private ISet<string> ReadCteNames(TSqlFragment statement)
@@ -404,8 +460,7 @@ internal sealed class SqlOperationExtractor
             return;
         // The excluded names are common-table-expression names, and T-SQL cannot qualify one,
         // so only a bare name can match.
-        var isBare = reference.Server.Length == 0 && reference.Database.Length == 0 && reference.Schema.Length == 0;
-        if (isBare && excluded?.Contains(reference.Name) == true)
+        if (IsBare(reference) && excluded?.Contains(reference.Name) == true)
             return;
         AddUnique(target, reference);
     }
@@ -577,7 +632,8 @@ internal sealed class SqlOperationCandidate
         List<string> writtenColumns,
         List<SqlObjectReference>? callTargets = null,
         bool dynamicSql = false,
-        List<SqlObjectReference>? functionReferences = null)
+        List<SqlObjectReference>? functionReferences = null,
+        List<string>? unresolvedWriteTargets = null)
     {
         Fragment = fragment;
         OperationType = operationType;
@@ -590,6 +646,7 @@ internal sealed class SqlOperationCandidate
         CallTargets = callTargets ?? new List<SqlObjectReference>();
         DynamicSql = dynamicSql;
         FunctionReferences = functionReferences ?? new List<SqlObjectReference>();
+        UnresolvedWriteTargets = unresolvedWriteTargets ?? new List<string>();
     }
 
     internal TSqlFragment Fragment { get; }
@@ -603,6 +660,7 @@ internal sealed class SqlOperationCandidate
     private List<SqlObjectReference> CallTargets { get; }
     private bool DynamicSql { get; }
     private List<SqlObjectReference> FunctionReferences { get; }
+    private List<string> UnresolvedWriteTargets { get; }
 
     internal SqlOperation ToOperation(
         int sequence,
@@ -617,6 +675,7 @@ internal sealed class SqlOperationCandidate
             Where,
             ReadTables,
             WriteTables,
+            UnresolvedWriteTargets,
             ReadColumns,
             WrittenColumns,
             FunctionReferences,
@@ -664,9 +723,10 @@ internal sealed record SqlOperation(
     string? Where,
     List<SqlObjectReference> ReadTables,
     List<SqlObjectReference> WriteTables,
+    List<string> UnresolvedWriteTargets,
     List<string> ReadColumns,
     List<string> WrittenColumns,
     List<SqlObjectReference> FunctionReferences,
     List<SqlObjectReference> CallTargets,
     bool DynamicSql,
-    SqlSourceLocation Source);
+    SqlSourceLocation Source);
