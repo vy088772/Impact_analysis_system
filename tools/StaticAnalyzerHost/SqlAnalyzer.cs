@@ -129,17 +129,20 @@ internal sealed class SqlOperationExtractor
         var writtenColumns = new List<string>();
         var functionReferences = new List<SqlObjectReference>();
         string? where = null;
+        // The CTE names come from the whole statement, so its main query, its INSERT source,
+        // and its UPDATE or DELETE FROM clause skip them as well as the WITH clause does.
+        var cteNames = ReadCteNames(fragment);
 
         switch (operationType)
         {
             case "SELECT":
             {
                 var queryExpression = GetFragmentProperty(fragment, "QueryExpression");
-                CollectReferences(queryExpression, readTables);
+                CollectReferences(queryExpression, readTables, cteNames);
                 CollectColumns(queryExpression, readColumns);
                 CollectFunctionReferences(queryExpression, functionReferences);
                 var selectCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
-                CollectReferences(selectCtes, readTables);
+                CollectReferences(selectCtes, readTables, cteNames);
                 CollectColumns(selectCtes, readColumns);
                 CollectFunctionReferences(selectCtes, functionReferences);
                 var into = GetFragmentProperty(fragment, "Into");
@@ -157,10 +160,10 @@ internal sealed class SqlOperationExtractor
                 AddObjectName(GetFragmentProperty(specification, "Target"), writeTables);
                 CollectColumns(GetPropertyValue(specification, "Columns"), writtenColumns);
                 var source = GetFragmentProperty(specification, "InsertSource");
-                CollectReferences(source, readTables);
+                CollectReferences(source, readTables, cteNames);
                 CollectColumns(source, readColumns);
                 CollectFunctionReferences(source, functionReferences);
-                CollectReferences(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), readTables);
+                CollectReferences(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), readTables, cteNames);
                 CollectColumns(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), readColumns);
                 CollectFunctionReferences(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), functionReferences);
                 break;
@@ -170,7 +173,7 @@ internal sealed class SqlOperationExtractor
                 var specification = GetFragmentProperty(fragment, "UpdateSpecification");
                 AddObjectName(GetFragmentProperty(specification, "Target"), writeTables);
                 var fromClause = GetFragmentProperty(specification, "FromClause");
-                CollectReferences(fromClause, readTables);
+                CollectReferences(fromClause, readTables, cteNames);
                 CollectColumns(fromClause, readColumns);
                 CollectFunctionReferences(fromClause, functionReferences);
                 var whereClause = GetFragmentProperty(specification, "WhereClause");
@@ -180,7 +183,7 @@ internal sealed class SqlOperationExtractor
                 CollectColumns(GetPropertyValue(specification, "SetClauses"), readColumns);
                 CollectFunctionReferences(GetPropertyValue(specification, "SetClauses"), functionReferences);
                 var updateCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
-                CollectReferences(updateCtes, readTables);
+                CollectReferences(updateCtes, readTables, cteNames);
                 CollectColumns(updateCtes, readColumns);
                 CollectFunctionReferences(updateCtes, functionReferences);
                 CollectWrittenUpdateColumns(GetPropertyValue(specification, "SetClauses"), writtenColumns);
@@ -192,7 +195,7 @@ internal sealed class SqlOperationExtractor
                 var specification = GetFragmentProperty(fragment, "DeleteSpecification");
                 AddObjectName(GetFragmentProperty(specification, "Target"), writeTables);
                 var fromClause = GetFragmentProperty(specification, "FromClause");
-                CollectReferences(fromClause, readTables);
+                CollectReferences(fromClause, readTables, cteNames);
                 CollectColumns(fromClause, readColumns);
                 CollectFunctionReferences(fromClause, functionReferences);
                 var whereClause = GetFragmentProperty(specification, "WhereClause");
@@ -200,7 +203,7 @@ internal sealed class SqlOperationExtractor
                 CollectColumns(whereClause, readColumns);
                 CollectFunctionReferences(whereClause, functionReferences);
                 var deleteCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
-                CollectReferences(deleteCtes, readTables);
+                CollectReferences(deleteCtes, readTables, cteNames);
                 CollectColumns(deleteCtes, readColumns);
                 CollectFunctionReferences(deleteCtes, functionReferences);
                 RemoveWrittenTables(readTables, writeTables);
@@ -300,16 +303,20 @@ internal sealed class SqlOperationExtractor
         }
     }
 
-    private void CollectReferences(object? value, ICollection<SqlObjectReference> references)
-    {
-        if (value is not TSqlFragment fragment)
-            return;
-
-        var cteNames = Descendants(fragment)
+    private ISet<string> ReadCteNames(TSqlFragment statement)
+        => Descendants(statement)
             .Where(child => child.GetType().Name == "CommonTableExpression")
             .Select(child => ReadIdentifierText(GetPropertyValue(child, "ExpressionName")))
             .Where(name => name.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    private void CollectReferences(
+        object? value,
+        ICollection<SqlObjectReference> references,
+        ISet<string> cteNames)
+    {
+        if (value is not TSqlFragment fragment)
+            return;
 
         foreach (var child in Descendants(fragment))
         {
@@ -396,8 +403,9 @@ internal sealed class SqlOperationExtractor
         if (reference.Name.Length == 0 || reference.Name.StartsWith("@", StringComparison.Ordinal))
             return;
         // The excluded names are common-table-expression names, and T-SQL cannot qualify one,
-        // so only the bare name can match.
-        if (excluded?.Contains(reference.Name) == true)
+        // so only a bare name can match.
+        var isBare = reference.Server.Length == 0 && reference.Database.Length == 0 && reference.Schema.Length == 0;
+        if (isBare && excluded?.Contains(reference.Name) == true)
             return;
         AddUnique(target, reference);
     }

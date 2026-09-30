@@ -325,16 +325,8 @@ END;
     assert update["read_tables"] == [_reference("", "PUR", "dbo", "Users")]
 
 
-def test_a_common_table_expression_drops_a_schema_qualified_read_of_the_same_bare_name() -> None:
-    """The exclusion compares the bare name only, so a CTE `X` also drops `dbo.X`.
-
-    Out of Scope records this as a defect. A fix fails this case first, and the
-    fixer then corrects Out of Scope.
-
-    The exclusion reads only the CTE names inside the fragment it walks. The
-    CTE bodies are one fragment, so `Y` reading `dbo.X` loses `dbo.X`. The main
-    query is another fragment, so its read of the CTE `Y` stays as a table read.
-    """
+def test_a_common_table_expression_keeps_a_schema_qualified_read_of_the_same_bare_name() -> None:
+    """T-SQL cannot qualify a CTE name, so `dbo.X` names a real table and stays a read."""
     result = _analyze_sql_text(
         """CREATE PROCEDURE dbo.usp_Cte
 AS
@@ -345,9 +337,85 @@ SELECT Id FROM Y;
 
     (select,) = result["operations"]
     assert select["read_tables"] == [
-        _reference("", "", "", "Y"),
         _reference("", "", "dbo", "Source"),
+        _reference("", "", "dbo", "X"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("statement", "reads", "writes"),
+    [
+        ("WITH C AS (SELECT Id FROM dbo.Src) SELECT Id FROM C;", ["Src"], []),
+        ("WITH C AS (SELECT Id FROM dbo.Src) SELECT Id INTO #t FROM C;", ["Src"], ["#t"]),
+        (
+            "WITH C AS (SELECT Id FROM dbo.Src) INSERT INTO dbo.Dest (Id) SELECT Id FROM C;",
+            ["Src"],
+            ["Dest"],
+        ),
+        (
+            "WITH C AS (SELECT Id FROM dbo.Src) UPDATE dbo.Dest SET Id = C.Id FROM dbo.Dest d JOIN C ON C.Id = d.Id;",
+            ["Src"],
+            ["Dest"],
+        ),
+        (
+            "WITH C AS (SELECT Id FROM dbo.Src) DELETE FROM dbo.Dest FROM dbo.Dest d JOIN C ON C.Id = d.Id;",
+            ["Src"],
+            ["Dest"],
+        ),
+    ],
+)
+def test_a_cte_read_in_the_main_part_is_no_table_read_for_each_statement_kind(
+    statement: str, reads: list[str], writes: list[str]
+) -> None:
+    result = _analyze_sql_text(f"CREATE PROCEDURE dbo.usp_Cte AS\n{statement}\n")
+
+    (operation,) = result["operations"]
+    assert [ref["name"] for ref in operation["read_tables"]] == reads
+    assert [ref["name"] for ref in operation["write_tables"]] == writes
+
+
+def test_a_recursive_cte_and_chained_ctes_give_no_cte_read() -> None:
+    result = _analyze_sql_text(
+        """CREATE PROCEDURE dbo.usp_Cte
+AS
+WITH Tree AS (
+    SELECT Id, ParentId FROM dbo.Node WHERE ParentId IS NULL
+    UNION ALL
+    SELECT n.Id, n.ParentId FROM dbo.Node n JOIN Tree t ON n.ParentId = t.Id
+), Flat AS (SELECT Id FROM Tree)
+SELECT Id FROM Flat;
+"""
+    )
+
+    (select,) = result["operations"]
+    assert select["read_tables"] == [_reference("", "", "dbo", "Node")]
+
+
+def test_a_cte_name_wins_over_a_real_table_of_the_same_name_in_its_statement() -> None:
+    result = _analyze_sql_text(
+        """CREATE PROCEDURE dbo.usp_Cte
+AS
+WITH Users AS (SELECT Id FROM dbo.Users) SELECT Id FROM Users;
+"""
+    )
+
+    (select,) = result["operations"]
+    assert select["read_tables"] == [_reference("", "", "dbo", "Users")]
+
+
+def test_the_ae_budget_log_summary_statement_reads_no_table1() -> None:
+    """`EOR.AEBudgetLog_Summary_Qry` reads the CTE `Table1`, never a table of that name."""
+    result = _analyze_sql_text(
+        """CREATE PROCEDURE EOR.AEBudgetLog_Summary_Qry
+AS
+WITH Table1 AS (SELECT BudgetId FROM EOR.AEBudgetLog)
+SELECT BudgetId INTO #table FROM Table1;
+"""
+    )
+
+    (operation,) = result["operations"]
+    assert operation["read_tables"] == [_reference("", "", "EOR", "AEBudgetLog")]
+    assert operation["write_tables"] == [_reference("", "", "", "#table")]
 
 
 def test_the_module_identity_states_no_database_and_an_unrecognised_module_states_no_schema() -> None:
