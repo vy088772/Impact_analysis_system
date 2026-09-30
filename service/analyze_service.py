@@ -2907,7 +2907,27 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     matches_by_identity: Dict[_WriterEvidenceIdentity, TableMatchProgram] = {}
     inline_matches_by_file: Dict[str, TableMatchProgram] = {}
     diagnostics: List[Dict] = []
-    for answer in inline_table_relations.by_table(scan, question):
+    # The rating runs only when the request names a Database. The inline matches read its
+    # result below, so a parsed relation takes the Database of its Database Invocation.
+    rated_invocations: List[DbInvocation] = []
+    execution_paths: List[Dict[str, object]] = []
+    if req.database:
+        # FindByTableRequest 同樣沒有 db_server 欄位；理由見 find_by_sp。
+        _sql_cache, graph = _require_sql_execution_graph(req.database)
+        # 重用同一 scope 的 rated invocations 與 Execution Paths（ticket 04/05）：
+        # 同一 scope 內問第二個 table，不必重新 rate C# facts、也不必重建
+        # Execution Paths —— 兩者共用 find_by_sp() 已經在用的同一份 retention
+        # 與同一條 validity stamp／explicit-refresh 規則，見
+        # `_execution_paths_for_scope` docstring。
+        rated_invocations, graph, execution_paths = _execution_paths_for_scope(
+            scope,
+            scans,
+            scan,
+            list(scan.csharp_results),
+            root,
+            refresh=req.refresh,
+        )
+    for answer in inline_table_relations.by_table(scan, question, rated_invocations, root):
         rel = answer.relation
         caller_class = str(getattr(rel, "class_name", "") or "")
         caller_method = str(getattr(rel, "method_name", "") or "")
@@ -2941,21 +2961,6 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     # Stored-procedure access is joined through Gateway invocations and the graph.
     # Do not fall back to SQL dependency dictionaries or definition-text guesses.
     if req.database:
-        # FindByTableRequest 同樣沒有 db_server 欄位；理由見 find_by_sp。
-        _sql_cache, graph = _require_sql_execution_graph(req.database)
-        # 重用同一 scope 的 rated invocations 與 Execution Paths（ticket 04/05）：
-        # 同一 scope 內問第二個 table，不必重新 rate C# facts、也不必重建
-        # Execution Paths —— 兩者共用 find_by_sp() 已經在用的同一份 retention
-        # 與同一條 validity stamp／explicit-refresh 規則，見
-        # `_execution_paths_for_scope` docstring。
-        rated_invocations, graph, execution_paths = _execution_paths_for_scope(
-            scope,
-            scans,
-            scan,
-            list(scan.csharp_results),
-            root,
-            refresh=req.refresh,
-        )
         diagnostics.extend(
             _invocation_diagnostic(invocation, requested_table=table_name)
             for invocation in rated_invocations

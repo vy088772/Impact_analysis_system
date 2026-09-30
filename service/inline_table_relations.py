@@ -8,7 +8,9 @@ The module has two queries:
 
 - The by-table query returns one answer for each relation that matches a table
   question. It resolves an unstated schema before it matches, as Schema
-  Resolution outside a module requires.
+  Resolution outside a module requires. It pairs a parsed relation with its
+  rated Database Invocation by the source span, and takes the Database, the
+  database candidates, and the Database attribution from that rating.
 - The by-method query returns each relation whose source file and method pass
   the caller's test. It holds no ownership rule.
 
@@ -21,10 +23,12 @@ count of the scan statistics, the merge of scans, and the HTML report.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Callable, Dict, List, Optional
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Sequence
 
 import schema_resolution
 from canonical_object_identity import ObjectName, full_key
+from code_analyzer.csharp_analysis_gateway import DbInvocation
 from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 
 from . import sql_cache_store
@@ -45,14 +49,35 @@ class InlineTableAnswer:
     database_attribution: str
 
 
-def by_table(scan: ProjectScanResult, question: TableQuestion) -> List[InlineTableAnswer]:
-    """Return one answer for each relation of the scan that matches the question."""
+def by_table(
+    scan: ProjectScanResult,
+    question: TableQuestion,
+    rated_invocations: Sequence[DbInvocation],
+    root: Path,
+) -> List[InlineTableAnswer]:
+    """Return one answer for each relation of the scan that matches the question.
+
+    ``rated_invocations`` are the rated Database Invocations of the scan, and ``root`` is the
+    directory that their source paths count from. The caller gives an empty list when the request
+    names no Database, because the rating runs only then.
+    """
     resolver = _InlineSchemaResolver()
+    rated = _rated_by_span(rated_invocations)
     answers: List[InlineTableAnswer] = []
     for relation in scan.table_relations:
-        # A relation that states no Database takes the Database of its C# connection,
-        # and a connection the parser cannot resolve leaves the Database out of the match.
-        database = relation.connection_database
+        key = _span_key(relation.csharp_file, relation.invocation_span, root)
+        invocation = rated.get(key) if key is not None else None
+        if invocation is not None:
+            # The rating decides the Database. A Database with candidates or with no answer
+            # leaves the Database out of the match, so it never hides a program.
+            database = invocation.database or ""
+            candidates = tuple(invocation.database_candidates)
+        else:
+            # A relation with no rated invocation takes the Database that the C# parser
+            # found for its connection. A connection the parser cannot resolve leaves the
+            # Database out of the match. A fallback relation always takes this branch.
+            database = relation.connection_database
+            candidates = ()
         table, schema_source = resolver.resolve(relation.table, database)
         match = question.match(table, database, schema_source)
         if match is None:
@@ -63,8 +88,8 @@ def by_table(scan: ProjectScanResult, question: TableQuestion) -> List[InlineTab
                 table=table,
                 match=match,
                 database=database,
-                database_candidates=(),
-                database_attribution=database_attribution(database, ()),
+                database_candidates=candidates,
+                database_attribution=database_attribution(database, candidates),
             )
         )
     return answers
@@ -79,6 +104,27 @@ def by_method(
         for relation in scan.table_relations
         if passes(relation.csharp_file, relation.method_name)
     ]
+
+
+def _span_key(file_path: str, span: Sequence[int], root: Path) -> Optional[tuple[str, int, int]]:
+    """The pairing key of a relation: its source file, relative to the root, and its source span."""
+    if len(span) != 2:
+        return None
+    try:
+        relative = Path(file_path).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        relative = file_path.replace("\\", "/")
+    return relative.casefold(), int(span[0]), int(span[1])
+
+
+def _rated_by_span(rated_invocations: Sequence[DbInvocation]) -> Dict[tuple[str, int, int], DbInvocation]:
+    """Index the rated Database Invocations by the key that a parsed relation carries."""
+    rated: Dict[tuple[str, int, int], DbInvocation] = {}
+    for invocation in rated_invocations:
+        source = invocation.source
+        key = (source.relative_path.replace("\\", "/").casefold(), source.start_offset, source.end_offset)
+        rated.setdefault(key, invocation)
+    return rated
 
 
 class _InlineSchemaResolver:
