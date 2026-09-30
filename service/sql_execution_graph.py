@@ -405,24 +405,21 @@ def _add_operation(
         for target in operation.call_targets:
             if not target.name:
                 continue
-            target, schema_source, target_module = _call_target(node_by_key, target, module_schema, cache_database)
-            if target_module is not None:
+            call = _call_target(node_by_key, target, module_schema, cache_database)
+            if call.names_module_node:
                 # The temp table expansion reads calls only from these edges.
-                call_edges.add((module_id, str(target_module["id"])))
+                call_edges.add((module_id, call.node_id))
             _add_relationship(
                 relationships,
                 "calls",
                 module_id,
-                # A call that no listed procedure answers keeps the id of the name it resolved to.
-                str(target_module["id"])
-                if target_module is not None
-                else _node_id("stored_procedure", target.schema, target.name),
+                call.node_id,
                 source,
                 branch_path,
                 conditions=list(conditions),
                 identity_suffix=str(sequence),
-                stated=target,
-                schema_source=schema_source,
+                stated=call.target,
+                schema_source=call.schema_source,
             )
         return
 
@@ -543,10 +540,22 @@ def _resolved_reference(
     return _with_resolved_schema(node_by_key, reference, module_schema, schema_resolution.resolve)
 
 
+@dataclasses.dataclass(frozen=True)
+class _CallTarget:
+    """What one `calls` relationship names."""
+
+    # The target with the schema that the rule gave it.
+    target: ObjectName
+    schema_source: str
+    # The id of the module node, or the id of the resolved name when no module node answers.
+    node_id: str
+    names_module_node: bool
+
+
 def _call_target(
     node_by_key: _NodeIndex, target: ObjectName, module_schema: str, cache_database: str
-) -> tuple[ObjectName, str, dict[str, Any] | None]:
-    """Give a call target the schema SQL Server resolves, its schema source, and its module node.
+) -> _CallTarget:
+    """Give a call target the schema SQL Server resolves, its schema source, and its node id.
 
     This is the one site that holds the call target rule (ADR-0036, ADR-0037).
     A call through a linked server or to another Database is resolved by no
@@ -554,18 +563,18 @@ def _call_target(
     call to a module that this cache does not list has no module node either. A
     listed module with no definition is a node.
     """
+    module = None
     if target.server or names_another_database(target.database, cache_database):
-        return target, schema_resolution.recorded_source("", target.schema), None
-    resolved, schema_source = _with_resolved_schema(
-        node_by_key, target, module_schema, schema_resolution.resolve_call
-    )
-    # An empty schema matches no listed node, because a listed node always carries a schema.
-    module = (
-        node_by_key.get(_node_key("stored_procedure", resolved.schema, resolved.name))
-        if resolved.schema
-        else None
-    )
-    return resolved, schema_source, module
+        schema_source = schema_resolution.recorded_source("", target.schema)
+    else:
+        target, schema_source = _with_resolved_schema(
+            node_by_key, target, module_schema, schema_resolution.resolve_call
+        )
+        # An empty schema matches no listed node, because a listed node always carries a schema.
+        if target.schema:
+            module = node_by_key.get(_node_key("stored_procedure", target.schema, target.name))
+    node_id = str(module["id"]) if module is not None else _node_id("stored_procedure", target.schema, target.name)
+    return _CallTarget(target, str(schema_source), node_id, module is not None)
 
 
 def _with_resolved_schema(

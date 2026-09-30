@@ -48,7 +48,7 @@ class SchemaSource(StrEnum):
     UNRESOLVED = "unresolved"
 
 
-_STRENGTH_ORDER = tuple(str(source) for source in SchemaSource)
+_STRENGTH_ORDER = tuple(SchemaSource)
 
 
 def recorded_source(schema_source: Optional[str], schema: Optional[str]) -> str:

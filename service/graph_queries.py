@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Iterable, Mapping, NamedTuple
 
-from schema_resolution import SchemaSource, recorded_source, strongest_source
+import schema_resolution
 from canonical_object_identity import ObjectName, part_key, schema_qualified
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 
@@ -192,7 +192,7 @@ def _access_record(
         "evidence": path.get("evidence", "unresolved"),
         "reason": path.get("reason", ""),
         "confirmed": path.get("confirmed", False),
-        "schema_source": match.schema_source if match is not None else str(SchemaSource.UNRESOLVED),
+        "schema_source": match.schema_source if match is not None else str(schema_resolution.SchemaSource.UNRESOLVED),
         "risk_flags": _record_risk_flags(path, match),
         "unresolved_reason": path.get("unresolved_reason", ""),
         "unresolved_targets": list(path.get("unresolved_targets", []) or []),
@@ -415,13 +415,15 @@ def _table_of(node: Mapping[str, Any], database: str, schema_source: str = "") -
         database=database,
         schema=schema,
         name=name,
-        schema_source=recorded_source(schema_source, schema),
+        schema_source=schema_resolution.recorded_source(schema_source, schema),
     )
 
 
 def _stronger(kept: _Target, other: _Target) -> _Target:
     """The first spelling stays; the schema source becomes the stronger of the two."""
-    return kept._replace(schema_source=strongest_source(kept.schema_source, other.schema_source))
+    return kept._replace(
+        schema_source=schema_resolution.strongest_source(kept.schema_source, other.schema_source)
+    )
 
 
 def _add_table(reached: _Tables, table: _Target) -> None:

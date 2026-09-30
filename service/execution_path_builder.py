@@ -7,7 +7,7 @@ from hashlib import sha256
 import re
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
-from schema_resolution import SchemaSource, recorded_source, strongest_source
+import schema_resolution
 from canonical_object_identity import ObjectName, bare_key, part_key, schema_qualified
 from code_analyzer.connection_source_entry import ConnectionSourceEntry
 from code_analyzer.csharp_analysis_gateway import (
@@ -243,7 +243,7 @@ def _paths_from_module(
                     module_chain=current_module_chain,
                     path_conditions=call_conditions,
                     unresolved_targets=[str(target_id or "<missing-target>")],
-                    unproven_schema=relationship.get("schema_source") == SchemaSource.UNRESOLVED,
+                    unproven_schema=relationship.get("schema_source") == schema_resolution.SchemaSource.UNRESOLVED,
                 )
             )
             continue
@@ -611,7 +611,7 @@ def _relationship_targets(
             "database": str(relationship.get("database") or "") or graph_database,
             "schema": schema,
             "name": str(target.get("name", "") or ""),
-            "schema_source": recorded_source(relationship.get("schema_source"), schema),
+            "schema_source": schema_resolution.recorded_source(relationship.get("schema_source"), schema),
         }
         same_table = next(
             (
@@ -624,7 +624,7 @@ def _relationship_targets(
         if same_table is None:
             full_keys.append(full_key)
         else:
-            same_table["schema_source"] = strongest_source(
+            same_table["schema_source"] = schema_resolution.strongest_source(
                 same_table["schema_source"], full_key["schema_source"]
             )
     return _ordered_unique(names), full_keys, _ordered_unique(missing)
