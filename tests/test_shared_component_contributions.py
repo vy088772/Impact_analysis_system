@@ -396,6 +396,70 @@ def test_a_view_component_reaches_the_screens_tables_too(
     ]
 
 
+def _table_relation(file_path: str, class_name: str, method_name: str, table: str) -> CSharpTableRelation:
+    return CSharpTableRelation(
+        csharp_file=file_path,
+        class_name=class_name,
+        method_name=method_name,
+        line_number=1,
+        table=parse(table),
+        database="OrdersDb",
+        access_type="READ",
+    )
+
+
+def test_a_screen_lists_the_tables_of_its_own_actions_only(
+    monkeypatch, tmp_path: Path
+) -> None:
+    controller = "Controllers/OrderController.cs"
+    controller_path = str(tmp_path / controller)
+    scan = _scan(
+        tmp_path,
+        views=[
+            _view_result(tmp_path, "Views/Order/Index.cshtml"),
+            _view_result(tmp_path, "Views/Order/Edit.cshtml"),
+        ],
+        controllers={controller: ["Index", "Edit"]},
+        table_relations=[
+            _table_relation(controller_path, "OrderController", "Index", "dbo.Orders"),
+            _table_relation(controller_path, "OrderController", "index", "Customers"),
+            _table_relation(controller_path, "OrderController", "Edit", "OrderLines"),
+            _table_relation(str(tmp_path / "Data/Other.cs"), "Other", "Index", "Unrelated"),
+        ],
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["Index"])
+
+    assert response.programs[0].tables == ["Orders", "Customers"]
+
+
+def test_a_view_component_lists_the_tables_of_its_entry_method_only(
+    monkeypatch, tmp_path: Path
+) -> None:
+    component_relative = "Components/MenuViewComponent.cs"
+    component_result = _view_component_result(
+        tmp_path, component_relative, "MenuViewComponent", extra_methods=["LoadAudit"]
+    )
+    scan = _scan(
+        tmp_path,
+        views=[_view_result(tmp_path, "Views/Order/Index.cshtml", view_components=["Menu"])],
+        controllers={"Controllers/OrderController.cs": ["Index"]},
+        components=[component_result],
+        table_relations=[
+            _table_relation(component_result.file_path, "MenuViewComponent", "invokeasync", "MenuItems"),
+            _table_relation(component_result.file_path, "MenuViewComponent", "LoadAudit", "AuditLog"),
+        ],
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["Index"])
+
+    program = response.programs[0]
+    assert program.tables == ["MenuItems"]
+    assert [contribution["tables"] for contribution in program.shared_component_contributions] == [
+        ["MenuItems"]
+    ]
+
+
 def test_a_measured_repositorys_selector_component_contributes_its_stored_procedures(
     monkeypatch, tmp_path: Path
 ) -> None:

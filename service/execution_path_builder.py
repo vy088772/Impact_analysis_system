@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import re
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import schema_resolution
 from canonical_object_identity import ObjectName, bare_key, part_key, schema_qualified
@@ -451,7 +451,9 @@ def _path_for_operation(
         "method_chain": _method_chain(invocation),
         "database": invocation.database or "",
         "database_candidates": list(invocation.database_candidates),
-        "database_attribution": _database_attribution(invocation),
+        "database_attribution": database_attribution(
+            invocation.database, invocation.database_candidates
+        ),
         "caller": _entry_method(invocation),
         "caller_class": invocation.class_name,
         "caller_method": invocation.method_name,
@@ -539,7 +541,9 @@ def _unresolved_path(
         "method_chain": _method_chain(invocation),
         "database": invocation.database or "",
         "database_candidates": list(invocation.database_candidates),
-        "database_attribution": _database_attribution(invocation),
+        "database_attribution": database_attribution(
+            invocation.database, invocation.database_candidates
+        ),
         "caller": _entry_method(invocation),
         "caller_class": invocation.class_name,
         "caller_method": invocation.method_name,
@@ -679,10 +683,11 @@ def _source_span(invocation: DbInvocation) -> dict[str, Any]:
     }
 
 
-def _database_attribution(invocation: DbInvocation) -> str:
-    if invocation.database:
+def database_attribution(database: Optional[str], database_candidates: Sequence[str]) -> str:
+    """How sure the Database of a Database Invocation, or of an inline table relation, is."""
+    if database:
         return "resolved"
-    if invocation.database_candidates:
+    if database_candidates:
         return "candidate"
     return "unresolved"
 

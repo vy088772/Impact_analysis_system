@@ -27,6 +27,13 @@ from canonical_object_identity import ObjectName, bare_key, parse, part_key
 
 UNPROVEN_SCHEMA = "unproven_schema"
 
+_WRITE_ACCESS_TYPES = frozenset({"WRITE", "WRITE_INDIRECT", "INSERT", "UPDATE", "DELETE", "SELECT_INTO"})
+
+
+def is_write_access(access_type: Optional[str]) -> bool:
+    """Whether the access type of a match record is a write. The case of the letters does not count."""
+    return (access_type or "").upper() in _WRITE_ACCESS_TYPES
+
 
 def names_another_database(database: Optional[str], own_database: Optional[str]) -> bool:
     """Whether a reference states a Database, and that Database is not the cache's own."""

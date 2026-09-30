@@ -7,6 +7,7 @@ table match function directly: its keys are the internal detail.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -352,6 +353,56 @@ def test_an_inline_relation_that_states_another_database_than_its_connection_rep
     matches = _ask_inline(monkeypatch, tmp_path, table, "Response", "PUR.dbo.Users")
 
     assert [(match.table, match.stated_database) for match in matches] == [("PUR.dbo.Users", "PUR")]
+
+
+def test_an_inline_write_outranks_the_read_of_its_file_and_stays_in_a_write_only_answer(
+    monkeypatch, tmp_path
+) -> None:
+    scan = _inline_scan(tmp_path, ObjectName("", "", "dbo", "Users"), "Response")
+    read = scan.table_relations[0]
+    scan.table_relations.append(replace(read, method_name="Save", access_type="INSERT"))
+    scan.table_relations.append(replace(read, csharp_file=str(tmp_path / "ReadOnlyPage.cs")))
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: None)
+
+    def ask(write_only: bool):
+        return analyze_service.find_by_table(
+            FindByTableRequest(
+                source={"project": "orders", "repo": "orders"},
+                table_name="dbo.Users",
+                cache_only=False,
+                write_only=write_only,
+            )
+        )
+
+    every_access = ask(write_only=False)
+    writes = ask(write_only=True)
+
+    assert [(match.file, match.access_type) for match in every_access.matches] == [
+        ("InlinePage.cs", "INSERT"),
+        ("ReadOnlyPage.cs", "READ"),
+    ]
+    assert [(match.file, match.access_type) for match in writes.matches] == [("InlinePage.cs", "INSERT")]
+    assert writes.excluded_count == 1
+
+
+def test_an_inline_record_carries_the_database_of_its_connection_as_resolved(monkeypatch, tmp_path) -> None:
+    matches = _ask_inline(monkeypatch, tmp_path, ObjectName("", "", "dbo", "Users"), "Response", "dbo.Users")
+
+    assert [(match.database, match.database_candidates, match.database_attribution) for match in matches] == [
+        ("Response", [], "resolved")
+    ]
+
+
+def test_an_inline_record_of_an_unresolved_connection_carries_no_database(monkeypatch, tmp_path) -> None:
+    matches = _ask_inline(
+        monkeypatch, tmp_path, ObjectName("", "", "dbo", "Users"), UNRESOLVED_CONNECTION_DATABASE, "dbo.Users"
+    )
+
+    assert [(match.database, match.database_candidates, match.database_attribution) for match in matches] == [
+        ("", [], "unresolved")
+    ]
 
 
 def test_the_backward_chain_keeps_an_inline_relation_whose_connection_is_unresolved(tmp_path) -> None:

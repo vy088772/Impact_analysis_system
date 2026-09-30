@@ -20,7 +20,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple
 
-import schema_resolution
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
 from code_analyzer.connection_source_entry import database_of, has_resolved_shape, with_database
@@ -69,7 +68,13 @@ from .execution_path_builder import (
     build_execution_paths,
 )
 from .graph_queries import filter_table_accesses
-from .table_match import UNPROVEN_SCHEMA, TableQuestion, names_another_database, names_listed_node
+from .table_match import (
+    UNPROVEN_SCHEMA,
+    TableQuestion,
+    is_write_access,
+    names_another_database,
+    names_listed_node,
+)
 from .program_screen import (
     ProgramScreen,
     resolve_program_screens,
@@ -84,6 +89,7 @@ from .scan_store import cache_status, cached_commit, cached_saved_at, get_or_sca
 from . import sql_cache_store
 from . import derived_execution_evidence_store
 from . import flow_chain_builder
+from . import inline_table_relations
 from .contract_preflight import (
     load_system_contract_selector,
     normalize_contract_selector,
@@ -2348,11 +2354,12 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             ]
 
             table_names: List[str] = []
-            for rel in scan.table_relations:
-                if resolution.owns_file(rel.csharp_file) and resolution.owns_action(
-                    rel.csharp_file, rel.method_name
-                ):
-                    _append_once(bare_name(rel.table), table_names)
+            for rel in inline_table_relations.by_method(
+                scan,
+                lambda file_path, method_name: resolution.owns_file(file_path)
+                and resolution.owns_action(file_path, method_name),
+            ):
+                _append_once(bare_name(rel.table), table_names)
 
             # 共用元件（S.15）：這個畫面渲染的 ViewComponent／partial view，貼上
             # 「來自共用元件」的標籤跟畫面自己的存取分開，不會混進 methods。
@@ -2394,11 +2401,11 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                         _append_once(invocation.procedure_name, sp_names, component_sp_names)
 
                     component_table_names: List[str] = []
-                    for rel in scan.table_relations:
-                        if rel.csharp_file != contribution.file_path or not _same_name(
-                            rel.method_name, contribution.entry_method
-                        ):
-                            continue
+                    for rel in inline_table_relations.by_method(
+                        scan,
+                        lambda file_path, method_name: file_path == contribution.file_path
+                        and _same_name(method_name, contribution.entry_method),
+                    ):
                         _append_once(bare_name(rel.table), table_names, component_table_names)
 
                     if not component_invocations and not component_table_names:
@@ -2681,47 +2688,6 @@ def _prefer_table_match(
         existing[key] = candidate
 
 
-class _InlineSchemaResolver:
-    """Resolve the schema of an inline C# SQL table at question time.
-
-    The rule is Schema Resolution outside a module: a table that states no
-    schema takes `dbo` when the Object Location Index of the connection's
-    Database holds `dbo.name`. The index is the only source. This class opens no
-    cache, and an absent, stale, or ambiguous index leaves the schema empty.
-    """
-
-    def __init__(self) -> None:
-        self._indexes: Dict[str, Optional[sql_cache_store.ObjectLocationIndex]] = {}
-
-    def resolve(self, table: ObjectName, connection_database: Optional[str]) -> tuple[ObjectName, str]:
-        """Return the table with its resolved schema, and the schema source."""
-        index = self._index(connection_database) if not table.schema and connection_database else None
-        schema, source = schema_resolution.resolve(table, "", self._holds(index))
-        return replace(table, schema=schema), source
-
-    @staticmethod
-    def _holds(index: Optional[sql_cache_store.ObjectLocationIndex]) -> Callable[[str, str], bool]:
-        """Whether the index holds one object of any kind: tables, views, procedures, and functions."""
-
-        def holds(schema: str, name: str) -> bool:
-            if index is None:
-                return False
-            key = full_key(ObjectName("", index.database, schema, name))
-            return key in index.table_full_keys or key in index.stored_procedure_full_keys
-
-        return holds
-
-    def _index(self, database: str) -> Optional[sql_cache_store.ObjectLocationIndex]:
-        if database not in self._indexes:
-            identity = sql_cache_store.find_cache_identity(database)
-            self._indexes[database] = (
-                sql_cache_store.load_object_location_index(identity)
-                if isinstance(identity, sql_cache_store.CacheIdentity)
-                else None
-            )
-        return self._indexes[database]
-
-
 def _written_table_name(table: ObjectName) -> str:
     """The table as the source code writes it: the parts it states, joined by dots."""
     return ".".join(part for part in (table.server, table.database, table.schema, table.name) if part)
@@ -2729,7 +2695,7 @@ def _written_table_name(table: ObjectName) -> str:
 
 def _table_match_rank(match: TableMatchProgram) -> tuple[int, int, int]:
     access_type = (match.access_type or "").upper()
-    is_write = access_type in {"WRITE", "WRITE_INDIRECT", "INSERT", "UPDATE", "DELETE", "SELECT_INTO"}
+    is_write = is_write_access(match.access_type)
     is_indirect = access_type.endswith("_INDIRECT")
     return (
         2 if is_write else 1 if access_type.startswith("READ") else 0,
@@ -2933,7 +2899,6 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     _record_table_reverse_lookup(table_name, scope)
 
     question = TableQuestion.of(table_name, req.database or "")
-    inline_resolver = _InlineSchemaResolver()
     # Graph-derived facts key by Execution Path identity, not by file
     # (ADR-0016) -- see `_table_match_identity`. An inline C# SQL fact carries
     # no such identity of its own; it keeps the pre-ticket file-scoped rule
@@ -2942,14 +2907,8 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     matches_by_identity: Dict[_WriterEvidenceIdentity, TableMatchProgram] = {}
     inline_matches_by_file: Dict[str, TableMatchProgram] = {}
     diagnostics: List[Dict] = []
-    for rel in scan.table_relations:
-        # A relation that states no Database takes the Database of its C# connection,
-        # and a connection the parser cannot resolve leaves the Database out of the match.
-        database = rel.connection_database
-        table, schema_source = inline_resolver.resolve(rel.table, database)
-        table_match = question.match(table, database, schema_source)
-        if table_match is None:
-            continue
+    for answer in inline_table_relations.by_table(scan, question):
+        rel = answer.relation
         caller_class = str(getattr(rel, "class_name", "") or "")
         caller_method = str(getattr(rel, "method_name", "") or "")
         candidate = TableMatchProgram(
@@ -2961,8 +2920,9 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             reason="inline_sql_source_fact",
             evidence_status="not_applicable",
             evidence_reason="inline_sql",
-            database=database,
-            database_attribution="resolved" if database else "unresolved",
+            database=answer.database,
+            database_candidates=list(answer.database_candidates),
+            database_attribution=answer.database_attribution,
             caller=(
                 f"{caller_class}.{caller_method}"
                 if caller_class
@@ -2970,10 +2930,10 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             ),
             caller_class=caller_class,
             caller_method=caller_method,
-            table=_written_table_name(table),
-            risk_flags=[UNPROVEN_SCHEMA] if table_match.unproven_schema else [],
-            stated_database=table_match.stated_database,
-            schema_source=table_match.schema_source,
+            table=_written_table_name(answer.table),
+            risk_flags=[UNPROVEN_SCHEMA] if answer.match.unproven_schema else [],
+            stated_database=answer.match.stated_database,
+            schema_source=answer.match.schema_source,
         )
         _prefer_table_match(inline_matches_by_file, candidate.file, candidate)
 
@@ -3087,17 +3047,9 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
 
     excluded_count = 0
     if req.write_only:
-        write_types = {
-            "WRITE",
-            "WRITE_INDIRECT",
-            "INSERT",
-            "UPDATE",
-            "DELETE",
-            "SELECT_INTO",
-        }
         before = len(all_matches)
-        all_matches = [match for match in all_matches if match.access_type in write_types]
-        # `UNRESOLVED` and every read type fall out of `write_types`, so this
+        all_matches = [match for match in all_matches if is_write_access(match.access_type)]
+        # `UNRESOLVED` and every read type are not write access types, so this
         # also counts a path the graph could not prove -- `write_only=True`
         # must keep meaning "proven writes and nothing else" (ADR-0015)
         # without silently reading as a complete list.
