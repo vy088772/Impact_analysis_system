@@ -21,18 +21,19 @@ CTE 與別名兩項都從關係的 source_location 切出陳述式原文來判�
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import re
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from canonical_object_identity import parse  # noqa: E402
+from canonical_object_identity import bare_key, parse, part_key  # noqa: E402
 from service import sql_cache_store  # noqa: E402
 
 _REFERENCE_TYPES = frozenset({"reads", "writes", "calls"})
@@ -41,20 +42,71 @@ _MODULE_LISTS = (
     ("view", "views"),
     ("function", "functions"),
 )
-_OBJECT_TOKEN = r"(?:[\w#@\[\]\.]+|\))"
+# 一個 FROM / JOIN 項目的物件寫法：名稱（可含括號、#、@、點），或子查詢的右括號。
+_FROM_ITEM_OBJECT = r"(?:[\w#@\[\]\.]+|\))"
 
 
-def _module_definitions(payload: Dict[str, Any]) -> Dict[str, str]:
-    """module id（`stored_procedure:BSPL.sp_BSprocess`）到它的定義文字。"""
+@dataclasses.dataclass(frozen=True)
+class GraphReport:
+    """一份快取的 graph 計數；欄位名就是報告與 JSON 的鍵。"""
+
+    empty_schema_references: int
+    references_by_schema_source: Dict[str, int]
+    cte_reads: int
+    alias_writes: int
+    unproven_schema_targets: int
+
+
+_TOTALED_COUNTS = ("empty_schema_references", "cte_reads", "alias_writes", "unproven_schema_targets")
+
+
+@dataclasses.dataclass(frozen=True)
+class _Reference:
+    """一條 reads / writes / calls 關係，連同它的目標 schema 與名稱。"""
+
+    relationship: Dict[str, Any]
+    target_id: str
+    schema: str
+    name: str
+
+    @property
+    def schema_source(self) -> str:
+        # 關係尚未帶 `schema_source` 欄位時（v7），目標有 schema 算 written。
+        return str(self.relationship.get("schema_source") or ("written" if self.schema else ""))
+
+
+def _module_definitions(payload: Dict[str, Any], nodes: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+    """module node id 到它的定義文字。
+
+    id 從 graph 自己的 module 節點取，不在這裡重組 id 的格式。
+    """
+    ids: Dict[tuple[str, str, str], str] = {}
+    for node_id, node in nodes.items():
+        ids[(str(node.get("type")), part_key(node.get("schema")), part_key(node.get("name")))] = node_id
     definitions: Dict[str, str] = {}
     for node_type, key in _MODULE_LISTS:
         for item in payload.get(key) or []:
+            written = parse(str(item.get("name") or ""))
             definition = item.get("definition")
-            if isinstance(definition, str):
-                written = parse(str(item.get("name") or ""))
-                schema = item.get("schema") or written.schema
-                definitions[f"{node_type}:{schema}.{written.name}"] = definition
+            module_id = ids.get((node_type, part_key(item.get("schema") or written.schema), bare_key(written)))
+            if module_id is not None and isinstance(definition, str):
+                definitions[module_id] = definition
     return definitions
+
+
+def _references(graph: Dict[str, Any], nodes: Dict[str, Dict[str, Any]]) -> Iterable[_Reference]:
+    for relationship in graph.get("relationships") or []:
+        if relationship.get("type") not in _REFERENCE_TYPES:
+            continue
+        target_id = str(relationship.get("target") or "")
+        node = nodes.get(target_id)
+        if node is not None:
+            schema, name = str(node.get("schema") or ""), str(node.get("name") or "")
+        else:
+            # 一個沒有節點的呼叫目標（未列出的程序）：id 形如 `stored_procedure:schema.name`。
+            written = parse(target_id.partition(":")[2])
+            schema, name = written.schema, written.name
+        yield _Reference(relationship, target_id, schema, name)
 
 
 def _statement_text(relationship: Dict[str, Any], definitions: Dict[str, str]) -> Optional[str]:
@@ -66,78 +118,62 @@ def _statement_text(relationship: Dict[str, Any], definitions: Dict[str, str]) -
     return definition[start : start + length]
 
 
-def _target_schema_and_name(target_id: str, nodes: Dict[str, Dict[str, Any]]) -> tuple[str, str]:
-    node = nodes.get(target_id)
-    if node is not None:
-        return str(node.get("schema") or ""), str(node.get("name") or "")
-    # 一個沒有節點的呼叫目標（未列出的程序）：id 形如 `stored_procedure:schema.name`。
-    _, _, qualified = target_id.partition(":")
-    schema, dot, name = qualified.partition(".")
-    return (schema, name) if dot else ("", qualified)
+def _written_as_sql(name: str) -> str:
+    """名稱的 regex 寫法，容許 SQL 的方括號。"""
+    return r"\[?" + re.escape(name) + r"\]?"
 
 
 def _is_cte_name(statement: str, name: str) -> bool:
-    bare = r"\[?" + re.escape(name) + r"\]?"
-    pattern = rf"(?:\bWITH|,)\s*{bare}\s*(?:\([^)]*\))?\s*AS\s*\("
+    pattern = rf"(?:\bWITH|,)\s*{_written_as_sql(name)}\s*(?:\([^)]*\))?\s*AS\s*\("
     return re.search(pattern, statement, re.IGNORECASE) is not None
 
 
 def _is_from_clause_alias(statement: str, name: str) -> bool:
-    bare = r"\[?" + re.escape(name) + r"\]?"
-    pattern = rf"(?:\bFROM|\bJOIN|,)\s*(?!{bare}\b){_OBJECT_TOKEN}\s+(?:AS\s+)?{bare}(?![\w.])"
+    written = _written_as_sql(name)
+    pattern = rf"(?:\bFROM|\bJOIN|,)\s*(?!{written}\b){_FROM_ITEM_OBJECT}\s+(?:AS\s+)?{written}(?![\w.])"
     return re.search(pattern, statement, re.IGNORECASE) is not None
 
 
-def report_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _schema_counts(references: List[_Reference]) -> tuple[int, Dict[str, int], int]:
+    """空 schema 的參照數、按 schema 來源的分組，以及帶 Unproven Schema 標記的目標節點數。"""
+    empty = [reference for reference in references if not reference.schema]
+    by_source = Counter(reference.schema_source for reference in references)
+    return len(empty), dict(by_source), len({reference.target_id for reference in empty})
+
+
+def _statement_findings(
+    references: List[_Reference], nodes: Dict[str, Dict[str, Any]], definitions: Dict[str, str]
+) -> tuple[int, int]:
+    """CTE 讀取數與別名寫入數，都數相異的（operation, 目標）組合。"""
+    cte_reads: set[tuple[str, str]] = set()
+    alias_writes: set[tuple[str, str]] = set()
+    for reference in references:
+        relationship = reference.relationship
+        statement = _statement_text(relationship, definitions)
+        if statement is None or not reference.name:
+            continue
+        operation_id = str(relationship.get("source") or "")
+        operation_and_target = (operation_id, reference.target_id)
+        if relationship["type"] == "reads" and _is_cte_name(statement, reference.name):
+            cte_reads.add(operation_and_target)
+        operation_type = (nodes.get(operation_id) or {}).get("operation_type")
+        if (
+            relationship["type"] == "writes"
+            and operation_type in ("UPDATE", "DELETE")
+            and _is_from_clause_alias(statement, reference.name)
+        ):
+            alias_writes.add(operation_and_target)
+    return len(cte_reads), len(alias_writes)
+
+
+def report_payload(payload: Dict[str, Any]) -> GraphReport:
     """數一份快取 payload 的 graph；payload 沒有 graph 時各項為 0。"""
     graph = payload.get("sql_execution_graph") or {}
     nodes = {str(node["id"]): node for node in graph.get("nodes") or [] if node.get("id")}
-    definitions = _module_definitions(payload)
-
-    empty_schema = 0
-    by_source: Counter[str] = Counter()
-    cte_reads: set[tuple[str, str]] = set()
-    alias_writes: set[tuple[str, str]] = set()
-    unproven_targets: set[str] = set()
-
-    for relationship in graph.get("relationships") or []:
-        relationship_type = relationship.get("type")
-        if relationship_type not in _REFERENCE_TYPES:
-            continue
-        target_id = str(relationship.get("target") or "")
-        schema, name = _target_schema_and_name(target_id, nodes)
-        by_source[str(relationship.get("schema_source") or ("written" if schema else ""))] += 1
-        if not schema:
-            empty_schema += 1
-            unproven_targets.add(target_id)
-
-        statement = _statement_text(relationship, definitions)
-        if statement is None or not name:
-            continue
-        operation_and_target = (str(relationship.get("source") or ""), target_id)
-        if relationship_type == "reads" and _is_cte_name(statement, name):
-            cte_reads.add(operation_and_target)
-        if relationship_type == "writes" and _is_from_clause_alias_write(
-            relationship, nodes, statement, name
-        ):
-            alias_writes.add(operation_and_target)
-
-    return {
-        "empty_schema_references": empty_schema,
-        "references_by_schema_source": dict(by_source),
-        "cte_reads": len(cte_reads),
-        "alias_writes": len(alias_writes),
-        "unproven_schema_targets": len(unproven_targets),
-    }
-
-
-def _is_from_clause_alias_write(
-    relationship: Dict[str, Any], nodes: Dict[str, Dict[str, Any]], statement: str, name: str
-) -> bool:
-    operation = nodes.get(str(relationship.get("source") or "")) or {}
-    if operation.get("operation_type") not in ("UPDATE", "DELETE"):
-        return False
-    return _is_from_clause_alias(statement, name)
+    references = list(_references(graph, nodes))
+    empty, by_source, unproven = _schema_counts(references)
+    cte_reads, alias_writes = _statement_findings(references, nodes, _module_definitions(payload, nodes))
+    return GraphReport(empty, by_source, cte_reads, alias_writes, unproven)
 
 
 def report_all_caches() -> List[Dict[str, Any]]:
@@ -161,41 +197,44 @@ def report_all_caches() -> List[Dict[str, Any]]:
         else:
             entry["action"] = "reported"
             entry["graph_version"] = (data.get("sql_execution_graph") or {}).get("graph_version")
-            entry.update(report_payload(data))
+            entry.update(dataclasses.asdict(report_payload(data)))
         reports.append(entry)
     return reports
 
 
+def _counts_text(counts: Dict[str, Any], by_source: Dict[str, int]) -> str:
+    sources = ", ".join(f"{source or '(empty)'}={count}" for source, count in sorted(by_source.items()))
+    return (
+        f"empty_schema={counts['empty_schema_references']} cte_reads={counts['cte_reads']} "
+        f"alias_writes={counts['alias_writes']} unproven_targets={counts['unproven_schema_targets']} "
+        f"by_source[{sources}]"
+    )
+
+
 def _print_report(reports: List[Dict[str, Any]]) -> None:
+    labels = {
+        "invalid_cache": "⚠️  快取無效（讀取路徑不會採信），略過",
+        "bad_identity": "⚠️  身分無法辨識，略過",
+    }
     totals: Counter[str] = Counter()
     source_totals: Counter[str] = Counter()
     for entry in reports:
         identity_text = f"{entry['server']}/{entry['database']}"
         if entry["action"] != "reported":
-            print(f"⚠️  {identity_text}：{entry['action']}{'（' + entry['error'] + '）' if entry.get('error') else ''}")
+            label = labels.get(str(entry["action"]), f"⚠️  未知結果（{entry['action']}）")
+            detail = f"（{entry['error']}）" if entry.get("error") else ""
+            print(f"{label}：{identity_text}{detail}")
             continue
-        sources = ", ".join(
-            f"{source or '(empty)'}={count}"
-            for source, count in sorted(entry["references_by_schema_source"].items())
-        )
         print(
             f"{identity_text}（graph_version {entry['graph_version']}）："
-            f"empty_schema={entry['empty_schema_references']} "
-            f"cte_reads={entry['cte_reads']} alias_writes={entry['alias_writes']} "
-            f"unproven_targets={entry['unproven_schema_targets']} by_source[{sources}]"
+            f"{_counts_text(entry, entry['references_by_schema_source'])}"
         )
-        for key in ("empty_schema_references", "cte_reads", "alias_writes", "unproven_schema_targets"):
-            totals[key] += entry[key]
+        totals.update({key: entry[key] for key in _TOTALED_COUNTS})
         source_totals.update(entry["references_by_schema_source"])
     if not reports:
         print("找不到任何 SQL 快取檔。")
         return
-    sources = ", ".join(f"{source or '(empty)'}={count}" for source, count in sorted(source_totals.items()))
-    print(
-        f"合計：empty_schema={totals['empty_schema_references']} cte_reads={totals['cte_reads']} "
-        f"alias_writes={totals['alias_writes']} unproven_targets={totals['unproven_schema_targets']} "
-        f"by_source[{sources}]"
-    )
+    print(f"合計：{_counts_text(totals, source_totals)}")
 
 
 def main() -> None:
