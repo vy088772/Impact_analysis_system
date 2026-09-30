@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import dataclasses
-import re
-import tempfile
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
 import schema_resolution
 from canonical_object_identity import ObjectName, parse, part_key
-from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
+from code_analyzer.sql_text_analysis import (
+    HostSqlTextAnalysis,
+    SqlOperation,
+    SqlTextAnalysis,
+    SqlTextAnalysisError,
+)
+from code_analyzer.static_analyzer_host import StaticAnalyzerHostError
 
 from .table_match import names_another_database
 
@@ -87,7 +91,7 @@ _MODULE_COLLECTIONS = (
 
 def build_sql_execution_graph(
     data: dict[str, Any],
-    host: StaticAnalyzerHost | None = None,
+    sql_text_analysis: SqlTextAnalysis | None = None,
     project_root: Path | None = None,
     progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> dict[str, Any]:
@@ -140,56 +144,45 @@ def build_sql_execution_graph(
     parse_errors: list[dict[str, Any]] = []
     _report_progress(progress_callback, "graph", 0, len(module_specs), "")
     if module_specs:
-        analyzer = host or StaticAnalyzerHost.for_project(
+        analysis = sql_text_analysis or HostSqlTextAnalysis.for_project(
             project_root or Path(__file__).resolve().parent.parent
         )
-        analyzer.ensure_ready()
-        with tempfile.TemporaryDirectory(prefix="sql-graph-") as temp_dir:
-            temp_root = Path(temp_dir)
-            input_paths: list[Path] = []
-            for index, (_, _, name, definition) in enumerate(module_specs, start=1):
-                input_path = temp_root / f"{index:05d}_{_safe_name(name)}.sql"
-                input_path.write_text(definition, encoding="utf-8", newline="")
-                input_paths.append(input_path)
-            name_by_path = {str(path): spec[2] for path, spec in zip(input_paths, module_specs)}
 
-            def report_batch(completed: int, total: int, last_input: str) -> None:
-                _report_progress(progress_callback, "graph", completed, total, name_by_path[last_input])
+        def report_batch(completed: int, total: int) -> None:
+            # The operator reads the name of the last SQL module of the batch.
+            _report_progress(progress_callback, "graph", completed, total, module_specs[completed - 1][2])
 
-            try:
-                results = analyzer.analyze_sql_files(input_paths, report_batch)
-            except StaticAnalyzerHostError as exc:
-                # The host names the failed input by path; the operator needs the module.
-                module_name = next((name for path, name in name_by_path.items() if path in str(exc)), None)
-                if module_name is None:
-                    raise
-                raise StaticAnalyzerHostError(f"SQL analysis failed for module {module_name}: {exc}") from exc
-            if len(results) != len(module_specs):
-                raise StaticAnalyzerHostError("StaticAnalyzerHost returned a SQL result count that differs from the module count")
-            for (object_type, object_schema, name, definition), result in zip(module_specs, results):
-                module_id = _node_id(object_type, object_schema, name)
-                for error in result.get("parse_errors", []) or []:
-                    parse_errors.append(
-                        {
-                            "module_id": module_id,
-                            "line": error.get("line", 0),
-                            "message": error.get("message", ""),
-                        }
-                    )
-                for raw_operation in result.get("operations", []) or []:
-                    _add_operation(
-                        nodes,
-                        relationships,
-                        node_by_key,
-                        call_edges,
-                        raw_operation,
-                        object_type,
-                        object_schema,
-                        name,
-                        module_id,
-                        str(data.get("database") or ""),
-                        len(definition),
-                    )
+        try:
+            results = analysis.analyze([definition for _, _, _, definition in module_specs], report_batch)
+        except SqlTextAnalysisError as exc:
+            # SQL Text Analysis names the failed text by index; the operator needs the module.
+            raise StaticAnalyzerHostError(
+                f"SQL analysis failed for module {module_specs[exc.index][2]}: {exc}"
+            ) from exc
+        for (object_type, object_schema, name, definition), result in zip(module_specs, results, strict=True):
+            module_id = _node_id(object_type, object_schema, name)
+            for error in result.parse_errors:
+                parse_errors.append(
+                    {
+                        "module_id": module_id,
+                        "line": error.line,
+                        "message": error.message,
+                    }
+                )
+            for operation in result.operations:
+                _add_operation(
+                    nodes,
+                    relationships,
+                    node_by_key,
+                    call_edges,
+                    operation,
+                    object_type,
+                    object_schema,
+                    name,
+                    module_id,
+                    str(data.get("database") or ""),
+                    len(definition),
+                )
 
     _expand_temp_table_lineage(nodes, relationships, call_edges, progress_callback)
 
@@ -398,7 +391,7 @@ def _add_operation(
     relationships: list[dict[str, Any]],
     node_by_key: _NodeIndex,
     call_edges: set[tuple[str, str]],
-    raw_operation: dict[str, Any],
+    operation: SqlOperation,
     module_type: str,
     module_schema: str,
     module_name: str,
@@ -406,27 +399,21 @@ def _add_operation(
     cache_database: str,
     module_definition_length: int,
 ) -> None:
-    module = {
-        "type": module_type,
-        "schema": module_schema,
-        "name": module_name,
+    # The source location keeps the key order the analyzer host reports; the
+    # module id stands in the place of the host's file path.
+    source = {
+        "source_path": module_id,
+        **dataclasses.asdict(operation.source),
+        "module_id": module_id,
+        "module_definition_length": module_definition_length,
     }
-    operation = dict(raw_operation)
-    operation["module"] = module
-    operation["module_id"] = module_id
-    source = dict(operation.get("source") or {})
-    source["source_path"] = module_id
-    source["module_id"] = module_id
-    source["module_definition_length"] = module_definition_length
-    operation["source"] = source
-    sequence = int(operation.get("sequence") or 0)
-    operation_type = str(operation.get("operation_type") or "")
-    branch_path = list(operation.get("branch_path") or [])
+    sequence = operation.sequence
+    operation_type = operation.operation_type
+    branch_path = list(operation.branch_path)
+    conditions = operation.conditions or operation.branch_path
 
     if operation_type == "CALL":
-        call_conditions = list(operation.get("conditions") or branch_path)
-        for call_target in operation.get("call_targets", []) or []:
-            target = _reference(call_target)
+        for target in operation.call_targets:
             if not target.name:
                 continue
             target, schema_source = _resolved_call_target(node_by_key, target, module_schema, cache_database)
@@ -441,7 +428,7 @@ def _add_operation(
                     target_id,
                     source,
                     branch_path,
-                    conditions=call_conditions,
+                    conditions=list(conditions),
                     identity_suffix=str(sequence),
                     stated=target,
                     schema_source=schema_source,
@@ -449,13 +436,34 @@ def _add_operation(
         return
 
     node_type = "unresolved_dynamic_sql" if (
-        operation_type == "DYNAMIC_SQL" or operation.get("dynamic_sql") is True
+        operation_type == "DYNAMIC_SQL" or operation.dynamic_sql
     ) else "dml_operation"
     operation_id = f"{node_type}:{module_id}:{sequence}"
+    # The node holds every field of the operation, in the order the analyzer host
+    # reports them. The cache file holds this order, so a change here changes the payload.
     operation_node = {
         "id": operation_id,
         "type": node_type,
-        **operation,
+        "operation_type": operation_type,
+        "module": {
+            "type": module_type,
+            "schema": module_schema,
+            "name": module_name,
+        },
+        "sequence": sequence,
+        "branch_path": list(operation.branch_path),
+        "conditions": list(operation.conditions),
+        "where": operation.where,
+        "read_tables": [dataclasses.asdict(reference) for reference in operation.read_tables],
+        "write_tables": [dataclasses.asdict(reference) for reference in operation.write_tables],
+        "unresolved_write_targets": list(operation.unresolved_write_targets),
+        "read_columns": list(operation.read_columns),
+        "written_columns": list(operation.written_columns),
+        "function_references": [dataclasses.asdict(reference) for reference in operation.function_references],
+        "call_targets": [dataclasses.asdict(reference) for reference in operation.call_targets],
+        "dynamic_sql": operation.dynamic_sql,
+        "source": source,
+        "module_id": module_id,
     }
     _add_node(nodes, node_by_key, operation_node)
 
@@ -476,12 +484,12 @@ def _add_operation(
             operation_id,
             source,
             branch_path,
-            conditions=list(operation.get("conditions") or branch_path),
+            conditions=list(conditions),
             confidence="unresolved",
         )
         return
 
-    for read_table in operation.get("read_tables", []) or []:
+    for read_table in operation.read_tables:
         reference, schema_source = _resolved_reference(node_by_key, read_table, module_schema)
         for target_id in _ensure_referenced_nodes(
             nodes, node_by_key, reference, module_id, cache_database
@@ -493,7 +501,7 @@ def _add_operation(
                 target_id,
                 source,
                 branch_path,
-                columns=list(operation.get("read_columns", []) or []),
+                columns=list(operation.read_columns),
                 stated=reference,
                 schema_source=schema_source,
             )
@@ -505,11 +513,11 @@ def _add_operation(
                     target_id,
                     source,
                     branch_path,
-                    conditions=list(operation.get("conditions") or branch_path),
+                    conditions=list(conditions),
                     schema_source=schema_source,
                 )
 
-    for write_table in operation.get("write_tables", []) or []:
+    for write_table in operation.write_tables:
         reference, schema_source = _resolved_reference(node_by_key, write_table, module_schema)
         for target_id in _ensure_referenced_nodes(
             nodes, node_by_key, reference, module_id, cache_database
@@ -521,12 +529,12 @@ def _add_operation(
                 target_id,
                 source,
                 branch_path,
-                columns=list(operation.get("written_columns", []) or []),
+                columns=list(operation.written_columns),
                 stated=reference,
                 schema_source=schema_source,
             )
 
-    for function_reference in operation.get("function_references", []) or []:
+    for function_reference in operation.function_references:
         reference, schema_source = _resolved_reference(node_by_key, function_reference, module_schema)
         for target_id in _known_object_node_ids(
             node_by_key,
@@ -541,26 +549,16 @@ def _add_operation(
                 target_id,
                 source,
                 branch_path,
-                conditions=list(operation.get("conditions") or branch_path),
+                conditions=list(conditions),
                 schema_source=schema_source,
             )
 
 
-def _reference(entry: dict[str, Any]) -> ObjectName:
-    """Read one analyzer reference; the host always reports all four parts."""
-    return ObjectName(
-        server=str(entry.get("server") or ""),
-        database=str(entry.get("database") or ""),
-        schema=str(entry.get("schema") or ""),
-        name=str(entry.get("name") or ""),
-    )
-
-
 def _resolved_reference(
-    node_by_key: _NodeIndex, entry: dict[str, Any], module_schema: str
+    node_by_key: _NodeIndex, reference: ObjectName, module_schema: str
 ) -> tuple[ObjectName, str]:
-    """Read one analyzer reference and give it the schema SQL Server resolves, with its schema source."""
-    return _with_resolved_schema(node_by_key, _reference(entry), module_schema, schema_resolution.resolve)
+    """Give one analyzer reference the schema SQL Server resolves, with its schema source."""
+    return _with_resolved_schema(node_by_key, reference, module_schema, schema_resolution.resolve)
 
 
 def _resolved_call_target(
@@ -760,7 +758,3 @@ def _node_id(object_type: str, schema: str, name: str, scope_module_id: str = ""
 def _is_scoped_temp_table(name: str) -> bool:
     """A `#name` temp table is scoped to its module; a `##name` global temp table is not."""
     return name.startswith("#") and not name.startswith("##")
-
-
-def _safe_name(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]", "_", value).strip("_") or "module"

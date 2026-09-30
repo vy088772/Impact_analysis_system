@@ -17,6 +17,7 @@ from code_analyzer.models import (
     SourceSnapshot,
 )
 from code_analyzer.project_scanner import ProjectScanResult
+from code_analyzer.sql_text_analysis import InMemorySqlTextAnalysis
 from code_analyzer.csharp_analysis_gateway import (
     DbInvocation,
     InvocationEvidence,
@@ -35,10 +36,10 @@ from service.sql_cache_store import CacheIdentity
 from service.sql_execution_graph import build_sql_execution_graph
 from tests.sql_cache_fixtures import (
     CacheRoot,
-    StubAnalyzerHost,
     analyzer_operation,
     cache_payload,
     execution_graph,
+    in_memory_sql_text_analysis,
     one_server_holds_every_database,
     write_cache,
 )
@@ -654,14 +655,14 @@ def _function_path_fixture(
     procedure: str,
     call: str,
     functions: list[str],
-    host: StubAnalyzerHost | None = None,
+    sql_text_analysis: InMemorySqlTextAnalysis | None = None,
 ) -> tuple[ProjectScanResult, str]:
     """Write one `Response` cache on disk and one scan whose method calls `procedure`.
 
     The procedure's one operation calls the function `call`. The real graph
     builder analyses each definition, so the function reference that reaches
     the evidence is the one the analyzer host reports. A test that needs a
-    reference the real host never reports gives a stub ``host`` instead.
+    reference the real host never reports gives the in-memory SQL Text Analysis instead.
     """
     procedure_name = parse(procedure)
 
@@ -681,7 +682,7 @@ def _function_path_fixture(
             graph=graph,
         )
 
-    graph = build_sql_execution_graph(response_cache(), host=host)
+    graph = build_sql_execution_graph(response_cache(), sql_text_analysis=sql_text_analysis)
     payload = response_cache(graph)
     write_cache(cache_root, CacheIdentity.of("vmsystest07", "Response"), payload)
 
@@ -797,12 +798,12 @@ def test_path_evidence_holds_every_function_a_reference_with_no_schema_can_name(
 
     The cache holds `COMMON.fn_Rate` and `dbo.fn_Rate`, and the operation's
     reference states no schema. The real host never reports such a reference,
-    because T-SQL requires a schema on a scalar function call, so a stub host does.
+    because T-SQL requires a schema on a scalar function call, so the in-memory adapter does.
     """
     procedure = "dbo.usp_Load"
     call = "fn_Rate"
     definition = f"CREATE PROCEDURE {procedure} AS SELECT {call}(Id) FROM dbo.Rates;"
-    host = StubAnalyzerHost(
+    sql_text_analysis = in_memory_sql_text_analysis(
         {definition: [analyzer_operation("SELECT", reads=["dbo.Rates"], functions=[call])]}
     )
     with CacheRoot() as cache_root:
@@ -812,7 +813,7 @@ def test_path_evidence_holds_every_function_a_reference_with_no_schema_can_name(
             procedure=procedure,
             call=call,
             functions=["COMMON.fn_Rate", "dbo.fn_Rate"],
-            host=host,
+            sql_text_analysis=sql_text_analysis,
         )
         monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)

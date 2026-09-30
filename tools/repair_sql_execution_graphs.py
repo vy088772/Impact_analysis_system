@@ -34,7 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from code_analyzer.static_analyzer_host import StaticAnalyzerHost  # noqa: E402
+from code_analyzer.sql_text_analysis import HostSqlTextAnalysis, SqlTextAnalysis  # noqa: E402
 from service import sql_cache_store  # noqa: E402
 from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph  # noqa: E402
 
@@ -51,7 +51,7 @@ def _existing_graph_version(payload: object) -> Optional[int]:
 
 def repair_cache_file(
     data_path: Path,
-    host: StaticAnalyzerHost,
+    sql_text_analysis: SqlTextAnalysis,
     project_root: Path,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
@@ -87,7 +87,7 @@ def repair_cache_file(
     # 重新跑一次 build_sql_execution_graph()——不連線 SQL Server、不改動
     # payload 裡除了 sql_execution_graph 以外的任何欄位。
     payload["sql_execution_graph"] = build_sql_execution_graph(
-        payload, host=host, project_root=project_root
+        payload, sql_text_analysis=sql_text_analysis, project_root=project_root
     )
     # 整份重新 json.dumps() 而不定點取代位元組：
     # 這裡換的是一個巢狀 JSON 物件（graph），不是單一純量值，定點取代等於要自己
@@ -102,7 +102,7 @@ def repair_cache_file(
 
 
 def repair_all_caches(
-    host: Optional[StaticAnalyzerHost] = None,
+    sql_text_analysis: Optional[SqlTextAnalysis] = None,
     project_root: Optional[Path] = None,
     dry_run: bool = False,
 ) -> List[Dict[str, Any]]:
@@ -114,8 +114,8 @@ def repair_all_caches(
     重建卻失敗的檔案是缺陷，照樣讓整批中斷。
     """
     project_root = project_root or PROJECT_ROOT
-    host = host or StaticAnalyzerHost.for_project(project_root)
-    host.ensure_ready()
+    # 每份快取共用同一個 SQL Text Analysis：analyzer host 只在第一次分析前準備一次。
+    sql_text_analysis = sql_text_analysis or HostSqlTextAnalysis.for_project(project_root)
 
     results: List[Dict[str, Any]] = []
     for cache_file in sql_cache_store.list_cache_files():
@@ -129,7 +129,7 @@ def repair_all_caches(
                 }
             )
             continue
-        results.append(repair_cache_file(cache_file.data_path, host, project_root, dry_run))
+        results.append(repair_cache_file(cache_file.data_path, sql_text_analysis, project_root, dry_run))
     return results
 
 

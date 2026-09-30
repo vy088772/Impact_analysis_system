@@ -258,7 +258,7 @@ def test_query_table_accesses_excludes_likely_invocations_from_formal_results() 
 
 def test_a_call_path_with_the_unproven_schema_mark_gives_no_table_match_record() -> None:
     """ADR-0035: the mark of a call sits on its path, and it reaches no other target."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "OrdersDb",
         {
             "dbo.usp_Direct": [
@@ -267,7 +267,7 @@ def test_a_call_path_with_the_unproven_schema_mark_gives_no_table_match_record()
             ]
         },
     )
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
     invocation = _invocation("SaveDirect", "usp_Direct")
 
     assert query_table_accesses(graph, [invocation], "usp_Missing") == []

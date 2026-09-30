@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from code_analyzer.static_analyzer_host import StaticAnalyzerHost
+from code_analyzer.sql_text_analysis import HostSqlTextAnalysis
 from service import sql_cache_store
 from service.sql_execution_graph import GRAPH_VERSION
 from tests.sql_cache_fixtures import CacheRoot, cache_payload, execution_graph, write_cache
@@ -48,13 +48,12 @@ def _write_stale_fixture(cache_root: Path, database: str = "TestDb") -> Path:
 
 
 def test_repair_rebuilds_a_stale_cache_to_the_current_graph_version() -> None:
-    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
-    host.ensure_ready()
+    sql_text_analysis = HostSqlTextAnalysis.for_project(PROJECT_ROOT)
 
     with CacheRoot() as cache_root:
         data_path = _write_stale_fixture(cache_root)
 
-        results = repair_all_caches(host=host, project_root=PROJECT_ROOT)
+        results = repair_all_caches(sql_text_analysis=sql_text_analysis, project_root=PROJECT_ROOT)
 
         assert [entry["action"] for entry in results] == ["repaired"]
         assert results[0]["old_graph_version"] == GRAPH_VERSION - 1
@@ -83,27 +82,25 @@ def test_repair_rebuilds_a_stale_cache_to_the_current_graph_version() -> None:
 
 
 def test_repaired_cache_is_accepted_by_the_normal_load_path() -> None:
-    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
-    host.ensure_ready()
+    sql_text_analysis = HostSqlTextAnalysis.for_project(PROJECT_ROOT)
 
     with CacheRoot() as cache_root:
         _write_stale_fixture(cache_root)
         assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb")) is None
 
-        repair_all_caches(host=host, project_root=PROJECT_ROOT)
+        repair_all_caches(sql_text_analysis=sql_text_analysis, project_root=PROJECT_ROOT)
 
         assert sql_cache_store.load_cached(sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb")) is not None
 
 
 def test_repair_only_touches_the_graph_field() -> None:
-    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
-    host.ensure_ready()
+    sql_text_analysis = HostSqlTextAnalysis.for_project(PROJECT_ROOT)
 
     with CacheRoot() as cache_root:
         data_path = _write_stale_fixture(cache_root)
         before = json.loads(data_path.read_text(encoding="utf-8"))
 
-        repair_all_caches(host=host, project_root=PROJECT_ROOT)
+        repair_all_caches(sql_text_analysis=sql_text_analysis, project_root=PROJECT_ROOT)
 
         after_bytes = data_path.read_bytes()
         after = json.loads(after_bytes.decode("utf-8"))
@@ -127,15 +124,14 @@ def test_repair_only_touches_the_graph_field() -> None:
 
 
 def test_repair_dry_run_changes_nothing_on_disk() -> None:
-    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
-    host.ensure_ready()
+    sql_text_analysis = HostSqlTextAnalysis.for_project(PROJECT_ROOT)
 
     with CacheRoot() as cache_root:
         data_path = _write_stale_fixture(cache_root)
         raw_before = data_path.read_bytes()
 
         results = repair_all_caches(
-            host=host, project_root=PROJECT_ROOT, dry_run=True
+            sql_text_analysis=sql_text_analysis, project_root=PROJECT_ROOT, dry_run=True
         )
 
         assert [entry["action"] for entry in results] == ["would_repair"]
@@ -143,14 +139,13 @@ def test_repair_dry_run_changes_nothing_on_disk() -> None:
 
 
 def test_repair_is_idempotent_once_a_cache_is_current() -> None:
-    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
-    host.ensure_ready()
+    sql_text_analysis = HostSqlTextAnalysis.for_project(PROJECT_ROOT)
 
     with CacheRoot() as cache_root:
         _write_stale_fixture(cache_root)
 
-        first = repair_all_caches(host=host, project_root=PROJECT_ROOT)
-        second = repair_all_caches(host=host, project_root=PROJECT_ROOT)
+        first = repair_all_caches(sql_text_analysis=sql_text_analysis, project_root=PROJECT_ROOT)
+        second = repair_all_caches(sql_text_analysis=sql_text_analysis, project_root=PROJECT_ROOT)
 
         assert [entry["action"] for entry in first] == ["repaired"]
         assert [entry["action"] for entry in second] == ["already_current"]
@@ -158,8 +153,7 @@ def test_repair_is_idempotent_once_a_cache_is_current() -> None:
 
 def test_repair_runs_to_the_end_beside_an_object_location_index() -> None:
     """The index sorts before its data file, and its table entries are strings."""
-    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
-    host.ensure_ready()
+    sql_text_analysis = HostSqlTextAnalysis.for_project(PROJECT_ROOT)
 
     with CacheRoot() as cache_root:
         identity = sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb")
@@ -171,7 +165,7 @@ def test_repair_runs_to_the_end_beside_an_object_location_index() -> None:
         index_path = cache_root / identity.index_filename
         index_before = index_path.read_bytes()
 
-        results = repair_all_caches(host=host, project_root=PROJECT_ROOT)
+        results = repair_all_caches(sql_text_analysis=sql_text_analysis, project_root=PROJECT_ROOT)
 
         assert [(Path(entry["path"]).name, entry["action"]) for entry in results] == [
             ("vmsystest07.topmost.com.tw__TestDb.json", "repaired")
@@ -180,14 +174,13 @@ def test_repair_runs_to_the_end_beside_an_object_location_index() -> None:
 
 
 def test_repair_reports_and_skips_a_file_that_names_no_identity() -> None:
-    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
-    host.ensure_ready()
+    sql_text_analysis = HostSqlTextAnalysis.for_project(PROJECT_ROOT)
 
     with CacheRoot() as cache_root:
         (cache_root / "stray.json").write_text("{}", encoding="utf-8")
         data_path = _write_stale_fixture(cache_root)
 
-        results = repair_all_caches(host=host, project_root=PROJECT_ROOT)
+        results = repair_all_caches(sql_text_analysis=sql_text_analysis, project_root=PROJECT_ROOT)
 
         assert [(Path(entry["path"]).name, entry["action"]) for entry in results] == [
             ("stray.json", "bad_identity"),
@@ -196,8 +189,7 @@ def test_repair_reports_and_skips_a_file_that_names_no_identity() -> None:
 
 
 def test_repair_cache_file_skips_an_already_current_cache() -> None:
-    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
-    host.ensure_ready()
+    sql_text_analysis = HostSqlTextAnalysis.for_project(PROJECT_ROOT)
 
     with CacheRoot() as cache_root:
         payload = _stale_payload(graph_version=GRAPH_VERSION)
@@ -206,7 +198,7 @@ def test_repair_cache_file_skips_an_already_current_cache() -> None:
         data_path = cache_root / identity.filename
         raw_before = data_path.read_bytes()
 
-        entry = repair_cache_file(data_path, host, PROJECT_ROOT)
+        entry = repair_cache_file(data_path, sql_text_analysis, PROJECT_ROOT)
 
         assert entry["action"] == "already_current"
         assert data_path.read_bytes() == raw_before

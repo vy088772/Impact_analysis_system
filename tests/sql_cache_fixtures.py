@@ -17,13 +17,19 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Optional, Union
+from typing import Any, Iterable, Mapping, Optional, Union
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import canonical_object_identity
+from code_analyzer.sql_text_analysis import (
+    InMemorySqlTextAnalysis,
+    SqlModuleIdentity,
+    SqlOperation,
+    SqlSourceLocation,
+)
 from config.settings import settings
 from service import sql_cache_store
 from service.sql_cache_store import CacheIdentity
@@ -187,56 +193,67 @@ def _references(written_names: Iterable[str]) -> list[dict[str, str]]:
     ]
 
 
-class StubAnalyzerHost:
-    """Stand in for the StaticAnalyzerHost: report fixed operations for each module.
+def in_memory_sql_text_analysis(
+    operations_by_definition: Mapping[str, Iterable[dict]],
+) -> InMemorySqlTextAnalysis:
+    """Build the in-memory adapter of SQL Text Analysis: fixed operations for each definition text.
 
-    The graph builder writes each module definition to a file and asks the host
-    to analyze that file. This stub reads the file back and reports the
-    operations it holds for that definition text, so a test does not start the
-    analyzer host.
+    Each operation comes from ``analyzer_operation()``. The adapter gives the
+    graph builder the operations it holds for a definition text, so a test
+    starts no analyzer host and writes no file.
     """
-
-    def __init__(self, operations_by_definition: Mapping[str, Iterable[dict]]) -> None:
-        self._operations_by_definition = {
-            definition: [dict(operation) for operation in operations]
+    return InMemorySqlTextAnalysis(
+        {
+            definition: [_typed_operation(operation) for operation in operations]
             for definition, operations in operations_by_definition.items()
         }
+    )
 
-    def ensure_ready(self) -> None:
-        return None
 
-    def analyze_sql(self, path: Path) -> dict:
-        definition = Path(path).read_text(encoding="utf-8")
-        operations = self._operations_by_definition.get(definition, [])
-        return {"operations": [dict(operation) for operation in operations], "parse_errors": []}
+def _typed_operation(operation: Mapping[str, Any]) -> SqlOperation:
+    """Turn one ``analyzer_operation()`` into the typed operation that SQL Text Analysis returns."""
+    fields = dict(operation)
 
-    def analyze_sql_files(
-        self,
-        paths: list[Path],
-        progress_callback: Optional[Callable[[int, int, str], None]] = None,
-    ) -> list[dict]:
-        """Batch method: one result for each path, in path order, and one progress report."""
-        results = [self.analyze_sql(path) for path in paths]
-        if progress_callback is not None and paths:
-            progress_callback(len(paths), len(paths), str(paths[-1]))
-        return results
+    def references(key: str) -> tuple[canonical_object_identity.ObjectName, ...]:
+        return tuple(canonical_object_identity.ObjectName(**reference) for reference in fields.pop(key))
+
+    typed = SqlOperation(
+        operation_type=fields.pop("operation_type"),
+        module=SqlModuleIdentity(**fields.pop("module", {})),
+        sequence=fields.pop("sequence"),
+        branch_path=tuple(fields.pop("branch_path")),
+        conditions=tuple(fields.pop("conditions")),
+        where=fields.pop("where"),
+        read_tables=references("read_tables"),
+        write_tables=references("write_tables"),
+        unresolved_write_targets=tuple(fields.pop("unresolved_write_targets", ())),
+        read_columns=tuple(fields.pop("read_columns")),
+        written_columns=tuple(fields.pop("written_columns")),
+        function_references=references("function_references"),
+        call_targets=references("call_targets"),
+        dynamic_sql=fields.pop("dynamic_sql"),
+        source=SqlSourceLocation(**fields.pop("source", {})),
+    )
+    if fields:
+        raise ValueError(f"SQL Text Analysis returns no such operation field: {sorted(fields)}")
+    return typed
 
 
 def stubbed_procedures(
     database: str,
     operations_by_procedure: Mapping[str, Iterable[dict]],
-) -> tuple[dict, StubAnalyzerHost]:
-    """Build a cache payload of procedures and a stub host that reports their operations.
+) -> tuple[dict, InMemorySqlTextAnalysis]:
+    """Build a cache payload of procedures and the in-memory SQL Text Analysis of their operations.
 
-    Each procedure's definition text is its written name, so the stub host
+    Each procedure's definition text is its written name, so the adapter
     finds the operations of each module that the graph builder analyzes.
-    Give the payload and the host to ``build_sql_execution_graph()``.
+    Give the payload and the adapter to ``build_sql_execution_graph()``.
     """
     payload = cache_payload(
         database,
         procedures={name: {"definition": name} for name in operations_by_procedure},
     )
-    return payload, StubAnalyzerHost(operations_by_procedure)
+    return payload, in_memory_sql_text_analysis(operations_by_procedure)
 
 
 def cache_with_procedures(*procedures: str) -> dict:

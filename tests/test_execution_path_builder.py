@@ -922,7 +922,7 @@ def test_a_call_to_a_listed_procedure_keeps_its_paths_and_gains_no_mark() -> Non
 
 def test_the_path_builder_reads_the_schema_source_that_the_graph_builder_records() -> None:
     """The mark follows the graph the builder makes, not a hand-written relationship."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "OrdersDb",
         {
             "dbo.usp_SaveOrder": [
@@ -931,7 +931,7 @@ def test_the_path_builder_reads_the_schema_source_that_the_graph_builder_records
             ]
         },
     )
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     paths = build_execution_paths([_save_order_invocation()], graph)
 

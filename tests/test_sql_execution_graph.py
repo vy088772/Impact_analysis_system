@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import time
@@ -15,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from canonical_object_identity import ObjectName
 from code_analyzer import static_analyzer_host
 from code_analyzer.static_analyzer_host import (
     CONTRACT_VERSION,
@@ -23,17 +25,25 @@ from code_analyzer.static_analyzer_host import (
 )
 from code_analyzer import sql_analyzer
 from code_analyzer.sql_analyzer import ObjectListing, SQLAnalyzer
+from code_analyzer.sql_text_analysis import (
+    HostSqlTextAnalysis,
+    InMemorySqlTextAnalysis,
+    SqlModuleIdentity,
+    SqlOperation,
+    SqlSourceLocation,
+    SqlTextAnalysisError,
+)
 from service import sql_cache_store
 from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
 from tests.sql_cache_fixtures import (
     CacheRoot,
-    StubAnalyzerHost,
     analyzer_operation,
     assert_relationships_resolve_to_known_nodes,
     cache_payload,
     case_variant_table_write_data,
     case_variant_temp_table_write_data,
     execution_graph,
+    in_memory_sql_text_analysis,
     stubbed_procedures,
     write_cache,
 )
@@ -439,6 +449,126 @@ END;
     ]
 
 
+def test_the_graph_build_gives_the_same_graph_through_sql_text_analysis() -> None:
+    """The expected graph is the one the analyzer host gave for this definition before SQL Text Analysis."""
+    definition = "CREATE PROCEDURE dbo.usp_B AS BEGIN EXEC dbo.usp_A; UPDATE dbo.T2 SET Id = 1 WHERE Id = 2; END;"
+    module = SqlModuleIdentity(type="stored_procedure", schema="dbo", name="usp_B")
+    call = SqlOperation(
+        operation_type="CALL",
+        module=module,
+        sequence=1,
+        call_targets=(ObjectName(server="", database="", schema="dbo", name="usp_A"),),
+        source=SqlSourceLocation(
+            start_line=1, start_column=37, start_offset=36, length=15, end_line=1, end_column=52
+        ),
+    )
+    update = SqlOperation(
+        operation_type="UPDATE",
+        module=module,
+        sequence=2,
+        conditions=("Id = 2",),
+        where="Id = 2",
+        write_tables=(ObjectName(server="", database="", schema="dbo", name="T2"),),
+        read_columns=("Id",),
+        written_columns=("Id",),
+        source=SqlSourceLocation(
+            start_line=1, start_column=53, start_offset=52, length=38, end_line=1, end_column=91
+        ),
+    )
+
+    graph = build_sql_execution_graph(
+        cache_payload("PUR", procedures={"dbo.usp_B": {"definition": definition}}),
+        sql_text_analysis=InMemorySqlTextAnalysis({definition: [call, update]}),
+    )
+
+    module_id = "stored_procedure:dbo.usp_B"
+    operation_id = f"dml_operation:{module_id}:2"
+    call_source = {
+        "source_path": module_id,
+        "start_line": 1,
+        "start_column": 37,
+        "start_offset": 36,
+        "length": 15,
+        "end_line": 1,
+        "end_column": 52,
+        "module_id": module_id,
+        "module_definition_length": 95,
+    }
+    update_source = {
+        "source_path": module_id,
+        "start_line": 1,
+        "start_column": 53,
+        "start_offset": 52,
+        "length": 38,
+        "end_line": 1,
+        "end_column": 91,
+        "module_id": module_id,
+        "module_definition_length": 95,
+    }
+    expected = execution_graph(
+        "PUR",
+        nodes=[
+            {"id": module_id, "type": "stored_procedure", "schema": "dbo", "name": "usp_B"},
+            {
+                "id": operation_id,
+                "type": "dml_operation",
+                "operation_type": "UPDATE",
+                "module": {"type": "stored_procedure", "schema": "dbo", "name": "usp_B"},
+                "sequence": 2,
+                "branch_path": [],
+                "conditions": ["Id = 2"],
+                "where": "Id = 2",
+                "read_tables": [],
+                "write_tables": [{"server": "", "database": "", "schema": "dbo", "name": "T2"}],
+                "unresolved_write_targets": [],
+                "read_columns": ["Id"],
+                "written_columns": ["Id"],
+                "function_references": [],
+                "call_targets": [],
+                "dynamic_sql": False,
+                "source": update_source,
+                "module_id": module_id,
+            },
+            {"id": "table:dbo.T2", "type": "table", "schema": "dbo", "name": "T2"},
+        ],
+        relationships=[
+            {
+                "id": f"calls:{module_id}:stored_procedure:dbo.usp_A:1",
+                "type": "calls",
+                "source": module_id,
+                "target": "stored_procedure:dbo.usp_A",
+                "confidence": "proven",
+                "branch_path": [],
+                "source_location": call_source,
+                "schema_source": "written",
+            },
+            {
+                "id": f"contains:{module_id}:{operation_id}",
+                "type": "contains",
+                "source": module_id,
+                "target": operation_id,
+                "confidence": "proven",
+                "branch_path": [],
+                "source_location": update_source,
+            },
+            {
+                "id": f"writes:{operation_id}:table:dbo.T2",
+                "type": "writes",
+                "source": operation_id,
+                "target": "table:dbo.T2",
+                "confidence": "proven",
+                "branch_path": [],
+                "source_location": update_source,
+                "columns": ["Id"],
+                "schema_source": "written",
+            },
+        ],
+    )
+    assert graph == expected
+    # The cache file holds the payload as JSON text, so the key order is part of the payload.
+    assert json.dumps(graph) == json.dumps(expected)
+
+
 def _crlf_procedure_definition() -> str:
     """A stored-procedure definition long enough to expose offset drift, using \\r\\n line endings."""
     lines = ["CREATE PROCEDURE dbo.usp_PadDelete AS", "BEGIN"]
@@ -461,7 +591,9 @@ def test_graph_offsets_stay_within_definition_length_for_crlf_source() -> None:
         tables={"PadTarget": {"columns": []}},
     )
 
-    graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
+    graph = build_sql_execution_graph(
+        data, sql_text_analysis=HostSqlTextAnalysis(host), project_root=PROJECT_ROOT
+    )
     assert_relationships_resolve_to_known_nodes(graph)
 
     operation_nodes = [node for node in graph["nodes"] if node["type"] == "dml_operation"]
@@ -517,7 +649,9 @@ def test_referenced_node_id_resolves_despite_a_case_variant_first_reference() ->
 
     data = case_variant_table_write_data(database="TestDb")
 
-    graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
+    graph = build_sql_execution_graph(
+        data, sql_text_analysis=HostSqlTextAnalysis(host), project_root=PROJECT_ROOT
+    )
     assert_relationships_resolve_to_known_nodes(graph)
 
     table_nodes = [
@@ -551,7 +685,9 @@ def test_write_to_real_table_survives_a_case_variant_read_through_a_temp_table()
 
     data = case_variant_temp_table_write_data(database="TestDb")
 
-    graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
+    graph = build_sql_execution_graph(
+        data, sql_text_analysis=HostSqlTextAnalysis(host), project_root=PROJECT_ROOT
+    )
     assert_relationships_resolve_to_known_nodes(graph)
 
     writes = [
@@ -598,13 +734,13 @@ def test_the_temp_table_expansion_ends_when_many_procedures_share_a_chain() -> N
 
     The old expansion enumerated every path and took more than a minute here.
     """
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {f"dbo.usp_Chain{index:02d}": _temp_chain_procedure(f"dbo.Base{index:02d}") for index in range(40)},
     )
 
     started = time.monotonic()
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
     elapsed = time.monotonic() - started
 
     assert elapsed < 5, f"the graph build took {elapsed:.1f} seconds"
@@ -618,7 +754,7 @@ def test_the_temp_table_expansion_ends_when_many_procedures_share_a_chain() -> N
 
 def test_a_cycle_of_temp_table_writes_gives_one_stable_result() -> None:
     """Test case 7 (cycle): A calls B, B calls A, and both write and read `#tmp`."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {
             "dbo.usp_A": [
@@ -635,8 +771,8 @@ def test_a_cycle_of_temp_table_writes_gives_one_stable_result() -> None:
         },
     )
 
-    first = build_sql_execution_graph(data, host=host)
-    second = build_sql_execution_graph(data, host=host)
+    first = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
+    second = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     assert_relationships_resolve_to_known_nodes(first)
     assert first["relationships"] == second["relationships"]
@@ -671,10 +807,12 @@ def test_a_batched_graph_equals_the_graph_from_one_run_for_each_module() -> None
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     host.ensure_ready()
     data = _three_procedures()
-    expected = build_sql_execution_graph(data, host=_OneRunPerModuleHost(host))
+    expected = build_sql_execution_graph(
+        data, sql_text_analysis=HostSqlTextAnalysis(_OneRunPerModuleHost(host))
+    )
 
     with patch.object(static_analyzer_host, "_MAX_HOST_FILES_PER_BATCH", 2):
-        batched = build_sql_execution_graph(data, host=host)
+        batched = build_sql_execution_graph(data, sql_text_analysis=HostSqlTextAnalysis(host))
 
     assert batched == expected
     assert batched["relationships"]
@@ -689,7 +827,7 @@ def test_the_graph_stage_reports_once_for_each_batch_with_the_last_module_name()
     with patch.object(static_analyzer_host, "_MAX_HOST_FILES_PER_BATCH", 2):
         build_sql_execution_graph(
             data,
-            host=host,
+            sql_text_analysis=HostSqlTextAnalysis(host),
             progress_callback=lambda stage, current, total, item: (
                 reports.append((current, total, item)) if stage == "graph" else None
             ),
@@ -698,28 +836,22 @@ def test_the_graph_stage_reports_once_for_each_batch_with_the_last_module_name()
     assert reports == [(0, 3, ""), (2, 3, "usp_B"), (3, 3, "usp_C")]
 
 
-def test_a_host_error_that_names_an_input_path_names_the_module() -> None:
-    class FailingHost:
-        def ensure_ready(self) -> None:
-            return None
+def test_a_host_error_that_names_a_text_names_the_module() -> None:
+    class FailingAnalysis:
+        def analyze(self, texts, progress_callback=None):
+            raise SqlTextAnalysisError(1, "sql analysis failed for input text 2 of 3: boom")
 
-        def analyze_sql_files(self, paths: list[Path], progress_callback=None) -> list[dict]:
-            raise StaticAnalyzerHostError(f"sql analysis failed for input {paths[1]}: boom")
-
-    with pytest.raises(StaticAnalyzerHostError, match="for module usp_B: "):
-        build_sql_execution_graph(_three_procedures(), host=FailingHost())
+    with pytest.raises(StaticAnalyzerHostError, match="for module usp_B: .*boom"):
+        build_sql_execution_graph(_three_procedures(), sql_text_analysis=FailingAnalysis())
 
 
-def test_a_host_error_that_names_no_input_path_passes_through_unchanged() -> None:
-    class FailingHost:
-        def ensure_ready(self) -> None:
-            return None
-
-        def analyze_sql_files(self, paths: list[Path], progress_callback=None) -> list[dict]:
+def test_a_host_error_that_names_no_text_passes_through_unchanged() -> None:
+    class FailingAnalysis:
+        def analyze(self, texts, progress_callback=None):
             raise StaticAnalyzerHostError("dotnet is gone")
 
     with pytest.raises(StaticAnalyzerHostError) as caught:
-        build_sql_execution_graph(_three_procedures(), host=FailingHost())
+        build_sql_execution_graph(_three_procedures(), sql_text_analysis=FailingAnalysis())
     assert str(caught.value) == "dotnet is gone"
 
 
@@ -728,19 +860,21 @@ def test_a_cache_with_no_module_definitions_never_starts_the_analyzer() -> None:
         def ensure_ready(self) -> None:
             raise AssertionError("the analyzer must not start")
 
-    graph = build_sql_execution_graph(cache_payload("PUR", tables=["dbo.T1"]), host=UnusedHost())
+    graph = build_sql_execution_graph(
+        cache_payload("PUR", tables=["dbo.T1"]), sql_text_analysis=HostSqlTextAnalysis(UnusedHost())
+    )
 
     assert [node["id"] for node in graph["nodes"]] == ["table:dbo.T1"]
 
 
 def test_the_lineage_stage_reports_after_the_graph_stage() -> None:
     """Test case 11 (progress): the `lineage` stage follows the last `graph` report."""
-    data, host = stubbed_procedures("PUR", {"dbo.usp_Chain": _temp_chain_procedure("dbo.Base")})
+    data, sql_text_analysis = stubbed_procedures("PUR", {"dbo.usp_Chain": _temp_chain_procedure("dbo.Base")})
     reports: list[tuple[str, int, int]] = []
 
     build_sql_execution_graph(
         data,
-        host=host,
+        sql_text_analysis=sql_text_analysis,
         progress_callback=lambda stage, current, total, item: reports.append((stage, current, total)),
     )
 
@@ -756,12 +890,12 @@ def test_the_lineage_stage_reports_after_the_graph_stage() -> None:
 
 def test_two_procedures_that_use_one_temp_table_name_stay_separate() -> None:
     """Test case 2 (isolation): each read of `#tmp` resolves only to its own procedure's base table."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {"dbo.usp_A": _temp_procedure("dbo.BaseA"), "dbo.usp_B": _temp_procedure("dbo.BaseB")},
     )
 
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     assert_relationships_resolve_to_known_nodes(graph)
     assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:2") == {"table:dbo.BaseA"}
@@ -770,7 +904,7 @@ def test_two_procedures_that_use_one_temp_table_name_stay_separate() -> None:
 
 def test_a_global_temp_table_stays_one_node_for_the_database() -> None:
     """Test case 8 (global temp table): two procedures with no call between them share `##g`."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {
             "dbo.usp_A": _temp_procedure("dbo.BaseA", "##g"),
@@ -778,7 +912,7 @@ def test_a_global_temp_table_stays_one_node_for_the_database() -> None:
         },
     )
 
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     assert_relationships_resolve_to_known_nodes(graph)
     global_nodes = [node for node in graph["nodes"] if node.get("name") == "##g"]
@@ -792,7 +926,7 @@ def test_a_global_temp_table_stays_one_node_for_the_database() -> None:
 
 def test_a_scoped_temp_table_node_keeps_its_written_name_and_names_its_module() -> None:
     """Test case 10 (node shape): `name` stays as written, `scope_module_id` names the owner."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {
             "dbo.usp_A": [
@@ -803,7 +937,7 @@ def test_a_scoped_temp_table_node_keeps_its_written_name_and_names_its_module() 
         },
     )
 
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     assert_relationships_resolve_to_known_nodes(graph)
     temp_nodes = [node for node in graph["nodes"] if node.get("name", "").startswith("#")]
@@ -819,11 +953,11 @@ def test_a_scoped_temp_table_node_keeps_its_written_name_and_names_its_module() 
 
 def test_the_object_location_index_keeps_the_temp_table_names() -> None:
     """The index holds each temp table name once, whatever number of nodes carry it."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {"dbo.usp_A": _temp_procedure("dbo.BaseA"), "dbo.usp_B": _temp_procedure("dbo.BaseB")},
     )
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     index = sql_cache_store.build_object_location_index(
         sql_cache_store.CacheIdentity.of(TEST_SERVER, "PUR"), cache_payload("PUR", graph=graph)
@@ -852,7 +986,9 @@ END;
         },
     )
 
-    graph = build_sql_execution_graph(data, host=host, project_root=PROJECT_ROOT)
+    graph = build_sql_execution_graph(
+        data, sql_text_analysis=HostSqlTextAnalysis(host), project_root=PROJECT_ROOT
+    )
 
     assert_relationships_resolve_to_known_nodes(graph)
     temp_nodes = [node for node in graph["nodes"] if node.get("name") == "#stage"]
@@ -874,7 +1010,7 @@ def _procedure_that_calls(*callees: str, temp_reads: bool = False, base_table: s
 
 def test_a_child_read_of_a_temp_table_resolves_to_the_parent_base_table() -> None:
     """Test case 3 (caller to callee): A writes `#tmp` and calls B, and B reads `#tmp`."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {
             "dbo.usp_A": _procedure_that_calls("dbo.usp_B", base_table="dbo.BaseA"),
@@ -882,7 +1018,7 @@ def test_a_child_read_of_a_temp_table_resolves_to_the_parent_base_table() -> Non
         },
     )
 
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     assert_relationships_resolve_to_known_nodes(graph)
     assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_B:1") == {"table:dbo.BaseA"}
@@ -890,7 +1026,7 @@ def test_a_child_read_of_a_temp_table_resolves_to_the_parent_base_table() -> Non
 
 def test_a_parent_read_of_a_temp_table_resolves_to_the_child_base_table() -> None:
     """Test case 4 (callee to caller): A calls B, B fills `#tmp`, and A reads `#tmp`."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {
             "dbo.usp_A": _procedure_that_calls("dbo.usp_B", temp_reads=True),
@@ -898,7 +1034,7 @@ def test_a_parent_read_of_a_temp_table_resolves_to_the_child_base_table() -> Non
         },
     )
 
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     assert_relationships_resolve_to_known_nodes(graph)
     assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:3") == {"table:dbo.BaseB"}
@@ -906,7 +1042,7 @@ def test_a_parent_read_of_a_temp_table_resolves_to_the_child_base_table() -> Non
 
 def test_two_callers_of_one_shared_procedure_keep_their_temp_tables_apart() -> None:
     """Test case 5 (siblings): A and B call U, and A, B, and U all use `#tmp`."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {
             "dbo.usp_A": _procedure_that_calls("dbo.usp_U", temp_reads=True, base_table="dbo.BaseA"),
@@ -915,7 +1051,7 @@ def test_two_callers_of_one_shared_procedure_keep_their_temp_tables_apart() -> N
         },
     )
 
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     assert_relationships_resolve_to_known_nodes(graph)
     # A sees its own writers and the writers of its callee U. It never sees B.
@@ -940,7 +1076,7 @@ def test_a_temp_table_is_visible_through_a_chain_of_calls() -> None:
 
     B never names `#tmp`, so it has no node. The chain still passes through B.
     """
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {
             "dbo.usp_A": _procedure_that_calls("dbo.usp_B", base_table="dbo.BaseA"),
@@ -949,7 +1085,7 @@ def test_a_temp_table_is_visible_through_a_chain_of_calls() -> None:
         },
     )
 
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     assert_relationships_resolve_to_known_nodes(graph)
     read_id = "dml_operation:stored_procedure:dbo.usp_C:1"
@@ -970,7 +1106,7 @@ def test_a_temp_table_is_visible_through_a_chain_of_calls() -> None:
 
 def test_a_call_to_a_procedure_the_graph_does_not_define_adds_no_lineage() -> None:
     """Test case 9 (undefined callee): the call adds no temp table lineage."""
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {
             "dbo.usp_A": _procedure_that_calls("dbo.usp_Missing", temp_reads=True),
@@ -978,7 +1114,7 @@ def test_a_call_to_a_procedure_the_graph_does_not_define_adds_no_lineage() -> No
         },
     )
 
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     # The calls relationship to the missing procedure keeps its target with no node,
     # as before, so this test does not assert that every target resolves.
@@ -992,7 +1128,7 @@ def test_a_temp_read_inside_a_callee_writer_does_not_climb_back_to_the_caller_si
     fills `#b` from its own base table. A's read went down to U, so it may not
     go up again from U to B.
     """
-    data, host = stubbed_procedures(
+    data, sql_text_analysis = stubbed_procedures(
         "PUR",
         {
             "dbo.usp_A": _procedure_that_calls("dbo.usp_U", temp_reads=True),
@@ -1004,7 +1140,7 @@ def test_a_temp_read_inside_a_callee_writer_does_not_climb_back_to_the_caller_si
         },
     )
 
-    graph = build_sql_execution_graph(data, host=host)
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
 
     assert_relationships_resolve_to_known_nodes(graph)
     assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:3") == set()
@@ -1021,8 +1157,10 @@ def _call_graph(caller: str, called: str, listed: dict[str, dict] | None = None)
     `listed` names the other procedures the listing holds, each with its entry fields.
     """
     procedures = {caller: {"definition": "caller"}, **(listed or {})}
-    host = StubAnalyzerHost({"caller": [analyzer_operation("CALL", sequence=1, calls=[called])]})
-    return build_sql_execution_graph(cache_payload("PUR", procedures=procedures), host=host)
+    sql_text_analysis = in_memory_sql_text_analysis(
+        {"caller": [analyzer_operation("CALL", sequence=1, calls=[called])]}
+    )
+    return build_sql_execution_graph(cache_payload("PUR", procedures=procedures), sql_text_analysis=sql_text_analysis)
 
 
 def test_an_unqualified_call_reaches_the_one_procedure_in_the_module_schema() -> None:
@@ -1065,7 +1203,7 @@ def test_an_unlisted_system_procedure_call_resolves_to_sys_and_makes_no_user_nod
     """User story 13: `sp_OACreate` and `sp_executesql` are system procedures, never `dbo` nodes."""
     graph = build_sql_execution_graph(
         cache_payload("PUR", procedures={"COMMON.usp_Caller": {"definition": "caller"}}),
-        host=StubAnalyzerHost(
+        sql_text_analysis=in_memory_sql_text_analysis(
             {
                 "caller": [
                     analyzer_operation("CALL", sequence=1, calls=["sp_OACreate"]),
@@ -1112,11 +1250,12 @@ def _resolution_graph(
 ) -> dict:
     """Build a `PUR` graph of the named modules, beside the other objects the listing holds.
 
-    Each module's definition text is its written name, so the stub host finds its operations.
+    Each module's definition text is its written name, so the in-memory adapter finds its operations.
     """
     modules = {module_kind: {name: {"definition": name} for name in operations_by_module}}
     graph = build_sql_execution_graph(
-        cache_payload("PUR", **modules, **listing), host=StubAnalyzerHost(operations_by_module)
+        cache_payload("PUR", **modules, **listing),
+        sql_text_analysis=in_memory_sql_text_analysis(operations_by_module),
     )
     assert_relationships_resolve_to_known_nodes(graph)
     return graph

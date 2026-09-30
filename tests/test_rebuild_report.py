@@ -19,9 +19,9 @@ from service.sql_cache_store import CacheIdentity
 from service.sql_execution_graph import build_sql_execution_graph
 from tests.sql_cache_fixtures import (
     CacheRoot,
-    StubAnalyzerHost,
     analyzer_operation,
     cache_payload,
+    in_memory_sql_text_analysis,
     write_cache,
 )
 from tools.rebuild_report import report_all_caches
@@ -36,7 +36,7 @@ def _built_cache(database: str, module: str, definition: str, operations: list[d
     procedures = {module: {"definition": definition}}
     graph = build_sql_execution_graph(
         cache_payload(database, procedures=procedures, **objects),
-        host=StubAnalyzerHost({definition: operations}),
+        sql_text_analysis=in_memory_sql_text_analysis({definition: operations}),
     )
     return cache_payload(database, procedures=procedures, graph=graph, **objects)
 
