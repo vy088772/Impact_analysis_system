@@ -57,9 +57,13 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance only
 # Payload format version: bump when the shape of `_StoredDerivedExecutionEvidence`
 # or of any pickled field inside it changes, so an old on-disk file left by a
 # previous version of this module is treated as unreadable (a miss) rather
-# than unpickled into an object this version does not expect.
-_STORE_VERSION = 3  # v2: each Execution Path gains `read_full_keys` and `write_full_keys`.
+# than unpickled into an object this version does not expect. Bump it also when
+# the path builder gives another answer for the same graph: the validity stamp
+# reads the inputs, not the code, so only this version makes such a file a miss.
+_STORE_VERSION = 4  # v2: each Execution Path gains `read_full_keys` and `write_full_keys`.
 # v3: each full key gains `schema_source`.
+# v4: a path that stops at a call with the schema source `unresolved` carries
+# `unproven_schema` in its `risk_flags` (unstated-schema-resolves-as-sql-server-does, ticket 10).
 
 _DATA_SUFFIX = ".pkl"
 
