@@ -6,10 +6,10 @@ See "The resolution rule" (the `sys` rule and the static `EXEC` reading), "The g
 
 **Blocked by:** 04 — A read or write with no schema resolves as SQL Server does (the call rule uses that ticket's resolution).
 
-**Status:** done
+**Status:** done, except one box that ticket 10 closes
 
 - [x] A failing graph builder test comes first: a `COMMON` module calls `GetBudgetVersion` with no schema while `COMMON` and `Mitoosi` both hold it, and exactly one call relationship reaches `COMMON.GetBudgetVersion`.
-- [x] A call that no listed procedure answers gives one path with the Unproven Schema mark.
+- [ ] A call that no listed procedure answers gives one path with the Unproven Schema mark. (Partial: one path exists and the relationship records `unresolved`; the path carries no `unproven_schema` flag. Moved to ticket 10.)
 - [x] An unqualified `sp_` or `xp_` name that the listing does not hold records schema `sys` and schema source `system`, and creates no `dbo` node. The seven caches' `sp_OACreate` and `sp_executesql` calls are the cases.
 - [x] A listed user procedure whose name starts with `sp_` still gets the link.
 - [x] A static `EXEC` inside a module resolves against the module's schema first.
