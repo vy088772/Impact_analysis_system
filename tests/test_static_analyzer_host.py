@@ -627,3 +627,31 @@ if __name__ == "__main__":
     test_one_batch_walks_the_corpus_once_not_once_per_input()
     test_command_source_resolution_stays_linear_in_corpus_size()
     print("StaticAnalyzerHost tests passed")
+
+
+def test_a_cte_name_matches_a_read_without_regard_to_case() -> None:
+    result = _analyze_sql_text(
+        """CREATE PROCEDURE dbo.usp_Cte
+AS
+WITH c AS (SELECT Id FROM dbo.Src) SELECT Id FROM C;
+"""
+    )
+
+    (select,) = result["operations"]
+    assert select["read_tables"] == [_reference("", "", "dbo", "Src")]
+
+
+def test_a_cte_name_does_not_reach_the_next_statement_of_the_module() -> None:
+    result = _analyze_sql_text(
+        """CREATE PROCEDURE dbo.usp_Cte
+AS
+BEGIN
+    WITH X AS (SELECT Id FROM dbo.Src) SELECT Id FROM X;
+    SELECT Id FROM X;
+END;
+"""
+    )
+
+    first, second = result["operations"]
+    assert first["read_tables"] == [_reference("", "", "dbo", "Src")]
+    assert second["read_tables"] == [_reference("", "", "", "X")]
