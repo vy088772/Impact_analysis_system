@@ -69,7 +69,7 @@ and "Testing Decisions" (Seam D).
 - The two collection errors are `test_search_roles.py` and
   `test_sp_tables.py`. They need a live database. Run the suite with
   `--continue-on-collection-errors`, or they stop it.
-- Three edge results changed. No scan writes these values today.
+- Three edge results changed. See the correction of 2026-09-30 below.
   - `with_database` does not add a `server` field to a mapping that has none.
     The old service helper added `server: None`. `server_of` gives no value in
     the two cases.
@@ -79,3 +79,23 @@ and "Testing Decisions" (Seam D).
     it reads from an entry for its statistics and its formal SP list.
 - The four changed source files use CRLF line ends. Keep CRLF when a script
   writes them.
+
+### 2026-09-30 — correction after the code review
+
+- The note above said that no scan writes the values of the three edge
+  results. That statement was wrong for two of the three.
+- `_extract_sqlfunc_connections` in `code_analyzer/db_connection_tracker.py`
+  (pattern 2) keeps a string literal as the Database name and does not remove
+  spaces. A literal such as `" OrdersDb "` or `" "` gets into an entry.
+- So the gateway edge and the project scanner edge are reachable, but only
+  from a literal that has a space at an end or that is blank.
+  - The gateway gives no Database and no server for a blank Database name. It
+    gave empty text and the server before.
+  - The project scanner gives `unknown` for a blank Database name in its
+    formal SP list. Its statistics do not count that name as a Database.
+- The `with_database` edge is not reachable. The project scanner writes the
+  `server` field in each entry.
+- The three results follow from the text of the spec: `database_of` gives the
+  Database name with no space at each end, and each reader uses the module.
+- The code review had two axes (Standards and Spec). It found no hard
+  violation and no missing requirement.
