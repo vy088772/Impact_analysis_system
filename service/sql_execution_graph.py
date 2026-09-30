@@ -54,7 +54,7 @@ NodeKey = tuple[str, str, str, str]
 
 
 class _NodeIndex(dict):
-    """Nodes by full key, plus the same nodes by bare name for a call that states no schema.
+    """Nodes by full key.
 
     It also holds the schema and name of each object the cache lists, of any kind,
     for the schema resolution rule. A node that only a reference adds is not listed.
@@ -62,7 +62,6 @@ class _NodeIndex(dict):
 
     def __init__(self) -> None:
         super().__init__()
-        self.bare: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._listed: set[tuple[str, str]] = set()
 
     def list_object(self, schema: str, name: str) -> None:
@@ -423,6 +422,7 @@ def _add_operation(
             target = _reference(call_target)
             if not target.name:
                 continue
+            target, schema_source = _resolved_call_target(node_by_key, target, module_schema, cache_database)
             for target_id, target_module in _resolve_call_target(node_by_key, target, cache_database):
                 if target_module is not None:
                     # The temp table expansion reads calls only from these edges.
@@ -437,6 +437,7 @@ def _add_operation(
                     conditions=call_conditions,
                     identity_suffix=str(sequence),
                     stated=target,
+                    schema_source=schema_source,
                 )
         return
 
@@ -557,22 +558,34 @@ def _resolved_reference(
     return dataclasses.replace(reference, schema=schema), schema_source
 
 
+def _resolved_call_target(
+    node_by_key: _NodeIndex, target: ObjectName, module_schema: str, cache_database: str
+) -> tuple[ObjectName, str]:
+    """Give a call target the schema SQL Server resolves, with its schema source.
+
+    A call through a linked server or to another Database is resolved by no listing
+    of this cache, so it keeps what it states.
+    """
+    if target.server or names_another_database(target.database, cache_database):
+        return target, schema_resolution.WRITTEN if target.schema else schema_resolution.UNRESOLVED
+    schema, schema_source = schema_resolution.resolve_call(target, module_schema, node_by_key.holds)
+    return dataclasses.replace(target, schema=schema), schema_source
+
+
 def _listed_nodes(
     node_by_key: _NodeIndex, object_type: str, schema: str, name: str
 ) -> list[dict[str, Any]]:
-    """The listed nodes one reference names, under the two-bucket rule.
+    """The listed nodes one reference names.
 
-    A reference that states a schema matches the node of that full key. A reference
-    that states no schema matches every node of that type with the bare name. Only
-    a call still reaches the second bucket: a read, a write, and a function
-    reference arrive here with the schema that the resolution rule gave them, and
-    one that the rule left empty matches no listed node. Listed nodes always carry
-    a schema, so none of them carries the Unproven Schema mark.
+    A reference arrives with the schema that the resolution rule gave it, and it
+    matches the node of that full key. One that the rule left empty matches no
+    listed node. Listed nodes always carry a schema, so none of them carries the
+    Unproven Schema mark.
     """
     if schema:
         node = node_by_key.get(_node_key(object_type, schema, name))
         return [node] if node else []
-    return list(node_by_key.bare.get((object_type, name.casefold()), []))
+    return []
 
 
 def _ensure_referenced_nodes(
@@ -628,7 +641,7 @@ def _resolve_call_target(
     """Return each node id a calls relationship names, with the module node the graph defines for it or None."""
     # A call through a linked server, to another Database, or to a module that this
     # cache does not list has no module node. A listed module with no definition is a node.
-    # A call target that states no schema matches every listed procedure with that bare name.
+    # The target arrives with the schema the resolution rule gave it; an empty schema matches no node.
     stated_id = _node_id("stored_procedure", target.schema, target.name)
     if target.server or names_another_database(target.database, cache_database):
         return [(stated_id, None)]
@@ -732,8 +745,6 @@ def _add_node(
     if key in node_by_key:
         return node_by_key[key]
     node_by_key[key] = node
-    if name:
-        node_by_key.bare.setdefault((object_type, name.casefold()), []).append(node)
     nodes.append(node)
     return node
 

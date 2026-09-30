@@ -558,6 +558,10 @@ Both serve path evidence.
   or Function read. A target that states no schema links to every listed node
   with that bare name. One unqualified call can therefore reach two procedures
   and give two Execution Paths.
+- Resolved by `.scratch/unstated-schema-resolves-as-sql-server-does` ticket 05:
+  an unqualified call links to the one procedure the Schema Resolution rule
+  names, so one call gives one path. The bullet below keeps the original
+  record of the decision.
 - Open decision (code review after issue 13): ADR-0035 rejects one path per
   candidate schema. Its reason is that one unknown fact becomes several facts,
   and at most one of them is true. The call rule above produces that shape for

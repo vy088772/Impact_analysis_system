@@ -29,14 +29,18 @@ from canonical_object_identity import ObjectName
 
 # The login default schema of this shop. No per-Database or per-System setting exists.
 DEFAULT_SCHEMA = "dbo"
+# The schema of the system procedures. The listing holds no `sys` object.
+SYSTEM_SCHEMA = "sys"
+_SYSTEM_PREFIXES = ("sp_", "xp_")
 
 WRITTEN = "written"
 MODULE_SCHEMA = "module_schema"
 DEFAULT_SCHEMA_SOURCE = "default_schema"
+SYSTEM = "system"
 UNRESOLVED = "unresolved"
 
 # Strongest first. A fact that two references prove keeps the strongest source.
-SOURCES = (WRITTEN, MODULE_SCHEMA, DEFAULT_SCHEMA_SOURCE, UNRESOLVED)
+SOURCES = (WRITTEN, MODULE_SCHEMA, DEFAULT_SCHEMA_SOURCE, SYSTEM, UNRESOLVED)
 
 
 def resolve(
@@ -59,3 +63,25 @@ def resolve(
     if holds(DEFAULT_SCHEMA, reference.name):
         return DEFAULT_SCHEMA, DEFAULT_SCHEMA_SOURCE
     return "", UNRESOLVED
+
+
+def resolve_call(
+    reference: ObjectName,
+    module_schema: str,
+    holds: Callable[[str, str], bool],
+) -> tuple[str, str]:
+    """Return the schema of a procedure call and its schema source.
+
+    A call follows ``resolve()``. An unqualified ``sp_`` or ``xp_`` name that the
+    listing holds in neither schema is a system procedure, so it resolves to
+    ``sys``. SQL Server checks ``sys`` first, but the listing holds no ``sys``
+    object, so a listed user procedure with that prefix still wins.
+    """
+    schema, source = resolve(reference, module_schema, holds)
+    if (
+        source == UNRESOLVED
+        and not reference.database
+        and reference.name.casefold().startswith(_SYSTEM_PREFIXES)
+    ):
+        return SYSTEM_SCHEMA, SYSTEM
+    return schema, source
