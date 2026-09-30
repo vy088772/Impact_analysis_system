@@ -777,3 +777,12 @@ def test_an_alias_inside_a_parenthesised_join_is_an_alias_of_the_from_clause() -
 
     assert operation["write_tables"] == [_reference("", "", "dbo", "Real")]
     assert [ref["name"] for ref in operation["read_tables"]] == ["Other", "Third"]
+
+
+def test_an_alias_inside_an_odbc_escape_join_is_an_alias_of_the_from_clause() -> None:
+    operation = _write_test_statement(
+        "UPDATE t SET a = 1 FROM { oj dbo.Other o LEFT OUTER JOIN dbo.Real t ON t.a = o.a };"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "Real")]
+    assert operation["read_tables"] == [_reference("", "", "dbo", "Other")]

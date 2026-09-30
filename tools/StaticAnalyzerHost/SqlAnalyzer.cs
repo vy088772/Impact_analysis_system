@@ -358,11 +358,15 @@ internal sealed class SqlOperationExtractor
                     StringComparison.OrdinalIgnoreCase));
 
     // The table references that one item of a FROM clause joins. A join holds two table
-    // references, and a join in parentheses holds one join. Any other table reference is one
-    // source with its own alias. A derived table is a scope of its own, so the walk stops there.
+    // references, a join in parentheses holds one join, and an ODBC escape join ({ oj ... })
+    // holds one table reference. Any other table reference is one source with its own alias.
+    // A derived table is a scope of its own, so the walk stops there.
     private static IEnumerable<TSqlFragment> JoinedTableReferences(TSqlFragment tableReference)
     {
-        var joined = new[] { "FirstTableReference", "SecondTableReference", "Join" }
+        var wrapped = tableReference.GetType().Name == "OdbcQualifiedJoinTableReference"
+            ? new[] { "TableReference" }
+            : new[] { "FirstTableReference", "SecondTableReference", "Join" };
+        var joined = wrapped
             .Select(property => GetFragmentProperty(tableReference, property))
             .OfType<TSqlFragment>()
             .ToList();
