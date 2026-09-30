@@ -14,8 +14,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set
 
-from canonical_object_identity import bare_key, parse, part_key
-from schema_resolution import DEFAULT_SCHEMA
+import schema_resolution
+from canonical_object_identity import ObjectName, bare_key, parse, part_key
 
 from .connection_source_entry import database_of, server_of
 from .external_wrapper_contracts import (
@@ -2317,15 +2317,19 @@ class SpCatalog:
         normalized_name: str,
         schema: Optional[str] = None,
     ) -> Optional[str]:
-        """The schema a call reaches: the stated one, else `dbo` when the catalog holds it."""
-        if schema:
-            return schema
+        """The schema a call reaches, by Schema Resolution outside a module.
+
+        That is the stated schema, else `dbo` when the catalog holds `dbo.name`.
+        """
         qualified_names = self.qualified_procedures_by_database.get(
             self._database_key(database), set()
         )
-        if f"{DEFAULT_SCHEMA}.{normalized_name}" in qualified_names:
-            return DEFAULT_SCHEMA
-        return None
+        resolved, _ = schema_resolution.resolve(
+            ObjectName("", "", schema or "", normalized_name),
+            "",
+            lambda held_schema, name: f"{held_schema}.{name}" in qualified_names,
+        )
+        return resolved or None
 
     def databases_containing(
         self,
