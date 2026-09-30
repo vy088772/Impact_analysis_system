@@ -157,11 +157,12 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
     """A cache built under any earlier graph version must be rejected.
 
     GRAPH_VERSION rises whenever the graph payload changes what a reader
-    concludes -- most recently to 7, when a reference that states no schema
-    stopped getting a `dbo` fill (canonical-object-identity, Step 2b), so a
-    graph that still holds the fill fails this check until it is rebuilt.
+    concludes -- most recently to 8, when a reference that states no schema
+    began to resolve as SQL Server resolves it (unstated-schema-resolves-as-
+    sql-server-does), so a v7 graph, which leaves that schema empty and marked,
+    fails this check until it is rebuilt.
     """
-    assert GRAPH_VERSION == 7
+    assert GRAPH_VERSION == 8
 
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(

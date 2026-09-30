@@ -4,7 +4,9 @@
 GRAPH_VERSION 每次提高都跑一次：讀取路徑只拒用舊版 Graph，不在查詢時重建。
 v3 修正 offset（下段說明）；v5 讓每個 analyzer 參照保留 server、database、
 schema、名稱四段（canonical-object-identity，Step 2a）；v7 讓沒寫 schema 的參照
-保持空白、不再補 dbo（Step 2b）。重建之後接著跑
+保持空白、不再補 dbo（Step 2b）；v8 讓沒寫 schema 的參照照 SQL Server
+的規則解析、CTE 名稱不再算讀表、UPDATE/DELETE 別名寫的是它指的物件
+（unstated-schema-resolves-as-sql-server-does）。重建之後接著跑
 tools/backfill_object_location_indexes.py。
 
 v3：01、02 兩張票只修好「以後怎麼寫」；這支工具修「已經寫壞的」——每份快取檔
