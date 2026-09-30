@@ -158,9 +158,9 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
 
     GRAPH_VERSION rises whenever the graph payload changes what a reader
     concludes -- most recently to 8, when a reference that states no schema
-    began to resolve as SQL Server resolves it (unstated-schema-resolves-as-
-    sql-server-does), so a v7 graph, which leaves that schema empty and marked,
-    fails this check until it is rebuilt.
+    began to resolve as SQL Server resolves it
+    (unstated-schema-resolves-as-sql-server-does), so a v7 graph, which leaves
+    that schema empty and marked, fails this check until it is rebuilt.
     """
     assert GRAPH_VERSION == 8
 

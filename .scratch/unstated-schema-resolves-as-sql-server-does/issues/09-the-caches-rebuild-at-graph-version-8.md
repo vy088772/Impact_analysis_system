@@ -28,6 +28,7 @@ Files this ticket changed (other tickets run in parallel; these are the only one
 - `tools/repair_sql_execution_graphs.py`: the docstring names v8.
 - Companion repository `llamaindex-spec-rag`: `tests/_sql_cache_fixtures.py` (`GRAPH_VERSION = 8`) and `evaluation/Impact_analysis/results/routing_expectations.json` (5 questions, see below).
 - Data, not in git (`data/` is ignored): the seven SQL caches and their indexes, rebuilt.
+- After the code review (second commit): `docs/使用說明書.md` and `docs/進階手冊.md` (each names version 8 beside the repair tool), the `GRAPH_VERSION` comment, the docstring of the stale-version test, and these notes.
 
 Order of work: the v7 report ran first; the backup `data/sql_cache_backup_v7_20260930/` (21 files, copied with `cp -Rp`) came before the repair; then the repair tool (12 s, seven caches 7 to 8), then the index backfill tool, then the report again.
 
@@ -46,11 +47,29 @@ Order of work: the v7 report ran first; the backup `data/sql_cache_backup_v7_202
 
 Differences from the expected scale:
 
-- Resolved schemas: 10411 (`module_schema`) + 60 (`system`) = 10471. The spec says about 9800. The report counts relationships. The spec's 9845 counts listed references, and the CTE and alias removals change it. Same scale. `default_schema` is 0: every resolved target sits in its module's own schema in these caches (all `dbo` modules resolve as `module_schema`, as the rule allows).
+The code review of 2026-09-30 found four wrong explanations in the first version of this list. The list below replaces them. Each number comes from a count of the v7 backup and the v8 caches, by relationship type and target node type.
+
 - CTE reads 231 to 0 and alias writes 330 to 0: both match the spec exactly.
-- `written` fell from 7612 to 6866 (-746). Cause: 675 `reads` and 18 `writes` relationships that v7 held for PUR, 64 `reads` and 115 `writes` for eFinance, and 1 in STC are gone. They are the removed CTE reads, the alias writes that became real-table writes (a write no longer also counts as a read), and alias-named targets. No relationship of type `contains`, `calls`, `uses`, or `unresolved` changed in count.
-- The 1 `writes` and 616 `reads` that v7 stated with a schema are unchanged in their targets.
-- Remaining unresolved: 2419 relationships (659 targets). They are the names the listing does not hold: `#temp` tables, `@table` variables, and other-Database objects. The spec counted 3107 unlisted names with a different unit (names, not relationships). No broken reference is left, since the CTE `Table1` is gone.
+- Resolved schemas: 10411 (`module_schema`) + 60 (`system`) = 10471. The spec says about 9800. The surplus has one cause, and it is a rule of the report, not a change in the graph:
+  - 9754 `module_schema` references name a table (7677 `reads`, 2077 `writes`). With the 60 `system` calls, that is 9814. This is the spec's "about 9800".
+  - 657 `module_schema` references name a procedure, a View, or a Function (80 `calls`, 552 View `reads`, 1 View `writes`, 24 Function `reads`). v7 already linked these no-schema references to a listed node. The report counts a v7 reference as `written` when its target node has a schema, so the v7 baseline put them in `written`.
+- `default_schema` is 0: every resolved target sits in its module's own schema in these caches (all `dbo` modules resolve as `module_schema`, as the rule allows).
+- `written` fell from 7612 to 6866 (-746). The parts:
+  - -657: the procedure, View, and Function references above. They moved from `written` to `module_schema`. Their targets did not change.
+  - +67 table `writes` (748 to 815): an alias write is now a write of the real table, and the procedure text states that table's schema.
+  - -153 table `reads` (5398 to 5245): 234 left and 81 came, counted per statement. 232 of the 234 sit on a statement that held an alias write in v7. The statement now writes the real object and no longer reads it. When the real object is a temp table, the reads that its lineage carried leave too. One case was checked in full: `dbo.usp_ATV_Manifest_Qry` in PUR, two `Update L ... From #List as L` statements.
+  - The probable cause of the 81 that came: a temp table now has the alias write as a writer, so a read of that temp table expands to more base tables. This ticket checked no case of the 81 in full.
+  - -4 Function `reads` and +1 View `reads`. This ticket did not find their cause.
+- All references: 20629 to 19756 (-873): `reads` 16096 to 15356 (-740), `writes` 4143 to 4010 (-133). This is a different number from the -746 above. The relationship types `contains` (9631), `calls` (390), `uses` (826), and `unresolved` (15) keep their counts.
+- No-schema table `reads` fell by 584 (9562 to 8978). The 584 holds the CTE reads and the reads that the alias fix removed. This ticket did not split the 584 further.
+- No-schema table `writes` fell by 200 (3394 to 3194): 330 alias writes left, and 130 writes of the real object came (60 `module_schema`, 70 to a temp table).
+- No module lost an answer. A check of each (module, object with a schema) pair shows no lost `writes` pair and no lost `calls` pair. 23 `reads` pairs are gone, and in each one the module now writes that table.
+- Remaining unresolved: 2419 relationships (659 targets).
+  - 2393 name a `#temp` table.
+  - 24 `reads` name a plain table that the listing of its Database does not hold: `syscomments` (10, in PUR and Response), `FAQTable` (7) and `RoleFAQ` (6) in STC `dbo.spFAQQry_V2`, and `ETONLog` (1) in PUR `dbo.spSelETONPODLQry`. These are unlisted or broken references. They keep the Unproven Schema mark, as user story 6 says.
+  - 2 name an object of another Database: `master..xp_cmdshell` (PUR) and `Common..Users` (Response).
+  - No reference names a table variable.
+- The spec's 3107 unlisted names use the same unit as this report. Its three numbers (9845 + 3107 + 3) give 12955, and the v7 baseline holds 13017. The gap is 62. The 61 no-schema calls of v7 are the probable cause; this ticket did not prove it.
 - `system`: 60 `calls` to an `sp_` or `xp_` name that no listing holds now name `sys`, as the spec says.
 
 Spot checks (eFinance graph, v7 to v8):
@@ -70,5 +89,20 @@ Companion repository: `routing_expectations.py --seeds-from` regenerated a draft
 Whole suites: this repository 16 failed, 1246 passed, with `test_search_roles.py` and `test_sp_tables.py` ignored. The 16 are the same ones that ticket 01 recorded on a clean checkout (they need `dotnet` fixtures or a registry entry that this machine lacks). Companion repository: 1216 passed, 0 failed. Before the change there, 1 test failed (the fixture constant against the sample cache), and the new constant fixes it.
 
 **Open operator item (not run here):** another operator machine runs, in this order: `python tools/repair_sql_execution_graphs.py`, then `python tools/backfill_object_location_indexes.py`. Back up its `data/sql_cache` first. Then that machine regenerates nothing else: the routing expectations file comes with the companion repository.
+
+**Code review, 2026-09-30** (commits `a5ac2f3` here and `cce5493` in the companion repository). A second session did a read-only check first: the report, the three spot checks, the backup, and both whole suites gave the same results as above. It did not repeat the `/find_by_table` question.
+
+What the review changed:
+
+- The two operator documents stopped at version 7. Each now names version 8. The commit that raised the version to 7 (`acc0a7f`) changed the same two lines.
+- The `GRAPH_VERSION` comment gave the tool's lookup order as the order of SQL Server. It now gives the order of SQL Server: `sys` for a system name, then the module's schema, then `dbo`. ADR-0037 says why the tool checks `sys` last and gets the same answer.
+- The comment and the test docstring split the spec name across two lines. The name is now on one line, so a search finds it.
+- Four explanations in "Differences from the expected scale" were wrong. The list above replaces them.
+
+What the review found and did not change (each is an operator decision):
+
+- `service/sql_execution_graph.py` ends with one CR byte that `a5ac2f3` added. The earlier commit ended with `"module"` and no line end. Python ignores the byte. Commit `d6af5e1` fixed the same kind of change in `sql_analyzer.py`.
+- The routing expectations file keeps `reviewed_at` 2026-09-29 and `reviewed_by` `ticket-13-canonical-object-identity`. Each earlier regeneration stamped its own ticket. The review of the five changes is in these notes only.
+- 14 `reads` name a plain table that no listing holds (`FAQTable`, `RoleFAQ`, `ETONLog`). They are correct by the rule. An operator can check whether each is a broken reference in the Database.
 
 Also for the operator: ticket 10 changes the path builder only. It needs no new rebuild, but derived evidence files from before ticket 10 would hold paths without the new flag. Check the evidence stamp when ticket 10 lands.

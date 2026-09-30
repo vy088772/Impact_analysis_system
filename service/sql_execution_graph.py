@@ -49,13 +49,13 @@ from .table_match import names_another_database
 # View/Function reference with no schema names every listed node with that bare
 # name (canonical-object-identity, Step 2b). A v6 graph, which filled `dbo`, reads
 # its no-schema targets as proven `dbo`, so it is rejected until it is rebuilt.
-# v8: a reference that states no schema resolves as SQL Server resolves it (the
-# module's schema, then `dbo`, then `sys` for a system name) and records its
-# schema source; a call reaches one procedure; a CTE name is no table read; an
-# UPDATE or DELETE alias writes the object it names (unstated-schema-resolves-
-# as-sql-server-does). A v7 graph gives a no-schema target an empty schema and
-# the Unproven Schema mark, reads CTE names as tables, and writes aliases, so it
-# is rejected until it is rebuilt.
+# v8: a reference that states no schema resolves as SQL Server resolves it
+# (`sys` for a system name, then the module's schema, then `dbo`) and records
+# its schema source; a call reaches one procedure; a CTE name is no table read;
+# an UPDATE or DELETE alias writes the object it names
+# (unstated-schema-resolves-as-sql-server-does). A v7 graph gives a no-schema
+# target an empty schema and the Unproven Schema mark, reads CTE names as
+# tables, and writes aliases, so it is rejected until it is rebuilt.
 GRAPH_VERSION = 8
 NodeKey = tuple[str, str, str, str]
 
