@@ -18,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from code_analyzer.connection_lookup import ConnectionLookup
 from code_analyzer.db_connection_tracker import DBConnectionTracker
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 from code_analyzer.webconfig_connection_resolver import (
@@ -166,14 +167,26 @@ class TestParseWebConfigConnections:
 
 
 # ============================================================
-# DBConnectionTracker：接上 resolver 之後，程式碼裡的查找鍵解析成真正目標
+# DBConnectionTracker：拿到 Connection Lookup 的 view 之後，程式碼裡的查找鍵解析成真正目標
 # ============================================================
 
 
-class TestDBConnectionTrackerWithResolver:
+def _view_of(source_file: Path):
+    """依掃描器的做法，向 Connection Lookup 要這個原始檔的 view。
+
+    掃描根是原始檔所在的專案目錄，所以 view 來自那個目錄裡真的存在的
+    Web.config 檔。"""
+    return ConnectionLookup(source_file.parent).for_file(source_file)
+
+
+class TestDBConnectionTrackerWithView:
     @staticmethod
-    def _stc_resolver():
-        return parse_web_config_file(STC_WEB_CONFIG)
+    def _stc_view():
+        return _view_of(STC_GLOBAL_ASAX)
+
+    @staticmethod
+    def _ttpur_view():
+        return _view_of(TTPUR_WEB_CONFIG.parent / "Default.aspx.cs")
 
     @requires_web_config_fixtures
     def test_direct_sqlconnection_from_appsettings_resolves_real_database(self):
@@ -182,7 +195,7 @@ class TestDBConnectionTrackerWithResolver:
         必須解析成真正的資料庫 SysErrorRecord，而不是把 key "error" 大寫成
         "ERROR" 當資料庫名稱。"""
         content = STC_GLOBAL_ASAX.read_text(encoding="utf-8")
-        tracker = DBConnectionTracker(connection_resolver=self._stc_resolver())
+        tracker = DBConnectionTracker(connections=self._stc_view())
         connections = tracker.analyze_connections(content)
 
         assert connections["cn"].database_name == "SysErrorRecord"
@@ -201,27 +214,26 @@ class TestDBConnectionTrackerWithResolver:
             "    }\n"
             "}\n"
         )
-        resolver = parse_web_config_file(TTPUR_WEB_CONFIG)
-        tracker = DBConnectionTracker(connection_resolver=resolver)
+        tracker = DBConnectionTracker(connections=self._ttpur_view())
         connections = tracker.analyze_connections(content)
 
         assert connections["cn"].database_name == "EFNETDB"
         assert connections["cn"].server == "vmsystest08.topmost.com.tw\\vmsystest08_pdcs"
 
     @requires_web_config_fixtures
-    def test_unresolvable_key_produces_no_connection_when_resolver_present(self):
-        """一旦提供了 connection_resolver，查找不到的鍵就不再退回猜測——維持
+    def test_unresolvable_key_produces_no_connection_when_a_table_is_present(self):
+        """一旦 view 有一張 Web.config 查找表，查找不到的鍵就不再退回猜測——維持
         unresolved，而不是捏造一個資料庫名稱。"""
         content = (
             'SqlConnection cn = new SqlConnection(ConfigurationManager.AppSettings["NotInWebConfig"]);'
         )
-        tracker = DBConnectionTracker(connection_resolver=self._stc_resolver())
+        tracker = DBConnectionTracker(connections=self._stc_view())
         connections = tracker.analyze_connections(content)
         assert "cn" not in connections
 
-    def test_no_resolver_falls_back_to_key_as_database(self):
-        """沒有 Web.config 情境時（例如單獨測試某個 regex 樣式），退回舊行為，
-        不會讓沒有專案情境的呼叫方直接失去現有功能。"""
+    def test_a_tracker_with_no_view_keeps_the_key_as_name_guess(self):
+        """沒有拿到 view 的 tracker（例如單獨測試某個 regex 樣式）把查找鍵當成
+        資料庫名稱，不會讓沒有專案情境的呼叫方直接失去現有功能。"""
         content = 'SQLFunc obj = new SQLFunc(ConfigurationManager.AppSettings["PUR"]);'
         tracker = DBConnectionTracker()
         connections = tracker.analyze_connections(content)
@@ -234,14 +246,14 @@ class TestDBConnectionTrackerWithResolver:
         字母的字串常數當成資料庫名稱（不論是否透過 ConfigurationManager 存
         取），現在完全移除，不能再誤判。"""
         content = 'SomeClass instance = new SomeClass(ConfigurationManager.AppSettings["error"]);'
-        tracker = DBConnectionTracker(connection_resolver=self._stc_resolver())
+        tracker = DBConnectionTracker(connections=self._stc_view())
         connections = tracker.analyze_connections(content)
         assert "instance" not in connections
 
     @requires_web_config_fixtures
     def test_sqlfunc_appsettings_resolves_through_web_config(self):
         content = 'SQLFunc obj = new SQLFunc(ConfigurationManager.AppSettings["error"]);'
-        tracker = DBConnectionTracker(connection_resolver=self._stc_resolver())
+        tracker = DBConnectionTracker(connections=self._stc_view())
         connections = tracker.analyze_connections(content)
         assert connections["obj"].database_name == "SysErrorRecord"
         assert connections["obj"].server == "vmsystest07"
@@ -251,13 +263,14 @@ class TestDBConnectionTrackerWithResolver:
         content = (
             'SQLObject obj = new SQLObject(ConfigurationManager.ConnectionStrings["TTOA"].ConnectionString);'
         )
-        resolver = parse_web_config_file(TTPUR_WEB_CONFIG)
-        tracker = DBConnectionTracker(connection_resolver=resolver)
+        tracker = DBConnectionTracker(connections=self._ttpur_view())
         connections = tracker.analyze_connections(content)
         assert connections["obj"].database_name == "EFNETDB"
         assert connections["obj"].server == "vmsystest08.topmost.com.tw\\vmsystest08_pdcs"
 
-    def test_appsettings_and_connectionstrings_keys_never_cross_resolve(self):
+    def test_appsettings_and_connectionstrings_keys_never_cross_resolve(
+        self, tmp_path: Path
+    ):
         """ADR-0008：一個 `AppSettings["PUR"]` 存取式只能查 app_settings 表，
         絕不能誤中 connection_strings 表裡同名但目標不同的 "PUR" entry
         （反之亦然）。"""
@@ -269,7 +282,9 @@ class TestDBConnectionTrackerWithResolver:
             <add name="PUR" connectionString="Data Source=srvB;Initial Catalog=DbFromConnectionStrings"/>
           </connectionStrings>
         </configuration>"""
-        resolver = parse_web_config_connections(content)
+        (tmp_path / "Shop.csproj").write_text("<Project></Project>", encoding="utf-8")
+        (tmp_path / "Web.config").write_text(content, encoding="utf-8")
+        view = ConnectionLookup(tmp_path).for_file(tmp_path / "Order.aspx.cs")
 
         appsettings_code = 'SqlConnection cn = new SqlConnection(ConfigurationManager.AppSettings["PUR"]);'
         connectionstrings_code = (
@@ -277,10 +292,10 @@ class TestDBConnectionTrackerWithResolver:
         )
 
         appsettings_connections = DBConnectionTracker(
-            connection_resolver=resolver
+            connections=view
         ).analyze_connections(appsettings_code)
         connectionstrings_connections = DBConnectionTracker(
-            connection_resolver=resolver
+            connections=view
         ).analyze_connections(connectionstrings_code)
 
         assert appsettings_connections["cn"].database_name == "DbFromAppSettings"
@@ -313,3 +328,64 @@ def test_project_scanner_resolves_stc_global_asax_connection_source():
         "database": "SysErrorRecord",
         "server": "vmsystest07",
     }
+
+
+def _write_web_application(directory: Path, *, database: str, server: str) -> Path:
+    """寫出一個最小的 WebForms 專案：專案檔、Web.config、一個頁面的 code-behind。"""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{directory.name}.csproj").write_text(
+        '<Project ToolsVersion="15.0"></Project>', encoding="utf-8"
+    )
+    (directory / "Web.config").write_text(
+        "<configuration><connectionStrings>"
+        f'<add name="Main" connectionString="Data Source={server};Initial Catalog={database}"/>'
+        "</connectionStrings></configuration>",
+        encoding="utf-8",
+    )
+    (directory / "Default.aspx").write_text(
+        '<%@ Page Language="C#" CodeBehind="Default.aspx.cs" %>', encoding="utf-8"
+    )
+    source = directory / "Default.aspx.cs"
+    source.write_text(
+        "public class Default {\n"
+        "    void Load() {\n"
+        "        SqlConnection cn = new SqlConnection("
+        'ConfigurationManager.ConnectionStrings["Main"].ConnectionString);\n'
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    return source
+
+
+def test_project_scanner_gives_two_web_applications_under_one_scan_root_their_own_table(
+    tmp_path: Path,
+):
+    """一張 Web.config 查找表涵蓋一個 Project Connection Scope（ADR-0018 的增
+    補）：同一個掃描根底下的兩個 web application 用同一個鍵名，各自解析到自己
+    的 Web.config 宣告的資料庫，不共用掃描根的那一張表。寫進 C# Scan Result
+    的項目只有 database 與 server。"""
+    shop_source = _write_web_application(tmp_path / "Shop", database="ShopDb", server="sql01")
+    depot_source = _write_web_application(
+        tmp_path / "Depot", database="DepotDb", server="sql02"
+    )
+
+    scanner = ProjectScanner(project_root=str(tmp_path), project_name="Sites")
+    scan_result = ProjectScanResult(
+        project_root=str(tmp_path),
+        project_name="Sites",
+        scan_time=datetime.now(),
+    )
+    scan_result = scanner.refresh_csharp_files(
+        scan_result, [str(shop_source), str(depot_source)]
+    )
+
+    assert scan_result.connection_sources[str(shop_source.resolve())]["cn"] == {
+        "database": "ShopDb",
+        "server": "sql01",
+    }
+    assert scan_result.connection_sources[str(depot_source.resolve())]["cn"] == {
+        "database": "DepotDb",
+        "server": "sql02",
+    }
+    assert scan_result.unresolved_connections == {}

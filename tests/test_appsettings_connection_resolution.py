@@ -24,17 +24,16 @@ from code_analyzer.appsettings_connection_resolver import (
     parse_appsettings_connections,
     parse_appsettings_file,
 )
+from code_analyzer.connection_lookup import ConnectionLookup
 from code_analyzer.connection_string_value import ResolvedConnection
 from code_analyzer.db_connection_tracker import DBConnectionTracker
 from code_analyzer.project_connection_scope import (
     CONTEXT_TYPE_NOT_REGISTERED,
     NO_PROJECT_CONNECTION_SCOPE,
-    ProjectConnectionScopeIndex,
     RECEIVER_DECLARATION_UNRESOLVED,
     ROOT_CONFIGURATION_NAMESPACE,
 )
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
-from code_analyzer.webconfig_connection_resolver import parse_web_config_file
 
 STC_WEB_CONFIG = PROJECT_ROOT / "data/repos/System_Dept_1/STC/STC/Web.config"
 STC_GLOBAL_ASAX = PROJECT_ROOT / "data/repos/System_Dept_1/STC/STC/Global.asax.cs"
@@ -85,18 +84,18 @@ def _write_source(path: Path, content: str) -> Path:
 
 
 def _track(
-    index: ProjectConnectionScopeIndex,
+    lookup: ConnectionLookup,
     source_file: Path,
     content: str,
     *,
     invoked: frozenset = frozenset(),
 ):
-    """依掃描器的做法，用這個檔案所屬的查找表解析它的連線。
+    """依掃描器的做法，把 Connection Lookup 給這個檔案的 view 交給 tracker。
 
     `invoked` 模擬 `ProjectScanner` 從 db_invocations 讀出來、餵給 tracker 的
     「這個檔案裡曾經真的發生過呼叫的連線運算式」集合（ticket 17）。
     """
-    tracker = DBConnectionTracker(connection_resolver=index.scope_for(source_file))
+    tracker = DBConnectionTracker(connections=lookup.for_file(source_file))
     tracker.invoked_connection_expressions = set(invoked)
     tracker.analyze_connections(content)
     return tracker
@@ -202,7 +201,7 @@ class TestDbContextResolution:
             "}\n",
         )
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, source.read_text(encoding="utf-8"))
+        tracker = _track(ConnectionLookup(tmp_path), source, source.read_text(encoding="utf-8"))
 
         assert tracker.connections["_payroll"].database_name == "PayrollDb"
         assert tracker.connections["_payroll"].server == "srvA"
@@ -230,7 +229,7 @@ class TestDbContextResolution:
             "}\n",
         )
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, source.read_text(encoding="utf-8"))
+        tracker = _track(ConnectionLookup(tmp_path), source, source.read_text(encoding="utf-8"))
 
         assert tracker.connections["_payroll"].database_name == "PayrollDb"
         assert tracker.connections["_payroll"].server == "srvA"
@@ -257,7 +256,7 @@ class TestDbContextResolution:
         )
 
         tracker = _track(
-            ProjectConnectionScopeIndex(tmp_path),
+            ConnectionLookup(tmp_path),
             source,
             source.read_text(encoding="utf-8"),
             invoked=frozenset({"_ledger"}),
@@ -287,7 +286,7 @@ class TestDbContextResolution:
         )
 
         tracker = _track(
-            ProjectConnectionScopeIndex(tmp_path), source, source.read_text(encoding="utf-8")
+            ConnectionLookup(tmp_path), source, source.read_text(encoding="utf-8")
         )
 
         assert tracker.connections == {}
@@ -312,7 +311,7 @@ class TestDbContextResolution:
         )
 
         tracker = _track(
-            ProjectConnectionScopeIndex(tmp_path),
+            ConnectionLookup(tmp_path),
             source,
             source.read_text(encoding="utf-8"),
             invoked=frozenset({"_ledger"}),
@@ -352,7 +351,7 @@ class TestDbContextResolution:
         )
 
         tracker = _track(
-            ProjectConnectionScopeIndex(tmp_path),
+            ConnectionLookup(tmp_path),
             source,
             source.read_text(encoding="utf-8"),
         )
@@ -384,7 +383,7 @@ class TestProjectConnectionScope:
             'string connection = configuration.GetConnectionString("Main");\n',
         )
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, source.read_text(encoding="utf-8"))
+        tracker = _track(ConnectionLookup(tmp_path), source, source.read_text(encoding="utf-8"))
 
         assert tracker.connections["connection"].database_name == "InnerDb"
         assert tracker.connections["connection"].server == "srvInner"
@@ -411,9 +410,9 @@ class TestProjectConnectionScope:
         api_source = _write_source(api / "Data" / "HrRepository.cs", call)
         runner_source = _write_source(runner / "Jobs" / "HrJob.cs", call)
 
-        index = ProjectConnectionScopeIndex(tmp_path)
-        api_tracker = _track(index, api_source, call)
-        runner_tracker = _track(index, runner_source, call)
+        lookup = ConnectionLookup(tmp_path)
+        api_tracker = _track(lookup, api_source, call)
+        runner_tracker = _track(lookup, runner_source, call)
 
         assert api_tracker.connections["connection"].database_name == "YMTHRPortal"
         assert api_tracker.connections["connection"].server == "vmsystest08"
@@ -436,7 +435,7 @@ class TestProjectConnectionScope:
         content = 'string connection = configuration.GetConnectionString("Payroll");\n'
         source = _write_source(tmp_path / "loose" / "Orphan.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert tracker.connections == {}
         assert [entry.reason for entry in tracker.unresolved] == [
@@ -457,7 +456,7 @@ class TestProjectConnectionScope:
         content = 'string connection = _configuration["Payroll"];\n'
         source = _write_source(project / "Data" / "Repository.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert "connection" not in tracker.connections
         assert [entry.reason for entry in tracker.unresolved] == [
@@ -477,7 +476,7 @@ class TestProjectConnectionScope:
         content = 'string level = _configuration["LogLevel"];\n'
         source = _write_source(project / "Startup" / "Logging.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert tracker.connections == {}
         assert tracker.unresolved == []
@@ -494,7 +493,7 @@ class TestProjectConnectionScope:
         content = 'string connection = _configuration["ConnectionStrings:Payroll"];\n'
         source = _write_source(project / "Data" / "Repository.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert tracker.connections["connection"].database_name == "PayrollDb"
         assert tracker.connections["connection"].server == "srvA"
@@ -512,13 +511,13 @@ class TestProjectConnectionScope:
         content = 'string connection = configuration.GetConnectionString("Payroll");\n'
         source = _write_source(project / "Data" / "Repository.cs", content)
 
-        index = ProjectConnectionScopeIndex(tmp_path)
-        tracker = _track(index, source, content)
+        lookup = ConnectionLookup(tmp_path)
+        tracker = _track(lookup, source, content)
 
         assert tracker.connections["connection"].database_name == "PayrollDb"
         assert tracker.connections["connection"].server == "srvA"
 
-        observations = index.environment_overrides()
+        observations = lookup.environment_overrides()
         assert len(observations) == 1
         observation = observations[0]
         assert observation["lookup_key"] == "Payroll"
@@ -537,17 +536,15 @@ class TestProjectConnectionScope:
 
 @requires_web_config_fixtures
 def test_the_web_config_resolution_path_is_unchanged():
-    """WebForms 系統底下沒有任何 appsettings.json，所以新的查找表完全不作用，
-    STC/Global.asax.cs 仍然透過 Web.config 解析成 SysErrorRecord。"""
+    """WebForms 系統底下沒有任何 appsettings.json，所以 STC/Global.asax.cs 的
+    view 不讀 Application Settings File，仍然透過 Web.config 解析成
+    SysErrorRecord。"""
     web_forms_root = STC_GLOBAL_ASAX.parent
 
-    index = ProjectConnectionScopeIndex(web_forms_root)
-    assert index.enabled is False
-    assert index.scope_for(STC_GLOBAL_ASAX) is None
+    view = ConnectionLookup(web_forms_root).for_file(STC_GLOBAL_ASAX)
+    assert view.reads_application_settings_file is False
 
-    tracker = DBConnectionTracker(
-        connection_resolver=parse_web_config_file(STC_WEB_CONFIG)
-    )
+    tracker = DBConnectionTracker(connections=view)
     connections = tracker.analyze_connections(
         STC_GLOBAL_ASAX.read_text(encoding="utf-8")
     )

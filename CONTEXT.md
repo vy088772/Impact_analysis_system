@@ -249,7 +249,7 @@ The declaration inside one View that names an action the screen calls. It comes 
 _Avoid_: route, form target, event handler
 
 **Project Connection Scope**:
-The directory of one project file, which is the extent over which one connection lookup table is valid. A `.cs` file belongs to the nearest project file above it, and two projects' tables are never merged — one key name is unique only inside the configuration file that declares it, and the same name in two projects can open two different databases. A file with no project file above it has no table, and its connections report unresolved. See [ADR-0018](docs/adr/0018-connection-lookup-tables-are-scoped-to-the-project-file.md).
+The directory of one project file, which is the extent over which one connection lookup table is valid. A `.cs` file belongs to the nearest project file above it, and two projects' tables are never merged — one key name is unique only inside the configuration file that declares it, and the same name in two projects can open two different databases. The table comes from the Application Settings File beside the project file. If the project has none, the table comes from the `Web.config` beside the project file. A project with neither file uses the `Web.config` of the scan root, and so does a file with no project file above it. One exception applies: when the scan root holds an Application Settings File, a file with no project file above it has no table, and its connections report unresolved. See [ADR-0018](docs/adr/0018-connection-lookup-tables-are-scoped-to-the-project-file.md).
 _Avoid_: scan root scope, repository connections, appsettings table
 
 **Application Settings File**:

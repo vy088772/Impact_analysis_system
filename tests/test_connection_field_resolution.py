@@ -21,12 +21,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from code_analyzer.connection_lookup import ConnectionLookup
 from code_analyzer.db_connection_tracker import DBConnectionTracker
 from code_analyzer.project_connection_scope import (
     build_project_connection_scope,
     CONNECTION_KEY_NOT_IN_PROJECT_SCOPE,
     FIELD_HELD_CONNECTION_NOT_TRACED,
-    ProjectConnectionScopeIndex,
     ROOT_CONFIGURATION_NAMESPACE,
 )
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
@@ -70,9 +70,9 @@ def _write_source(path: Path, content: str) -> Path:
     return path
 
 
-def _track(index: ProjectConnectionScopeIndex, source_file: Path, content: str):
-    """依掃描器的做法，用這個檔案所屬的查找表解析它的連線。"""
-    tracker = DBConnectionTracker(connection_resolver=index.scope_for(source_file))
+def _track(lookup: ConnectionLookup, source_file: Path, content: str):
+    """依掃描器的做法，把 Connection Lookup 給這個檔案的 view 交給 tracker。"""
+    tracker = DBConnectionTracker(connections=lookup.for_file(source_file))
     tracker.analyze_connections(content)
     return tracker
 
@@ -121,7 +121,7 @@ class TestConnectionHeldInAField:
         content = _controller('_connetStr = config.GetConnectionString("Payroll");')
         source = _write_source(project / "Controllers" / "ReportController.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert tracker.connections["con"].database_name == "PayrollDb"
         assert tracker.connections["con"].server == "srvA"
@@ -144,9 +144,9 @@ class TestConnectionHeldInAField:
         payroll_source = _write_source(payroll / "Controllers" / "R.cs", content)
         ledger_source = _write_source(ledger / "Controllers" / "R.cs", content)
 
-        index = ProjectConnectionScopeIndex(tmp_path)
-        payroll_tracker = _track(index, payroll_source, content)
-        ledger_tracker = _track(index, ledger_source, content)
+        lookup = ConnectionLookup(tmp_path)
+        payroll_tracker = _track(lookup, payroll_source, content)
+        ledger_tracker = _track(lookup, ledger_source, content)
 
         assert payroll_tracker.connections["con"].database_name == "PayrollDb"
         assert payroll_tracker.connections["con"].server == "srvA"
@@ -166,7 +166,7 @@ class TestConnectionHeldInAField:
         content = _controller('_connetStr = config.GetValue<string>("Payroll");')
         source = _write_source(project / "Controllers" / "R.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert "con" not in tracker.connections
         assert "_connetStr" not in tracker.connections
@@ -188,7 +188,7 @@ class TestConnectionHeldInAField:
         )
         source = _write_source(project / "Controllers" / "R.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert tracker.connections["con"].database_name == "PayrollDb"
         assert tracker.connections["con"].server == "srvA"
@@ -211,7 +211,7 @@ class TestConnectionHeldInAField:
         )
         source = _write_source(project / "Startup.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert tracker.connections == {}
         assert tracker.unresolved == []
@@ -227,7 +227,7 @@ class TestConnectionHeldInAField:
         content = _controller("_connetStr = factory.Build();")
         source = _write_source(project / "Controllers" / "R.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert "con" not in tracker.connections
         reasons = _reasons(tracker)
@@ -249,7 +249,7 @@ def test_the_measured_repository_resolves_its_raw_ado_net_calls():
     """ETR 有三十五處 `new SqlConnection(_connetStr)`。其中三十四處的欄位讀
     自 ConnectionStrings 區段，必須解析成 ETR 資料庫；一處讀自根命名空間，
     必須解析不出來並說出理由（那是 ETR 自己的組態缺陷，看得見才能修）。"""
-    index = ProjectConnectionScopeIndex(ETR_REPOSITORY)
+    lookup = ConnectionLookup(ETR_REPOSITORY)
     call_site = re.compile(r"new\s+SqlConnection\s*\(\s*(\w+)\s*\)")
 
     resolved: list = []
@@ -260,7 +260,7 @@ def test_the_measured_repository_resolves_its_raw_ado_net_calls():
         content = decode_source_bytes(source.read_bytes())
         if not call_site.search(content):
             continue
-        tracker = _track(index, source, content)
+        tracker = _track(lookup, source, content)
         reasons = _reasons(tracker)
         for match in call_site.finditer(content):
             variable = match.group(1)
@@ -287,7 +287,7 @@ class TestFieldConnectionReasons:
         content = _controller('_connetStr = config.GetConnectionString("Missing");')
         source = _write_source(project / "Controllers" / "R.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert "con" not in tracker.connections
         reasons = _reasons(tracker)
@@ -321,7 +321,7 @@ class TestFieldConnectionReasons:
         )
         source = _write_source(project / "Data" / "TwoWays.cs", content)
 
-        tracker = _track(ProjectConnectionScopeIndex(tmp_path), source, content)
+        tracker = _track(ConnectionLookup(tmp_path), source, content)
 
         assert tracker.connections["con"].database_name == "PayrollDb"
         opaque_call = [

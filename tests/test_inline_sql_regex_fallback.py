@@ -18,8 +18,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from canonical_object_identity import ObjectName
+from code_analyzer.connection_lookup import ConnectionLookup
 from code_analyzer.csharp_parser import CSharpParser
-from code_analyzer.project_connection_scope import ProjectConnectionScopeIndex
 from code_analyzer.project_scanner import (
     INLINE_SQL_REGEX,
     CSharpTableRelation,
@@ -32,7 +32,6 @@ from code_analyzer.sql_text_analysis import (
     SqlParseError,
     SqlTextResult,
 )
-from code_analyzer.webconfig_connection_resolver import WebConfigConnections
 from tests.test_inline_sql_table_answer import _ask
 from tests.test_inline_sql_table_relations import (
     _FakeHost,
@@ -110,8 +109,7 @@ def _relations_of_source(tmp_path: Path, sql_literal: str) -> list[CSharpTableRe
     scanner.csharp_parser = CSharpParser()
     scanner.static_analyzer_host = _FakeHost([])
     scanner.sql_text_analysis = InMemorySqlTextAnalysis({})
-    scanner.connection_resolver = WebConfigConnections()
-    scanner.connection_scopes = ProjectConnectionScopeIndex(root)
+    scanner.connection_lookup = ConnectionLookup(root)
     scanner.refresh_csharp_files(scan, [str(source)])
     return scan.table_relations
 

@@ -23,8 +23,7 @@ The view selects a table by these rules, in this order:
 
 Rules 3 to 5 extend ADR-0018: a `Web.config` table also covers one Project
 Connection Scope, and a project with no configuration file uses the
-`Web.config` of the scan root. The ADR gains that amendment when the project
-scanner starts to use this module.
+`Web.config` of the scan root. The amendment of ADR-0018 records these rules.
 
 The two configuration parsers stay pure parsers. This module reads no user
 name and no password (ADR-0010), because the parsers give none.
@@ -39,13 +38,14 @@ from typing import Dict, FrozenSet, List, Mapping, Optional, Tuple, Union
 
 from .connection_string_value import ResolvedConnection
 from .project_connection_scope import (
+    BASE_SETTINGS_FILE_NAME,
     CONNECTION_KEY_NOT_IN_PROJECT_SCOPE,
     CONTEXT_TYPE_NOT_REGISTERED,
+    IGNORED_DIRECTORY_NAMES,
     NO_PROJECT_CONNECTION_SCOPE,
     PROJECT_FILE_SUFFIXES,
     ROOT_CONFIGURATION_NAMESPACE,
     ProjectConnectionScope,
-    ProjectConnectionScopeIndex,
     build_project_connection_scope,
 )
 from .webconfig_connection_resolver import parse_web_config_file
@@ -318,10 +318,23 @@ class ConnectionLookup:
         )
 
     def _scan_root_holds_application_settings_file(self) -> bool:
+        """True when an Application Settings File is in or below the scan root.
+
+        The search does not go into a directory that holds build output or
+        packages.
+        """
         if self._holds_application_settings_file is None:
-            self._holds_application_settings_file = ProjectConnectionScopeIndex(
-                self._scan_root
-            ).enabled
+            self._holds_application_settings_file = False
+            folded_name = BASE_SETTINGS_FILE_NAME.casefold()
+            for _, directory_names, file_names in os.walk(self._scan_root):
+                directory_names[:] = [
+                    name
+                    for name in directory_names
+                    if name.casefold() not in IGNORED_DIRECTORY_NAMES
+                ]
+                if any(name.casefold() == folded_name for name in file_names):
+                    self._holds_application_settings_file = True
+                    break
         return self._holds_application_settings_file
 
     def _relative_to_scan_root(self, path: Path) -> str:

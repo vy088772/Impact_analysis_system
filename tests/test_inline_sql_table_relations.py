@@ -25,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from canonical_object_identity import ObjectName
+from code_analyzer.connection_lookup import ConnectionLookup
 from code_analyzer.csharp_parser import CSharpParser
 from code_analyzer.models import (
     CodeLocation,
@@ -34,7 +35,6 @@ from code_analyzer.models import (
     SQLQuery,
     SQLQueryType,
 )
-from code_analyzer.project_connection_scope import ProjectConnectionScopeIndex
 from code_analyzer.project_scanner import (
     UNRESOLVED_CONNECTION_DATABASE,
     CSharpTableRelation,
@@ -47,7 +47,6 @@ from code_analyzer.sql_text_analysis import (
     SqlTextAnalysisError,
 )
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
-from code_analyzer.webconfig_connection_resolver import WebConfigConnections
 
 requires_dotnet = pytest.mark.skipif(
     shutil.which("dotnet") is None,
@@ -141,8 +140,7 @@ def _scan(
     scanner.csharp_parser = _FakeParser([_query_for(source, query) for query in queries or []])
     scanner.static_analyzer_host = _FakeHost(invocations)
     scanner.sql_text_analysis = analysis
-    scanner.connection_resolver = WebConfigConnections()
-    scanner.connection_scopes = ProjectConnectionScopeIndex(root)
+    scanner.connection_lookup = ConnectionLookup(root)
 
     scanner.refresh_csharp_files(scan, [str(source)])
     return scan.table_relations
@@ -320,8 +318,7 @@ def test_the_scan_sends_the_text_of_a_database_invocation_to_the_real_host(tmp_p
     scanner.scan_result = None
     scanner.csharp_parser = CSharpParser()
     scanner.static_analyzer_host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
-    scanner.connection_resolver = WebConfigConnections()
-    scanner.connection_scopes = ProjectConnectionScopeIndex(root)
+    scanner.connection_lookup = ConnectionLookup(root)
 
     scanner.refresh_csharp_files(scan, [str(source)])
 

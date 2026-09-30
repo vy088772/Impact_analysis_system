@@ -28,9 +28,8 @@ from .static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 from .sql_text_analysis import HostSqlTextAnalysis, SqlTextAnalysis, SqlTextAnalysisError
 from .smart_file_finder import SmartFileFinder, FileSearchResult
 from .config_parser import WebConfigParser
-from .project_connection_scope import ProjectConnectionScopeIndex
 from .source_text import decode_source_bytes
-from .webconfig_connection_resolver import parse_web_config_connections, WebConfigConnections
+from .connection_lookup import ConnectionLookup
 from .connection_source_entry import ConnectionSourceEntry, database_of, resolved_entry
 from .razor_display_field_resolver import resolve_razor_display_fields
 from config.settings import settings, DatabaseConfig
@@ -460,17 +459,11 @@ class ProjectScanner:
         self.static_analyzer_host = StaticAnalyzerHost.for_project(Path(__file__).resolve().parent.parent)
         self.sql_text_analysis = HostSqlTextAnalysis(self.static_analyzer_host)
 
-        # 解析專案的 Web.config，讓 db_tracker 能把程式碼裡的 AppSettings/
-        # ConnectionStrings 查找鍵解析成真正的 {server, database}，而不是把
-        # 查找鍵本身當成資料庫名稱來猜。
-        self.connection_resolver: WebConfigConnections = self._load_connection_resolver()
-        if self.csharp_parser is not None:
-            self.csharp_parser.db_tracker.connection_resolver = self.connection_resolver
-
-        # ASP.NET Core 的 appsettings.json 查找表，依專案檔目錄分範圍
-        # （ADR-0018）。掃描根底下沒有任何 appsettings.json 時它不作用，
-        # Web.config 解析路徑因此完全不變。
-        self.connection_scopes = ProjectConnectionScopeIndex(self.project_root)
+        # 這個掃描根的 Connection Lookup。它回答「一個連線查找鍵，對一個原始檔
+        # 來說開的是哪一條連線」，讓 db_tracker 能把程式碼裡的查找鍵解析成真正
+        # 的 {server, database}，而不是把查找鍵本身當成資料庫名稱來猜。哪一張
+        # 查找表涵蓋哪一個原始檔，只有它知道（ADR-0018 與它的增補）。
+        self.connection_lookup = ConnectionLookup(self.project_root)
         
         # 初始化 SQL 分析器（多資料庫）
         self.sql_analyzers: Dict[str, SQLAnalyzer] = {}
@@ -498,37 +491,17 @@ class ProjectScanner:
         print(f"   掃描檔案: {', '.join([f'*.{ext}' for ext in self.scan_extensions])}")
     
     # ========================================
-    # Web.config 連線字串解析
+    # 連線來源解析
     # ========================================
-    def _load_connection_resolver(self) -> WebConfigConnections:
-        """尋找專案的 Web.config，解析成 app_settings/connection_strings 兩張表。
-
-        找不到 Web.config 時回傳空的 WebConfigConnections——db_tracker 會退回
-        舊行為（把查找鍵當成資料庫名稱），而不是拋出例外讓整個掃描失敗。
-        """
-        web_config_path = WebConfigParser(self.project_root)._find_file("web.config")
-        if not web_config_path:
-            return WebConfigConnections()
-        try:
-            content = Path(web_config_path).read_text(encoding="utf-8-sig")
-        except OSError as error:
-            print(f"⚠️ 讀取 web.config 失敗: {error}")
-            return WebConfigConnections()
-        return parse_web_config_connections(content)
-
     def _parse_csharp_file(self, file_path: str, file_key: str) -> FileAnalysisResult:
         """解析一個 C# 檔，並記下它解析出來的連線來源與解不出來的理由。
 
-        連線查找表一律來自這個檔案所屬的 Project Connection Scope；
-        這個掃描根沒有 appsettings.json 時，改用掃描根的 Web.config
-        查找表（ADR-0018）。一個檔案的連線永遠不能借用另一個專案的表，
-        因為同一個鍵名在兩個專案裡可以開兩個不同的資料庫。
+        tracker 拿到的是 Connection Lookup 給這個檔案的 view（ADR-0018）。一個
+        檔案的連線永遠不能借用另一個專案的表，因為同一個鍵名在兩個專案裡可
+        以開兩個不同的資料庫。
         """
         tracker = self.csharp_parser.db_tracker
-        scope = self.connection_scopes.scope_for(file_path)
-        tracker.connection_resolver = (
-            scope if scope is not None else self.connection_resolver
-        )
+        tracker.file_connections = self.connection_lookup.for_file(file_path)
         tracker.invoked_connection_expressions = self._invoked_connection_expressions(
             file_path, file_key
         )
@@ -599,17 +572,17 @@ class ProjectScanner:
             return None
 
     def _record_connection_observations(self) -> None:
-        """把目前已建立的每一個 scope 觀察到的環境改寫併進掃描結果。
+        """把 Connection Lookup 回報的每一個 Environment Settings Override 併進掃描結果。
 
-        併入而不是取代：一次只重掃一個檔案的 refresh 只建立得出那個檔案所屬
-        的 scope，取代會讓完整掃描記下的其他觀察憑空消失。以
+        併入而不是取代：一次只重掃一個檔案的 refresh 只看得到那個檔案所屬的
+        專案，取代會讓完整掃描記下的其他觀察憑空消失。以
         (設定檔, 查找鍵) 去重，所以重複掃描同一個專案不會累積重複項。
         """
         observations = {
             (entry.get("settings_file"), entry.get("lookup_key")): entry
             for entry in self.scan_result.connection_observations
         }
-        for entry in self.connection_scopes.environment_overrides():
+        for entry in self.connection_lookup.environment_overrides():
             observations[(entry.get("settings_file"), entry.get("lookup_key"))] = entry
         self.scan_result.connection_observations[:] = [
             observations[key] for key in sorted(observations)
@@ -1460,6 +1433,9 @@ class ProjectScanner:
         for file_path in tqdm(search_result.all_files, desc="解析進度"):
             if file_path.endswith('.cs'):
                 try:
+                    self.csharp_parser.db_tracker.file_connections = (
+                        self.connection_lookup.for_file(file_path)
+                    )
                     result = self.csharp_parser.parse_file(file_path)
                     file_analyses.append(result)
                     all_sp_calls.extend(result.stored_procedure_calls)

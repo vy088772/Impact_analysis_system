@@ -5,18 +5,15 @@
 """
 
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field, replace
 
+from . import connection_lookup
+from .connection_lookup import FileConnections
 from .project_connection_scope import (
-    CONNECTION_KEY_NOT_IN_PROJECT_SCOPE,
-    CONTEXT_TYPE_NOT_REGISTERED,
     FIELD_HELD_CONNECTION_NOT_TRACED,
-    ProjectConnectionScope,
     RECEIVER_DECLARATION_UNRESOLVED,
-    ROOT_CONFIGURATION_NAMESPACE,
 )
-from .webconfig_connection_resolver import WebConfigConnections, ResolvedConnection
 
 
 @dataclass
@@ -55,68 +52,54 @@ class UnresolvedConnection:
         }
 
 
-# 一份設定檔解析出來的連線查找表：Web.config 的，或 appsettings.json 的。
-# 兩者有相同的 app_settings/connection_strings 兩張表，所以查找的程式碼只有一份。
-ConnectionLookupTables = Union[WebConfigConnections, ProjectConnectionScope]
-
-
 class DBConnectionTracker:
     """資料庫連線追蹤器
 
-    connection_resolver 是由 webconfig_connection_resolver.parse_web_config_connections()
-    解析專案 Web.config 得到的 WebConfigConnections，內含 app_settings/
-    connection_strings 兩張各自獨立的 {查找鍵: ResolvedConnection} 表。程式碼裡從
-    ConfigurationManager.AppSettings["x"] 或
+    connections 是 Connection Lookup 給這個原始檔的 view（FileConnections）。程
+    式碼裡從 ConfigurationManager.AppSettings["x"] 或
     ConfigurationManager.ConnectionStrings["x"].ConnectionString 擷取出的查找鍵
-    "x"，一律配對到產生它的存取式，透過對應那張表解析成真正的
-    {server, database}——絕不把 "x" 本身當成資料庫名稱來猜，也絕不讓兩個
+    "x"，一律配對到產生它的存取式，拿它所屬的命名空間去問 view——絕不讓兩個
     XML 命名空間的同名查找鍵互相混用（ADR-0008：<appSettings> 的 key 與
     <connectionStrings> 的 name 是兩個獨立的命名空間，即使字面上撞名也可能指向
     不同的連線）。
 
-    沒有提供 connection_resolver（例如脫離專案情境、單純測試某個 regex 樣式）時，
-    退回成把查找鍵當成資料庫名稱的舊行為，讓沒有 Web.config 可解析的呼叫方仍能
-    得到可用（雖然較不精確）的結果；一旦提供了 connection_resolver，任何查找不到
-    的鍵就一律視為無法解析（不再退回猜測），因為此時「這個鍵不在 Web.config 裡」
-    本身就是一個明確的事實。
+    這個 tracker 不挑查找表。哪一張表涵蓋這個原始檔、查不到時說什麼理由、什
+    麼時候退回「把查找鍵當成資料庫名稱」的猜測，全部是 view 的答案
+    （ADR-0018 與它的增補）。tracker 只認得 C# 的程式碼形狀。
 
-    connection_resolver 也可以是一個 ProjectConnectionScope（ASP.NET Core 的
-    appsettings.json 查找表，ADR-0018）。它與 WebConfigConnections 有相同的
-    app_settings/connection_strings 兩張表，所以查找的程式碼只有一份；它另外帶著
-    組合根裡的 DbContext 註冊與 Configuration 根命名空間的鍵名，讓解析不出來的
-    連線說得出理由。Web.config 的解析路徑不因此改變任何一步。
+    沒有提供 view（例如脫離專案情境、單純測試某個 regex 樣式）時，tracker 用一
+    個沒有查找表的 view，所以每一個查找鍵都得到「把查找鍵當成資料庫名稱」的猜
+    測，讓沒有設定檔可解析的呼叫方仍能得到可用（雖然較不精確）的結果。
+
+    除了向 view 問答案，tracker 只讀 view 的一個事實：這個原始檔是不是讀
+    Application Settings File。ASP.NET Core 專屬的程式碼形狀只在那條路徑上
+    解析，也只在那條路徑上留下解析不出來的理由；Web.config 路徑的輸出因此不
+    變。
     """
 
-    APP_SETTINGS = "app_settings"
-    CONNECTION_STRINGS = "connection_strings"
+    APP_SETTINGS = connection_lookup.APP_SETTINGS
+    CONNECTION_STRINGS = connection_lookup.CONNECTION_STRINGS
     # Configuration 根命名空間（IConfiguration["Key"] 與
     # IConfiguration.GetValue<string>("Key") 讀到的那一層）。它不是連線查找表，
     # 所以這個 kind 永遠不查任何一張表——兩個命名空間不合併。
-    ROOT_CONFIGURATION = "root_configuration"
+    ROOT_CONFIGURATION = connection_lookup.ROOT_CONFIGURATION
     DB_CONTEXT_TYPE = "db_context_type"
     # 一個 Field-Held Connection：連線來自呼叫端類別的一個欄位，而不是來自任何
     # 一張查找表。這個 kind 記的是「那個欄位追不回一個查找鍵」，所以它也不查表。
     FIELD_HELD_CONNECTION = "field_held_connection"
 
-    def __init__(self, connection_resolver: Optional[ConnectionLookupTables] = None):
+    def __init__(self, connections: Optional[FileConnections] = None):
         self.connections: Dict[str, ConnectionInfo] = {}
-        self.connection_resolver: Optional[ConnectionLookupTables] = connection_resolver
+        # Connection Lookup 給目前這個原始檔的 view。呼叫方（ProjectScanner）在每
+        # 個檔案解析前設定它。
+        self.file_connections: FileConnections = connections or FileConnections()
         self.unresolved: List[UnresolvedConnection] = []
         # 這個檔案裡真的發生過 Database Invocation 的連線運算式（變數名）。一個
         # 型別宣告本身從不是一次呼叫——「這個型別沒註冊」這個理由只問曾經被呼叫
         # 過的接收者，從不主動去猜哪個變數的型別名字長得像資料庫內容型別
         # （ticket 17）。呼叫方（ProjectScanner）在每個檔案解析前設定它，就像
-        # 設定 connection_resolver 一樣。
+        # 設定 file_connections 一樣。
         self.invoked_connection_expressions: Set[str] = set()
-
-    def _project_scope(self) -> Optional[ProjectConnectionScope]:
-        """回傳目前的 ProjectConnectionScope，若解析器是 Web.config 的則回傳 None。
-
-        以型別分辨，不以「有沒有某個屬性」分辨：屬性改名會讓每一個 Core 專案
-        無聲地退回 Web.config 路徑，也就是退回這張票要消滅的猜測。
-        """
-        resolver = self.connection_resolver
-        return resolver if isinstance(resolver, ProjectConnectionScope) else None
 
     def _record_unresolved(
         self, variable_name: str, key: str, namespace: str, reason: str, line_number: int
@@ -131,26 +114,6 @@ class DBConnectionTracker:
             )
         )
 
-    @staticmethod
-    def _lookup(
-        table: Dict[str, ResolvedConnection], key: str
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """在一張連線查找表裡找一個鍵，大小寫不敏感。"""
-        resolved = table.get(key)
-        if resolved is None:
-            folded = key.casefold()
-            resolved = next(
-                (
-                    value
-                    for candidate_key, value in table.items()
-                    if candidate_key.casefold() == folded
-                ),
-                None,
-            )
-        if resolved is not None and resolved.database:
-            return resolved.database, resolved.server
-        return None, None
-
     def _resolve(
         self,
         key: str,
@@ -158,52 +121,16 @@ class DBConnectionTracker:
         variable_name: str = "",
         line_number: int = 0,
     ) -> Tuple[Optional[str], Optional[str]]:
-        """把一個連線查找鍵解析成 (database, server)。
+        """把一個連線查找鍵解析成 (database, server)，解不出來時記下 view 給的理由。
 
-        kind 是 DBConnectionTracker.APP_SETTINGS 或 DBConnectionTracker.CONNECTION_STRINGS，
-        決定去哪一張表查找——絕不讓 AppSettings 的 key 誤解析到 ConnectionStrings
-        的同名 name，反之亦然。kind 是 ROOT_CONFIGURATION 時不查任何一張表。
+        kind 是查找鍵所屬的命名空間（APP_SETTINGS、CONNECTION_STRINGS 或
+        ROOT_CONFIGURATION）。view 只在那個命名空間裡找——絕不讓 AppSettings 的
+        key 誤解析到 ConnectionStrings 的同名 name，反之亦然。
         """
-        scope = self._project_scope()
-        if scope is not None:
-            return self._resolve_in_scope(scope, key, kind, variable_name, line_number)
-
-        if not self.connection_resolver:
-            return key, None
-        return self._lookup(getattr(self.connection_resolver, kind), key)
-
-    def _resolve_in_scope(
-        self,
-        scope: ProjectConnectionScope,
-        key: str,
-        kind: str,
-        variable_name: str,
-        line_number: int,
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """在一個 Project Connection Scope 裡解析，解不出來時說出理由。"""
-        if scope.unresolved_reason:
-            self._record_unresolved(
-                variable_name, key, kind, scope.unresolved_reason, line_number
-            )
-            return None, None
-
-        if kind == self.ROOT_CONFIGURATION:
-            self._record_unresolved(
-                variable_name, key, kind, ROOT_CONFIGURATION_NAMESPACE, line_number
-            )
-            return None, None
-
-        database, server = self._lookup(getattr(scope, kind), key)
-        if database:
-            return database, server
-
-        reason = (
-            ROOT_CONFIGURATION_NAMESPACE
-            if key in scope.root_configuration_keys
-            else CONNECTION_KEY_NOT_IN_PROJECT_SCOPE
-        )
-        self._record_unresolved(variable_name, key, kind, reason, line_number)
-        return None, None
+        answer = self.file_connections.lookup(key, kind)
+        if answer.reason:
+            self._record_unresolved(variable_name, key, kind, answer.reason, line_number)
+        return answer.database, answer.server
 
     def _resolve_context_type(
         self, context_type: str, variable_name: str, line_number: int
@@ -213,34 +140,22 @@ class DBConnectionTracker:
         型別名稱本身不是資料庫名稱，就像連線查找鍵不是資料庫名稱一樣
         （ADR-0008）。答案只來自組合根裡的註冊。
         """
-        scope = self._project_scope()
-        if scope is None:
-            return None, None, ""
-        if scope.unresolved_reason:
+        registration = self.file_connections.context_registration(context_type)
+        if registration.reason:
             self._record_unresolved(
                 variable_name,
                 context_type,
                 self.DB_CONTEXT_TYPE,
-                scope.unresolved_reason,
+                registration.reason,
                 line_number,
             )
-            return None, None, ""
-
-        key = scope.context_connection_keys.get(context_type)
-        if not key:
-            self._record_unresolved(
-                variable_name,
-                context_type,
-                self.DB_CONTEXT_TYPE,
-                CONTEXT_TYPE_NOT_REGISTERED,
-                line_number,
-            )
+        if not registration.lookup_key:
             return None, None, ""
 
         database, server = self._resolve(
-            key, self.CONNECTION_STRINGS, variable_name, line_number
+            registration.lookup_key, self.CONNECTION_STRINGS, variable_name, line_number
         )
-        return database, server, key
+        return database, server, registration.lookup_key
 
     def analyze_connections(self, content: str) -> Dict[str, ConnectionInfo]:
         """
@@ -343,9 +258,9 @@ class DBConnectionTracker:
         格式: _connetStrRead = _config.GetConnectionString("QDmsDB");
         """
         # 模式 1: GetConnectionString
-        # 有 Project Connection Scope 時，鍵一律透過 appsettings.json 的
-        # ConnectionStrings 區段解析成真正的 {server, database}；沒有 scope 時
-        # 維持既有行為（把鍵當資料庫名稱），Web.config 路徑一步都不變。
+        # 在 Application Settings File 路徑上，鍵一律透過 ConnectionStrings 區
+        # 段解析成真正的 {server, database}；在 Web.config 路徑上，這個讀取永遠
+        # 把鍵當資料庫名稱，Web.config 路徑一步都不變。
         pattern1 = r'(\w+)\s*=\s*\w+\.GetConnectionString\s*\(\s*["\']([^"\']+)["\']\s*\)'
         matches1 = re.finditer(pattern1, content, re.IGNORECASE)
 
@@ -354,7 +269,7 @@ class DBConnectionTracker:
             key = match.group(2)
             line_num = content[:match.start()].count('\n') + 1
 
-            if self._project_scope() is None:
+            if not self.file_connections.reads_application_settings_file:
                 self.connections[var_name] = ConnectionInfo(
                     variable_name=var_name,
                     database_name=key,
@@ -412,14 +327,14 @@ class DBConnectionTracker:
         """把資料庫內容型別的接收者，解析成它在組合根裡註冊的那個連線。
 
         答案只來自組合根的註冊。從型別名稱推斷資料庫（`PayrollContext` ->
-        `Payroll`）是 ADR-0008 指名要換掉、不是延伸的捷徑，所以沒有
-        Project Connection Scope 時不猜，什麼都不做。
+        `Payroll`）是 ADR-0008 指名要換掉、不是延伸的捷徑，所以在 Web.config
+        路徑上不猜，什麼都不做。
         """
-        scope = self._project_scope()
-        if scope is None:
+        if not self.file_connections.reads_application_settings_file:
             return
 
-        for context_type in sorted(scope.context_connection_keys):
+        registered_context_types = self.file_connections.registered_context_types
+        for context_type in registered_context_types:
             pattern = self._CONTEXT_DECLARATION.format(
                 context_type=re.escape(context_type)
             )
@@ -446,7 +361,7 @@ class DBConnectionTracker:
         # invoked_connection_expressions），所以放在註冊型別的迴圈之後：那個
         # 迴圈已經把每一個註冊型別的接收者解析進 self.connections，這裡才不會
         # 把一個其實解析得出來的變數誤判成「型別沒註冊」。
-        self._report_unresolved_context_receivers(content, scope)
+        self._report_unresolved_context_receivers(content, registered_context_types)
 
     # 任何以 Context 結尾的型別宣告——不分是不是資料庫內容型別。找出宣告只是
     # 為了讀出接收者自己宣告的型別名稱；決定要不要回報理由的問題永遠是「這個
@@ -515,7 +430,7 @@ class DBConnectionTracker:
         return cls.declared_type_carries_database_signal(declared_type)
 
     def _report_unresolved_context_receivers(
-        self, content: str, scope: ProjectConnectionScope
+        self, content: str, registered_context_types: Tuple[str, ...]
     ) -> None:
         """為一次真的發生過的 Database Invocation，寫下它的接收者為什麼解析
         不出連線。
@@ -556,7 +471,7 @@ class DBConnectionTracker:
                 )
                 continue
             context_type, line_num = found
-            if context_type in scope.context_connection_keys:
+            if context_type in registered_context_types:
                 continue
             self._resolve_context_type(context_type, var_name, line_num)
 
@@ -574,22 +489,6 @@ class DBConnectionTracker:
         + r'\.\s*GetValue\s*<[^>]*>\s*\(\s*["\']([^"\']+)["\']\s*\)',
     )
 
-    def _names_a_connection(self, key: str) -> bool:
-        """這個根命名空間的鍵，讀起來是不是在讀一條連線字串。
-
-        讀根命名空間的程式碼絕大多數在讀日誌層級、功能開關這類與資料庫無關的
-        設定。把它們全部記成「解析不出來的連線」只會淹沒真正的缺口，所以只有
-        鍵名在連線字串區段裡、或它自己的值就是一條連線字串時才回報。
-        """
-        scope = self._project_scope()
-        if scope is None:
-            return False
-        folded = key.casefold()
-        return any(
-            name.casefold() == folded
-            for name in (*scope.root_connection_keys, *scope.connection_strings)
-        )
-
     def _extract_root_configuration_reads(self, content: str):
         """處理從 Configuration 根命名空間讀出來的連線鍵。
 
@@ -600,7 +499,7 @@ class DBConnectionTracker:
         `Configuration["ConnectionStrings:Key"]` 帶著區段前綴，是同一張連線查
         找表的另一種寫法，照常解析。
         """
-        if self._project_scope() is None:
+        if not self.file_connections.reads_application_settings_file:
             return
 
         for pattern in self._ROOT_CONFIGURATION_READS:
@@ -627,7 +526,10 @@ class DBConnectionTracker:
                         )
                     continue
 
-                if not self._names_a_connection(raw_key):
+                # 讀根命名空間的程式碼絕大多數在讀日誌層級、功能開關這類與資料
+                # 庫無關的設定。把它們全部記成「解析不出來的連線」只會淹沒真正
+                # 的缺口，所以只有這個鍵讀起來是一條連線時才回報。
+                if not self.file_connections.names_a_connection(raw_key):
                     continue
                 self._resolve(raw_key, self.ROOT_CONFIGURATION, var_name, line_num)
 
@@ -726,11 +628,11 @@ class DBConnectionTracker:
         放進 lookup_key——那一欄的意義本來就由 namespace 決定，資料庫內容型別
         的形狀放的也是型別名而不是查找鍵。
 
-        只在有 Project Connection Scope 時記錄。Web.config 的解析路徑從來不
-        產生理由，在那裡開始產生會改變既有系統的輸出，而這張票談的是 Core
-        系統（ADR-0018）。
+        只在 Application Settings File 路徑上記錄。Web.config 的解析路徑從來
+        不產生這個理由，在那裡開始產生會改變既有系統的輸出，而這張票談的是
+        Core 系統（ADR-0018）。
         """
-        if self._project_scope() is None:
+        if not self.file_connections.reads_application_settings_file:
             return
 
         source_reason = self._nearest_unresolved(source_var, line_number)
