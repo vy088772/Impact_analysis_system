@@ -25,8 +25,11 @@ A `Web.config` table also holds the entries of each Parent Application of the
 web application, nearest first (ADR-0038). The chain starts from the project
 file beside the `Web.config` that supplied the table. The own entry of the
 application wins over an inherited entry. Each namespace inherits only from the
-same namespace. After the inheritance, rule 6 gives the guess only when the own
-table and each inherited table are empty.
+same namespace. A `<clear/>` or a `<remove>` in a `Web.config` stops the
+inheritance from above it, and a section in a `<location>` that has
+`inheritInChildApplications="false"` does not pass to child applications. After
+the inheritance, rule 6 gives the guess only when the own table and each
+inherited table are empty.
 
 Rules 3 to 5 extend ADR-0018: a `Web.config` table also covers one Project
 Connection Scope, and a project with no configuration file uses the
@@ -39,7 +42,7 @@ name and no password (ADR-0010), because the parsers give none.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -57,7 +60,11 @@ from .project_connection_scope import (
     ProjectConnectionScope,
     build_project_connection_scope,
 )
-from .webconfig_connection_resolver import WebConfigConnections, parse_web_config_file
+from .webconfig_connection_resolver import (
+    EntryBlocks,
+    WebConfigConnections,
+    parse_web_config_file,
+)
 
 # The namespaces of a lookup key. ADR-0008 keeps them apart.
 APP_SETTINGS = "app_settings"
@@ -76,11 +83,18 @@ class TableLayer:
     """The two lookup tables of one configuration file, and the file that declared them.
 
     `declared_in` is a path relative to the clone root, or to the scan root
-    when the analyzer finds no clone root.
+    when the analyzer finds no clone root. `blocks` holds, for each namespace,
+    what the file stops from above: a `<clear/>` or a `<remove>`.
     """
 
     tables: Mapping[str, LookupTable]
     declared_in: str
+    blocks: Mapping[str, EntryBlocks] = field(default_factory=dict)
+
+    def stops(self, namespace: str, key: str) -> bool:
+        """True when this file keeps a key of the layers above it from the application."""
+        blocks = self.blocks.get(namespace)
+        return blocks is not None and blocks.stops(key)
 
 
 @dataclass(frozen=True)
@@ -143,7 +157,8 @@ class FileConnections:
 
     `layers` holds the own table of the source file first, then the table of
     each Parent Application, nearest first. The first layer that declares a key
-    in a namespace answers it.
+    in a namespace answers it. A layer that clears the namespace, or removes the
+    key, ends the search.
     """
 
     def __init__(
@@ -205,6 +220,8 @@ class FileConnections:
                     server=resolved.server,
                     declared_in=layer.declared_in,
                 )
+            if layer.stops(namespace, key):
+                break
         return None
 
     def context_registration(self, context_type: str) -> ContextRegistration:
@@ -334,25 +351,39 @@ class ConnectionLookup:
 
         The layers are the own `Web.config` first, then the `Web.config` of
         each Parent Application, nearest first. A layer that is empty in the
-        two namespaces does not count. When no layer is left, or no
-        `Web.config` exists, the view gives the key-as-name guess.
+        two namespaces and stops nothing does not count. When no layer holds an
+        entry, or no `Web.config` exists, the view gives the key-as-name guess.
         """
         if web_config is None:
             return FileConnections()
         layers = []
-        for path in [web_config, *self._parent_web_configs(web_config)]:
+        for position, path in enumerate([web_config, *self._parent_web_configs(web_config)]):
             parsed = self._parse_web_config(path)
-            if parsed:
-                layers.append(
-                    TableLayer(
-                        tables={
-                            APP_SETTINGS: parsed.app_settings,
-                            CONNECTION_STRINGS: parsed.connection_strings,
-                        },
-                        declared_in=self._relative_path(path),
-                    )
-                )
-        return FileConnections(layers=layers) if layers else FileConnections()
+            # The own layer serves its own application, so it also holds the
+            # sections that a `<location>` keeps from child applications.
+            own = position == 0
+            layer = TableLayer(
+                tables={
+                    APP_SETTINGS: {
+                        **parsed.app_settings,
+                        **(parsed.own_only_app_settings if own else {}),
+                    },
+                    CONNECTION_STRINGS: {
+                        **parsed.connection_strings,
+                        **(parsed.own_only_connection_strings if own else {}),
+                    },
+                },
+                declared_in=self._relative_path(path),
+                blocks={
+                    APP_SETTINGS: parsed.app_settings_blocks,
+                    CONNECTION_STRINGS: parsed.connection_strings_blocks,
+                },
+            )
+            if any(layer.tables.values()) or parsed.blocks_inheritance:
+                layers.append(layer)
+        if not any(any(layer.tables.values()) for layer in layers):
+            return FileConnections()
+        return FileConnections(layers=layers)
 
     def _parent_web_configs(self, web_config: Path) -> List[Path]:
         """The `Web.config` of each Parent Application, nearest first.

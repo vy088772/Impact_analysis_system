@@ -700,3 +700,227 @@ def test_an_application_settings_file_names_itself_relative_to_the_clone_root(
     source = _source_file(core / "Program.cs")
 
     assert _lookup(core, source, "Main", CONNECTION_STRINGS).declared_in == "Core/appsettings.json"
+
+
+# ---------------------------------------------------------------------------
+# Step 3: inheritance stops where IIS stops it (ticket 06)
+# ---------------------------------------------------------------------------
+
+
+def _write_raw_web_config(directory: Path, body: str) -> Path:
+    """Write a Web.config with a free body, for the clear, remove, and location cases."""
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "Web.config"
+    path.write_text(f"<configuration>{body}</configuration>", encoding="utf-8")
+    return path
+
+
+def _parent_and_child(tmp_path: Path, parent_body: str, child_body: str = "<appSettings/>"):
+    """A parent and a child application. Give back the parent, the child, and a child source.
+
+    The child always has its own Web.config. Without one, the child would use
+    the Web.config of the scan root, which is the parent one here.
+    """
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://localhost/Site")
+    _write_raw_web_config(parent, parent_body)
+    child = _write_web_project(tmp_path / "Site" / "Response", "http://localhost/Site/Response")
+    _write_raw_web_config(child, child_body)
+    return parent, child, _source_file(child / "Response.Master.cs")
+
+
+PARENT_PUR = (
+    "<connectionStrings>"
+    '<add name="PUR" connectionString="Server=sql01;Database=PurDb"/>'
+    '<add name="ATV" connectionString="Server=sql01;Database=AtvDb"/>'
+    "</connectionStrings>"
+)
+
+
+def test_a_clear_in_the_child_section_stops_all_inheritance_of_that_namespace(
+    tmp_path: Path,
+):
+    _, _, source = _parent_and_child(
+        tmp_path, PARENT_PUR, "<connectionStrings><clear/></connectionStrings>"
+    )
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "ATV") == ConnectionAnswer()
+
+
+def test_a_clear_keeps_the_entries_that_the_child_adds_after_it(tmp_path: Path):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        PARENT_PUR,
+        "<connectionStrings><clear/>"
+        '<add name="Own" connectionString="Server=sql02;Database=OwnDb"/>'
+        "</connectionStrings>",
+    )
+
+    assert _lookup(tmp_path, source, "Own").database == "OwnDb"
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+
+
+def test_a_clear_stops_the_chain_above_the_child_and_not_below_it(tmp_path: Path):
+    _clone(tmp_path)
+    grandparent = _write_web_project(tmp_path / "Root", "http://localhost/Root")
+    _write_raw_web_config(grandparent, PARENT_PUR)
+    parent = _write_web_project(tmp_path / "Root" / "Mid", "http://localhost/Root/Mid")
+    _write_raw_web_config(
+        parent,
+        "<connectionStrings><clear/>"
+        '<add name="Mid" connectionString="Server=sql01;Database=MidDb"/>'
+        "</connectionStrings>",
+    )
+    child = _write_web_project(tmp_path / "Root" / "Mid" / "Leaf", "http://localhost/Root/Mid/Leaf")
+    _write_raw_web_config(child, "<appSettings/>")
+    source = _source_file(child / "Leaf.cs")
+
+    assert _lookup(tmp_path, source, "Mid").declared_in == "Root/Mid/Web.config"
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+
+
+def test_a_clear_in_one_namespace_leaves_the_other_namespace_inherited(tmp_path: Path):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        PARENT_PUR
+        + '<appSettings><add key="PUR" value="Server=sql01;Database=PurSettingDb"/></appSettings>',
+        "<connectionStrings><clear/></connectionStrings>",
+    )
+
+    assert _lookup(tmp_path, source, "PUR", APP_SETTINGS).database == "PurSettingDb"
+    assert _lookup(tmp_path, source, "PUR", CONNECTION_STRINGS) == ConnectionAnswer()
+
+
+def test_a_clear_in_app_settings_stops_the_inheritance_of_app_settings(tmp_path: Path):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        '<appSettings><add key="K" value="Server=sql01;Database=KDb"/></appSettings>',
+        "<appSettings><clear/></appSettings>",
+    )
+
+    assert _lookup(tmp_path, source, "K", APP_SETTINGS) == ConnectionAnswer()
+
+
+def test_a_remove_in_the_child_section_stops_the_inheritance_of_that_one_key(
+    tmp_path: Path,
+):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        PARENT_PUR,
+        '<connectionStrings><remove name="PUR"/></connectionStrings>',
+    )
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "ATV").database == "AtvDb"
+
+
+def test_a_remove_in_app_settings_uses_the_key_attribute(tmp_path: Path):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        '<appSettings><add key="K" value="Server=sql01;Database=KDb"/>'
+        '<add key="L" value="Server=sql01;Database=LDb"/></appSettings>',
+        '<appSettings><remove key="K"/></appSettings>',
+    )
+
+    assert _lookup(tmp_path, source, "K", APP_SETTINGS) == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "L", APP_SETTINGS).database == "LDb"
+
+
+def test_a_remove_matches_the_key_with_no_regard_to_case(tmp_path: Path):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        PARENT_PUR,
+        '<connectionStrings><remove name="pur"/></connectionStrings>',
+    )
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+
+
+def test_a_remove_of_a_key_that_the_same_file_adds_later_keeps_the_later_entry(
+    tmp_path: Path,
+):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        PARENT_PUR,
+        '<connectionStrings><remove name="PUR"/>'
+        '<add name="PUR" connectionString="Server=sql02;Database=NewPurDb"/>'
+        "</connectionStrings>",
+    )
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer(
+        database="NewPurDb", server="sql02", declared_in="Site/Response/Web.config"
+    )
+
+
+def test_a_remove_of_a_key_that_the_same_file_added_earlier_removes_both(tmp_path: Path):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        PARENT_PUR,
+        '<connectionStrings><add name="PUR" connectionString="Server=sql02;Database=NewPurDb"/>'
+        '<remove name="PUR"/></connectionStrings>',
+    )
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+
+
+def test_a_child_section_with_only_a_clear_gives_no_guess_while_a_parent_declares_entries(
+    tmp_path: Path,
+):
+    _, _, source = _parent_and_child(
+        tmp_path, PARENT_PUR, "<connectionStrings><clear/></connectionStrings>"
+    )
+
+    assert _lookup(tmp_path, source, "Unknown") == ConnectionAnswer()
+
+
+def test_a_parent_section_in_a_location_that_blocks_child_applications_does_not_reach_them(
+    tmp_path: Path,
+):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        '<location path="." inheritInChildApplications="false">'
+        f"{PARENT_PUR}</location>"
+        "<connectionStrings>"
+        '<add name="Shared" connectionString="Server=sql01;Database=SharedDb"/>'
+        "</connectionStrings>",
+    )
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "Shared").database == "SharedDb"
+
+
+def test_a_section_in_a_location_that_blocks_child_applications_still_serves_its_own_application(
+    tmp_path: Path,
+):
+    parent, _, _ = _parent_and_child(
+        tmp_path,
+        '<location path="." inheritInChildApplications="false">'
+        f"{PARENT_PUR}</location>",
+    )
+    source = _source_file(parent / "Default.cs")
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer(
+        database="PurDb", server="sql01", declared_in="Site/Web.config"
+    )
+
+
+def test_a_section_in_a_location_that_allows_child_applications_is_inherited(
+    tmp_path: Path,
+):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        '<location path="." inheritInChildApplications="true">'
+        f"{PARENT_PUR}</location>",
+    )
+
+    assert _lookup(tmp_path, source, "PUR").database == "PurDb"
+
+
+def test_a_section_in_a_location_for_another_path_is_not_read(tmp_path: Path):
+    parent, _, _ = _parent_and_child(
+        tmp_path, f'<location path="Admin">{PARENT_PUR}</location>'
+    )
+    source = _source_file(parent / "Default.cs")
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer(database="PUR")

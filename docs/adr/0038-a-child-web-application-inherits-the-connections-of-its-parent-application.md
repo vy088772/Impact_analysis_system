@@ -22,6 +22,8 @@ The analyzer finds the Parent Application of a web application. The connection l
 - The analyzer finds candidate project files in the whole repository clone. The search stops at the clone root. When the analyzer finds no clone root, it does not search for a Parent Application.
 - The analyzer reads the project file and the `Web.config` of an ancestor. It does not scan the code of an ancestor.
 - The Application Settings File path does not inherit. ASP.NET Core does not merge the configuration of a parent application.
+- Inheritance stops where IIS stops it. A `<clear/>` in a section stops all inheritance of that namespace from above the file. A `<remove>` stops one key, with no regard to case. The analyzer applies `<clear/>`, `<remove>`, and `<add>` in document order, so a `<remove>` of a key that the same file adds later keeps the later entry.
+- A section inside a `<location>` element with `inheritInChildApplications="false"` serves the application of its own file and does not pass to child applications. The analyzer reads a `<location>` element only when its `path` is empty or `.`.
 - The Resolved Connection Source records the declaring file in `declared_in`, as a path relative to the clone root.
 
 The rule uses no System name, no path, and no Database name.
@@ -36,6 +38,6 @@ The IIS Express `applicationhost.config` under `.vs` is not a source. In Y-DOCs 
 
 The C# Scan Result shape changes, so the scan cache version rises.
 
-Inheritance stops where IIS stops it (`<clear/>`, `<remove>`, and `inheritInChildApplications="false"`). An ambiguous Parent Application gives a visible reason. Both are later work of the same spec.
+An ambiguous Parent Application gives a visible reason. This is later work of the same spec.
 
 See [ADR-0008](0008-web-config-connection-string-resolution.md) and [ADR-0018](0018-connection-lookup-tables-are-scoped-to-the-project-file.md).

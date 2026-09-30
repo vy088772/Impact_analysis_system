@@ -26,7 +26,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, FrozenSet, Set, Union
 
 from .connection_string_value import (
     ResolvedConnection,
@@ -38,10 +38,30 @@ from .connection_string_value import (
 # `from .webconfig_connection_resolver import ResolvedConnection` 呼叫端不動。
 __all__ = [
     "ResolvedConnection",
+    "EntryBlocks",
     "WebConfigConnections",
     "parse_web_config_connections",
     "parse_web_config_file",
 ]
+
+
+@dataclass(frozen=True)
+class EntryBlocks:
+    """What one namespace of a Web.config stops from above (ticket 06).
+
+    `cleared` is True after a `<clear/>`: nothing above this file reaches the
+    application. `removed` holds the case-folded keys of each `<remove>` that
+    no later `<add>` of the same file undid.
+    """
+
+    cleared: bool = False
+    removed: FrozenSet[str] = frozenset()
+
+    def stops(self, key: str) -> bool:
+        return self.cleared or key.casefold() in self.removed
+
+    def __bool__(self) -> bool:
+        return self.cleared or bool(self.removed)
 
 
 @dataclass(frozen=True)
@@ -51,13 +71,93 @@ class WebConfigConnections:
     app_settings 對應 <appSettings><add key="..." value="..."/></appSettings>，
     connection_strings 對應
     <connectionStrings><add name="..." connectionString="..."/></connectionStrings>。
+
+    這兩張表是子應用程式會繼承的項目。位於
+    <location inheritInChildApplications="false"> 內的 section 只服務這份
+    Web.config 自己的應用程式，所以放在 own_only_* 兩張表，不會傳給子應用程式。
+    app_settings_blocks 與 connection_strings_blocks 記錄 <clear/> 與 <remove>
+    對「這份檔案上方」的繼承所造成的阻擋。
     """
 
     app_settings: Dict[str, ResolvedConnection] = field(default_factory=dict)
     connection_strings: Dict[str, ResolvedConnection] = field(default_factory=dict)
+    own_only_app_settings: Dict[str, ResolvedConnection] = field(default_factory=dict)
+    own_only_connection_strings: Dict[str, ResolvedConnection] = field(default_factory=dict)
+    app_settings_blocks: EntryBlocks = EntryBlocks()
+    connection_strings_blocks: EntryBlocks = EntryBlocks()
 
     def __bool__(self) -> bool:
-        return bool(self.app_settings or self.connection_strings)
+        return bool(
+            self.app_settings
+            or self.connection_strings
+            or self.own_only_app_settings
+            or self.own_only_connection_strings
+        )
+
+    @property
+    def blocks_inheritance(self) -> bool:
+        return bool(self.app_settings_blocks or self.connection_strings_blocks)
+
+
+# 一個 namespace 的 section 名稱、<add> 的鍵屬性與值屬性。<remove> 用鍵屬性。
+_APP_SETTINGS = ("appSettings", "key", "value")
+_CONNECTION_STRINGS = ("connectionStrings", "name", "connectionString")
+
+
+class _Section:
+    """One <appSettings> or <connectionStrings> element, read in document order.
+
+    IIS applies `<clear/>`, `<remove>`, and `<add>` in the order they appear, so
+    a `<remove>` of a key that a later `<add>` declares keeps the later entry.
+    """
+
+    def __init__(self, key_attribute: str, value_attribute: str):
+        self._key_attribute = key_attribute
+        self._value_attribute = value_attribute
+        self.entries: Dict[str, ResolvedConnection] = {}
+        self.cleared = False
+        self.removed: Set[str] = set()
+
+    def read(self, element: ET.Element) -> None:
+        for child in element:
+            key = child.get(self._key_attribute)
+            if child.tag == "clear":
+                self.entries.clear()
+                self.removed.clear()
+                self.cleared = True
+            elif child.tag == "remove" and key:
+                folded = key.casefold()
+                self.entries = {
+                    name: value
+                    for name, value in self.entries.items()
+                    if name.casefold() != folded
+                }
+                self.removed.add(folded)
+            elif child.tag == "add":
+                value = child.get(self._value_attribute)
+                if not key or not value:
+                    continue
+                candidate = resolve_connection_string_value(value)
+                if candidate.database:
+                    self.entries[key] = candidate
+                    self.removed.discard(key.casefold())
+
+    @property
+    def blocks(self) -> EntryBlocks:
+        return EntryBlocks(cleared=self.cleared, removed=frozenset(self.removed))
+
+
+def _new_sections() -> Dict[tuple, _Section]:
+    return {kind: _Section(*kind[1:]) for kind in (_APP_SETTINGS, _CONNECTION_STRINGS)}
+
+
+def _own_location(location: ET.Element) -> bool:
+    """True when a <location> element applies to the application of the file itself."""
+    return (location.get("path") or ".").strip() in (".", "")
+
+
+def _passes_to_children(location: ET.Element) -> bool:
+    return (location.get("inheritInChildApplications") or "true").strip().lower() != "false"
 
 
 def parse_web_config_connections(content: str) -> WebConfigConnections:
@@ -66,33 +166,41 @@ def parse_web_config_connections(content: str) -> WebConfigConnections:
     被註解掉的 <add .../> 節點在 ElementTree 解析樹裡不是 element，findall
     找不到它們，所以永遠不會解析出結果。一個值裡解不出資料庫名稱的項目
     （例如純路徑或郵件伺服器設定）也不會出現在回傳結果中。
+
+    <clear/> 與 <remove> 依文件順序套用。<location> 只讀 path 為空或 "." 的
+    元素；它的 inheritInChildApplications="false" 讓其中的 section 不傳給
+    子應用程式。
     """
     try:
         root = ET.fromstring(content)
     except ET.ParseError:
         return WebConfigConnections()
 
-    app_settings: Dict[str, ResolvedConnection] = {}
-    for add in root.findall("./appSettings/add"):
-        key = add.get("key")
-        value = add.get("value")
-        if not key or not value:
-            continue
-        candidate = resolve_connection_string_value(value)
-        if candidate.database:
-            app_settings[key] = candidate
+    shared = _new_sections()
+    own_only = _new_sections()
 
-    connection_strings: Dict[str, ResolvedConnection] = {}
-    for add in root.findall("./connectionStrings/add"):
-        name = add.get("name")
-        conn_str = add.get("connectionString")
-        if not name or not conn_str:
-            continue
-        candidate = resolve_connection_string_value(conn_str)
-        if candidate.database:
-            connection_strings[name] = candidate
+    def read_sections(parent: ET.Element, target: Dict[tuple, _Section]) -> None:
+        for kind, section in target.items():
+            for element in parent.findall(kind[0]):
+                section.read(element)
 
-    return WebConfigConnections(app_settings=app_settings, connection_strings=connection_strings)
+    read_sections(root, shared)
+    for location in root.findall("location"):
+        if not _own_location(location):
+            continue
+        if _passes_to_children(location):
+            read_sections(location, shared)
+        else:
+            read_sections(location, own_only)
+
+    return WebConfigConnections(
+        app_settings=shared[_APP_SETTINGS].entries,
+        connection_strings=shared[_CONNECTION_STRINGS].entries,
+        own_only_app_settings=own_only[_APP_SETTINGS].entries,
+        own_only_connection_strings=own_only[_CONNECTION_STRINGS].entries,
+        app_settings_blocks=shared[_APP_SETTINGS].blocks,
+        connection_strings_blocks=shared[_CONNECTION_STRINGS].blocks,
+    )
 
 
 def parse_web_config_file(path: Union[str, Path]) -> WebConfigConnections:
