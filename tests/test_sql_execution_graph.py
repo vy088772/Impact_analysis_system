@@ -1014,8 +1014,11 @@ if __name__ == "__main__":
     print("SQL execution graph tests passed")
 
 
-def test_a_reference_that_states_no_schema_names_every_listed_node_with_that_bare_name() -> None:
-    """Two-bucket rule: an unstated schema is never `dbo`; it matches every schema that lists the name."""
+def test_a_call_that_states_no_schema_names_every_listed_procedure_with_that_bare_name() -> None:
+    """Two-bucket rule for a call: an unstated schema matches every schema that lists the name.
+
+    A read resolves by the schema resolution rule instead (the tests below).
+    """
     data = cache_payload(
         "Response",
         procedures={
@@ -1023,32 +1026,211 @@ def test_a_reference_that_states_no_schema_names_every_listed_node_with_that_bar
             "dbo.usp_Child": {},
             "COMMON.usp_Child": {},
         },
-        views={"dbo.vw_Rates": {}, "COMMON.vw_Rates": {}},
     )
-    host = StubAnalyzerHost(
-        {
-            "caller": [
-                analyzer_operation("CALL", sequence=1, calls=["usp_Child"]),
-                analyzer_operation("SELECT", sequence=2, reads=["vw_Rates"]),
-                analyzer_operation("SELECT", sequence=3, reads=["COMMON.vw_Rates"]),
-            ]
-        }
-    )
+    host = StubAnalyzerHost({"caller": [analyzer_operation("CALL", sequence=1, calls=["usp_Child"])]})
 
     graph = build_sql_execution_graph(data, host=host)
 
     assert_relationships_resolve_to_known_nodes(graph)
-    targets = {
-        (relationship["type"], relationship["source"].rsplit(":", 1)[-1], relationship["target"])
-        for relationship in graph["relationships"]
-        if relationship["type"] in {"calls", "reads"}
-    }
-    assert {target for kind, _, target in targets if kind == "calls"} == {
+    assert {
+        relationship["target"] for relationship in graph["relationships"] if relationship["type"] == "calls"
+    } == {
         "stored_procedure:dbo.usp_Child",
         "stored_procedure:COMMON.usp_Child",
     }
-    assert {(source, target) for kind, source, target in targets if kind == "reads"} == {
-        ("2", "view:dbo.vw_Rates"),
-        ("2", "view:COMMON.vw_Rates"),
-        ("3", "view:COMMON.vw_Rates"),
+
+
+def _resolution_graph(
+    operations_by_module: dict[str, list[dict]],
+    *,
+    module_kind: str = "procedures",
+    **listing: list[str],
+) -> dict:
+    """Build a `PUR` graph of the named modules, beside the other objects the listing holds.
+
+    Each module's definition text is its written name, so the stub host finds its operations.
+    """
+    modules = {module_kind: {name: {"definition": name} for name in operations_by_module}}
+    graph = build_sql_execution_graph(
+        cache_payload("PUR", **modules, **listing), host=StubAnalyzerHost(operations_by_module)
+    )
+    assert_relationships_resolve_to_known_nodes(graph)
+    return graph
+
+
+def _targets(graph: dict, relationship_type: str) -> set[tuple[str, str | None]]:
+    """Each target of one relationship type, with the schema source the relationship records."""
+    return {
+        (relationship["target"], relationship.get("schema_source"))
+        for relationship in graph["relationships"]
+        if relationship["type"] == relationship_type
     }
+
+
+def _node(graph: dict, node_id: str) -> dict:
+    return next(node for node in graph["nodes"] if node["id"] == node_id)
+
+
+def test_a_common_module_writes_the_common_table_that_its_unqualified_name_names() -> None:
+    """User story 3: `Delete UserProgram` inside `COMMON.ModuleList_Update` writes `COMMON.UserProgram`."""
+    graph = _resolution_graph(
+        {"COMMON.ModuleList_Update": [analyzer_operation("DELETE", writes=["UserProgram"])]},
+        tables=["COMMON.UserProgram", "dbo.UserProgram"],
+    )
+
+    assert _targets(graph, "writes") == {("table:COMMON.UserProgram", "module_schema")}
+    assert _node(graph, "table:COMMON.UserProgram")["schema"] == "COMMON"
+    assert not [node for node in graph["nodes"] if node["id"] == "table:.UserProgram"]
+
+
+def test_a_common_module_reads_the_common_table_when_only_common_holds_the_name() -> None:
+    graph = _resolution_graph(
+        {"COMMON.usp_Load": [analyzer_operation("SELECT", reads=["UserProgram"])]},
+        tables=["COMMON.UserProgram", "HR.UserProgram"],
+    )
+
+    assert _targets(graph, "reads") == {("table:COMMON.UserProgram", "module_schema")}
+
+
+def test_a_common_module_reads_the_dbo_table_when_only_dbo_holds_the_name() -> None:
+    graph = _resolution_graph(
+        {"COMMON.usp_Load": [analyzer_operation("SELECT", reads=["Currency"])]},
+        tables=["dbo.Currency", "HR.Currency"],
+    )
+
+    assert _targets(graph, "reads") == {("table:dbo.Currency", "default_schema")}
+
+
+def test_a_dbo_module_writes_the_dbo_table_that_its_unqualified_name_names() -> None:
+    """User story 4: `Delete UserProgram` inside a `dbo` module writes `dbo.UserProgram`, not `COMMON.UserProgram`."""
+    graph = _resolution_graph(
+        {"dbo.usp_Clear": [analyzer_operation("DELETE", writes=["UserProgram"])]},
+        tables=["COMMON.UserProgram", "dbo.UserProgram"],
+    )
+
+    assert _targets(graph, "writes") == {("table:dbo.UserProgram", "module_schema")}
+
+
+def test_a_name_that_neither_the_module_schema_nor_dbo_holds_keeps_an_empty_schema() -> None:
+    """User story 6: SQL Server fails here, so the target keeps the Unproven Schema mark."""
+    graph = _resolution_graph(
+        {"COMMON.usp_Load": [analyzer_operation("SELECT", reads=["Staff", "vw_Staff"])]},
+        tables=["HR.Staff"],
+        views=["HR.vw_Staff"],
+    )
+
+    assert _targets(graph, "reads") == {("table:.Staff", "unresolved"), ("table:.vw_Staff", "unresolved")}
+    assert _node(graph, "table:.Staff")["schema"] == ""
+
+
+def test_an_unlisted_name_keeps_an_empty_schema() -> None:
+    """User story 7: a name that the listing does not hold is not guessed."""
+    graph = _resolution_graph(
+        {"COMMON.usp_Load": [analyzer_operation("INSERT", reads=["Ghost"], writes=["#Stage"])]},
+        tables=["dbo.Currency"],
+    )
+
+    assert _targets(graph, "reads") == {("table:.Ghost", "unresolved")}
+    assert _targets(graph, "writes") == {("table:.#Stage@stored_procedure:COMMON.usp_Load", "unresolved")}
+
+
+def test_a_database_qualified_name_with_no_schema_keeps_an_empty_schema() -> None:
+    """User story 15: `db..name` resolves against the user's default schema in that Database, which no listing here proves."""
+    graph = _resolution_graph(
+        {"COMMON.usp_Load": [analyzer_operation("SELECT", reads=["Response..Orders", "PUR..Rates"])]},
+        tables=["dbo.Orders", "COMMON.Orders", "dbo.Rates", "COMMON.Rates"],
+    )
+
+    assert _targets(graph, "reads") == {("table:.Orders", "unresolved"), ("table:.Rates", "unresolved")}
+
+
+def test_a_written_schema_records_the_written_source() -> None:
+    graph = _resolution_graph(
+        {"COMMON.usp_Load": [analyzer_operation("UPDATE", reads=["HR.Staff"], writes=["dbo.Orders"])]},
+    )
+
+    assert _targets(graph, "reads") == {("table:HR.Staff", "written")}
+    assert _targets(graph, "writes") == {("table:dbo.Orders", "written")}
+
+
+def test_the_lookup_crosses_object_kinds_inside_one_schema() -> None:
+    """User story 12: `FROM X` finds a view `COMMON.X` before a table `dbo.X`, as SQL Server does."""
+    graph = _resolution_graph(
+        {"COMMON.usp_Load": [analyzer_operation("SELECT", reads=["Rates"])]},
+        tables=["dbo.Rates"],
+        views=["COMMON.Rates"],
+    )
+
+    assert _targets(graph, "reads") == {("view:COMMON.Rates", "module_schema")}
+    assert _targets(graph, "uses") == {("view:COMMON.Rates", "module_schema")}
+
+
+def test_a_view_read_with_no_schema_resolves_before_the_listed_view_lookup() -> None:
+    """User story 10: the two-bucket rule no longer links every listed view with that bare name."""
+    graph = _resolution_graph(
+        {"dbo.usp_Report": [analyzer_operation("SELECT", reads=["vw_Rates"])]},
+        views=["dbo.vw_Rates", "COMMON.vw_Rates"],
+    )
+
+    assert _targets(graph, "reads") == {("view:dbo.vw_Rates", "module_schema")}
+
+
+def test_a_function_reference_with_no_schema_resolves_by_the_same_rule() -> None:
+    graph = _resolution_graph(
+        {"COMMON.usp_Load": [analyzer_operation("SELECT", functions=["fn_Rate", "fn_Tax", "dbo.fn_Rate"])]},
+        functions=["COMMON.fn_Rate", "dbo.fn_Rate", "dbo.fn_Tax"],
+    )
+
+    assert _targets(graph, "uses") == {
+        ("function:COMMON.fn_Rate", "module_schema"),
+        ("function:dbo.fn_Tax", "default_schema"),
+        ("function:dbo.fn_Rate", "written"),
+    }
+
+
+@pytest.mark.parametrize("module_kind", ["views", "functions"])
+def test_a_reference_inside_a_view_or_a_function_resolves_against_its_own_schema(module_kind: str) -> None:
+    """User story 11: a `COMMON` view reads `COMMON.Rates`, not `dbo.Rates`, so the lineage below it starts right."""
+    graph = _resolution_graph(
+        {"COMMON.Rates_Source": [analyzer_operation("SELECT", reads=["Rates"])]},
+        module_kind=module_kind,
+        tables=["dbo.Rates", "COMMON.Rates"],
+    )
+
+    assert _targets(graph, "reads") == {("table:COMMON.Rates", "module_schema")}
+
+
+def test_the_temp_table_lineage_follows_the_resolved_base_table() -> None:
+    graph = _resolution_graph(
+        {
+            "COMMON.usp_Stage": [
+                analyzer_operation("INSERT", sequence=1, reads=["Rates"], writes=["#Stage"]),
+                analyzer_operation("SELECT", sequence=2, reads=["#Stage"]),
+            ]
+        },
+        tables=["dbo.Rates", "COMMON.Rates"],
+    )
+
+    lineage_reads = [relationship for relationship in graph["relationships"] if relationship.get("lineage")]
+    assert [(relationship["target"], relationship["schema_source"]) for relationship in lineage_reads] == [
+        ("table:COMMON.Rates", "module_schema"),
+    ]
+
+
+def test_a_lineage_read_takes_the_schema_source_of_its_own_chain() -> None:
+    """A module outside the chain that writes `COMMON.Rates` does not change how the chain found the schema."""
+    graph = _resolution_graph(
+        {
+            "COMMON.usp_Stage": [
+                analyzer_operation("INSERT", sequence=1, reads=["Rates"], writes=["#Stage"]),
+                analyzer_operation("SELECT", sequence=2, reads=["#Stage"]),
+            ],
+            "dbo.usp_Other": [analyzer_operation("SELECT", reads=["COMMON.Rates"])],
+        },
+        tables=["COMMON.Rates"],
+    )
+
+    lineage_reads = [relationship for relationship in graph["relationships"] if relationship.get("lineage")]
+    assert [(relationship["target"], relationship["schema_source"]) for relationship in lineage_reads] == [
+        ("table:COMMON.Rates", "module_schema"),
+    ]

@@ -76,7 +76,8 @@ def test_a_reference_with_no_schema_counts_as_empty_and_unproven() -> None:
 
     assert report["empty_schema_references"] == 1
     assert report["unproven_schema_targets"] == 1
-    assert report["references_by_schema_source"] == {"written": 1, "": 1}
+    # The listing does not hold `UserProgram`, so the graph builder records it as unresolved.
+    assert report["references_by_schema_source"] == {"written": 1, "unresolved": 1}
 
 
 def test_an_unproven_target_counts_once_however_many_references_name_it() -> None:

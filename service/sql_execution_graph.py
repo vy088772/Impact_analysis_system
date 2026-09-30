@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import tempfile
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
+import schema_resolution
 from canonical_object_identity import ObjectName, parse, part_key
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 
@@ -52,11 +54,22 @@ NodeKey = tuple[str, str, str, str]
 
 
 class _NodeIndex(dict):
-    """Nodes by full key, plus the same nodes by bare name for a reference that states no schema."""
+    """Nodes by full key, plus the same nodes by bare name for a call that states no schema.
+
+    It also holds the schema and name of each object the cache lists, of any kind,
+    for the schema resolution rule. A node that only a reference adds is not listed.
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.bare: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._listed: set[tuple[str, str]] = set()
+
+    def list_object(self, schema: str, name: str) -> None:
+        self._listed.add((schema.casefold(), name.casefold()))
+
+    def holds(self, schema: str, name: str) -> bool:
+        return (schema.casefold(), name.casefold()) in self._listed
 
 
 _MODULE_COLLECTIONS = (
@@ -96,6 +109,7 @@ def build_sql_execution_graph(
                     "name": name,
                 },
             )
+            node_by_key.list_object(object_schema, name)
             definition = str(item.get("definition") or "")
             if definition.strip():
                 module_specs.append((object_type, object_schema, name, definition))
@@ -115,6 +129,7 @@ def build_sql_execution_graph(
                 "name": name,
             },
         )
+        node_by_key.list_object(object_schema, name)
 
     parse_errors: list[dict[str, Any]] = []
     _report_progress(progress_callback, "graph", 0, len(module_specs), "")
@@ -255,8 +270,9 @@ def _expand_temp_table_lineage(
     # The base tables of a state are the non-temp reads of its own writers, each
     # with the server and database that read stated. A temp read of a writer is
     # an edge to another state in the same direction. A call is an edge to the
-    # same temp table in a caller or a callee.
-    base_tables: dict[_State, dict[tuple[str, str, str], _Chain]] = {}
+    # same temp table in a caller or a callee. Each base table keeps its chain and
+    # the schema source of the read at the end of that chain.
+    base_tables: dict[_State, dict[tuple[str, str, str], tuple[_Chain, str]]] = {}
     successors: dict[_State, set[_State]] = {}
     predecessors: dict[_State, set[_State]] = {}
     pending = [state_of(str(relationship.get("target") or ""), _NO_DIRECTION) for relationship in temp_reads]
@@ -266,7 +282,7 @@ def _expand_temp_table_lineage(
             continue
         scope, key, direction = state
         own_node_id = node_id_of(state)
-        own: dict[tuple[str, str, str], _Chain] = {}
+        own: dict[tuple[str, str, str], tuple[_Chain, str]] = {}
         base_tables[state] = own
         edges = successors.setdefault(state, set())
         for writer_id in writers_by_table.get(own_node_id, ()):
@@ -280,7 +296,13 @@ def _expand_temp_table_lineage(
                         str(writer_read.get("server") or ""),
                         str(writer_read.get("database") or ""),
                     )
-                    own[base] = (own_node_id,)
+                    # Two writers of one temp table that read one base table keep the strongest source.
+                    schema_source = str(writer_read["schema_source"])
+                    kept_source = own[base][1] if base in own else schema_source
+                    own[base] = (
+                        (own_node_id,),
+                        min(kept_source, schema_source, key=schema_resolution.SOURCES.index),
+                    )
         if scope:
             if direction != _DOWN:
                 edges.update((caller, key, _UP) for caller in callers_of.get(scope, ()))
@@ -303,11 +325,11 @@ def _expand_temp_table_lineage(
         prefix = (node_id_of(state),) if node_id_of(state) else ()
         changed = False
         for successor in successors.get(state, ()):
-            for base, chain in base_tables[successor].items():
+            for base, (chain, schema_source) in base_tables[successor].items():
                 candidate = prefix + chain
                 kept = own.get(base)
-                if kept is None or (len(candidate), candidate) < (len(kept), kept):
-                    own[base] = candidate
+                if kept is None or (len(candidate), candidate) < (len(kept[0]), kept[0]):
+                    own[base] = (candidate, schema_source)
                     changed = True
         if changed:
             for predecessor in predecessors.get(state, ()):
@@ -315,17 +337,18 @@ def _expand_temp_table_lineage(
                     queue.append(predecessor)
                     queued.add(predecessor)
 
-    derived: list[tuple[str, str, ObjectName, dict[str, Any], list[str], list[str]]] = []
+    derived: list[tuple[str, str, ObjectName, str, dict[str, Any], list[str], list[str]]] = []
     for index, relationship in enumerate(temp_reads, start=1):
         source_id = str(relationship.get("source") or "")
         temp_id = str(relationship.get("target") or "")
         state = state_of(temp_id, _NO_DIRECTION)
-        for (base_id, server, database), chain in sorted(base_tables.get(state, {}).items()):
+        for (base_id, server, database), (chain, schema_source) in sorted(base_tables.get(state, {}).items()):
             derived.append(
                 (
                     source_id,
                     base_id,
                     ObjectName(server=server, database=database, schema="", name=""),
+                    schema_source,
                     dict(relationship.get("source_location") or {}),
                     list(relationship.get("branch_path") or []),
                     list(chain),
@@ -333,7 +356,7 @@ def _expand_temp_table_lineage(
             )
         _report_progress(progress_callback, "lineage", index, len(temp_reads), source_id)
 
-    for source_id, target_id, stated, source_location, branch_path, lineage in derived:
+    for source_id, target_id, stated, schema_source, source_location, branch_path, lineage in derived:
         _add_relationship(
             relationships,
             "reads",
@@ -344,6 +367,7 @@ def _expand_temp_table_lineage(
             conditions=branch_path,
             identity_suffix=f"lineage:{lineage[0]}",
             stated=stated,
+            schema_source=schema_source,
         )
         relationships[-1]["lineage"] = lineage
 
@@ -450,7 +474,7 @@ def _add_operation(
         return
 
     for read_table in operation.get("read_tables", []) or []:
-        reference = _reference(read_table)
+        reference, schema_source = _resolved_reference(node_by_key, read_table, module_schema)
         for target_id in _ensure_referenced_nodes(
             nodes, node_by_key, reference, module_id, cache_database
         ):
@@ -463,6 +487,7 @@ def _add_operation(
                 branch_path,
                 columns=list(operation.get("read_columns", []) or []),
                 stated=reference,
+                schema_source=schema_source,
             )
             if target_id.split(":", 1)[0] in {"view", "function"}:
                 _add_relationship(
@@ -473,10 +498,11 @@ def _add_operation(
                     source,
                     branch_path,
                     conditions=list(operation.get("conditions") or branch_path),
+                    schema_source=schema_source,
                 )
 
     for write_table in operation.get("write_tables", []) or []:
-        reference = _reference(write_table)
+        reference, schema_source = _resolved_reference(node_by_key, write_table, module_schema)
         for target_id in _ensure_referenced_nodes(
             nodes, node_by_key, reference, module_id, cache_database
         ):
@@ -489,13 +515,15 @@ def _add_operation(
                 branch_path,
                 columns=list(operation.get("written_columns", []) or []),
                 stated=reference,
+                schema_source=schema_source,
             )
 
     for function_reference in operation.get("function_references", []) or []:
+        reference, schema_source = _resolved_reference(node_by_key, function_reference, module_schema)
         for target_id in _known_object_node_ids(
             node_by_key,
             "function",
-            _reference(function_reference),
+            reference,
             cache_database,
         ):
             _add_relationship(
@@ -506,6 +534,7 @@ def _add_operation(
                 source,
                 branch_path,
                 conditions=list(operation.get("conditions") or branch_path),
+                schema_source=schema_source,
             )
 
 
@@ -519,15 +548,26 @@ def _reference(entry: dict[str, Any]) -> ObjectName:
     )
 
 
+def _resolved_reference(
+    node_by_key: _NodeIndex, entry: dict[str, Any], module_schema: str
+) -> tuple[ObjectName, str]:
+    """Read one analyzer reference and give it the schema SQL Server resolves, with its schema source."""
+    reference = _reference(entry)
+    schema, schema_source = schema_resolution.resolve(reference, module_schema, node_by_key.holds)
+    return dataclasses.replace(reference, schema=schema), schema_source
+
+
 def _listed_nodes(
     node_by_key: _NodeIndex, object_type: str, schema: str, name: str
 ) -> list[dict[str, Any]]:
     """The listed nodes one reference names, under the two-bucket rule.
 
     A reference that states a schema matches the node of that full key. A reference
-    that states no schema matches every node of that type with the bare name. The
-    lookup never fills an unstated schema with `dbo`. Listed nodes always carry a
-    schema, so none of them carries the Unproven Schema mark.
+    that states no schema matches every node of that type with the bare name. Only
+    a call still reaches the second bucket: a read, a write, and a function
+    reference arrive here with the schema that the resolution rule gave them, and
+    one that the rule left empty matches no listed node. Listed nodes always carry
+    a schema, so none of them carries the Unproven Schema mark.
     """
     if schema:
         node = node_by_key.get(_node_key(object_type, schema, name))
@@ -542,13 +582,13 @@ def _ensure_referenced_nodes(
     module_id: str,
     cache_database: str,
 ) -> list[str]:
-    """Return the ids of the nodes one table, View, or Function reference names.
+    """Return the ids of the nodes one resolved table, View, or Function reference names.
 
-    A reference that names a listed View or Function returns their ids. Any other
-    reference is a table node that keeps the schema the reference states, and an
-    empty schema when it states none. The node takes no database: node identity is
-    type, schema, and name, and the relationship records the database its
-    reference stated.
+    A reference that names a listed View or Function returns its id. Any other
+    reference is a table node that keeps the resolved schema, and an empty schema
+    when the resolution rule left it empty. The node takes no database: node
+    identity is type, schema, and name, and the relationship records the database
+    its reference stated.
     """
     object_schema, name = reference.schema, reference.name
     if _is_scoped_temp_table(name):
@@ -563,7 +603,8 @@ def _ensure_referenced_nodes(
         return [str(_add_node(nodes, node_by_key, node)["id"])]
     # A reference to another Database matches no listed View or Function: this cache
     # holds no definition of that object, so a local node would be false evidence.
-    if not names_another_database(reference.database, cache_database):
+    # An unresolved reference names no listed object either.
+    if object_schema and not names_another_database(reference.database, cache_database):
         for object_type in ("view", "function"):
             listed = _listed_nodes(node_by_key, object_type, object_schema, name)
             if listed:
@@ -604,8 +645,9 @@ def _known_object_node_ids(
     cache_database: str,
 ) -> list[str]:
     # A reference to another Database matches no node: this cache holds no
-    # definition of that object, so a local node would be false evidence.
-    if names_another_database(reference.database, cache_database):
+    # definition of that object, so a local node would be false evidence. An
+    # unresolved reference names no listed function either.
+    if not reference.schema or names_another_database(reference.database, cache_database):
         return []
     return [
         str(node["id"])
@@ -625,6 +667,7 @@ def _add_relationship(
     confidence: str = "proven",
     identity_suffix: str = "",
     stated: ObjectName | None = None,
+    schema_source: str = "",
 ) -> None:
     relationship_id = f"{relationship_type}:{source_id}:{target_id}"
     if identity_suffix:
@@ -651,6 +694,8 @@ def _add_relationship(
         relationship["database"] = stated.database
     if stated is not None and stated.server:
         relationship["server"] = stated.server
+    if schema_source:
+        relationship["schema_source"] = schema_source
     relationships.append(relationship)
 
 
