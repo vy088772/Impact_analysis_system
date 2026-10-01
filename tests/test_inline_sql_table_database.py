@@ -76,7 +76,7 @@ def _ask(
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda name: None)
-    monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name: (None, {}))
+    monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name, server="", **_: (None, {}))
     monkeypatch.setattr(analyze_service, "_execution_paths_for_scope", rated)
     monkeypatch.setattr(analyze_service, "filter_table_accesses", lambda *args, **kwargs: [])
     response = analyze_service.find_by_table(

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from typing import Any, List, Dict, Literal, Optional, Union
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 WrapperContractSelector = Union[str, List[str], None]
 
@@ -372,7 +372,21 @@ ExternalWrapperContractAcceptanceRequest = WrapperContractAcceptanceRequest
 ExternalWrapperContractAcceptanceResponse = WrapperContractAcceptanceResponse
 
 
-class FindBySPRequest(BaseModel):
+class LookupDatabaseHost(BaseModel):
+    """The Database host a reverse lookup may name (`/find_by_sp`, `/find_by_table`).
+
+    A Database name that lives on more than one host needs the host. A blank
+    host counts as no host named.
+    """
+    db_server: str = ""                       # 選填：資料庫主機位址；同名資料庫在多台主機時必填
+
+    @field_validator("db_server", mode="before")
+    @classmethod
+    def _blank_host_is_no_host(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class FindBySPRequest(LookupDatabaseHost):
     """POST /find_by_sp 請求：反查「哪些程式呼叫了這支 SP」（純快取比對，不觸發 clone）。
 
     cache_only=True（預設）時，若該 repo 尚未 clone 過，直接回傳 skipped=True，
@@ -418,7 +432,7 @@ class FindBySPResponse(BaseModel):
     source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）
 
 
-class FindByTableRequest(BaseModel):
+class FindByTableRequest(LookupDatabaseHost):
     """POST /find_by_table 請求：反查「哪些程式存取了這張資料表」（純快取比對，不觸發 clone）。
 
     情境：使用者打算異動某張資料表（改欄位、改約束等），需要先知道哪些程式會受影響——
