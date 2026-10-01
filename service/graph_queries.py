@@ -87,7 +87,7 @@ def filter_table_accesses(
     own_database = str(graph.get("database") or "")
 
     accesses: list[dict[str, Any]] = []
-    lineage_index: _LineageIndex | None = None
+    lineage_index: LineageIndex | None = None
     for path in paths:
         writes = _matching_targets(path.get("write_full_keys", []), question, own_database)
         reads = _matching_targets(path.get("read_full_keys", []), question, own_database)
@@ -115,7 +115,7 @@ def filter_table_accesses(
         # decides whether the resulting record claims the read (ADR-0015).
         if access in {"all", "read"} and not writes and not reads:
             if lineage_index is None:
-                lineage_index = _LineageIndex(graph)
+                lineage_index = LineageIndex(graph)
             lineage_reads = lineage_index.read_lineage(path, question, own_database)
             for table, match in lineage_reads:
                 accesses.append(
@@ -227,7 +227,7 @@ def _target_key(target: _Target) -> _TargetKey:
     return part_key(target.database), part_key(target.schema), target.name.casefold()
 
 
-class _LineageIndex:
+class LineageIndex:
     """Table reverse index for one graph, built at most once.
 
     A table reverse lookup asks this once per graph, not once per Execution
@@ -253,7 +253,7 @@ class _LineageIndex:
 
     The graph itself is kept only inside this instance, so `read_lineage`
     never re-reads it: the index and the graph it was built from stay
-    paired by construction, and a caller holding a `_LineageIndex` cannot
+    paired by construction, and a caller holding a `LineageIndex` cannot
     hand it a different graph's data.
 
     Built lazily, on the first call to `read_lineage` -- a lookup whose
@@ -262,11 +262,13 @@ class _LineageIndex:
     only the membership test, not another build.
     """
 
-    __slots__ = ("_graph", "_reached")
+    __slots__ = ("_graph", "_reached", "_reachable_by_node")
 
     def __init__(self, graph: Mapping[str, Any]) -> None:
         self._graph = graph
         self._reached: dict[str, dict[_TargetKey, tuple[_Target, set[str]]]] | None = None
+        # View or Function node id -> the tables it reaches; `_ensure_built` fills it.
+        self._reachable_by_node: dict[str, _Tables] = {}
 
     def _ensure_built(self) -> dict[str, dict[_TargetKey, tuple[_Target, set[str]]]]:
         """Return bare name -> full key -> (table, ids of the operations that reach it)."""
@@ -379,7 +381,21 @@ class _LineageIndex:
                 entry[1].add(operation_id)
 
         self._reached = reached_by_name
+        self._reachable_by_node = reachable
         return reached_by_name
+
+    def reachable_tables(self, node_id: str) -> list[tuple[ObjectName, str]]:
+        """Return each table that one View or Function node reaches, with its schema source.
+
+        The rule is the one `read_lineage` applies: the tables that the node's own
+        operations read, plus the tables of each View or Function that they read,
+        to any depth. A table carries the Database of the relationship that reads it.
+        """
+        self._ensure_built()
+        return [
+            (ObjectName("", table.database, table.schema, table.name), table.schema_source)
+            for table in self._reachable_by_node.get(node_id, {}).values()
+        ]
 
     def read_lineage(
         self, path: Mapping[str, Any], question: TableQuestion, own_database: str

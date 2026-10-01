@@ -444,6 +444,9 @@ class TableMatchProgram(WrapperEvidenceFields):
     file: str = ""                             # 相對 repo 根目錄的檔案路徑
     via_sp: bool = False                       # True：這筆是透過 Gateway + SQL Execution Graph path 間接找到的
     # 不是 C# inline SQL fact 的直接命中
+    read_through: str = ""                    # inline C# SQL 讀的是 View 或 Function、經由它讀到這張表時，
+    # 那個 View 或 Function 的名稱（含 schema，例如 "dbo.fun_GetRoleOrderTypeList"）；
+    # 這種命中的 access_type 是 READ_INDIRECT（parsed）或 UNRESOLVED（fallback）。直接命中為空字串。
     access_type: str = ""                     # 存取型態：C# 直接命中沿用 CSharpTableRelation.access_type
     # 直接命中可為 "READ"/"INSERT"/"UPDATE"/"DELETE"；Execution Graph 的巢狀
     # 呼叫會保留原始 operation_type，間接寫入標示為 "WRITE_INDIRECT"。evidence_status

@@ -1939,6 +1939,11 @@
             "title": "Program",
             "type": "string"
           },
+          "read_through": {
+            "default": "",
+            "title": "Read Through",
+            "type": "string"
+          },
           "reason": {
             "default": "",
             "title": "Reason",
