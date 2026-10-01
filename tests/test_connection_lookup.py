@@ -573,6 +573,20 @@ def test_a_site_root_is_the_parent_of_an_application_below_it(tmp_path: Path):
     assert _lookup(tmp_path, source, "PUR").database == "PurDb"
 
 
+def test_a_project_file_suffix_in_upper_case_still_makes_a_web_application(tmp_path: Path):
+    """The search for the nearest project file and the search for a Parent
+    Application read a project file suffix with no regard to case."""
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://host/Site")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    (child / "Child.csproj").rename(child / "Child.CSPROJ")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    source = _source_file(child / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR").database == "PurDb"
+
+
 def test_two_candidate_parents_with_the_same_path_give_no_inheritance(tmp_path: Path):
     _clone(tmp_path)
     for name, database in (("SiteA", "DbA"), ("SiteB", "DbB")):

@@ -102,7 +102,8 @@ class ConnectionAnswer:
     """The answer of a view for one lookup key in one namespace.
 
     `declared_in` names the configuration file that declared the key, as a
-    path relative to the scan root. `reason` states why the lookup failed. One
+    path relative to the clone root, or to the scan root when the analyzer
+    finds no clone root. `reason` states why the lookup failed. One
     answer holds all four fields, so a caller cannot lose the reason.
     """
 
@@ -463,15 +464,23 @@ class ConnectionLookup:
 
     @staticmethod
     def _project_file_beside(directory: Path) -> Optional[Path]:
+        """The first project file in a directory, in name order.
+
+        The suffix comparison ignores case, as the search for a Parent
+        Application does.
+        """
         try:
-            project_files = sorted(
-                found
-                for suffix in PROJECT_FILE_SUFFIXES
-                for found in directory.glob(f"*{suffix}")
-            )
+            entries = sorted(directory.iterdir())
         except OSError:
             return None
-        return project_files[0] if project_files else None
+        return next(
+            (
+                entry
+                for entry in entries
+                if entry.name.casefold().endswith(PROJECT_FILE_SUFFIXES) and entry.is_file()
+            ),
+            None,
+        )
 
     def _project_file_for(self, source_file: Union[str, Path]) -> Optional[Path]:
         """The nearest project file above a source file.

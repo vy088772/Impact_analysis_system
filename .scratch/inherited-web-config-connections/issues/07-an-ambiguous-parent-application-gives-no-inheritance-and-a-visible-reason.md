@@ -64,3 +64,14 @@ Test result: 1437 passed (same two files left out as tickets 05 and 06).
 - Standards: no hard breach. Fixed: the `CONTEXT.md` gap; the dedupe now covers
   this reason only; a `<clear/>` silence test. Smells that stay: the
   `(chain, ambiguous)` tuples could be one small type.
+
+### 2026-10-01 — correction after the review of the whole effort
+
+- The second decision above is not correct in each case. It is correct when
+  the own `Web.config` of the child declares at least one entry.
+- When each layer is empty, the view gives the key-as-name guess and also the
+  reason `ambiguous_parent_application`. The key then shows in the connection
+  sources and in the unresolved connections of the scan result.
+- This result agrees with stories 17, 38, and 43 of the spec. The test
+  `test_an_ambiguous_parent_application_keeps_the_key_as_name_guess_with_the_reason`
+  pins it at the view. No scanner test pins it.
