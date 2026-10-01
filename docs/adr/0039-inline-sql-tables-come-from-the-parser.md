@@ -43,6 +43,7 @@ Inline SQL tables come from the analyzer host's SQL command. The regular express
 - A table that an `UPDATE` or a `DELETE` operation writes carries only the write. The host removes that table from the read tables of the operation. The SQL Execution Graph has the same rule.
 - The read is not lost. An `UPDATE` or a `DELETE` must find the rows that it changes, so the write includes the read.
 - A name that starts with `#` or `@` gives no relation. A function reference and an unresolved write target give no relation.
+- A function reference is a scalar function call. A table-valued function in a `FROM` clause is not a function reference: the host reports it in the read tables, as it reports a view. So a read of a view or of a table-valued function gives a relation that names that object. When a request names a Database, a by-table question also reaches each table that the object reads, through the SQL Execution Graph, as an Execution Path does. (Amended on 2026-10-01, ticket 10.)
 - A parsed relation carries the reason `inline_sql_parsed` and the source span of its Database Invocation. Its Evidence Status stays `not_applicable`.
 - A parsed relation takes its Database from the rating of its Database Invocation. With no rated invocation, it takes the Database that the C# parser found for its connection.
 - When the host fails on one text, the scan stops. The error names the source file and the text. A host failure is not a fallback condition.

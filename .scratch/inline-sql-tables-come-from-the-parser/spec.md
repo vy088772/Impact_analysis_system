@@ -230,6 +230,11 @@ The C# Scan Result format version rises. Each System rescans locally.
   adds no schema resolution.
 - A name that starts with `#` or `@` gives no relation. A function reference
   gives no relation. An unresolved write target gives no relation.
+- A function reference is a scalar function call, such as `dbo.fn_Key(x)` in a
+  select list. A table-valued function in a `FROM` clause is not a function
+  reference. The host reports it in the read tables, as it reports a view. So
+  a read of a view or of a table-valued function gives a relation with the
+  access type `SELECT`. Ticket 10 adds the tables that this read reaches.
 - A parsed relation carries the reason `inline_sql_parsed`. Its Evidence Status
   stays `not_applicable`. The Database and the schema carry their own marks,
   so the access type does not wait for them.
@@ -622,3 +627,14 @@ The C# Scan Result format version rises. Each System rescans locally.
   state the behaviour that is correct for a guess: it stays out of a
   `write_only` answer and adds one to the excluded count. Ticket 08 measured
   that behaviour. The rest of the spec does not change.
+- Correction on 2026-10-01, after the triage of ticket 10: the rule "A function
+  reference gives no relation" did not say what a table-valued function in a
+  `FROM` clause gives. The host reports that function in the read tables, as
+  it reports a view, so the relation names the function. The SQL Execution
+  Graph does the same: a path matches the view or the function by its name,
+  and it also reaches each table that the view or the function reads
+  (`READ_INDIRECT`). An inline relation reached only the name. The ten local
+  Systems hold 232 parsed relations and 6 fallback relations that read a view,
+  and 6 parsed relations that read a table-valued function. Ticket 10 adds the
+  tables behind the view or the function to the by-table answers. The rule
+  above now states what a function reference is.

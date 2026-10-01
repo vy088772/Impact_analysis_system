@@ -23,7 +23,7 @@ Files this ticket changed (other tickets run in parallel; these are the only one
 
 - `.scratch/inline-sql-tables-come-from-the-parser/issues/08-the-local-systems-rescan-and-the-real-data-agrees.md` (this file)
 - `.scratch/inline-sql-tables-come-from-the-parser/issues/09-the-csharp-parser-reads-no-sql-from-a-csharp-comment.md` (new)
-- `.scratch/inline-sql-tables-come-from-the-parser/issues/10-a-table-valued-function-in-a-from-clause-is-not-a-table.md` (new)
+- `.scratch/inline-sql-tables-come-from-the-parser/issues/10-an-inline-read-of-a-view-or-a-function-reaches-the-tables-behind-it.md` (new; the triage of 2026-10-01 renamed it)
 
 No product code and no test changed. In `data/`, the live `data/scan_cache` did not change (see "The rescan"). The companion repository did not change.
 

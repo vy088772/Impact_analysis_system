@@ -127,7 +127,7 @@ The stored procedure an inline SQL command text turns out to execute, rated agai
 _Avoid_: inline SP call, exec target, promoted procedure
 
 **Inline SQL Table Relation**:
-One table that one inline SQL text reads or writes, with its source file and its method. The C# Scan Result holds the relations in `table_relations`. Each relation has its own access type. Its `reason` names one of two sources:
+One table, view, or table-valued function that one inline SQL text reads or writes, with its source file and its method. A read of a view or a table-valued function also reaches each table that the object reads, the same way an Execution Path reaches it. That reached read is indirect, and it names the view or the function it passes through. The C# Scan Result holds the relations in `table_relations`. Each relation has its own access type. Its `reason` names one of two sources:
 - `inline_sql_parsed`: the analyzer host's SQL command parsed the text through SQL Text Analysis. A written table takes the operation type `INSERT`, `UPDATE`, `DELETE`, or `SELECT_INTO`. A read table takes `SELECT`. The relation carries the source span of its Database Invocation.
 - `inline_sql_regex`: the regular expressions of the C# parser guessed the table. The access type is always `UNRESOLVED`, so a `write_only` question leaves it out and counts it.
 
