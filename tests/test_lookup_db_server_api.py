@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from service import analyze_service
 from service.api import app
-from service.sql_cache_store import CacheIdentity
+from service.sql_cache_store import CacheIdentity, normalize_server
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
 from tests.sql_cache_fixtures import CacheRoot, cache_payload, execution_graph, write_cache
 from tests.test_find_by_sp_likely_matches import _graph as _graph_with_shared_sp
@@ -109,7 +109,7 @@ def test_a_database_on_two_hosts_with_no_host_named_gets_the_ambiguous_code(
     detail = response.json()["detail"]
     assert detail["code"] == "ambiguous_database"
     assert detail["database"] == "OrdersDb"
-    assert [server.split(".")[0] for server in detail["servers"]] == [HOST_WITH_THE_SP, HOST_WITHOUT_THE_SP]
+    assert detail["servers"] == [normalize_server(HOST_WITH_THE_SP), normalize_server(HOST_WITHOUT_THE_SP)]
 
 
 def test_find_by_sp_answers_from_the_host_that_the_request_names(two_hosts) -> None:
@@ -170,3 +170,50 @@ def test_a_call_without_a_host_for_a_database_on_one_host_keeps_today_behavior(
     assert response.status_code == 200
     if endpoint == "/find_by_sp":
         assert [match["program"] for match in response.json()["matches"]] == ["provenpage"]
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "payload"),
+    [("/find_by_sp", _sp_request(cache_only=True)), ("/find_by_table", _table_request(cache_only=True))],
+)
+def test_the_ambiguous_code_comes_before_the_cache_only_skip(
+    two_hosts, monkeypatch, endpoint: str, payload: dict
+) -> None:
+    monkeypatch.setattr(analyze_service, "peek_scan_roots", lambda source: [Path("unscanned")])
+    monkeypatch.setattr(analyze_service, "has_cache", lambda root: False)
+
+    response = client.post(endpoint, json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ambiguous_database"
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "payload"),
+    [("/find_by_sp", _sp_request()), ("/find_by_table", _table_request())],
+)
+def test_an_ambiguous_database_is_refused_before_any_source_scan(
+    two_hosts, monkeypatch, endpoint: str, payload: dict
+) -> None:
+    def must_not_scan(source, refresh=False):
+        raise AssertionError("an ambiguous Database must not resolve or scan source")
+
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", must_not_scan)
+
+    response = client.post(endpoint, json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ambiguous_database"
+
+
+def test_a_blank_host_counts_as_no_host_named_for_a_database_on_two_hosts(two_hosts) -> None:
+    response = client.post("/find_by_sp", json=_sp_request(db_server="   "))
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ambiguous_database"
+
+
+def test_a_blank_host_counts_as_no_host_named_for_a_database_on_one_host(one_host) -> None:
+    response = client.post("/find_by_table", json=_table_request(db_server="   "))
+
+    assert response.status_code == 200

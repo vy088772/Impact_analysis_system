@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from typing import Any, List, Dict, Literal, Optional, Union
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 WrapperContractSelector = Union[str, List[str], None]
 
@@ -372,7 +372,21 @@ ExternalWrapperContractAcceptanceRequest = WrapperContractAcceptanceRequest
 ExternalWrapperContractAcceptanceResponse = WrapperContractAcceptanceResponse
 
 
-class FindBySPRequest(BaseModel):
+class LookupDatabaseHost(BaseModel):
+    """The Database host a reverse lookup may name (`/find_by_sp`, `/find_by_table`).
+
+    A Database name that lives on more than one host needs the host. A blank
+    host counts as no host named.
+    """
+    db_server: str = ""                       # 選填：資料庫主機位址；同名資料庫在多台主機時必填
+
+    @field_validator("db_server", mode="before")
+    @classmethod
+    def _blank_host_is_no_host(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class FindBySPRequest(LookupDatabaseHost):
     """POST /find_by_sp 請求：反查「哪些程式呼叫了這支 SP」（純快取比對，不觸發 clone）。
 
     cache_only=True（預設）時，若該 repo 尚未 clone 過，直接回傳 skipped=True，
@@ -383,7 +397,6 @@ class FindBySPRequest(BaseModel):
     sp_name: str                              # 要反查的 SP 名稱（不分大小寫比對）
     wrapper_contract: WrapperContractSelector = ""  # 外部 wrapper contract selector
     database: str = ""                        # SQL execution graph cache key，通常是 system_id
-    db_server: str = ""                       # 選填：資料庫主機位址；同名資料庫在多台主機時必填
     cache_only: bool = True                   # True → repo 未 clone 過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
 
@@ -419,7 +432,7 @@ class FindBySPResponse(BaseModel):
     source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）
 
 
-class FindByTableRequest(BaseModel):
+class FindByTableRequest(LookupDatabaseHost):
     """POST /find_by_table 請求：反查「哪些程式存取了這張資料表」（純快取比對，不觸發 clone）。
 
     情境：使用者打算異動某張資料表（改欄位、改約束等），需要先知道哪些程式會受影響——
@@ -435,7 +448,6 @@ class FindByTableRequest(BaseModel):
     database: str = ""                        # 選填：資料庫快取鍵（通常是 spec-rag 的 system_id）。
     # 提供時會由 SQL Execution Graph 解析 SP/View/Function lineage；C# inline
     # SQL facts 仍保留直接出現的表名，兩者都會納入結果。
-    db_server: str = ""                       # 選填：資料庫主機位址；同名資料庫在多台主機時必填
     write_only: bool = False                  # True：只回傳「寫入」這張表的命中（access_type
     # 屬於 WRITE/WRITE_INDIRECT/INSERT/UPDATE/DELETE），濾掉純讀取（READ）與無法判斷（""）
     # 的命中——用於「打算異動這張表，只想知道誰會寫壞」這種比純反查更聚焦的情境。

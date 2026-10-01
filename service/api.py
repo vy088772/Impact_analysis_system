@@ -37,6 +37,8 @@
 """
 from __future__ import annotations
 
+from typing import Union
+
 from fastapi import FastAPI, HTTPException
 
 from config.settings import settings
@@ -178,7 +180,12 @@ def accept_wrapper_contract(
         raise HTTPException(status_code=500, detail=f"contract acceptance 失敗：{exc}") from exc
 
 
-def _ambiguous_database_http_error(exc: analyze_service.AmbiguousDatabaseError) -> HTTPException:
+def _lookup_conflict_http_error(
+    exc: Union[analyze_service.SqlExecutionGraphRequiredError, analyze_service.AmbiguousDatabaseError],
+) -> HTTPException:
+    """The 409 of a reverse lookup: the Database is not scanned, or it lives on several hosts."""
+    if isinstance(exc, analyze_service.SqlExecutionGraphRequiredError):
+        return _graph_readiness_http_error(exc)
     return HTTPException(
         status_code=409,
         detail={
@@ -197,10 +204,11 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         raise HTTPException(status_code=400, detail="sp_name 不可為空")
     try:
         return analyze_service.find_by_sp(req)
-    except analyze_service.SqlExecutionGraphRequiredError as exc:
-        raise _graph_readiness_http_error(exc) from exc
-    except analyze_service.AmbiguousDatabaseError as exc:
-        raise _ambiguous_database_http_error(exc) from exc
+    except (
+        analyze_service.SqlExecutionGraphRequiredError,
+        analyze_service.AmbiguousDatabaseError,
+    ) as exc:
+        raise _lookup_conflict_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -214,10 +222,11 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         raise HTTPException(status_code=400, detail="table_name 不可為空")
     try:
         return analyze_service.find_by_table(req)
-    except analyze_service.SqlExecutionGraphRequiredError as exc:
-        raise _graph_readiness_http_error(exc) from exc
-    except analyze_service.AmbiguousDatabaseError as exc:
-        raise _ambiguous_database_http_error(exc) from exc
+    except (
+        analyze_service.SqlExecutionGraphRequiredError,
+        analyze_service.AmbiguousDatabaseError,
+    ) as exc:
+        raise _lookup_conflict_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001

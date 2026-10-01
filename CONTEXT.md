@@ -10,6 +10,10 @@ The normalized `(server, database)` pair that names one SQL cache, independent o
 A Database shared by many Systems has exactly one identity, and so exactly one cache. The identity owns its three filenames: the data file, the Scan Record, and the Object Location Index. The cache store alone answers which files in the cache directory are caches. A file whose name no identity writes, such as an old schema-keyed cache, never lists as another Database. See [ADR-0009](docs/adr/0009-sql-cache-identity-decoupled-from-system.md) and [ADR-0033](docs/adr/0033-one-sql-cache-holds-one-database.md).
 _Avoid_: system_id cache key, per-System cache, database name alone
 
+**Ambiguous Database**:
+A Database name that has a SQL cache on more than one host, asked about with no host named. The two reverse lookups (`/find_by_sp`, `/find_by_table`) refuse it with HTTP 409 and the code `ambiguous_database`, before any source scan, and list the hosts. The caller names one host in `db_server` and asks again. It is not a Database that is not scanned: that one keeps the code `sql_execution_graph_required`. A blank `db_server` counts as no host named. `/analyze`, `/path_evidence` and `/flow_chain` do not use this code; for a Database on several hosts with no host named they answer "not scanned". See the SQL Cache Identity entry and [ADR-0033](docs/adr/0033-one-sql-cache-holds-one-database.md).
+_Avoid_: unknown server, duplicate database
+
 **Canonical Object Identity**:
 The one rule that turns a written SQL object name into a comparison key. The top-level `canonical_object_identity` module holds it. The `llamaindex-spec-rag` repository holds a mirror module that passes the same shared cases. A written name has up to four parts: server, database, schema, and bare name. An empty part means "not stated", never "default". The rule itself never fills an unstated schema with `dbo`: Schema Resolution fills it, and then this rule makes the key.
 
