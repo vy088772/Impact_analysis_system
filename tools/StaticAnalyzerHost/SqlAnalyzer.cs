@@ -56,13 +56,18 @@ internal sealed class SqlOperationExtractor
 
         if (IsExecute(fragment))
         {
-            candidates.Add(CreateExecuteCandidate(fragment, module, branchPath));
+            candidates.Add(CreateExecuteCandidate(fragment, GetFragmentProperty(fragment, "ExecuteSpecification"), branchPath));
             return;
         }
 
         if (IsDml(fragment))
         {
             candidates.Add(CreateCandidate(fragment, module, branchPath));
+            // INSERT ... EXEC runs its EXEC as a direct EXEC does, so the EXEC gives its own
+            // operation after the INSERT that writes its result.
+            var insertSource = GetFragmentProperty(GetFragmentProperty(fragment, "InsertSpecification"), "InsertSource");
+            if (GetFragmentProperty(insertSource, "Execute") is { } execute)
+                candidates.Add(CreateExecuteCandidate(execute, execute, branchPath));
             return;
         }
 
@@ -228,12 +233,13 @@ internal sealed class SqlOperationExtractor
             unresolvedWriteTargets: unresolvedWriteTargets);
     }
 
+    // The fragment gives the location of the operation: the whole EXEC statement, or the EXEC
+    // part of an INSERT ... EXEC statement.
     private SqlOperationCandidate CreateExecuteCandidate(
         TSqlFragment fragment,
-        SqlModuleIdentity module,
+        TSqlFragment? specification,
         IReadOnlyList<string> branchPath)
     {
-        var specification = GetFragmentProperty(fragment, "ExecuteSpecification");
         var executableEntity = GetFragmentProperty(specification, "ExecutableEntity");
         var callTargets = new List<SqlObjectReference>();
         if (executableEntity is not null)

@@ -13,7 +13,12 @@ from code_analyzer.csharp_analysis_gateway import (
 )
 from service.execution_path_builder import build_execution_paths
 from service.sql_execution_graph import build_sql_execution_graph
-from tests.sql_cache_fixtures import assert_relationships_resolve_to_known_nodes, cache_payload
+from tests.sql_cache_fixtures import (
+    analyzer_operation,
+    assert_relationships_resolve_to_known_nodes,
+    cache_payload,
+    stubbed_procedures,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -309,3 +314,42 @@ END;
         and relationship["target"] == "function:dbo.fn_OrderItems"
         for relationship in relationships
     )
+
+
+def test_the_exec_of_an_insert_exec_statement_gives_one_call_and_one_execution_path() -> None:
+    """The host gives an INSERT ... EXEC statement two operations: the INSERT, then a CALL."""
+    data, sql_text_analysis = stubbed_procedures(
+        "OrdersDb",
+        {
+            "dbo.usp_Fill": [
+                analyzer_operation("INSERT", sequence=1, writes=["#t"]),
+                analyzer_operation("CALL", sequence=2, calls=["usp_X"]),
+            ],
+            "dbo.usp_X": [analyzer_operation("SELECT", sequence=1, reads=["dbo.OrderItem"])],
+        },
+    )
+    graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
+    assert_relationships_resolve_to_known_nodes(graph)
+
+    calls = [
+        (relationship["source"], relationship["target"])
+        for relationship in graph["relationships"]
+        if relationship["type"] == "calls"
+    ]
+    assert calls == [("stored_procedure:dbo.usp_Fill", "stored_procedure:dbo.usp_X")]
+
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="Fill",
+        database="OrdersDb",
+        procedure_name="usp_Fill",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("OrderPage.cs", 10, 20),
+        procedure_schema="dbo",
+        method_chain=("Fill",),
+    )
+    paths = build_execution_paths([invocation], graph)
+
+    through_call = [path for path in paths if path["sp_chain"] == ["dbo.usp_Fill", "dbo.usp_X"]]
+    assert len(through_call) == 1
+    assert through_call[0]["terminal_operation"] == "SELECT"

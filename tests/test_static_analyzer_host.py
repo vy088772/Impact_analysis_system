@@ -839,3 +839,65 @@ def test_a_cte_name_inside_a_delete_subquery_is_no_table_read() -> None:
     )
 
     assert operation["read_tables"] == [_reference("", "", "dbo", "Src")]
+
+
+def test_an_insert_exec_statement_writes_its_target_and_calls_its_procedure() -> None:
+    result = _analyze_sql_text("CREATE PROCEDURE dbo.usp_Fill AS\nINSERT INTO #t EXEC dbo.usp_X;\n")
+
+    insert, call = result["operations"]
+    assert insert["operation_type"] == "INSERT"
+    assert insert["write_tables"] == [_reference("", "", "", "#t")]
+    assert insert["call_targets"] == []
+    assert call["operation_type"] == "CALL"
+    assert call["call_targets"] == [_reference("", "", "dbo", "usp_X")]
+    assert call["write_tables"] == []
+    assert call["dynamic_sql"] is False
+
+
+def test_an_insert_exec_into_a_table_variable_writes_nothing_and_calls_the_bare_name() -> None:
+    result = _analyze_sql_text("CREATE PROCEDURE dbo.usp_Fill AS\nINSERT INTO @t EXEC usp_X;\n")
+
+    insert, call = result["operations"]
+    assert insert["operation_type"] == "INSERT"
+    assert insert["write_tables"] == []
+    assert call["operation_type"] == "CALL"
+    assert call["call_targets"] == [_reference("", "", "", "usp_X")]
+
+
+def test_an_insert_exec_of_sp_executesql_calls_it_as_a_direct_exec_does() -> None:
+    result = _analyze_sql_text(
+        "CREATE PROCEDURE dbo.usp_Fill AS\n"
+        "INSERT INTO @t EXEC sp_executesql @sql;\n"
+        "EXEC sp_executesql @sql;\n"
+    )
+
+    _insert, inner, direct = result["operations"]
+    assert inner["operation_type"] == direct["operation_type"] == "CALL"
+    assert inner["call_targets"] == direct["call_targets"] == [_reference("", "", "", "sp_executesql")]
+
+
+def test_an_insert_exec_of_a_string_gives_the_dynamic_sql_operation_of_a_direct_exec() -> None:
+    result = _analyze_sql_text(
+        "CREATE PROCEDURE dbo.usp_Fill AS\n"
+        "INSERT INTO #t EXEC (@sql);\n"
+        "EXEC (@sql);\n"
+    )
+
+    insert, inner, direct = result["operations"]
+    assert insert["write_tables"] == [_reference("", "", "", "#t")]
+    for operation in (inner, direct):
+        assert operation["operation_type"] == "DYNAMIC_SQL"
+        assert operation["dynamic_sql"] is True
+        assert operation["call_targets"] == []
+
+
+def test_the_exec_of_an_insert_exec_keeps_the_branch_of_its_statement() -> None:
+    result = _analyze_sql_text(
+        "CREATE PROCEDURE dbo.usp_Fill AS\n"
+        "IF @a = 1\n"
+        "    INSERT INTO #t EXEC dbo.usp_X;\n"
+    )
+
+    insert, call = result["operations"]
+    assert call["branch_path"] == insert["branch_path"] == ["IF @a = 1"]
+    assert call["sequence"] == insert["sequence"] + 1

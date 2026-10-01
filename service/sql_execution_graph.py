@@ -64,7 +64,12 @@ from .table_match import names_another_database
 # and in its SET clause (unstated-schema-resolves-as-sql-server-does, ticket 11).
 # A v8 graph misses those reads, so a procedure that reads a table only inside
 # such a subquery is absent from the read answer; it is rejected until rebuilt.
-GRAPH_VERSION = 9
+# v10: the EXEC of an INSERT ... EXEC statement gives its own CALL or DYNAMIC_SQL
+# operation after the INSERT (unstated-schema-resolves-as-sql-server-does,
+# ticket 12). A v9 graph has no calls relationship for that EXEC, so the called
+# procedure is on no Execution Path, and each later operation of the module has
+# a sequence one lower; it is rejected until rebuilt.
+GRAPH_VERSION = 10
 NodeKey = tuple[str, str, str, str]
 
 
