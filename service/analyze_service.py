@@ -18,7 +18,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple
 
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
@@ -384,6 +384,42 @@ def _program_resolutions(raw_name: str, scan: ProjectScanResult) -> List[_Progra
 def _names_file_outright(file_path: str, program_base: str) -> bool:
     """Whether a program name is one file's whole base name, never a part of it."""
     return bool(program_base) and _normalize_program(Path(file_path).name) == program_base
+
+
+def _resolution_owns_invocation(
+    resolution: _ProgramResolution,
+    invocation: DbInvocation,
+    files_by_relative: Mapping[str, str],
+) -> bool:
+    """Whether one Database Invocation sits on an action this unit reports."""
+    return resolution.owns_action(
+        files_by_relative.get(
+            str(invocation.source.relative_path).replace("\\", "/").casefold(),
+            "",
+        ),
+        _invocation_entry_method(invocation),
+    )
+
+
+def _program_resolutions_for_names(
+    names: Sequence[str], scan: ProjectScanResult
+) -> Tuple[List[Any], List[_ProgramResolution]]:
+    """The scanned C# files, once each, and the resolutions of several program names.
+
+    `/analyze` and `/path_evidence` both select program files through this, so
+    one name never matches different files on the two endpoints.
+    """
+    resolutions = [
+        resolution for name in names for resolution in _program_resolutions(name, scan)
+    ]
+    files: List[Any] = []
+    seen_paths: Set[str] = set()
+    for resolution in resolutions:
+        for result in resolution.matched_files:
+            if result.file_path not in seen_paths:
+                seen_paths.add(result.file_path)
+                files.append(result)
+    return files, resolutions
 
 
 def _screen_files(screen: ProgramScreen, csharp_by_path: Dict[str, Any]) -> List[Any]:
@@ -1871,22 +1907,31 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
 
     if req.program_names:
         # Same program resolution as /analyze, so both endpoints agree on
-        # which files a name matches.
-        matched_files = []
-        seen_paths: Set[str] = set()
-        for name in req.program_names:
-            for resolution in _program_resolutions(name, scan):
-                for result in resolution.matched_files:
-                    if result.file_path not in seen_paths:
-                        seen_paths.add(result.file_path)
-                        matched_files.append(result)
+        # which files a name matches and which actions on them it owns.
+        matched_files, resolutions = _program_resolutions_for_names(
+            req.program_names, scan
+        )
     else:
         matched_files = list(scan.csharp_results)
+        resolutions = []
 
     scope = DerivedExecutionEvidenceScope.of(req, roots)
     rated_invocations, joined_graph = _rated_execution_invocations(
         scope, scan, matched_files, root  # type: ignore[arg-type]
     )
+    if resolutions:
+        files_by_relative = {
+            _rel(result.file_path, root).casefold(): result.file_path
+            for result in scan.csharp_results
+        }
+        rated_invocations = [
+            invocation
+            for invocation in rated_invocations
+            if any(
+                _resolution_owns_invocation(resolution, invocation, files_by_relative)
+                for resolution in resolutions
+            )
+        ]
     selected_path: Dict | None = None
     selected_invocation: DbInvocation | None = None
     for invocation in rated_invocations:
@@ -2315,14 +2360,8 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             def owns_invocation(
                 invocation: DbInvocation, resolution=resolution
             ) -> bool:
-                return resolution.owns_action(
-                    files_by_relative.get(
-                        str(invocation.source.relative_path)
-                        .replace("\\", "/")
-                        .casefold(),
-                        "",
-                    ),
-                    _invocation_entry_method(invocation),
+                return _resolution_owns_invocation(
+                    resolution, invocation, files_by_relative
                 )
 
             # 2) Join C# database facts through the Gateway; legacy relations are not
