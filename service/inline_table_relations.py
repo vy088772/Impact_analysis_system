@@ -12,9 +12,10 @@ The module has two queries:
   requires. It pairs a parsed relation with its rated Database Invocation by
   the source span, and takes the Database, the database candidates, and the
   Database attribution from that rating.
-- The by-method query returns each relation whose source file and method pass
-  the caller's test. It holds no ownership rule. `/flow_chain` forward, the
-  `/analyze` screen table list, and the shared component table list call it.
+- The by-method query returns each relation whose `MethodSite` passes the
+  caller's test. It holds no ownership rule. `/flow_chain` forward, the
+  `/analyze` screen table list, and the shared component table list call it
+  through `table_names_by_method`, which gives the bare table names.
 
 Three readers apply no rule, and they read the stored fields: the relation
 count of the scan statistics, the merge of scans, and the HTML report.
@@ -27,13 +28,21 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
 import schema_resolution
-from canonical_object_identity import ObjectName, full_key
+from canonical_object_identity import ObjectName, bare_name, full_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation
 from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 
 from . import sql_cache_store
 from .execution_path_builder import database_attribution
 from .table_match import TableMatch, TableQuestion
+
+
+@dataclass(frozen=True)
+class MethodSite:
+    """The source file and the method that a table relation belongs to."""
+
+    file_path: str
+    method_name: str
 
 
 @dataclass(frozen=True)
@@ -96,14 +105,27 @@ def by_table(
 
 
 def by_method(
-    scan: ProjectScanResult, passes: Callable[[str, str], bool]
+    scan: ProjectScanResult, passes: Callable[[MethodSite], bool]
 ) -> List[CSharpTableRelation]:
-    """Return each relation of the scan whose source file and method name pass the caller's test."""
+    """Return each relation of the scan whose `MethodSite` passes the caller's test."""
     return [
         relation
         for relation in scan.table_relations
-        if passes(relation.csharp_file, relation.method_name)
+        if passes(MethodSite(relation.csharp_file, relation.method_name))
     ]
+
+
+def table_names_by_method(scan: ProjectScanResult, passes: Callable[[MethodSite], bool]) -> List[str]:
+    """Return the bare table name of each relation that the by-method query returns.
+
+    The names keep the order of the relations, and each name occurs once.
+    """
+    names: List[str] = []
+    for relation in by_method(scan, passes):
+        name = bare_name(relation.table)
+        if name not in names:
+            names.append(name)
+    return names
 
 
 def _span_key(file_path: str, span: Sequence[int], root: Path) -> Optional[tuple[str, int, int]]:

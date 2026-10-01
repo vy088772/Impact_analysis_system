@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Opt
 from config.settings import settings
 from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
 from code_analyzer.connection_source_entry import database_of, has_resolved_shape, with_database
-from canonical_object_identity import ObjectName, bare_key, bare_name, full_key, parse, part_key, schema_qualified
+from canonical_object_identity import ObjectName, bare_key, full_key, parse, part_key, schema_qualified
 from code_analyzer.csharp_analysis_gateway import (
     CSharpAnalysisGateway,
     DbInvocation,
@@ -2353,13 +2353,11 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 if invocation.evidence is not InvocationEvidence.PROVEN
             ]
 
-            table_names: List[str] = []
-            for rel in inline_table_relations.by_method(
+            table_names = inline_table_relations.table_names_by_method(
                 scan,
-                lambda file_path, method_name: resolution.owns_file(file_path)
-                and resolution.owns_action(file_path, method_name),
-            ):
-                _append_once(bare_name(rel.table), table_names)
+                lambda site: resolution.owns_file(site.file_path)
+                and resolution.owns_action(site.file_path, site.method_name),
+            )
 
             # 共用元件（S.15）：這個畫面渲染的 ViewComponent／partial view，貼上
             # 「來自共用元件」的標籤跟畫面自己的存取分開，不會混進 methods。
@@ -2400,13 +2398,13 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                             continue
                         _append_once(invocation.procedure_name, sp_names, component_sp_names)
 
-                    component_table_names: List[str] = []
-                    for rel in inline_table_relations.by_method(
+                    component_table_names = inline_table_relations.table_names_by_method(
                         scan,
-                        lambda file_path, method_name: file_path == contribution.file_path
-                        and _same_name(method_name, contribution.entry_method),
-                    ):
-                        _append_once(bare_name(rel.table), table_names, component_table_names)
+                        lambda site: site.file_path == contribution.file_path
+                        and _same_name(site.method_name, contribution.entry_method),
+                    )
+                    for name in component_table_names:
+                        _append_once(name, table_names)
 
                     if not component_invocations and not component_table_names:
                         continue
@@ -3251,7 +3249,11 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
 
     # direction == "forward"（預設）
     program_base = _normalize_program(req.program_name)
-    matched_files = [r for r in scan.csharp_results if _file_matches(r.file_path, program_base)]
+
+    def owns_file(file_path: str) -> bool:
+        return _file_matches(file_path, program_base)
+
+    matched_files = [r for r in scan.csharp_results if owns_file(r.file_path)]
     if not matched_files:
         return FlowChainResponse(direction="forward", forward_chain=None, source_root=str(root))
 
@@ -3268,8 +3270,8 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
 
     forward = flow_chain_builder.build_forward_chain(
         scan,
-        matched_files,
         req.anchor_method,
+        owns_file=owns_file,
         graph=execution_graph,
         invocations=rated_invocations,
     )

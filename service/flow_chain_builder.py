@@ -37,9 +37,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-from canonical_object_identity import bare_key, bare_name
+from canonical_object_identity import bare_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 from code_analyzer.models import FileAnalysisResult
 from code_analyzer.project_scanner import ProjectScanResult
@@ -93,24 +93,23 @@ def _method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List[str]]:
 
 
 def _inline_sql_tables(
-    scan: ProjectScanResult, matched_files: List[FileAnalysisResult], reachable_methods: Set[str]
+    scan: ProjectScanResult, owns_file: Callable[[str], bool], reachable_methods: Set[str]
 ) -> Set[str]:
     """列出可達方法的 inline SQL table relation 所指的資料表名稱，補足 SP 鏈以外的來源。
 
     有些方法（例如只組 DropDownList 選項的 BindXxx）直接用
     `obj.CreateReader("select ... from Table")` 這種內嵌 SQL 字串查資料，完全
     沒有 database invocation，這種情況下只看 SQL Execution Graph path 也不會涵蓋它。
-    掃描時已經把這些 SQL 轉成 table relation；這裡只挑出「屬於 matched_files
-    裡可達方法」的那些 relation。
+    掃描時已經把這些 SQL 轉成 table relation；這裡只挑出「屬於這支程式的檔案
+    裡可達方法」的那些 relation。方法名稱用完全相同的比對：relation 的方法名稱
+    與 reachable_methods 都來自 C# 方法宣告，而 C# 的名稱分大小寫。
     """
-    matched_paths = {fr.file_path for fr in matched_files}
-    return {
-        bare_name(relation.table)
-        for relation in inline_table_relations.by_method(
+    return set(
+        inline_table_relations.table_names_by_method(
             scan,
-            lambda file_path, method_name: file_path in matched_paths and method_name in reachable_methods,
+            lambda site: owns_file(site.file_path) and site.method_name in reachable_methods,
         )
-    }
+    )
 
 
 def _reachable_from(start: str, adj: Dict[str, List[str]], max_depth: int = 8) -> Tuple[List[str], Set[str]]:
@@ -148,8 +147,9 @@ def _reachable_from(start: str, adj: Dict[str, List[str]], max_depth: int = 8) -
 
 def build_forward_chain(
     scan: ProjectScanResult,
-    matched_files: List[FileAnalysisResult],
     anchor_method: str,
+    *,
+    owns_file: Callable[[str], bool],
     graph: Optional[Mapping[str, object]] = None,
     invocations: Iterable[DbInvocation] = (),
 ) -> Optional[dict]:
@@ -159,12 +159,14 @@ def build_forward_chain(
     ui_fields 的 events 挑出的候選 handler 方法名稱（見這個模組頂部說明）；這裡
     只管照著這個名稱組鏈，不判斷這個名稱選得準不準。
 
-    scan：ProjectScanResult，inline SQL 資料表取自它的 table_relations；
-    matched_files 是 scan.csharp_results 裡屬於這支程式的檔案。
+    scan：ProjectScanResult，inline SQL 資料表取自它的 table_relations。
+    owns_file：一個檔案路徑是否屬於這支程式；這支程式的檔案就是
+    scan.csharp_results 裡通過它的那些。
 
-    回傳 None 代表在 matched_files 裡完全找不到這個方法名稱（呼叫端應視為此
+    回傳 None 代表在這支程式的檔案裡完全找不到這個方法名稱（呼叫端應視為此
     錨點無效，換下一個候選）。
     """
+    matched_files = [fr for fr in scan.csharp_results if owns_file(fr.file_path)]
     adj = _method_adjacency(matched_files)
     if anchor_method not in adj and not any(
         anchor_method == m.name for fr in matched_files for cls in fr.classes for m in cls.methods
@@ -231,7 +233,7 @@ def build_forward_chain(
     # 有些方法完全沒呼叫 SP，只靠內嵌 SQL 字串查表，單看 sp_chain 會漏掉這些表。
     # 獨立回傳一份（inline_sql_tables）方便呼叫端知道「這些表不是從哪支 SP 來的」，
     # 同時也併入 all_tables，讓 tables/FK 展開跟 SP 來源的表一視同仁。
-    inline_tables = _inline_sql_tables(scan, matched_files, reachable_methods)
+    inline_tables = _inline_sql_tables(scan, owns_file, reachable_methods)
     all_tables.update(inline_tables)
 
     return {

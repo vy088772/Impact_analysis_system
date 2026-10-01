@@ -8,7 +8,6 @@ question, so both directions name the same inline SQL tables for one method.
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 from canonical_object_identity import ObjectName
@@ -18,7 +17,7 @@ from service import analyze_service
 from service.schemas import AzureSource, FindByTableRequest, FlowChainRequest
 from service.sql_cache_store import CacheIdentity, build_object_location_index
 from tests.sql_cache_fixtures import cache_payload
-from tests.test_graph_reverse_lookup import _file
+from tests.scan_fixtures import csharp_file, scan_of
 
 _SOURCE = AzureSource(project="orders", repo="orders")
 
@@ -37,14 +36,7 @@ def _relation(root: Path, method: str, table: ObjectName, access_type: str = "SE
 
 
 def _scan(root: Path, methods: list[MethodInfo], relations: list[CSharpTableRelation]) -> ProjectScanResult:
-    return ProjectScanResult(
-        project_root=str(root),
-        project_name="orders",
-        scan_time=datetime.now(),
-        csharp_results=[_file(root, "OrderPage.cs", methods)],
-        aspx_results=[],
-        table_relations=relations,
-    )
+    return scan_of(root, [csharp_file(root, "OrderPage.cs", methods)], relations)
 
 
 def _serve(monkeypatch, root: Path, scan: ProjectScanResult, listed_tables: list[str] | None = None) -> None:
