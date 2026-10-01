@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import urlsplit
 
-from .project_connection_scope import IGNORED_DIRECTORY_NAMES, PROJECT_FILE_SUFFIXES
+from .project_connection_scope import IGNORED_DIRECTORY_NAMES, is_project_file
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -169,6 +169,6 @@ class ParentApplications:
             found.extend(
                 Path(directory) / name
                 for name in sorted(file_names)
-                if name.casefold().endswith(PROJECT_FILE_SUFFIXES)
+                if is_project_file(name)
             )
         return found

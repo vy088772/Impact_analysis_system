@@ -111,6 +111,11 @@ class ProjectConnectionScope:
     environment_overrides: Tuple[EnvironmentSettingsOverride, ...] = ()
 
 
+def is_project_file(name: str) -> bool:
+    """檔名是不是專案檔。副檔名比對不分大小寫。"""
+    return name.casefold().endswith(PROJECT_FILE_SUFFIXES)
+
+
 def _find_settings_file(directory: Path, name: str) -> Optional[Path]:
     try:
         entries = list(directory.iterdir())

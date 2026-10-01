@@ -301,7 +301,7 @@ class ProjectScanResult:
                         "database": str(
                             record.get("database")
                             or database_of(resolved_source)
-                            or "unknown"
+                            or UNRESOLVED_CONNECTION_DATABASE
                         ),
                         "connection_variable": connection_variable,
                         "invocation_kind": str(record.get("invocation_kind") or "direct_sqlclient"),
