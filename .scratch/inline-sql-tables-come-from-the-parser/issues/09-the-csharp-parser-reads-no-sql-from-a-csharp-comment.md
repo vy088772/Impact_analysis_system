@@ -15,7 +15,7 @@ The rescan of ticket 08 found this defect. It is not in the spec. Before the spe
 - The live code on line 122 calls the stored procedure `usp_PO_ManifaseUpload_AddData` in place of that insert.
 - The C# Scan Result gives `ManifestNew` with the reason `inline_sql_regex` and the access type `UNRESOLVED`, in the method `Initial_IVObject`.
 - Line 130 holds the same kind of commented-out insert into `ManifestTemp`. It gives no relation. So the parser is not even consistent about a C# comment.
-- Spec user story 11 calls this insert "the real writer". That premise is false. Ticket 08 records the result.
+- Spec user story 11 first called this insert "the real writer". That premise was false. Ticket 08 records the result, and the spec corrected story 11 on 2026-10-01.
 
 **Cause, as far as ticket 08 looked:** `CSharpParser._extract_sql_queries` (`code_analyzer/csharp_parser.py`) runs its SQL patterns on the whole file content. No step removes C# comments first. `strip_sql_comments` removes SQL comments only, inside a SQL text.
 

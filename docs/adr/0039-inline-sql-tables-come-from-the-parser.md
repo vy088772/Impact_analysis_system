@@ -10,7 +10,7 @@ An analyst asks which programs read or write a table. Inline SQL is SQL text ins
 The regular expressions missed real tables. A missed writer is worse than an extra writer:
 
 - A statement that starts with `WITH` or `MERGE` gave no table. The parser dropped each statement whose first word it did not classify.
-- `INSERT INTO t (col1, col2) ...` gave no `t`. The pattern read `t (` as a function call. ATV holds a real case: `insert into ManifestNew (R_ID,data) values(...)`.
+- `INSERT INTO t (col1, col2) ...` gave no `t`. The pattern read `t (` as a function call. ATV holds a text of this form: `insert into ManifestNew (R_ID,data) values(...)`. That text is in commented-out C# code, so it is not a real writer.
 
 The regular expressions also gave false tables and false writes:
 
@@ -27,7 +27,7 @@ The ten local C# Scan Results gave these facts on 2026-09-30:
 - 545 of the 583 texts match a literal command text that the host recorded in the same file. 30 texts are in a file where the host recorded only `dynamic` texts. 8 texts have no host record.
 - The host received 607 recorded texts, and 582 of them parsed. Each of the 25 failures is the lone word `delete`, which is not SQL.
 - The scans hold 641 inline relations, and each one has the statement type `SELECT`. 176 of them have no resolved Database.
-- No local relation is a false CTE table or a false alias table. The one local lost write is the ATV `ManifestNew` insert.
+- No local relation is a false CTE table or a false alias table. No local write was lost. The ATV `ManifestNew` insert first looked like a lost write, but it is in commented-out C# code (correction of 2026-10-01, after the rescan).
 
 The ten local Systems are a small part of more than one hundred Systems. So the local data does not show that the defects are absent. The defects follow from the code.
 

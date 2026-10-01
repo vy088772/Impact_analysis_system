@@ -6,11 +6,11 @@ See "Rollout" and "Testing Decisions" (acceptance) and user stories 11, 30 to 32
 
 **Blocked by:** 03, 04, 05, 06.
 
-**Status:** done (2026-10-01), except item 3. Item 3 is not met, because its premise is false. See "Item 3" in the Notes, and ticket 09.
+**Status:** done (2026-10-01). Item 3 first failed, because its premise was false. The spec corrected user story 11 and item 3 on 2026-10-01. See "Item 3" in the Notes, and ticket 09.
 
 - [x] The one-time check of ticket 02 has its result on record. That check needs the scans of the old format, so it cannot run after this rescan.
 - [x] Each old C# Scan Result reports `scan_cache_stale` before the rescan.
-- [ ] `/find_by_table ManifestNew write_only=True` on ATV returns the ATV program with the type `INSERT`. **Not met:** the insert is commented-out C# code. See the Notes.
+- [x] `/find_by_table ManifestNew write_only=True` on ATV returns no ATV program, and its excluded count is one. (Corrected item. The first text asked for the ATV program with the type `INSERT`. That failed, because the insert is commented-out C# code. See the Notes.)
 - [x] At least 545 relations carry the reason `inline_sql_parsed`. (637)
 - [x] The ticket records the counts per reason and per access type, before and after.
 - [x] The ticket records three spot checks: one parsed relation, one fallback relation, and one relation whose access type changed.
@@ -78,7 +78,8 @@ Relation by relation, keyed by System, file, line, and table:
   - `write_only=True`: no match, `excluded_count` 1.
   - `write_only=False`: one match, `po_manifastuploadv3`, `inline_sql_regex`, `UNRESOLVED`, `via_sp` false.
 - The live code calls `usp_PO_ManifaseUpload_AddData` in place of the insert. In the ETON SQL cache, that procedure has `INSERT` operations on `ManifestTemp` and `ManifestNew`. `/find_by_sp usp_PO_ManifaseUpload_AddData` (ATV, `ETON`) gives no proven match. It lists `po_manifastuploadv3` under `likely_matches`: Database candidates `["ETON"]`, attribution `candidate`, reason `unique_across_catalogs`. The connection of that call does not resolve, so the write is not proven. A `write_only` answer correctly leaves it out (ADR-0015).
-- So user story 11 and its acceptance item rest on a false premise: the insert is not "the real writer". Correcting the spec text of story 11 is a decision for the maintainer. This ticket did not edit the spec.
+- So user story 11 and its acceptance item rested on a false premise: the insert is not "the real writer".
+- Correction (2026-10-01, a separate step after this ticket): the spec now states story 11 and item 3 as the behaviour above. The guess stays out of a `write_only` answer and adds one to the excluded count. ADR-0039 also no longer calls the insert a lost write. The measurement above meets the corrected item, so no new run was needed.
 
 ### Routing expectations
 
