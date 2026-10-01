@@ -326,7 +326,7 @@ def _expand_temp_table_lineage(
             predecessors.setdefault(successor, set()).add(state)
             pending.append(successor)
 
-    # Worklist fixed point, as in graph_queries._LineageIndex: a state grows by
+    # Worklist fixed point, as in graph_queries.LineageIndex: a state grows by
     # each successor's base tables until no set changes. Each base table keeps
     # its shortest chain of temp nodes, and a tie goes to the lower chain, so a
     # cycle ends and visit order does not change the result.

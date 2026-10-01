@@ -2702,6 +2702,11 @@ def _table_match_rank(match: TableMatchProgram) -> tuple[int, int, int]:
     )
 
 
+def _inline_match_rank(match: TableMatchProgram) -> tuple[bool, tuple[int, int, int]]:
+    """The rank of an inline record: a direct read first, then `_table_match_rank`."""
+    return not match.read_through, _table_match_rank(match)
+
+
 def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
     """反查「哪些程式呼叫了這支 SP」，使用 Gateway invocation 與 SQL Execution Graph，無 AI。
 
@@ -2909,6 +2914,9 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     # result below, so a parsed relation takes the Database of its Database Invocation.
     rated_invocations: List[DbInvocation] = []
     execution_paths: List[Dict[str, object]] = []
+    # The inline matches read the graph too: an inline read of a View or a Function
+    # reaches the tables behind it only when the request names a Database.
+    inline_graph: Optional[Mapping[str, Any]] = None
     if req.database:
         # FindByTableRequest 同樣沒有 db_server 欄位；理由見 find_by_sp。
         _sql_cache, graph = _require_sql_execution_graph(req.database)
@@ -2925,17 +2933,21 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             root,
             refresh=req.refresh,
         )
-    for answer in inline_table_relations.by_table(scan, question, rated_invocations, root):
+        inline_graph = graph
+    for answer in inline_table_relations.by_table(scan, question, rated_invocations, root, inline_graph):
         rel = answer.relation
         caller_class = str(getattr(rel, "class_name", "") or "")
         caller_method = str(getattr(rel, "method_name", "") or "")
         candidate = TableMatchProgram(
             program=_normalize_program(Path(rel.csharp_file).name),
             file=_rel(rel.csharp_file, root),
-            # Inline C# SQL remains a direct source fact; SQL-module relationships
+            # Inline C# SQL remains a source fact; SQL-module relationships
             # are queried from the Execution Graph below. The relation names its
-            # own source (parsed or regular expression) and its own access type.
-            access_type=rel.access_type,
+            # own source (parsed or regular expression). A direct answer keeps the
+            # access type of its relation; an answer that reaches the table through
+            # a View or a Function reads `READ_INDIRECT` or `UNRESOLVED`.
+            access_type=answer.access_type,
+            read_through=schema_qualified(answer.through) if answer.through is not None else "",
             reason=rel.reason,
             evidence_status="not_applicable",
             evidence_reason="inline_sql",
@@ -2949,12 +2961,18 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             ),
             caller_class=caller_class,
             caller_method=caller_method,
-            table=_written_table_name(answer.table),
+            # A reached table reports its node name, as the lineage record of an Execution Path does.
+            table=answer.table.name if answer.through is not None else _written_table_name(answer.table),
             risk_flags=[UNPROVEN_SCHEMA] if answer.match.unproven_schema else [],
             stated_database=answer.match.stated_database,
             schema_source=answer.match.schema_source,
         )
-        _prefer_table_match(inline_matches_by_file, candidate.file, candidate)
+        # One inline record for each file, and a direct read beats a read through a
+        # View or a Function: `_table_match_rank` alone orders `READ_INDIRECT` above
+        # `SELECT`, so it would keep the indirect one.
+        current = inline_matches_by_file.get(candidate.file)
+        if current is None or _inline_match_rank(candidate) > _inline_match_rank(current):
+            inline_matches_by_file[candidate.file] = candidate
 
     # Stored-procedure access is joined through Gateway invocations and the graph.
     # Do not fall back to SQL dependency dictionaries or definition-text guesses.
