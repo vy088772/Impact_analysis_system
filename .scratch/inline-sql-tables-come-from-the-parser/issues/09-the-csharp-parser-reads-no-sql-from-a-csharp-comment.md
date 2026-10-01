@@ -6,7 +6,7 @@ The rescan of ticket 08 found this defect. It is not in the spec. Before the spe
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done (2026-10-01). See "Implementation notes" at the end. The service restart waits for the merge into the main line (see the notes).
 
 **The local case:**
 
@@ -84,22 +84,22 @@ The rescan of ticket 08 found this defect. It is not in the spec. Before the spe
 
 **Acceptance criteria:**
 
-- [ ] `// db.CreateReader("select a from T where x = 1");` gives no SQL query and no table `T`.
-- [ ] `/* objPUR.CreateReader("select a, b from T where x = 1"); */` gives no SQL query, also when the block spans more lines.
-- [ ] `// new SqlCommand("usp_X", cn);` gives no stored procedure call.
-- [ ] A commented-out method or class does not appear in the classes of the result.
-- [ ] `string url = "http://host/x"; var r = db.CreateReader("select a from T where y = 2");` still gives `T` on that line.
-- [ ] `@"select a -- note // not a comment from T"`, `$"select {x} from T // tail"`, and `'"'` before a live SQL string leave the SQL text and its tables unchanged.
-- [ ] A live SQL string on the line after a multi-line `/* ... */` block keeps its correct line number.
-- [ ] `strip_csharp_comments` gives a text of the same length and the same line breaks, for each test input.
-- [ ] `comment_line_count` for a file is the same as before the change.
-- [ ] `PO_ManifastUploadV3.aspx.cs` of ATV gives no `ManifestNew` query, and it still gives the stored procedure call `usp_PO_ManifaseUpload_AddData` on line 122.
-- [ ] `_CACHE_VERSION` is 44, and the history comment states why.
-- [ ] Rescan the ten local Systems on this machine. Back up `data/scan_cache` first. Then call `scan_store.get_or_scan(root, refresh=False)` for each root, with `PYTHONPATH=.`. Restart the service after the rescan.
-- [ ] After the rescan, no fallback relation of the ten Systems has a source line that starts with `//`, `/*`, or `*`. Ticket 08 found 14 such relations.
-- [ ] Record in this ticket, for each System, the relation count and the stored procedure call count before and after the rescan. Name each table relation and each stored procedure call that the rescan removed.
-- [ ] `/find_by_table ManifestNew` on ATV gives no ATV program.
-- [ ] The tests of the C# parser pass, including `test_csharp_parser_inline_sql_tables.py`. Compare the Impact suite with its baseline: three ids differ between a worktree and the main checkout, and that difference is not a regression.
+- [x] `// db.CreateReader("select a from T where x = 1");` gives no SQL query and no table `T`.
+- [x] `/* objPUR.CreateReader("select a, b from T where x = 1"); */` gives no SQL query, also when the block spans more lines.
+- [x] `// new SqlCommand("usp_X", cn);` gives no stored procedure call.
+- [x] A commented-out method or class does not appear in the classes of the result.
+- [x] `string url = "http://host/x"; var r = db.CreateReader("select a from T where y = 2");` still gives `T` on that line.
+- [x] `@"select a -- note // not a comment from T"`, `$"select {x} from T // tail"`, and `'"'` before a live SQL string leave the SQL text and its tables unchanged.
+- [x] A live SQL string on the line after a multi-line `/* ... */` block keeps its correct line number.
+- [x] `strip_csharp_comments` gives a text of the same length and the same line breaks, for each test input.
+- [x] `comment_line_count` for a file is the same as before the change.
+- [x] `PO_ManifastUploadV3.aspx.cs` of ATV gives no `ManifestNew` query, and it still gives the stored procedure call `usp_PO_ManifaseUpload_AddData` on line 122.
+- [x] `_CACHE_VERSION` is 44, and the history comment states why.
+- [ ] Rescan the ten local Systems on this machine. Back up `data/scan_cache` first. Then call `scan_store.get_or_scan(root, refresh=False)` for each root, with `PYTHONPATH=.`. Restart the service after the rescan. (Rescan done. The restart waits for the merge: see the notes.)
+- [x] After the rescan, no fallback relation of the ten Systems has a source line that starts with `//`, `/*`, or `*`. Ticket 08 found 14 such relations.
+- [x] Record in this ticket, for each System, the relation count and the stored procedure call count before and after the rescan. Name each table relation and each stored procedure call that the rescan removed.
+- [x] `/find_by_table ManifestNew` on ATV gives no ATV program.
+- [x] The tests of the C# parser pass, including `test_csharp_parser_inline_sql_tables.py`. Compare the Impact suite with its baseline: three ids differ between a worktree and the main checkout, and that difference is not a regression. (Full suite in the worktree: 1487 passed. The two failures are the known path-dependent ids `test_program_refresh.py::test_refresh_does_not_write_wrapper_registry_or_system_catalog` and `test_wrapper_decompilation.py::test_decompile_wrapper_classifies_sqlfunc_dll_end_to_end`. `test_search_roles.py` and `test_sp_tables.py` connect to SQL Server when they load, and this machine has no ODBC driver.)
 
 **Out of scope:**
 
@@ -110,3 +110,110 @@ The rescan of ticket 08 found this defect. It is not in the spec. Before the spe
 - The comments of an ASPX, Razor, or Vue file (`<%-- --%>`, `<!-- -->`, `@* *@`).
 - A nested string inside an interpolation hole, for example `$"{(a ? "x" : "y")}"`. The removal may keep the text there, as the rule "keep the text when unsure" allows.
 - A new ADR. The rule is a parser defect fix, not a design decision.
+
+## Implementation notes
+
+> *This was written by AI during implementation (2026-10-01).*
+
+### Files this ticket changed
+
+Other tickets run in parallel. These are the only files of ticket 09:
+
+- `code_analyzer/csharp_parser.py`: the new `strip_csharp_comments` and its helpers (`_blank`, `_line_end`, `_literal_end`, `_char_end`, `_regular_end`, `_verbatim_end`, `_raw_end`, `_hole_end`), next to `strip_sql_comments`. `parse_file` calls it once, after it reads the file and before `_detect_framework` and every extractor.
+- `service/scan_store.py`: `_CACHE_VERSION` 43 becomes 44, with the v44 history note.
+- `tests/test_csharp_parser_reads_no_comment.py` (new): 20 tests.
+- This ticket file.
+
+In `data/` (not in git): the backup `data/scan_cache_backup_v43_ticket09`, and the ten rescanned C# Scan Results in `data/scan_cache` (version 44).
+
+The work ran in the worktree `.claude/worktrees/ticket09-csharp-comments`, on the branch `ticket09-csharp-comments`, from `e6f81b3`.
+
+### How the removal works
+
+- The removal reads the text once, from left to right. Outside a literal, `//` blanks to the line end, and `/* ... */` blanks to its close.
+- It skips each literal as one piece: `"..."`, `@"..."`, `$"..."`, `$@"..."`, `@$"..."`, `"""..."""` (also `$$"""...""""`), and a character literal. An interpolation hole is skipped with its nested literals, for example `{Fmt('"')}`. A comment inside a hole stays.
+- A line that starts with `#` is a preprocessor directive, and it stays as it is. Without this rule, `#region Don't touch` would start a character literal.
+- When the end of a literal or of a `/*` block is not certain, the removal keeps the rest of the file unchanged.
+- `_count_lines` still reads the original lines, so `comment_line_count` does not change.
+
+### Checks on the real files
+
+- The removal ran on each `.cs` file under `data/repos` (2691 files). No file reached the "not certain" path. No removed text started after an odd count of `"` on its line, so no removal started inside a string. All 2702 files take 0.7 s together.
+- `PO_ManifastUploadV3.aspx.cs` (ATV): line 131 gave `ManifestNew` before the change and gives nothing after. The stored procedure call `usp_PO_ManifaseUpload_AddData` on line 122 stays.
+- One test fact that is not from this ticket: `$"select {x} from Interpolated ..."` gives no table, with or without the removal. The fallback does not read an interpolated string here. This ticket does not change it.
+- A table named `T` gives no relation in this parser (a one-letter name). So the tests use real names, for example `Orders`, in place of the `T` of the acceptance criteria.
+
+### The rescan
+
+- Backup: `data/scan_cache_backup_v43_ticket09` (20 files, version 43).
+- `scan_store.get_or_scan(resolve_cached_root(meta["root"]), refresh=False)` for each meta file, with `PYTHONPATH=.` and the code of this branch. Other sessions ran the analyzer host at the same time, so the rescan was slow: TTRDQ 1348 s, TOPCSCY 2940 s, TTPUR 407 s, IQCS 123 s, the others under 15 s. The first run stopped at the one-hour limit of a background command, during TOPCSCY. The second run read the four finished Systems from the cache and scanned the other six.
+- After the rescan, each of the ten meta files has `cache_version` 44.
+
+### Counts, before (v43) and after (v44)
+
+| System | Table relations | Stored procedure calls |
+|---|---|---|
+| Response | 11 → 11 | 15 → 14 |
+| TaskSchedule | 0 → 0 | 13 → 13 |
+| TTRDQ | 243 → 232 | 453 → 433 |
+| ATV | 6 → 5 | 19 → 19 |
+| TOPCSCY | 0 → 0 | 1924 → 1922 |
+| RTTalentDB | 0 → 0 | 149 → 149 |
+| IQCS | 0 → 0 | 70 → 70 |
+| TTPUR | 395 → 392 | 582 → 574 |
+| Notification | 0 → 0 | 3 → 3 |
+| STC | 26 → 26 | 26 → 26 |
+| Total | 681 → 666 | 3254 → 3223 |
+
+"Stored procedure calls" are the `stored_procedure_calls` of the C# parser, summed over the files of each C# Scan Result. No relation and no call was added, except one relation that changed its method (see below).
+
+### The table relations that the rescan removed (15)
+
+Each one was `inline_sql_regex` / `UNRESOLVED`, and each source line is in a C# comment. Ticket 08 counted 14 by the first characters of the line. The 15th (TTRDQ `T2/T2DetailMan.aspx.cs` line 47) is inside a `/* ... */` block that starts on an earlier line.
+
+- ATV `PO_ManifastUploadV3.aspx.cs` 131 `Initial_IVObject`: `ManifestNew`.
+- TTRDQ `Claim/ClaimPOQry.aspx.cs` 32 `binddata1`: `view_POrder`.
+- TTRDQ `Dev/DevPartDecide.aspx.cs` 350 `btnShowDialog_Click`: `Evaluate`.
+- TTRDQ `Dev/pic_mt.aspx.cs` 142 `selUserID_SelectedIndexChanged`: `users`.
+- TTRDQ `PQR/PQRRequest.aspx.cs` 205 `bindPrority`: `view_selCustomer`.
+- TTRDQ `QC/SafetyPartQry.aspx.cs` 35 `BindSelCustomer`: `view_selCustomer`.
+- TTRDQ `SC/T2Qry_Dev.aspx.cs` 41 `btnCountyTrigger_Click`: `PartStatus`.
+- TTRDQ `SC/T2Qry_Dev.aspx.cs` 81 `bindProcessSelect`: `T2BussCategoryList`.
+- TTRDQ `SC/T2Qry_Vdr.aspx.cs` 110 `bindChkSelect`: `T2ProcessList`.
+- TTRDQ `SupplierProfile/SupplierProfile.aspx.cs` 540 `dgPartsY_RowDataBound`: `RepresentativePartsY`.
+- TTRDQ `SupplierProfile/SupplierProfile.aspx.cs` 571 `dgParts_RowDataBound`: `RepresentativeParts`.
+- TTRDQ `T2/T2DetailMan.aspx.cs` 47 `AlertMsg`: `t2guidelist`.
+- TTPUR `Evaluate/PUR_EvaluateEdit.aspx.cs` 271 `BindSelModel`: `Model`.
+- TTPUR `Orders/PUR_POPublish.aspx.cs` 311 `CancelData`: `users`.
+- TTPUR `Ship/PUR_InvInput.aspx.cs` 64 `BindMOT`: `POR`.
+
+One relation changed its method, not its table: TTRDQ `Homepage_DevV3.aspx.cs` line 468, `View_HomePageDev_getPicArea`, was in `bindData1` and is now in `bindChkArea`. Line 468 is inside `bindChkArea()`, which starts on line 464, so the new method is correct. A comment before it had misled the method search.
+
+### The stored procedure calls that the rescan removed (31)
+
+Each one comes from a C# comment:
+
+- Response `Question.cs` 171: `spAddQuestionMainByFinish`.
+- TTRDQ `Dev/DevPartDecide.aspx.cs` 770: `usp_Devpart_AddPQRPIC`.
+- TTRDQ `Dev/DevPartDetailVdr.aspx.cs` 876 and 918: `usp_DevPartDetail_Qry8`.
+- TTRDQ `Dev/JudgementRuleManD.aspx.cs` 153: `usp_JudgementRuleMan_Qry_D`.
+- TTRDQ `Dev/JudgementRuleQry.aspx.cs` 269: `usp_JudgementRuleMan_Qry`.
+- TTRDQ `PQR/PQRForm_V.aspx.cs`, all in `/* ... */` blocks: 1111, 1170, 1234, 1294 `usp_PQRUploadFile_attachChk`; 1126, 1184, 1248 `usp_PQRFormUploadCus_getFileName`; 1147, 1205, 1269 `usp_PQRFormUploadVendor_SaveUploadFile`; 1310 `usp_PQRFormRefCus_updateRefName`; 1325 `usp_PQRFormRefCus_getRefName`.
+- TTRDQ `SC/T2AppEdit_Dev.aspx.cs` 184 and `SC/T2App_Vdr.aspx.cs` 389: `usp_T2App_Vdr_SaveProcessDetail_TVP`.
+- TTRDQ `T2/T2VendorParts.aspx.cs` 105: `usp_T2VendorParts_Source`.
+- TOPCSCY `Services/SHIP/ShipStatusQryService.cs` 81: `usp_SHIP_ShipStatusQry` and `usp_SHIP_ShipStatusQryForExcel` (a commented-out call through the variable `_spName`).
+- TTPUR `CDCU/RMCDManagement.aspx.cs` 83: `[dbo].[usp_CDCU_RMCDManagement_Qry]`.
+- TTPUR `HomePage5.aspx.cs` 100: `[dbo].[usp_HomePage5_Qry]`.
+- TTPUR `Orders/PUR_SOImportExcept.aspx.cs` 46: `[dbo].[usp_Orders_PUR_SOImportExcept_Modify]`.
+- TTPUR `Quotation/PURVdrConFirmActMan.aspx.cs` 52: `spSelChkEvaluateStatus`.
+- TTPUR `Ship/PUR_IVPntSample.aspx.cs` 1277: `[dbo].[usp_Ship_PUR_PLinput_GetCaseNo]`; 865: `[dbo].[]` (an empty name).
+- TTPUR `Orders/PUR_POPublish.aspx.cs` 125 and 579: `usp_SO_Publish_NoPriceV2`. The call lines are live (`obj.CreateDataSet(cmd, par, "SP")`), but the only assignment of that name to `cmd` is the comment on line 101 (`//    cmd = "usp_SO_Publish_NoPriceV2";`). The live names `usp_SO_Publish` and `usp_POPublish_CancelQry` stay on both lines.
+
+### The answers
+
+- After the rescan, no fallback relation of the ten Systems has a source line that starts with `//`, `/*`, or `*` (0; ticket 08 found 14).
+- `/find_by_table ManifestNew` on ATV (`cache_only`, code of this branch, in process): no match and `excluded_count` 0, with no Database, with `PUR`, and with `ETON`, for `write_only` false and true. `skipped` is false, so the v44 cache was read. Ticket 08 recorded one match (`write_only` false) and `excluded_count` 1 (`write_only` true).
+
+### The service restart
+
+The service on port 8800 runs the code of the main checkout, which still has `_CACHE_VERSION` 43. If it restarts before the merge, it reads each v44 scan as stale. So restart it after this branch merges into the main line.
