@@ -88,6 +88,9 @@ def test_static_analyzer_host_contract() -> None:
         sql = host.analyze_sql(source_path)
         assert sql["contract_version"] == CONTRACT_VERSION
         assert sql["operations"] == []
+        many = host.analyze_sql_files([source_path, source_path])
+        assert len(many) == 2
+        assert all(source["operations"] == [] for source in many)
 
 
 def test_the_analyzer_build_reports_the_contract_version_of_the_host() -> None:
@@ -111,6 +114,12 @@ def test_the_sql_command_answers_many_inputs_with_one_source_for_each_in_input_o
     assert set(single) == {"contract_version", "operations", "parse_errors"}
 
 
+def _sql_response(input_count: int) -> dict:
+    """The host response for a SQL run: one input keeps the flat shape, more use `sources`."""
+    empty = {"operations": [], "parse_errors": []}
+    return empty if input_count == 1 else {"sources": [dict(empty) for _ in range(input_count)]}
+
+
 def test_analyze_sql_files_splits_by_the_batch_limit_and_reports_each_batch(tmp_path: Path) -> None:
     host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
     paths = [tmp_path / f"M{index}.sql" for index in range(5)]
@@ -120,9 +129,7 @@ def test_analyze_sql_files_splits_by_the_batch_limit_and_reports_each_batch(tmp_
     def fake_run(_host: StaticAnalyzerHost, *args: str) -> dict:
         batch = [Path(value) for value in args[1::2]]
         runs.append(batch)
-        if len(batch) == 1:
-            return {"operations": [], "parse_errors": []}
-        return {"sources": [{"operations": [], "parse_errors": []} for _ in batch]}
+        return _sql_response(len(batch))
 
     with (
         patch("code_analyzer.static_analyzer_host._MAX_HOST_FILES_PER_BATCH", 2),
@@ -144,9 +151,7 @@ def test_analyze_sql_files_splits_before_a_command_passes_the_character_limit(tm
     def fake_run(_host: StaticAnalyzerHost, *args: str) -> dict:
         count = len(args) // 2
         runs.append(count)
-        if count == 1:
-            return {"operations": [], "parse_errors": []}
-        return {"sources": [{"operations": [], "parse_errors": []} for _ in range(count)]}
+        return _sql_response(count)
 
     # Room for two inputs after the command name, not three.
     with (
@@ -166,7 +171,7 @@ def test_one_sql_input_longer_than_the_character_limit_still_runs_alone(tmp_path
 
     def fake_run(_host: StaticAnalyzerHost, *args: str) -> dict:
         runs.append(len(args) // 2)
-        return {"operations": [], "parse_errors": []}
+        return _sql_response(len(args) // 2)
 
     with (
         patch("code_analyzer.static_analyzer_host._MAX_HOST_COMMAND_CHARS", 10),
@@ -185,8 +190,9 @@ def test_a_failed_sql_input_stops_the_run_with_its_path_in_the_error(tmp_path: P
     good.write_text("CREATE PROCEDURE dbo.usp_Good AS SELECT 1;", encoding="utf-8")
     missing = tmp_path / "Missing.sql"
 
-    with pytest.raises(StaticAnalyzerHostError, match="Missing.sql"):
+    with pytest.raises(StaticAnalyzerHostError, match="Missing.sql") as caught:
         host.analyze_sql_files([good, missing])
+    assert caught.value.input_path == missing
 
 
 def test_a_sql_batch_response_with_a_wrong_entry_count_is_rejected(tmp_path: Path) -> None:

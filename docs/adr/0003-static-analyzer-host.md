@@ -5,3 +5,5 @@ Integrate the Roslyn and ScriptDom source projects behind one versioned StaticAn
 ## Consequences
 
 Python calls one host with separate C# and SQL analysis commands and validates one JSON contract version. Analyzer availability and .NET runtime failures are reported before refresh or scan work begins.
+
+The `sql` command accepts one or more inputs. One input keeps the flat response with `operations` and `parse_errors`. Two or more inputs return a `sources` list with one entry for each input, in input order. A failed input stops the run with an error message that names the path of that input.
