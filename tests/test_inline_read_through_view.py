@@ -223,7 +223,7 @@ def test_find_by_table_names_the_view_that_a_reached_record_passes_through(monke
 
 
 def test_a_reached_record_takes_the_database_fields_of_its_rated_invocation(monkeypatch, tmp_path) -> None:
-    """A parsed relation whose invocation has candidates: the reached record keeps them (Q3)."""
+    """A parsed relation whose invocation has candidates still reaches through the graph, and its record keeps them."""
     scan = _view_reader_scan(tmp_path, ("dbo.vOrder", "SELECT"))
     scan.table_relations[:] = [replace(scan.table_relations[0], invocation_span=(154, 310))]
     rated = DbInvocation(

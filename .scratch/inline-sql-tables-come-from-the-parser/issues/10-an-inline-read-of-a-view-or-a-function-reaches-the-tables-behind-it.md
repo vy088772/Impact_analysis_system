@@ -111,7 +111,7 @@ The work ran on the branch `ticket10-view-lineage`, in the worktree `.claude/wor
 
 **Changed files:**
 
-- `service/graph_queries.py`: `_LineageIndex` became `LineageIndex`, because the inline module now uses it. `_ensure_built` keeps the reachable tables of each View or Function in `_containers`. The new query `reachable_tables(node_id)` gives them, each as an `ObjectName` with its schema source. The worklist fixed point does not change, so the Execution Path lineage keeps its behavior.
+- `service/graph_queries.py`: `_LineageIndex` became `LineageIndex`, because the inline module now uses it. `_ensure_built` keeps the reachable tables of each View or Function in `_reachable_by_node` (first named `_containers`; the correction commit renamed it). The new query `reachable_tables(node_id)` gives them, each as an `ObjectName` with its schema source. The worklist fixed point does not change, so the Execution Path lineage keeps its behavior.
 - `service/sql_execution_graph.py`: one comment names `graph_queries.LineageIndex`.
 - `service/inline_table_relations.py`: `by_table` takes a fifth argument, `graph` (the SQL Execution Graph of the request's Database, or `None`). The new class `_InlineLineage` finds the listed View or Function node of a relation and asks `LineageIndex.reachable_tables`. `InlineTableAnswer` gains `through` (the View or the Function, with its schema; `None` for a direct answer) and the property `access_type`.
 - `service/schemas.py`: `TableMatchProgram` gains `read_through` (for example `dbo.fun_GetRoleOrderTypeList`). It is empty for a direct answer.
@@ -142,7 +142,7 @@ The work ran on the branch `ticket10-view-lineage`, in the worktree `.claude/wor
 
 **Fixes of the second review (a correction commit, user choice "A"):**
 
-- Standards 2: the node key is `_node_key(name) = (part_key(schema), bare_key(name))`, the keys of the Canonical Object Identity.
+- Standards 2: the node key is `_node_key(name) = (part_key(schema), bare_key(name))`, the keys of the Canonical Object Identity. This is a small change in behavior: `part_key` removes `[ ]` and spaces, so a relation whose schema is written `[dbo]` now finds its node. The graph build still keys its listed nodes with a plain `casefold` (`sql_execution_graph.py` `_NodeIndex` and `_node_key`). Today the two keys give the same result, because a listed node holds no brackets. One shared key for both sides is open work.
 - Standards 4: `InlineTableAnswer` gives `table_name` and `read_through`, as it gives `access_type`. `find_by_table` reads the three properties. `_written_table_name` moved from `analyze_service.py` into `InlineTableAnswer.table_name`, because it had no other caller.
 - Standards 6: `LineageIndex._containers` became `_reachable_by_node`.
 - Standards 7: a comment in `build_backward_chains` explains `graph or None`.
@@ -150,5 +150,7 @@ The work ran on the branch `ticket10-view-lineage`, in the worktree `.claude/wor
 - Spec 2: `test_a_reached_record_takes_the_database_fields_of_its_rated_invocation` gives a rated invocation with the candidates `PUR` and `STC`. The reached record has the Database `""`, those candidates, and the attribution `candidate`.
 - Spec 4: `test_a_relation_whose_connection_names_another_database_reaches_nothing`. The test fails when the guard reads only `read.database`, so it proves the connection branch. The rule stays: the direct answer has the same rule.
 - Not done: Standards 1, 3, and 5, and Spec 3 and 5. The user's choice "A" did not include them. Standards 3 and Spec 5 together are one possible follow-up: a `LineageIndex` that also finds a View or Function node by name, shared by `find_by_table` and `filter_table_accesses`.
+
+**Third review (`/code-review` of the correction commit, `git diff 5a14eb5 d2e8893`):** no hard violation and no blocking spec finding. It confirmed that the four Standards fixes are real and that the three new tests fail when their behavior breaks. A follow-up commit fixes the note: the old name `_containers`, the `[dbo]` behavior, and a "(Q3)" reference in a test docstring. Still open: (1) the graph build and the inline side use two node key rules; (2) `InlineTableAnswer.table_name` gives the node name or the written name, and the dotted join could move into `canonical_object_identity`; (3) the comment "a listed node always states its schema" has no check; (4) the `/analyze` test does its own setup; (5) no test covers the shared component table list (Q6 names it, but the acceptance criteria do not); and Standards 1, 3, and 5 of the second review.
 
 Verification of the correction commit: the focused tests with the OpenAPI test give 128 passed. mypy shows no error in the changed lines. The whole suite (in a worktree, without the two modules that need a Database connection) gives 2 failed and 1485 passed. The 2 failures are the same two path-dependent ids as above.
