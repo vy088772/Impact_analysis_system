@@ -1,6 +1,6 @@
-# 11 — A child application with an empty own table keeps the key-as-name guess
+# 11 — A child application with an empty own table gets no guess while an ancestor declares entries
 
-**Status:** needs-triage
+**Status:** done (2026-10-01)
 
 **Found in:** the second review of the whole effort (2026-10-01).
 
@@ -29,3 +29,17 @@ guess before step 2 either.
    entries.
 
 **Done when:** the spec and the code agree, and one test pins the decision.
+
+## Comments
+
+### 2026-10-01 — decision: option 1
+
+- The maintainer chose option 1. The current rule stays, and story 17
+  excludes this case.
+- Reason: a key that no layer declares fails at run time in IIS. A guess for
+  that key is probably wrong.
+- The spec gains an amendment of story 17. The note in "Inherited lookup
+  tables" now names this decision.
+- The code does not change. The test
+  `test_the_view_gives_the_guess_only_when_the_own_table_and_each_inherited_table_are_empty`
+  pins the decision.

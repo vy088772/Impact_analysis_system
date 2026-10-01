@@ -127,6 +127,9 @@ the Parent Application rule goes into the Connection Lookup.
     not resolve.
 17. As an analyst, I want a call whose connection stays unresolved to keep its
     current Evidence Status, so that this change does not demote any call.
+    One case is excluded: a child application whose own table is empty loses
+    the key-as-name guess when an ancestor declares an entry. (Amendment of
+    2026-10-01, issue 11.)
 18. As an analyst, I want a project file with no IIS URL to have no Parent
     Application, so that a console job or a library keeps its current
     behavior.
@@ -452,11 +455,11 @@ the Parent Application rule goes into the Connection Lookup.
 - After step 2, the view gives the key-as-name guess only when the own table
   and each inherited table are empty.
 - This rule removes the guess from a child application whose own table is
-  empty, when an ancestor declares an entry. This disagrees with story 17,
-  which says that this change does not demote any call. The code follows this
-  rule. Issue 11 holds the open decision. On 2026-10-01, each local child
-  application had an entry in its own table, so no call lost its Evidence
-  Status. (Note of 2026-10-01.)
+  empty, when an ancestor declares an entry. Story 17 excludes this case. A
+  key that no layer declares fails at run time in IIS, so a guess for it is
+  probably wrong. The maintainer decided this in issue 11. On 2026-10-01,
+  each local child application had an entry in its own table, so no call lost
+  its Evidence Status. (Note of 2026-10-01.)
 - Step 2 adds `declared_in` to the builder of the stored form.
 - The service remaps a connection onto the selected Database in some cases.
   That remap keeps `declared_in`, because the step 0 operation copies each
