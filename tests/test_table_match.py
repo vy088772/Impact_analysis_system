@@ -507,3 +507,10 @@ def test_a_located_database_row_carries_no_schema_source() -> None:
 
     assert "schema_source" not in LocatedDatabase.model_fields
     assert "schema_source" not in LocatedDatabase().model_dump(by_alias=True)
+
+
+def test_a_merge_access_type_counts_as_a_write() -> None:
+    from service.table_match import is_write_access
+
+    assert is_write_access("MERGE")
+    assert is_write_access("merge")

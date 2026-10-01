@@ -27,7 +27,7 @@ from canonical_object_identity import ObjectName, bare_key, parse, part_key
 
 UNPROVEN_SCHEMA = "unproven_schema"
 
-_WRITE_ACCESS_TYPES = frozenset({"WRITE", "WRITE_INDIRECT", "INSERT", "UPDATE", "DELETE", "SELECT_INTO"})
+_WRITE_ACCESS_TYPES = frozenset({"WRITE", "WRITE_INDIRECT", "INSERT", "UPDATE", "DELETE", "MERGE", "SELECT_INTO"})
 
 
 def is_write_access(access_type: Optional[str]) -> bool:

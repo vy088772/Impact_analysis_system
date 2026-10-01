@@ -69,7 +69,12 @@ from .table_match import names_another_database
 # ticket 12). A v9 graph has no calls relationship for that EXEC, so the called
 # procedure is on no Execution Path, and each later operation of the module has
 # a sequence one lower; it is rejected until rebuilt.
-GRAPH_VERSION = 10
+# v11: a MERGE statement gives a MERGE operation that writes its target and reads
+# its source, and an INSERT into a CTE writes no table named like the CTE
+# (unstated-schema-resolves-as-sql-server-does, ticket 13). A v10 graph has no
+# operation for a MERGE, so the procedure that merges into a table is absent from
+# the write answer for that table; it is rejected until rebuilt.
+GRAPH_VERSION = 11
 NodeKey = tuple[str, str, str, str]
 
 

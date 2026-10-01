@@ -172,7 +172,7 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
     (unstated-schema-resolves-as-sql-server-does), so a v7 graph, which leaves
     that schema empty and marked, fails this check until it is rebuilt.
     """
-    assert GRAPH_VERSION == 10
+    assert GRAPH_VERSION == 11
 
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(
@@ -420,6 +420,39 @@ END;
         "function:dbo.fn_Rate",
         "function:dbo.fn_Rate",
     ]
+
+
+def test_the_merge_of_usp_so_management_save_writes_shipping_order_d() -> None:
+    """The `MERGE` of PUR's `dbo.usp_SOManagement_Save`, trimmed, gives a MERGE operation and a write."""
+    data = cache_payload(
+        "PUR",
+        procedures={
+            "dbo.usp_SOManagement_Save": {
+                "definition": """CREATE PROCEDURE dbo.usp_SOManagement_Save
+AS
+BEGIN
+    MERGE ShippingOrderD AS T
+    USING (select VendorID,@CustomerCode as CustomerCode,@SO as SO from @Vendors) AS S
+    ON (T.VendorCode = S.VendorID and T.CustomerCode=S.CustomerCode and T.SO=S.SO)
+    WHEN NOT MATCHED by target
+        THEN INSERT(CustomerCode,SO,VendorCode) VALUES(S.CustomerCode,S.SO,S.VendorID);
+END;
+""",
+            },
+        },
+    )
+
+    graph = build_sql_execution_graph(data)
+
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    merges = [node for node in graph["nodes"] if node.get("operation_type") == "MERGE"]
+    assert len(merges) == 1
+    writes = [
+        nodes[relationship["target"]]["name"]
+        for relationship in graph["relationships"]
+        if relationship["type"] == "writes" and relationship["source"] == merges[0]["id"]
+    ]
+    assert writes == ["ShippingOrderD"]
 
 
 def test_a_read_through_a_temp_table_keeps_the_database_its_base_read_stated() -> None:
