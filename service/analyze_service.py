@@ -1870,12 +1870,16 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
     )
 
     if req.program_names:
-        program_bases = {_normalize_program(name) for name in req.program_names}
-        matched_files = [
-            result
-            for result in scan.csharp_results
-            if any(_file_matches(result.file_path, base) for base in program_bases)
-        ]
+        # Same program resolution as /analyze, so both endpoints agree on
+        # which files a name matches.
+        matched_files = []
+        seen_paths: Set[str] = set()
+        for name in req.program_names:
+            for resolution in _program_resolutions(name, scan):
+                for result in resolution.matched_files:
+                    if result.file_path not in seen_paths:
+                        seen_paths.add(result.file_path)
+                        matched_files.append(result)
     else:
         matched_files = list(scan.csharp_results)
 

@@ -4,10 +4,21 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The "Order" test runs first, before any production change.
-- [ ] The result is written in this ticket: green (no change) or red (the observed answers of each endpoint).
-- [ ] If the test is red, both endpoints give the same answer for "Order", and neither matches `OrdersController` by substring.
-- [ ] A scan with no Razor files keeps its current answers on both endpoints.
+- [x] The "Order" test runs first, before any production change.
+- [x] The result is written in this ticket: green (no change) or red (the observed answers of each endpoint).
+- [x] If the test is red, both endpoints give the same answer for "Order", and neither matches `OrdersController` by substring.
+- [x] A scan with no Razor files keeps its current answers on both endpoints.
 - [ ] The path evidence API test and the exact path evidence test still pass.
+
+## Result
+
+**Red.** The test `tests/test_path_evidence_program_files.py` ran first, before any production change.
+
+- `/analyze` for "Order": `programs == []`, `not_found == ["Order"]`.
+- `/path_evidence` for "Order": selected `OrderHistoryController.cs` and `OrdersController.cs` by substring.
+
+**Fix.** `get_path_evidence` in `service/analyze_service.py` now resolves program files through `_program_resolutions`, the same call `/analyze` uses. It keeps the union of the matched files, without duplicates. `_file_matches` is unchanged, so `/analyze` does not relax to substring matching.
+
+**No Razor files.** `_program_resolutions` returns the legacy base-name match when the scan has no Razor file. A second test pins the answer: both controllers still match "Order" on `/path_evidence`.
