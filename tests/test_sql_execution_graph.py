@@ -172,7 +172,7 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
     ticket 01, ADR-0043), so a v13 graph, which reads through the caller's
     table of that name, fails this check until it is rebuilt.
     """
-    assert GRAPH_VERSION == 14
+    assert GRAPH_VERSION == 15
 
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(

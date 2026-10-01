@@ -54,7 +54,7 @@ from .table_match import names_another_database
 # name (canonical-object-identity, Step 2b). A v6 graph, which filled `dbo`, reads
 # its no-schema targets as proven `dbo`, so it is rejected until it is rebuilt.
 # v8: a reference that states no schema resolves as SQL Server resolves it
-# (`sys` for a system name, then the module's schema, then `dbo`) and records
+# (the module's schema, then `dbo`, then `sys` for a system name) and records
 # its schema source; a call reaches one procedure; a CTE name is no table read;
 # an UPDATE or DELETE alias writes the object it names
 # (unstated-schema-resolves-as-sql-server-does). A v7 graph gives a no-schema
@@ -91,7 +91,14 @@ from .table_match import names_another_database
 # lineage read through the caller's table of that name, so `/find_by_table`
 # lists a procedure that never refers to the base table; it is rejected until
 # rebuilt.
-GRAPH_VERSION = 14
+# v15: an UPDATE or DELETE whose target names an unaliased table of its FROM clause
+# writes that table (`UPDATE Users ... FROM COMMON.Users` writes `COMMON.Users`), and an
+# OUTPUT ... INTO clause writes its table (unstated-schema-resolves-as-sql-server-does,
+# review after ticket 13). A v14 graph writes the bare name, which resolves to the
+# schema of the module or to `dbo`, and it misses the table of an OUTPUT ... INTO
+# clause, so a procedure that writes a table only that way is absent from the write
+# answer for that table; it is rejected until rebuilt.
+GRAPH_VERSION = 15
 NodeKey = tuple[str, str, str, str]
 
 
@@ -193,6 +200,14 @@ def build_sql_execution_graph(
             ) from exc
         for (object_type, object_schema, name, definition), result in zip(module_specs, results, strict=True):
             module_id = _node_id(object_type, object_schema, name)
+            module = _Module(
+                object_type,
+                object_schema,
+                name,
+                module_id,
+                str(data.get("database") or ""),
+                len(definition),
+            )
             for error in result.parse_errors:
                 parse_errors.append(
                     {
@@ -208,12 +223,7 @@ def build_sql_execution_graph(
                     node_by_key,
                     call_edges,
                     operation,
-                    object_type,
-                    object_schema,
-                    name,
-                    module_id,
-                    str(data.get("database") or ""),
-                    len(definition),
+                    module,
                 )
 
     _expand_temp_table_lineage(nodes, relationships, call_edges, progress_callback)
@@ -435,26 +445,34 @@ def _report_progress(
         pass
 
 
+@dataclasses.dataclass(frozen=True)
+class _Module:
+    """The module whose operations the builder adds: its listing identity, its node id,
+    the cache Database that holds it, and the length of its definition text."""
+
+    type: str
+    schema: str
+    name: str
+    id: str
+    cache_database: str
+    definition_length: int
+
+
 def _add_operation(
     nodes: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
     node_by_key: _NodeIndex,
     call_edges: set[tuple[str, str]],
     operation: SqlOperation,
-    module_type: str,
-    module_schema: str,
-    module_name: str,
-    module_id: str,
-    cache_database: str,
-    module_definition_length: int,
+    module: _Module,
 ) -> None:
     # The source location keeps the key order the analyzer host reports; the
     # module id stands in the place of the host's file path.
     source = {
-        "source_path": module_id,
+        "source_path": module.id,
         **dataclasses.asdict(operation.source),
-        "module_id": module_id,
-        "module_definition_length": module_definition_length,
+        "module_id": module.id,
+        "module_definition_length": module.definition_length,
     }
     sequence = operation.sequence
     operation_type = operation.operation_type
@@ -465,14 +483,14 @@ def _add_operation(
         for target in operation.call_targets:
             if not target.name:
                 continue
-            call = _call_target(node_by_key, target, module_schema, cache_database)
+            call = _call_target(node_by_key, target, module.schema, module.cache_database)
             if call.names_module_node:
                 # The temp table expansion reads calls only from these edges.
-                call_edges.add((module_id, call.node_id))
+                call_edges.add((module.id, call.node_id))
             _add_relationship(
                 relationships,
                 "calls",
-                module_id,
+                module.id,
                 call.node_id,
                 source,
                 branch_path,
@@ -486,7 +504,7 @@ def _add_operation(
     node_type = "unresolved_dynamic_sql" if (
         operation_type == "DYNAMIC_SQL" or operation.dynamic_sql
     ) else "dml_operation"
-    operation_id = f"{node_type}:{module_id}:{sequence}"
+    operation_id = f"{node_type}:{module.id}:{sequence}"
     # The node holds every field of the operation, in the order the analyzer host
     # reports them. The cache file holds this order, so a change here changes the payload.
     operation_node = {
@@ -494,9 +512,9 @@ def _add_operation(
         "type": node_type,
         "operation_type": operation_type,
         "module": {
-            "type": module_type,
-            "schema": module_schema,
-            "name": module_name,
+            "type": module.type,
+            "schema": module.schema,
+            "name": module.name,
         },
         "sequence": sequence,
         "branch_path": list(operation.branch_path),
@@ -511,14 +529,14 @@ def _add_operation(
         "call_targets": [dataclasses.asdict(reference) for reference in operation.call_targets],
         "dynamic_sql": operation.dynamic_sql,
         "source": source,
-        "module_id": module_id,
+        "module_id": module.id,
     }
     _add_node(nodes, node_by_key, operation_node)
 
     _add_relationship(
         relationships,
         "contains",
-        module_id,
+        module.id,
         operation_id,
         source,
         branch_path,
@@ -528,7 +546,7 @@ def _add_operation(
         _add_relationship(
             relationships,
             "unresolved",
-            module_id,
+            module.id,
             operation_id,
             source,
             branch_path,
@@ -538,8 +556,8 @@ def _add_operation(
         return
 
     for read_table in operation.read_tables:
-        reference, schema_source = _resolved_reference(node_by_key, read_table, module_schema)
-        target_id = _referenced_node_id(nodes, node_by_key, reference, module_id, cache_database)
+        reference, schema_source = _resolved_reference(node_by_key, read_table, module.schema)
+        target_id = _referenced_node_id(nodes, node_by_key, reference, module.id, module.cache_database)
         _add_relationship(
             relationships,
             "reads",
@@ -555,7 +573,7 @@ def _add_operation(
             _add_relationship(
                 relationships,
                 "uses",
-                module_id,
+                module.id,
                 target_id,
                 source,
                 branch_path,
@@ -564,12 +582,12 @@ def _add_operation(
             )
 
     for write_table in operation.write_tables:
-        reference, schema_source = _resolved_reference(node_by_key, write_table, module_schema)
+        reference, schema_source = _resolved_reference(node_by_key, write_table, module.schema)
         _add_relationship(
             relationships,
             "writes",
             operation_id,
-            _referenced_node_id(nodes, node_by_key, reference, module_id, cache_database),
+            _referenced_node_id(nodes, node_by_key, reference, module.id, module.cache_database),
             source,
             branch_path,
             columns=list(operation.written_columns),
@@ -578,13 +596,13 @@ def _add_operation(
         )
 
     for function_reference in operation.function_references:
-        reference, schema_source = _resolved_reference(node_by_key, function_reference, module_schema)
-        function_id = _listed_function_id(node_by_key, reference, cache_database)
+        reference, schema_source = _resolved_reference(node_by_key, function_reference, module.schema)
+        function_id = _listed_function_id(node_by_key, reference, module.cache_database)
         if function_id is not None:
             _add_relationship(
                 relationships,
                 "uses",
-                module_id,
+                module.id,
                 function_id,
                 source,
                 branch_path,

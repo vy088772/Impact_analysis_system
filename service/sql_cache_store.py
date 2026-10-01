@@ -586,7 +586,8 @@ class ObjectLocationIndex:
     full 桶是 `database.schema.name`。bare 桶保留今天持有的每一個名稱。
     快取列出的物件，database 取快取自己的 Database；graph 節點的 database 取 reference
     寫出的那個，沒寫就是快取自己的 Database。schema 沒人證明的節點，full key 的
-    schema 段是空的，絕不補 dbo。
+    schema 段是空的，絕不補 dbo；Schema Resolution 解出 schema 的節點，照節點寫的
+    schema（可能是 dbo）。
     寧可多報也不能少報：多報頂多多讀一次快取，少報會漏掉一個本該找到的答案。
     索引的版本是檔案的屬性，不是索引內容的一部分，所以值裡不帶版本。
     """

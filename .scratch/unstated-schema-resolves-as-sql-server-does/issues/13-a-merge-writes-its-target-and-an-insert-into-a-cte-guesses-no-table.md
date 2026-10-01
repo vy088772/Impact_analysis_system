@@ -92,3 +92,12 @@ Not covered, and not asked: a subquery inside a `MERGE ... OUTPUT` or `TOP` clau
 
 - `OUTPUT ... INTO` of a `MERGE`. Ticket 11 counts no real table as an `OUTPUT ... INTO` target in the seven caches.
 - The regex extraction of inline C# SQL. It already keeps a statement that starts with `MERGE` (`code_analyzer/csharp_parser.py`). The `inline-sql-tables-come-from-the-parser` spec moves it to the analyzer host's parser.
+
+**Final review, 2026-10-01** (`/code-review` from `08dd048`, then the fixes).
+
+- Defect: an `OUTPUT ... INTO dbo.Log` clause of an `INSERT`, `UPDATE`, `DELETE`, or `MERGE` statement wrote no table. A `write_only` question missed that writer. Fix: `AddOutputIntoTarget()` in `SqlAnalyzer.cs` adds the `INTO` table to the write tables. A table variable writes nothing. A temp table writes itself.
+- Defect: see ticket 03. A target with no alias now matches an unaliased `FROM` table by name.
+- Both changes raise the graph format version to 12. A v11 graph is rejected until it is rebuilt.
+- Not changed: `ReadCteNames()` reads the CTE names of the whole statement. T-SQL allows no `WITH` clause inside a subquery, so no CTE can hide a table of the same name in another part of the statement.
+- Not changed: `unresolved_write_targets` still has no reader. The spec leaves the updatable CTE out of scope.
+- The removal of `extract_tables_from_definition` belongs to the inline-sql-tables-come-from-the-parser feature (ticket 06), not to this feature.

@@ -56,8 +56,9 @@ Schema mark stays only where the rule cannot decide.
 The analyzer stops reading a CTE name as a table, and it writes the object an
 `UPDATE` or `DELETE` alias names instead of the alias.
 
-The graph format version rises to 8. The repair tool rebuilds every local
-graph, and the index backfill tool rebuilds every index. A rebuilt graph
+The graph format version rises to 8 (tickets 11 to 13 later raised it to 11;
+the version comment in `service/sql_execution_graph.py` states why). The repair
+tool rebuilds every local graph, and the index backfill tool rebuilds every index. A rebuilt graph
 invalidates every stored Derived Execution Evidence file. The fix for that last
 point already landed before this spec (commit `08dd048`).
 

@@ -1289,3 +1289,63 @@ def test_the_location_of_a_predicate_read_starts_at_the_first_token_after_the_ke
     assert sql[start:start + location["length"]] == predicate
     assert (location["start_line"], location["start_column"]) == (2, start_column)
     assert (location["end_line"], location["end_column"]) == (end_line, end_column)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE Users SET a = 1 FROM COMMON.Users;",
+        "UPDATE users SET a = 1 FROM [COMMON].[Users] WHERE a = 0;",
+        "DELETE Users FROM COMMON.Users WHERE a = 0;",
+    ],
+)
+def test_a_target_that_names_an_unaliased_from_table_writes_that_table(statement: str) -> None:
+    operation = _write_test_statement(statement)
+
+    assert [(ref["schema"], ref["name"].lower()) for ref in operation["write_tables"]] == [
+        ("COMMON", "users")
+    ]
+    assert operation["read_tables"] == []
+    assert operation["unresolved_write_targets"] == []
+
+
+def test_a_target_that_names_an_unaliased_cte_or_join_table_keeps_its_rule() -> None:
+    cte = _write_test_statement(
+        "WITH Users AS (SELECT a FROM dbo.Src) UPDATE Users SET a = 1 FROM Users;"
+    )
+    join = _write_test_statement(
+        "UPDATE Users SET a = 1 FROM COMMON.Users JOIN dbo.Other o ON o.Id = Users.Id;"
+    )
+
+    assert cte["write_tables"] == []
+    assert cte["unresolved_write_targets"] == ["Users"]
+    assert join["write_tables"] == [_reference("", "", "COMMON", "Users")]
+    assert join["read_tables"] == [_reference("", "", "dbo", "Other")]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT dbo.A (id) OUTPUT inserted.id INTO dbo.Log (id) SELECT id FROM dbo.S;",
+        "UPDATE dbo.A SET a = 1 OUTPUT inserted.id INTO dbo.Log (id);",
+        "DELETE dbo.A OUTPUT deleted.id INTO dbo.Log (id);",
+        f"{_MERGE_HEAD} WHEN MATCHED THEN DELETE OUTPUT deleted.id INTO dbo.Log (id);",
+    ],
+)
+def test_an_output_into_clause_writes_its_table(statement: str) -> None:
+    operation = _write_test_statement(statement)
+
+    assert _reference("", "", "dbo", "Log") in operation["write_tables"]
+    assert len(operation["write_tables"]) == 2
+    assert _reference("", "", "dbo", "Log") not in operation["read_tables"]
+
+
+def test_an_output_into_a_table_variable_writes_nothing_and_into_a_temp_table_writes_it() -> None:
+    variable = _write_test_statement("DELETE dbo.A OUTPUT deleted.id INTO @log (id);")
+    temp = _write_test_statement("DELETE dbo.A OUTPUT deleted.id INTO #log (id);")
+
+    assert variable["write_tables"] == [_reference("", "", "dbo", "A")]
+    assert temp["write_tables"] == [
+        _reference("", "", "dbo", "A"),
+        _reference("", "", "", "#log"),
+    ]

@@ -3,7 +3,7 @@
 不改動任何快取檔。
 
 `.scratch/unstated-schema-resolves-as-sql-server-does/` 的驗收工具：重建 graph
-（graph_version 8）之前先跑一次留下 v7 基準，重建之後再跑一次比較。每份快取數：
+（版本見 `GRAPH_VERSION`）之前先跑一次留下 v7 基準，重建之後再跑一次比較。每份快取數：
 
 - empty_schema_references：目標沒有 schema 的 reads / writes / calls 關係數；
 - references_by_schema_source：上述關係按 schema 來源分組。關係沒有帶

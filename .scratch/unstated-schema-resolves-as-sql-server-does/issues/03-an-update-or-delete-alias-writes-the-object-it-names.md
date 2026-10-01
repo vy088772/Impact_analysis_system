@@ -31,7 +31,7 @@ Decisions:
 - A bare target that names a CTE with no alias (`UPDATE C SET ...`) also goes to `unresolved_write_targets`, as the spec's Out of Scope section describes.
 - An alias of an `@table` variable writes nothing and records nothing, as a direct write to a variable does today.
 - The host contract version stays at 4, because the change only adds one field. The graph format version did not change. Ticket 09 raises it once.
-- Not changed: a target with no alias that states a bare table name (`UPDATE Users ... FROM dbo.Users`) keeps the old result, a write to the bare name.
+- Changed by the final review (graph version 12): a target with no alias that states a bare table name now matches an unaliased table of the `FROM` clause by its table name. `UPDATE Users ... FROM COMMON.Users` writes `COMMON.Users`. The old result was a write to the bare name, which resolved to the module schema or to `dbo`, and so it could hide the real writer. A target that matches no `FROM` table still writes its own name.
 - Nothing reads `unresolved_write_targets` yet. It only travels on the operation node.
 
 Verification: the analyzer host test file passes (38 tests). The whole suite gives 1226 passed and 16 failed. The 16 failures are the same set as ticket 02 recorded (wrapper and real checkout tests). `tests/test_search_roles.py` and `tests/test_sp_tables.py` need a live database, so the run skipped them.

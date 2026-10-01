@@ -233,6 +233,7 @@ internal sealed class SqlOperationExtractor
             {
                 var specification = GetFragmentProperty(fragment, "InsertSpecification");
                 AddWriteTarget(GetFragmentProperty(specification, "Target"), null, cteNames, writeTables, unresolvedWriteTargets);
+                AddOutputIntoTarget(specification, writeTables);
                 CollectColumns(GetPropertyValue(specification, "Columns"), writtenColumns);
                 var source = GetFragmentProperty(specification, "InsertSource");
                 CollectReads(source, readTables, readColumns, functionReferences, cteNames);
@@ -244,6 +245,7 @@ internal sealed class SqlOperationExtractor
                 var specification = GetFragmentProperty(fragment, "UpdateSpecification");
                 var fromClause = GetFragmentProperty(specification, "FromClause");
                 AddWriteTarget(GetFragmentProperty(specification, "Target"), fromClause, cteNames, writeTables, unresolvedWriteTargets);
+                AddOutputIntoTarget(specification, writeTables);
                 CollectReads(fromClause, readTables, readColumns, functionReferences, cteNames);
                 var whereClause = GetFragmentProperty(specification, "WhereClause");
                 where = ExtractWhereClause(whereClause);
@@ -260,6 +262,7 @@ internal sealed class SqlOperationExtractor
                 var specification = GetFragmentProperty(fragment, "DeleteSpecification");
                 var fromClause = GetFragmentProperty(specification, "FromClause");
                 AddWriteTarget(GetFragmentProperty(specification, "Target"), fromClause, cteNames, writeTables, unresolvedWriteTargets);
+                AddOutputIntoTarget(specification, writeTables);
                 CollectReads(fromClause, readTables, readColumns, functionReferences, cteNames);
                 var whereClause = GetFragmentProperty(specification, "WhereClause");
                 where = ExtractWhereClause(whereClause);
@@ -275,6 +278,7 @@ internal sealed class SqlOperationExtractor
                 // The USING source, the ON condition, and each WHEN clause read their tables.
                 var specification = GetFragmentProperty(fragment, "MergeSpecification");
                 AddWriteTarget(GetFragmentProperty(specification, "Target"), null, cteNames, writeTables, unresolvedWriteTargets);
+                AddOutputIntoTarget(specification, writeTables);
                 var mergeParts = new object?[]
                 {
                     GetFragmentProperty(specification, "TableReference"),
@@ -434,14 +438,27 @@ internal sealed class SqlOperationExtractor
     private static bool IsBare(SqlObjectReference reference)
         => reference.Server.Length == 0 && reference.Database.Length == 0 && reference.Schema.Length == 0;
 
+    // A FROM table with an alias answers to the alias. A named table without one answers to
+    // its own name, so `UPDATE Users ... FROM COMMON.Users` writes `COMMON.Users`.
     private static TSqlFragment? FindFromClauseAlias(TSqlFragment? fromClause, string aliasName)
         => Fragments(GetPropertyValue(fromClause, "TableReferences"))
             .SelectMany(JoinedTableReferences)
             .FirstOrDefault(reference =>
-                string.Equals(
-                    ReadIdentifierText(GetPropertyValue(reference, "Alias")),
-                    aliasName,
-                    StringComparison.OrdinalIgnoreCase));
+                string.Equals(ExposedName(reference), aliasName, StringComparison.OrdinalIgnoreCase));
+
+    private static string ExposedName(TSqlFragment reference)
+    {
+        var alias = ReadIdentifierText(GetPropertyValue(reference, "Alias"));
+        if (alias.Length > 0 || reference.GetType().Name != "NamedTableReference")
+            return alias;
+        return ReadObjectName(GetFragmentProperty(reference, "SchemaObject")).Name;
+    }
+
+    // An OUTPUT ... INTO clause inserts the output rows into a table, so that table is written.
+    private void AddOutputIntoTarget(TSqlFragment? specification, ICollection<SqlObjectReference> writeTables)
+        => AddObjectName(
+            GetFragmentProperty(GetFragmentProperty(specification, "OutputIntoClause"), "IntoTable"),
+            writeTables);
 
     // The table references that one item of a FROM clause joins. A join holds two table
     // references, a join in parentheses holds one join, and an ODBC escape join ({ oj ... })
