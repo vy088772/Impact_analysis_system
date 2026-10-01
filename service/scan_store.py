@@ -183,7 +183,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # `.scratch/inherited-web-config-connections/` ticket 05）。子 web application 也
 # 會解析它的 Parent Application 宣告的連線。舊快取的連線來源沒有這個欄位，也沒
 # 有繼承來的連線，必須重新掃描。
-_CACHE_VERSION = 43
+# v44：C# 解析器在每個 extractor 讀檔前先移除 C# 註解（`//`、`/* */`；字串與字元
+# 字面值裡的符號不算；見 `.scratch/inline-sql-tables-come-from-the-parser/`
+# ticket 09）。被註解掉的程式碼不再產生 SQL 查詢、資料表關聯或預存程序呼叫。
+# 舊快取還留著註解裡的關聯（例如 ATV 的 `ManifestNew`）與預存程序呼叫，必須
+# 重新掃描。
+_CACHE_VERSION = 44
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

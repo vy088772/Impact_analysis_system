@@ -68,6 +68,194 @@ def strip_sql_comments(sql: str) -> str:
     return "".join(out)
 
 
+def _blank(text: str) -> str:
+    """Replace each character with a space, but keep each line break."""
+    return "".join(ch if ch in "\r\n" else " " for ch in text)
+
+
+def strip_csharp_comments(source: str) -> str:
+    """Replace each C# comment with spaces. Each line break and each literal stays.
+
+    The result has the same length and the same line breaks as `source`, so
+    each line number and each position that an extractor records stays correct.
+    A `//` or `/*` inside a string or a character literal is text. When the
+    removal cannot find the end of a construct with certainty, it keeps the rest
+    of the text: a comment that stays gives a false answer, but a removed live
+    line loses a real answer.
+    """
+    out: List[str] = []
+    i, length = 0, len(source)
+    while i < length:
+        ch = source[i]
+        if ch == "#" and source[source.rfind("\n", 0, i) + 1:i].strip() == "":
+            # A preprocessor directive, for example `#region Don't`, holds free
+            # text. Keep the line as it is.
+            end = _line_end(source, i)
+            out.append(source[i:end])
+            i = end
+        elif source.startswith("//", i):
+            end = _line_end(source, i)
+            out.append(_blank(source[i:end]))
+            i = end
+        elif source.startswith("/*", i):
+            close = source.find("*/", i + 2)
+            if close < 0:
+                out.append(source[i:])
+                break
+            out.append(_blank(source[i:close + 2]))
+            i = close + 2
+        elif ch in "\"'@$":
+            literal_end = _literal_end(source, i)
+            if literal_end is None:
+                out.append(source[i:])
+                break
+            if literal_end == _NOT_A_LITERAL:
+                literal_end = i + 1
+            out.append(source[i:literal_end])
+            i = literal_end
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+_NOT_A_LITERAL = -1
+
+
+def _line_end(source: str, i: int) -> int:
+    end = source.find("\n", i)
+    return len(source) if end < 0 else end
+
+
+def _literal_end(source: str, i: int) -> Optional[int]:
+    """Give the index after the C# literal that starts at `i`.
+
+    Give `_NOT_A_LITERAL` when no literal starts at `i` (for example the `@` of
+    `@class`), and None when the end of the literal is not certain.
+    """
+    length = len(source)
+    j, dollars, verbatim = i, 0, False
+    while j < length and source[j] in "$@":
+        if source[j] == "@":
+            if verbatim:
+                return _NOT_A_LITERAL
+            verbatim = True
+        else:
+            dollars += 1
+        j += 1
+    if j >= length:
+        return _NOT_A_LITERAL
+    if source[j] == "'":
+        return _char_end(source, j + 1) if j == i else _NOT_A_LITERAL
+    if source[j] != '"':
+        return _NOT_A_LITERAL
+    if verbatim:
+        return _verbatim_end(source, j + 1, interpolated=dollars > 0)
+    if source.startswith('"""', j):
+        return _raw_end(source, j)
+    return _regular_end(source, j + 1, interpolated=dollars > 0)
+
+
+def _char_end(source: str, j: int) -> Optional[int]:
+    """`j` is the index after the opening `'` of a character literal."""
+    if source[j:j + 1] == "\\":
+        # `'\''`, `'\\'`, `'\n'`, `'A'`: the escaped character is never the end.
+        close = source.find("'", j + 2)
+        if close < 0 or close - j > 10 or "\n" in source[j:close]:
+            return None
+        return close + 1
+    if source[j + 1:j + 2] == "'" and source[j:j + 1] not in ("", "\r", "\n"):
+        return j + 2
+    return None
+
+
+def _regular_end(source: str, j: int, interpolated: bool) -> Optional[int]:
+    """`j` is the index after the opening `"` of a `"..."` or `$"..."` string.
+
+    A regular string holds no line break in its text, so a line break before
+    the closing quote gives None.
+    """
+    length = len(source)
+    while j < length:
+        ch = source[j]
+        if ch == "\\":
+            j += 2
+        elif ch == '"':
+            return j + 1
+        elif ch in "\r\n":
+            return None
+        elif interpolated and ch == "{":
+            if source.startswith("{{", j):
+                j += 2
+                continue
+            hole_end = _hole_end(source, j + 1)
+            if hole_end is None:
+                return None
+            j = hole_end
+        else:
+            j += 1
+    return None
+
+
+def _verbatim_end(source: str, j: int, interpolated: bool) -> Optional[int]:
+    """`j` is the index after the opening `"` of `@"..."`, `$@"..."` or `@$"..."`."""
+    length = len(source)
+    while j < length:
+        ch = source[j]
+        if ch == '"':
+            if source.startswith('""', j):
+                j += 2
+                continue
+            return j + 1
+        if interpolated and ch == "{":
+            if source.startswith("{{", j):
+                j += 2
+                continue
+            hole_end = _hole_end(source, j + 1)
+            if hole_end is None:
+                return None
+            j = hole_end
+        else:
+            j += 1
+    return None
+
+
+def _raw_end(source: str, j: int) -> Optional[int]:
+    """`j` is the index of the first quote of a raw string literal `\"\"\"...\"\"\"`."""
+    quotes = j
+    while quotes < len(source) and source[quotes] == '"':
+        quotes += 1
+    fence = source[j:quotes]
+    close = source.find(fence, quotes)
+    return None if close < 0 else close + len(fence)
+
+
+def _hole_end(source: str, j: int) -> Optional[int]:
+    """`j` is the index after the `{` of an interpolation hole.
+
+    The hole is C# code. It can hold a nested literal, for example
+    `{Fmt('"')}`, so each literal inside it is skipped as one piece.
+    """
+    length, depth = len(source), 0
+    while j < length:
+        ch = source[j]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            if depth == 0:
+                return j + 1
+            depth -= 1
+        elif ch in "\"'@$":
+            end = _literal_end(source, j)
+            if end is None:
+                return None
+            if end != _NOT_A_LITERAL:
+                j = end
+                continue
+        j += 1
+    return None
+
+
 class CSharpParser:
     """C# 程式碼解析器"""
     
@@ -188,7 +376,11 @@ class CSharpParser:
                 framework=FrameworkType.UNKNOWN,
                 errors=[f"讀取檔案失敗: {e}"]
             )
-        
+
+        # 註解裡的程式碼不會執行：每個 extractor 讀移除 C# 註解後的文字。
+        # 行數統計（_count_lines）仍讀原始的 lines。
+        content = strip_csharp_comments(content)
+
         # 建立結果物件
         result = FileAnalysisResult(
             file_path=file_path,
