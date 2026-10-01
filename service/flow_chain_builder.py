@@ -517,6 +517,8 @@ def build_backward_chains(
     # unstated schema, it takes the Database from the rated invocation, and a read of
     # a View or a Function reaches the tables behind it in the graph.
     question = TableQuestion.of(table_name, database)
+    # A request with no Database gives an empty graph here; `by_table` takes `None` for
+    # it, so an inline read of a View or a Function gives only its direct answer.
     for answer in inline_table_relations.by_table(scan, question, invocations, root, graph or None):
         rel = answer.relation
         add_chain(
