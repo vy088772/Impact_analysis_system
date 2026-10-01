@@ -1948,13 +1948,13 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
         )
     else:
         matched_files = list(scan.csharp_results)
-        resolutions = []
+        resolutions = []  # every file counts: no program filter below
 
     scope = DerivedExecutionEvidenceScope.of(req, roots)
     rated_invocations, joined_graph = _rated_execution_invocations(
         scope, scan, matched_files, root  # type: ignore[arg-type]
     )
-    if resolutions:
+    if req.program_names:
         files_by_relative = {
             _rel(result.file_path, root).casefold(): result.file_path
             for result in scan.csharp_results

@@ -180,6 +180,12 @@ def accept_wrapper_contract(
         raise HTTPException(status_code=500, detail=f"contract acceptance 失敗：{exc}") from exc
 
 
+_LOOKUP_CONFLICT_ERRORS = (
+    analyze_service.SqlExecutionGraphRequiredError,
+    analyze_service.AmbiguousDatabaseError,
+)
+
+
 def _lookup_conflict_http_error(
     exc: Union[analyze_service.SqlExecutionGraphRequiredError, analyze_service.AmbiguousDatabaseError],
 ) -> HTTPException:
@@ -204,10 +210,7 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         raise HTTPException(status_code=400, detail="sp_name 不可為空")
     try:
         return analyze_service.find_by_sp(req)
-    except (
-        analyze_service.SqlExecutionGraphRequiredError,
-        analyze_service.AmbiguousDatabaseError,
-    ) as exc:
+    except _LOOKUP_CONFLICT_ERRORS as exc:
         raise _lookup_conflict_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -222,10 +225,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         raise HTTPException(status_code=400, detail="table_name 不可為空")
     try:
         return analyze_service.find_by_table(req)
-    except (
-        analyze_service.SqlExecutionGraphRequiredError,
-        analyze_service.AmbiguousDatabaseError,
-    ) as exc:
+    except _LOOKUP_CONFLICT_ERRORS as exc:
         raise _lookup_conflict_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
