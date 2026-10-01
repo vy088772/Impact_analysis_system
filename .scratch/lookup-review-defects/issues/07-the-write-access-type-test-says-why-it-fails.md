@@ -4,9 +4,9 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done (branch worktree-lookup-review-07 in llamaindex-spec-rag)
 
-- [ ] The bare `next(...)` is replaced by an assertion with a clear message.
-- [ ] The message names commit 5a9aec0 and says to switch the sibling checkout.
-- [ ] A test shows that, with the list absent, the failure carries that message.
-- [ ] With the list present, the five original checks pass as before.
+- [x] The bare `next(...)` is replaced by an assertion with a clear message.
+- [x] The message names commit 5a9aec0 and says to switch the sibling checkout.
+- [x] A test shows that, with the list absent, the failure carries that message.
+- [x] With the list present, the five original checks pass as before.
