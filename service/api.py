@@ -178,6 +178,18 @@ def accept_wrapper_contract(
         raise HTTPException(status_code=500, detail=f"contract acceptance 失敗：{exc}") from exc
 
 
+def _ambiguous_database_http_error(exc: analyze_service.AmbiguousDatabaseError) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": exc.code,
+            "database": exc.database,
+            "servers": exc.servers,
+            "message": str(exc),
+        },
+    )
+
+
 @app.post("/find_by_sp", response_model=FindBySPResponse)
 def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
     """反查「哪些程式呼叫了這支 SP」（純快取比對；cache_only=True 時不觸發 clone）。"""
@@ -187,6 +199,8 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         return analyze_service.find_by_sp(req)
     except analyze_service.SqlExecutionGraphRequiredError as exc:
         raise _graph_readiness_http_error(exc) from exc
+    except analyze_service.AmbiguousDatabaseError as exc:
+        raise _ambiguous_database_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -202,6 +216,8 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         return analyze_service.find_by_table(req)
     except analyze_service.SqlExecutionGraphRequiredError as exc:
         raise _graph_readiness_http_error(exc) from exc
+    except analyze_service.AmbiguousDatabaseError as exc:
+        raise _ambiguous_database_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001

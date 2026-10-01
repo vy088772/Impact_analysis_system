@@ -181,7 +181,7 @@ def _serve(
     """
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda given, refresh=False: scan)
-    monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name, server=None: (None, graph))
+    monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name, server="", **_: (None, graph))
     monkeypatch.setattr(
         analyze_service, "_execution_paths_for_scope", lambda *args, **kwargs: (list(rated), graph, [])
     )

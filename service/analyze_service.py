@@ -137,6 +137,20 @@ class SqlExecutionGraphRequiredError(ValueError):
         )
 
 
+class AmbiguousDatabaseError(ValueError):
+    """A lookup names a Database that has a SQL cache on more than one host."""
+
+    code = "ambiguous_database"
+
+    def __init__(self, database: str, servers: Iterable[str]) -> None:
+        self.database = str(database or "").strip()
+        self.servers = sorted(servers)
+        super().__init__(
+            f"資料庫 {self.database} 在多台主機上都有 SQL 快取"
+            f"（{', '.join(self.servers)}）；請用 db_server 指定主機。"
+        )
+
+
 @dataclass
 class ProgramRefreshResult:
     """Result of replacing only the files belonging to requested programs."""
@@ -1021,7 +1035,17 @@ def load_sp_catalog(database: str = "") -> SpCatalog:
     return catalog
 
 
-def _require_sql_execution_graph(database: str, db_server: str = "") -> Tuple[Dict, Dict]:
+def _require_sql_execution_graph(
+    database: str,
+    db_server: str = "",
+    *,
+    name_ambiguous_database: bool = False,
+) -> Tuple[Dict, Dict]:
+    """Load the one cache of a Database; raise when it has none or no graph.
+
+    ``name_ambiguous_database`` is for the two lookup endpoints: a Database on
+    several hosts, with no host named, raises its own error and not "not scanned".
+    """
     database = str(database or "").strip()
     if not database:
         raise ValueError(
@@ -1032,6 +1056,8 @@ def _require_sql_execution_graph(database: str, db_server: str = "") -> Tuple[Di
         if db_server
         else sql_cache_store.find_cache_identity(database)
     )
+    if name_ambiguous_database and isinstance(identity, sql_cache_store.AmbiguousServer):
+        raise AmbiguousDatabaseError(database, identity.servers)
     cached = (
         sql_cache_store.load_cached(identity)
         if isinstance(identity, sql_cache_store.CacheIdentity)
@@ -2803,9 +2829,11 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
             "find_by_sp 需要 database 以載入 SQL execution graph；"
             "請提供 system_id 並先執行 refresh_sql_cli。"
         )
-    # FindBySPRequest 沒有 db_server 欄位，這裡只能給 database；
-    # sql_cache_store.find_cache_identity() 會從磁碟找唯一一份同名快取。
-    _cached, _graph = _require_sql_execution_graph(req.database)
+    # 請求帶 db_server 就讀那一台；沒帶時由 find_cache_identity() 從磁碟找唯一
+    # 一份同名快取，同名快取在多台主機上時回 ambiguous_database。
+    _cached, _graph = _require_sql_execution_graph(
+        req.database, req.db_server, name_ambiguous_database=True
+    )
     scope = DerivedExecutionEvidenceScope.of(req, roots)
     rated_invocations, _ = _rated_execution_invocations_for_scope(
         scope,
@@ -2956,8 +2984,10 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     # reaches the tables behind it only when the request names a Database.
     inline_graph: Optional[Mapping[str, Any]] = None
     if req.database:
-        # FindByTableRequest 同樣沒有 db_server 欄位；理由見 find_by_sp。
-        _sql_cache, graph = _require_sql_execution_graph(req.database)
+        # db_server 的處理與 find_by_sp 相同。
+        _sql_cache, graph = _require_sql_execution_graph(
+            req.database, req.db_server, name_ambiguous_database=True
+        )
         # 重用同一 scope 的 rated invocations 與 Execution Paths（ticket 04/05）：
         # 同一 scope 內問第二個 table，不必重新 rate C# facts、也不必重建
         # Execution Paths —— 兩者共用 find_by_sp() 已經在用的同一份 retention

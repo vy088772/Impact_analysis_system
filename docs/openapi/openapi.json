@@ -244,6 +244,11 @@
             "title": "Database",
             "type": "string"
           },
+          "db_server": {
+            "default": "",
+            "title": "Db Server",
+            "type": "string"
+          },
           "refresh": {
             "default": false,
             "title": "Refresh",
@@ -335,6 +340,11 @@
           "database": {
             "default": "",
             "title": "Database",
+            "type": "string"
+          },
+          "db_server": {
+            "default": "",
+            "title": "Db Server",
             "type": "string"
           },
           "refresh": {

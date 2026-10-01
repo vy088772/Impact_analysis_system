@@ -383,6 +383,7 @@ class FindBySPRequest(BaseModel):
     sp_name: str                              # 要反查的 SP 名稱（不分大小寫比對）
     wrapper_contract: WrapperContractSelector = ""  # 外部 wrapper contract selector
     database: str = ""                        # SQL execution graph cache key，通常是 system_id
+    db_server: str = ""                       # 選填：資料庫主機位址；同名資料庫在多台主機時必填
     cache_only: bool = True                   # True → repo 未 clone 過就跳過，不觸發 clone
     refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
 
@@ -434,6 +435,7 @@ class FindByTableRequest(BaseModel):
     database: str = ""                        # 選填：資料庫快取鍵（通常是 spec-rag 的 system_id）。
     # 提供時會由 SQL Execution Graph 解析 SP/View/Function lineage；C# inline
     # SQL facts 仍保留直接出現的表名，兩者都會納入結果。
+    db_server: str = ""                       # 選填：資料庫主機位址；同名資料庫在多台主機時必填
     write_only: bool = False                  # True：只回傳「寫入」這張表的命中（access_type
     # 屬於 WRITE/WRITE_INDIRECT/INSERT/UPDATE/DELETE），濾掉純讀取（READ）與無法判斷（""）
     # 的命中——用於「打算異動這張表，只想知道誰會寫壞」這種比純反查更聚焦的情境。
