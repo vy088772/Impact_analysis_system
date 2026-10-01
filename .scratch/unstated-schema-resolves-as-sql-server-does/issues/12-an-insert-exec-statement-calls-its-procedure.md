@@ -6,7 +6,7 @@ The bug and gap review of 2026-10-01 found this defect. It is older than this fe
 
 **Blocked by:** None — can start immediately.
 
-**Status:** done, except the rebuild of the shared local caches, which the landing script runs (see "Implementation notes")
+**Status:** done, except one box (another machine) that stays an open operator item
 
 - [x] A failing analyzer host test comes first: `INSERT INTO #t EXEC dbo.usp_X;` gives a `CALL` operation with the call target `dbo.usp_X`, and an `INSERT` operation that writes `#t`.
 - [x] The call target keeps every part it states, as a direct `EXEC` does. `INSERT INTO @t EXEC usp_X;` gives the bare target `usp_X`, and the graph builder resolves it by Schema Resolution (ticket 05).
@@ -15,7 +15,7 @@ The bug and gap review of 2026-10-01 found this defect. It is older than this fe
 - [x] `INSERT INTO #t EXEC (@sql);` gives the same `DYNAMIC_SQL` operation that a direct `EXEC (@sql)` gives. The seven caches hold no such statement.
 - [x] A graph builder test with a stub host shows one `calls` relationship from the module to the listed procedure, and one Execution Path through it.
 - [x] The golden `path_id` test stays unedited and passes.
-- [ ] The graph format version rises, and its comment states why the earlier graph is rejected. The local caches rebuild in the order of ticket 09: back up, repair tool, then index backfill tool. (The version is 10. A copy of the caches is rebuilt. The shared `data/sql_cache` rebuilds when the landing script runs.)
+- [x] The graph format version rises, and its comment states why the earlier graph is rejected. The local caches rebuild in the order of ticket 09: back up, repair tool, then index backfill tool.
 - [x] A comparison of the graphs before and after the rebuild records the added `calls` relationships per cache. Expected: 27 in PUR and 26 in eFinance (see Comments). Any other change gets an explanation.
 - [x] The companion repository regenerates its routing expectations. Each change is a new program on a path through a called procedure, and an unexpected change becomes its own ticket.
 - [x] The whole suite shows no new failure.
@@ -94,3 +94,5 @@ The result is the same as the expected scale. No other change occurred.
 **Open operator item (not run here):** another operator machine runs, in this order: `python tools/repair_sql_execution_graphs.py`, then `python tools/backfill_object_location_indexes.py`. Back up its `data/sql_cache` first.
 
 **Out of scope, as the Design notes say:** the temp table lineage from the result set of the called procedure into `#t`. No ticket holds it yet.
+
+**Landing, 2026-10-01.** The landing script put the commit on `YuHsien_20260630` as `22433c2`, and the companion commit on `spec_extend_20260701` as `4b68378`. Then it rebuilt the shared caches in the order of ticket 09: the backup `data/sql_cache_backup_v9_20261001/` (21 files, `cp -Rp`), the repair tool (seven caches 9 to 10), then the index backfill tool. The comparison of the backup with the rebuilt caches gives the same result as the copy: PUR +27 `calls`, eFinance +26 `calls`, and no other change.
