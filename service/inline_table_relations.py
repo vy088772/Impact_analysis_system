@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 import schema_resolution
-from canonical_object_identity import ObjectName, bare_name, full_key
+from canonical_object_identity import ObjectName, bare_key, bare_name, full_key, part_key, schema_qualified
 from code_analyzer.csharp_analysis_gateway import DbInvocation
 from code_analyzer.project_scanner import INLINE_SQL_PARSED, CSharpTableRelation, ProjectScanResult
 
@@ -74,6 +74,23 @@ class InlineTableAnswer:
         if self.through is None:
             return self.relation.access_type
         return "READ_INDIRECT" if self.relation.reason == INLINE_SQL_PARSED else "UNRESOLVED"
+
+    @property
+    def table_name(self) -> str:
+        """The table as the answer reports it.
+
+        A direct answer gives the parts that the source code states, joined by dots. A reached
+        answer gives the node name, as the lineage record of an Execution Path does.
+        """
+        if self.through is not None:
+            return self.table.name
+        table = self.table
+        return ".".join(part for part in (table.server, table.database, table.schema, table.name) if part)
+
+    @property
+    def read_through(self) -> str:
+        """The View or the Function that a reached answer passes through, as `schema.name`. Empty for a direct answer."""
+        return schema_qualified(self.through) if self.through is not None else ""
 
 
 def by_table(
@@ -195,14 +212,14 @@ class _InlineLineage:
         self._database = str(graph.get("database") or "")
         self._resolver = resolver
         self._index = LineageIndex(graph)
+        # (schema key, bare key) -> (node id, the object as the graph spells it). A listed node
+        # always states its schema, so the key never holds an empty schema.
         self._nodes: Dict[tuple[str, str], tuple[str, ObjectName]] = {}
         for node in graph.get("nodes", []) or []:
             if node.get("type") not in {"view", "function"}:
                 continue
-            schema, name = str(node.get("schema") or ""), str(node.get("name") or "")
-            self._nodes.setdefault(
-                (schema.casefold(), name.casefold()), (str(node.get("id")), ObjectName("", "", schema, name))
-            )
+            listed = ObjectName("", "", str(node.get("schema") or ""), str(node.get("name") or ""))
+            self._nodes.setdefault(_node_key(listed), (str(node.get("id")), listed))
 
     def reached(
         self, read: ObjectName, database: str, question: TableQuestion
@@ -215,7 +232,8 @@ class _InlineLineage:
         if names_another_database(read.database or database, self._database):
             return []
         resolved, _source = self._resolver.resolve(read, self._database)
-        node = self._nodes.get((resolved.schema.casefold(), resolved.name.casefold())) if resolved.schema else None
+        # An unresolved schema names no listed node, as in the graph build.
+        node = self._nodes.get(_node_key(resolved)) if resolved.schema else None
         if node is None:
             return []
         node_id, through = node
@@ -225,6 +243,11 @@ class _InlineLineage:
             if match is not None:
                 answers.append((through, table, match))
         return answers
+
+
+def _node_key(name: ObjectName) -> tuple[str, str]:
+    """The key of a View or Function node: the schema key and the bare key of the Canonical Object Identity."""
+    return part_key(name.schema), bare_key(name)
 
 
 class _InlineSchemaResolver:

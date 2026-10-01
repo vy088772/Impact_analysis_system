@@ -10,19 +10,25 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 import pytest
 
 from canonical_object_identity import parse
+from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
 from code_analyzer.models import MethodInfo
 from code_analyzer.project_scanner import INLINE_SQL_PARSED, INLINE_SQL_REGEX, ProjectScanResult
 from service import analyze_service, inline_table_relations
-from service.schemas import AzureSource, FindByTableRequest, FlowChainRequest
+from service.schemas import AnalyzeRequest, AzureSource, FindByTableRequest, FlowChainRequest
 from service.sql_cache_store import CacheIdentity, build_object_location_index
 from service.sql_execution_graph import build_sql_execution_graph
 from service.table_match import TableQuestion
-from tests.sql_cache_fixtures import analyzer_operation, cache_payload, in_memory_sql_text_analysis
+from tests.sql_cache_fixtures import (
+    analyzer_operation,
+    cache_payload,
+    in_memory_sql_text_analysis,
+    one_server_holds_every_database,
+)
 from tests.test_flow_chain_inline_tables import _relation, _scan as _flow_scan
 from tests.test_table_match import _inline_scan
 
@@ -138,6 +144,13 @@ def test_a_relation_that_states_another_database_reaches_nothing(tmp_path) -> No
     assert _answers(_scan(tmp_path, "STC.dbo.vOrder"), "Orders", graph, tmp_path) == []
 
 
+def test_a_relation_whose_connection_names_another_database_reaches_nothing(tmp_path) -> None:
+    """The SQL text states no Database, and the connection names `STC`: the graph of `PUR` holds no `dbo.vOrder` of `STC`."""
+    graph = _graph(views={"dbo.vOrder": ["dbo.Orders"]})
+
+    assert _answers(_scan(tmp_path, "dbo.vOrder", connection_database="STC"), "Orders", graph, tmp_path) == []
+
+
 def test_a_relation_with_an_unresolved_connection_database_uses_the_graph(tmp_path) -> None:
     graph = _graph(views={"dbo.vOrder": ["dbo.Orders"]})
 
@@ -159,13 +172,20 @@ def test_a_relation_that_states_no_schema_reaches_through_the_listed_dbo_view(mo
     ]
 
 
-def _serve(monkeypatch, root: Path, scan: ProjectScanResult, graph: dict) -> None:
-    """Serve the scan and the graph to `/find_by_table` and `/flow_chain`. No Execution Path exists."""
+def _serve(
+    monkeypatch, root: Path, scan: ProjectScanResult, graph: dict, rated: Sequence[DbInvocation] = ()
+) -> None:
+    """Serve the scan, the graph, and the rated invocations to `/find_by_table` and `/flow_chain`.
+
+    No Execution Path exists.
+    """
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda given, refresh=False: scan)
     monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name, server=None: (None, graph))
-    monkeypatch.setattr(analyze_service, "_execution_paths_for_scope", lambda *args, **kwargs: ([], graph, []))
-    monkeypatch.setattr(analyze_service, "_rated_execution_invocations", lambda *args, **kwargs: ([], graph))
+    monkeypatch.setattr(
+        analyze_service, "_execution_paths_for_scope", lambda *args, **kwargs: (list(rated), graph, [])
+    )
+    monkeypatch.setattr(analyze_service, "_rated_execution_invocations", lambda *args, **kwargs: (list(rated), graph))
 
 
 def _find_by_table(table_name: str, write_only: bool = False):
@@ -200,6 +220,31 @@ def test_find_by_table_names_the_view_that_a_reached_record_passes_through(monke
     assert [(match.access_type, match.read_through) for match in _find_by_table("vOrder").matches] == [
         ("SELECT", "")
     ]
+
+
+def test_a_reached_record_takes_the_database_fields_of_its_rated_invocation(monkeypatch, tmp_path) -> None:
+    """A parsed relation whose invocation has candidates: the reached record keeps them (Q3)."""
+    scan = _view_reader_scan(tmp_path, ("dbo.vOrder", "SELECT"))
+    scan.table_relations[:] = [replace(scan.table_relations[0], invocation_span=(154, 310))]
+    rated = DbInvocation(
+        class_name="OrderPage",
+        method_name="Load",
+        database=None,
+        procedure_name=None,
+        evidence=InvocationEvidence.UNRESOLVED,
+        source=InvocationSourceSpan("OrderPage.cs", 154, 310),
+        database_candidates=("PUR", "STC"),
+    )
+    _serve(monkeypatch, tmp_path, scan, _graph(views={"dbo.vOrder": ["dbo.Orders"]}), [rated])
+
+    (match,) = _find_by_table("Orders").matches
+
+    assert (match.access_type, match.read_through) == ("READ_INDIRECT", "dbo.vOrder")
+    assert (match.database, list(match.database_candidates), match.database_attribution) == (
+        "",
+        ["PUR", "STC"],
+        "candidate",
+    )
 
 
 def test_find_by_table_keeps_the_direct_read_when_one_file_also_reads_through_a_view(
@@ -251,3 +296,22 @@ def test_flow_chain_forward_still_lists_the_view_and_not_the_table_behind_it(mon
 
     assert response.forward_chain is not None
     assert response.forward_chain["inline_sql_tables"] == ["vOrder"]
+
+
+def test_the_analyze_screen_table_list_still_lists_the_view(monkeypatch, tmp_path) -> None:
+    graph = _graph(views={"dbo.vOrder": ["dbo.Orders"]})
+    scan = _view_reader_scan(tmp_path, ("dbo.vOrder", "SELECT"))
+    monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    monkeypatch.setattr(
+        analyze_service.sql_cache_store,
+        "load_cached",
+        lambda identity: cache_payload("PUR", views=["dbo.vOrder"], tables=["dbo.Orders"], graph=graph),
+    )
+
+    response = analyze_service.analyze(
+        AnalyzeRequest(database="PUR", program_names=["OrderPage"], include_snippets=False)
+    )
+
+    assert response.programs[0].tables == ["vOrder"]

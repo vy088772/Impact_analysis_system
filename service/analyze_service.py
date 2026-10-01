@@ -2686,11 +2686,6 @@ def _prefer_table_match(
         existing[key] = candidate
 
 
-def _written_table_name(table: ObjectName) -> str:
-    """The table as the source code writes it: the parts it states, joined by dots."""
-    return ".".join(part for part in (table.server, table.database, table.schema, table.name) if part)
-
-
 def _table_match_rank(match: TableMatchProgram) -> tuple[int, int, int]:
     access_type = (match.access_type or "").upper()
     is_write = is_write_access(match.access_type)
@@ -2947,7 +2942,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             # access type of its relation; an answer that reaches the table through
             # a View or a Function reads `READ_INDIRECT` or `UNRESOLVED`.
             access_type=answer.access_type,
-            read_through=schema_qualified(answer.through) if answer.through is not None else "",
+            read_through=answer.read_through,
             reason=rel.reason,
             evidence_status="not_applicable",
             evidence_reason="inline_sql",
@@ -2961,8 +2956,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             ),
             caller_class=caller_class,
             caller_method=caller_method,
-            # A reached table reports its node name, as the lineage record of an Execution Path does.
-            table=answer.table.name if answer.through is not None else _written_table_name(answer.table),
+            table=answer.table_name,
             risk_flags=[UNPROVEN_SCHEMA] if answer.match.unproven_schema else [],
             stated_database=answer.match.stated_database,
             schema_source=answer.match.schema_source,

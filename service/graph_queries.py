@@ -262,13 +262,13 @@ class LineageIndex:
     only the membership test, not another build.
     """
 
-    __slots__ = ("_graph", "_reached", "_containers")
+    __slots__ = ("_graph", "_reached", "_reachable_by_node")
 
     def __init__(self, graph: Mapping[str, Any]) -> None:
         self._graph = graph
         self._reached: dict[str, dict[_TargetKey, tuple[_Target, set[str]]]] | None = None
         # View or Function node id -> the tables it reaches; `_ensure_built` fills it.
-        self._containers: dict[str, _Tables] = {}
+        self._reachable_by_node: dict[str, _Tables] = {}
 
     def _ensure_built(self) -> dict[str, dict[_TargetKey, tuple[_Target, set[str]]]]:
         """Return bare name -> full key -> (table, ids of the operations that reach it)."""
@@ -381,7 +381,7 @@ class LineageIndex:
                 entry[1].add(operation_id)
 
         self._reached = reached_by_name
-        self._containers = reachable
+        self._reachable_by_node = reachable
         return reached_by_name
 
     def reachable_tables(self, node_id: str) -> list[tuple[ObjectName, str]]:
@@ -394,7 +394,7 @@ class LineageIndex:
         self._ensure_built()
         return [
             (ObjectName("", table.database, table.schema, table.name), table.schema_source)
-            for table in self._containers.get(node_id, {}).values()
+            for table in self._reachable_by_node.get(node_id, {}).values()
         ]
 
     def read_lineage(
