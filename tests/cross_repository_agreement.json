@@ -73,6 +73,17 @@
       "full_key": ".common.usp_load"
     }
   ],
+  "program_suffixes": [
+    { "input": "Order.aspx.cs", "stripped": "order" },
+    { "input": "Order.ascx.cs", "stripped": "order" },
+    { "input": "Order.aspx", "stripped": "order" },
+    { "input": "Order.ascx", "stripped": "order" },
+    { "input": "Order.cshtml", "stripped": "order" },
+    { "input": "Order.vue", "stripped": "order" },
+    { "input": "Order.cs", "stripped": "order" },
+    { "input": "ORDER.CSHTML", "stripped": "order" },
+    { "input": "Order", "stripped": "order" }
+  ],
   "sql_cache_identity": [
     {
       "server": "sqlsrv01",
