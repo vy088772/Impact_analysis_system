@@ -901,3 +901,128 @@ def test_the_exec_of_an_insert_exec_keeps_the_branch_of_its_statement() -> None:
     insert, call = result["operations"]
     assert call["branch_path"] == insert["branch_path"] == ["IF @a = 1"]
     assert call["sequence"] == insert["sequence"] + 1
+
+
+def test_an_insert_into_a_cte_writes_no_table_and_keeps_the_cte_source_read() -> None:
+    operation = _write_test_statement(
+        "WITH c AS (SELECT a FROM dbo.T) INSERT INTO c (a) VALUES (1);"
+    )
+
+    assert operation["operation_type"] == "INSERT"
+    assert operation["write_tables"] == []
+    assert operation["unresolved_write_targets"] == ["c"]
+    assert operation["read_tables"] == [_reference("", "", "dbo", "T")]
+
+
+def test_an_insert_into_a_schema_qualified_name_of_a_cte_still_writes_that_table() -> None:
+    operation = _write_test_statement(
+        "WITH c AS (SELECT a FROM dbo.T) INSERT INTO dbo.c (a) VALUES (1);"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "c")]
+    assert operation["unresolved_write_targets"] == []
+
+
+_MERGE_HEAD = "MERGE dbo.T AS t USING dbo.S AS s ON t.id = s.id"
+
+
+def test_a_merge_writes_its_target_and_reads_its_source() -> None:
+    operation = _write_test_statement(
+        f"{_MERGE_HEAD} WHEN MATCHED THEN UPDATE SET t.a = s.a;"
+    )
+
+    assert operation["operation_type"] == "MERGE"
+    assert operation["write_tables"] == [_reference("", "", "dbo", "T")]
+    assert operation["read_tables"] == [_reference("", "", "dbo", "S")]
+
+
+def test_a_merge_target_without_an_alias_writes_the_object_it_names() -> None:
+    operation = _write_test_statement(
+        "MERGE dbo.T USING dbo.S s ON T.id = s.id WHEN MATCHED THEN DELETE;"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "T")]
+    assert operation["read_tables"] == [_reference("", "", "dbo", "S")]
+
+
+def test_a_merge_into_a_temp_table_writes_it_and_into_a_table_variable_writes_nothing() -> None:
+    temp = _write_test_statement(
+        "MERGE #t AS t USING dbo.S AS s ON t.id = s.id WHEN MATCHED THEN DELETE;"
+    )
+    variable = _write_test_statement(
+        "MERGE @t AS t USING dbo.S AS s ON t.id = s.id WHEN MATCHED THEN DELETE;"
+    )
+
+    assert temp["write_tables"] == [_reference("", "", "", "#t")]
+    assert variable["write_tables"] == []
+    assert variable["unresolved_write_targets"] == []
+
+
+def test_a_merge_into_a_cte_goes_to_the_unresolved_write_targets() -> None:
+    operation = _write_test_statement(
+        "WITH c AS (SELECT id FROM dbo.T) "
+        "MERGE c USING dbo.S AS s ON c.id = s.id WHEN MATCHED THEN DELETE;"
+    )
+
+    assert operation["operation_type"] == "MERGE"
+    assert operation["write_tables"] == []
+    assert operation["unresolved_write_targets"] == ["c"]
+    assert {ref["name"] for ref in operation["read_tables"]} == {"T", "S"}
+
+
+def test_a_merge_source_subquery_and_source_cte_read_their_tables_and_no_cte_name() -> None:
+    subquery = _write_test_statement(
+        "MERGE dbo.T AS t USING (SELECT id FROM dbo.S) AS s ON t.id = s.id "
+        "WHEN MATCHED THEN DELETE;"
+    )
+    cte = _write_test_statement(
+        "WITH c AS (SELECT id FROM dbo.S) "
+        "MERGE dbo.T AS t USING c ON t.id = c.id WHEN MATCHED THEN DELETE;"
+    )
+
+    assert subquery["read_tables"] == [_reference("", "", "dbo", "S")]
+    assert cte["read_tables"] == [_reference("", "", "dbo", "S")]
+
+
+def test_the_on_condition_and_each_when_clause_read_the_tables_of_their_subqueries() -> None:
+    operation = _write_test_statement(
+        "MERGE dbo.T AS t USING dbo.S AS s "
+        "ON t.id = s.id AND t.k IN (SELECT k FROM dbo.OnTable) "
+        "WHEN MATCHED AND EXISTS (SELECT 1 FROM dbo.AndTable) "
+        "THEN UPDATE SET t.a = (SELECT MAX(x) FROM dbo.SetTable) "
+        "WHEN NOT MATCHED THEN INSERT (a, b) VALUES ((SELECT MAX(y) FROM dbo.ValueTable), 1);"
+    )
+
+    assert {ref["name"] for ref in operation["read_tables"]} == {
+        "S", "OnTable", "AndTable", "SetTable", "ValueTable",
+    }
+
+
+def test_a_merge_written_columns_hold_the_update_set_and_insert_columns() -> None:
+    operation = _write_test_statement(
+        f"{_MERGE_HEAD} WHEN MATCHED THEN UPDATE SET t.a = s.a, t.b = 1 "
+        "WHEN NOT MATCHED THEN INSERT (c, d) VALUES (s.c, s.d);"
+    )
+
+    assert operation["written_columns"] == ["a", "b", "c", "d"]
+
+
+def test_a_merge_with_a_by_source_clause_keeps_its_write_and_its_written_columns() -> None:
+    operation = _write_test_statement(
+        f"{_MERGE_HEAD} WHEN NOT MATCHED BY SOURCE THEN UPDATE SET t.gone = 1 "
+        "WHEN NOT MATCHED BY TARGET THEN INSERT DEFAULT VALUES;"
+    )
+
+    assert operation["operation_type"] == "MERGE"
+    assert operation["write_tables"] == [_reference("", "", "dbo", "T")]
+    assert operation["written_columns"] == ["gone"]
+
+
+def test_a_merge_source_that_reads_the_target_gives_no_read_of_the_target() -> None:
+    operation = _write_test_statement(
+        "MERGE dbo.T AS t USING (SELECT id FROM dbo.T) AS s ON t.id = s.id "
+        "WHEN MATCHED THEN DELETE;"
+    )
+
+    assert operation["write_tables"] == [_reference("", "", "dbo", "T")]
+    assert operation["read_tables"] == []

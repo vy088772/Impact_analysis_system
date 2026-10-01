@@ -126,6 +126,7 @@ internal sealed class SqlOperationExtractor
             "InsertStatement" => "INSERT",
             "UpdateStatement" => "UPDATE",
             "DeleteStatement" => "DELETE",
+            "MergeStatement" => "MERGE",
             _ => "UNKNOWN",
         };
         var readTables = new List<SqlObjectReference>();
@@ -163,7 +164,7 @@ internal sealed class SqlOperationExtractor
             case "INSERT":
             {
                 var specification = GetFragmentProperty(fragment, "InsertSpecification");
-                AddObjectName(GetFragmentProperty(specification, "Target"), writeTables);
+                AddWriteTarget(GetFragmentProperty(specification, "Target"), null, cteNames, writeTables, unresolvedWriteTargets);
                 CollectColumns(GetPropertyValue(specification, "Columns"), writtenColumns);
                 var source = GetFragmentProperty(specification, "InsertSource");
                 CollectReferences(source, readTables, cteNames);
@@ -215,6 +216,34 @@ internal sealed class SqlOperationExtractor
                 CollectReferences(deleteCtes, readTables, cteNames);
                 CollectColumns(deleteCtes, readColumns);
                 CollectFunctionReferences(deleteCtes, functionReferences);
+                RemoveWrittenTables(readTables, writeTables);
+                break;
+            }
+            case "MERGE":
+            {
+                // The target names the object it writes, and its alias (AS t) changes nothing.
+                // The USING source, the ON condition, and each WHEN clause read their tables.
+                var specification = GetFragmentProperty(fragment, "MergeSpecification");
+                AddWriteTarget(GetFragmentProperty(specification, "Target"), null, cteNames, writeTables, unresolvedWriteTargets);
+                var mergeParts = new object?[]
+                {
+                    GetFragmentProperty(specification, "TableReference"),
+                    GetFragmentProperty(specification, "SearchCondition"),
+                    GetPropertyValue(specification, "ActionClauses"),
+                    GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"),
+                };
+                foreach (var part in mergeParts)
+                {
+                    CollectReferences(part, readTables, cteNames);
+                    CollectColumns(part, readColumns);
+                    CollectFunctionReferences(part, functionReferences);
+                }
+                foreach (var clause in Fragments(GetPropertyValue(specification, "ActionClauses")))
+                {
+                    var action = GetFragmentProperty(clause, "Action");
+                    CollectWrittenUpdateColumns(GetPropertyValue(action, "SetClauses"), writtenColumns);
+                    CollectColumns(GetPropertyValue(action, "Columns"), writtenColumns);
+                }
                 RemoveWrittenTables(readTables, writeTables);
                 break;
             }
@@ -299,7 +328,7 @@ internal sealed class SqlOperationExtractor
             "CreateFunctionStatement" or "AlterFunctionStatement" or "CreateOrAlterFunctionStatement";
 
     private static bool IsDml(TSqlFragment fragment)
-        => fragment.GetType().Name is "SelectStatement" or "InsertStatement" or "UpdateStatement" or "DeleteStatement";
+        => fragment.GetType().Name is "SelectStatement" or "InsertStatement" or "UpdateStatement" or "DeleteStatement" or "MergeStatement";
 
     private static bool IsExecute(TSqlFragment fragment)
         => fragment.GetType().Name == "ExecuteStatement";

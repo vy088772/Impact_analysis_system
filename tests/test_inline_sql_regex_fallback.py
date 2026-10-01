@@ -183,8 +183,11 @@ def test_write_only_leaves_a_fallback_relation_out_and_counts_it(monkeypatch, tm
 # --- Seam 3: the real host ------------------------------------------------------------------
 
 
-def test_the_host_parses_a_merge_text_and_gives_no_operation() -> None:
+def test_the_host_parses_a_merge_text_and_gives_one_merge_operation() -> None:
     (result,) = HostSqlTextAnalysis.for_project(PROJECT_ROOT).analyze([MERGE_TEXT])
 
     assert result.parse_errors == ()
-    assert result.operations == ()
+    (operation,) = result.operations
+    assert operation.operation_type == "MERGE"
+    assert [name.name for name in operation.write_tables] == ["Target"]
+    assert [name.name for name in operation.read_tables] == ["Source"]
