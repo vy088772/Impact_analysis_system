@@ -28,3 +28,7 @@
 
 - Review: two axes (Standards, Spec), one commit `50cbff5`. All findings fixed in the follow-up commit: the Boolean flag on `_require_sql_execution_graph` is gone, the ambiguity check moved ahead of the skip and the scan, a blank host is stripped, the duplicated schema field and `except` clause are shared, the error names its link to `AmbiguousServer`, the CONTEXT.md entry is new, and the test compares the exact host strings.
 - Left as is, on purpose: the `database` and `db_server` pair still travels as two arguments, as in the other endpoints.
+
+## Note (final check)
+
+- The server needs no change for ticket 09. A request with `db_server` is already answered from the named host.

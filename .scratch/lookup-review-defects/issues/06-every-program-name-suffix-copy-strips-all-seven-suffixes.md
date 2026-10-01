@@ -23,3 +23,7 @@ The review was **right for the client** and **wrong for the server**.
 - **Other suffix checks that stay.** These are detection checks, not program-name strips: `impact_orch/explore_routing.py` (`_PROGRAM_FILE_SUFFIXES`, `.aspx.cs` and `.aspx` only) and `service/program_screen.py` (a `.cs` stem check). Prose in `routing_scoring.py` only lists the suffixes in a message.
 - **Branches (not merged):** server `ticket06-suffix-server`, client `ticket06-suffix-client`. The client parity test reads the agreement file of the server, so the server branch must be in the sibling checkout when the client suite runs.
 - **Test run:** the client suite shows 1286 passed and 3 failed. The 3 failures are `test_table_lookup_write_access_types.py` (ticket 07). They need the sibling checkout at its normal path.
+
+## Note (final check)
+
+- The server commit `950a98e` and the client commit `d0caca2` are separate commits, as the ticket asked.

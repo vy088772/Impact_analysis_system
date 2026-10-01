@@ -32,3 +32,7 @@
 - Standards fix: `cross_system_lookup._database_unreads` groups skipped databases once by reason. `agent_tools._UNREAD_DATABASES_CLOSINGS` replaces the `closing` elif chain. `rag_client._skipped_database` and `_with_db_server` replace repeated code.
 - Left as is, on purpose: no caller passes `db_server` yet (ticket 05 decides who names the host). The two boolean flags `keep_partial_on_ceiling` and `skip_ambiguous_database` stay separate, to keep ticket 01 untouched. No new term in `CONTEXT.md`.
 - Tests: full suite 1207 passed. The only failures are the sibling-checkout tests, which depend on the path. `mypy` shows the same 6 errors as before.
+
+## Note (final check)
+
+- The open question "who names the host?" is closed by ticket 09: the client sends the declared host after `ambiguous_database`.
