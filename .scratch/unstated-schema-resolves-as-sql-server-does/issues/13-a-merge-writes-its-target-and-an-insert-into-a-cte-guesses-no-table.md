@@ -6,7 +6,7 @@ The bug and gap review of 2026-10-01 found both defects. The `MERGE` gap is olde
 
 **Blocked by:** 12 — An INSERT ... EXEC statement calls its procedure (both change `Visit()` and `CreateCandidate()` in `tools/StaticAnalyzerHost/SqlAnalyzer.cs`).
 
-**Status:** in progress. This repository's code, tests, and docs are done (branch `ticket13-merge-target`). Open: the real cache rebuild and the companion repository (see the notes below).
+**Status:** done
 
 The `INSERT` into a CTE:
 
@@ -22,12 +22,12 @@ The `MERGE`:
 - [x] The `ON` condition and each `WHEN` clause read the tables of their subqueries.
 - [x] The written columns hold the `UPDATE SET` columns and the `INSERT` columns of the `WHEN` clauses.
 - [x] The written target stops counting as a read, as for `UPDATE` and `DELETE`.
-- [ ] `MERGE` counts as a write access type: `_WRITE_ACCESS_TYPES` in `service/table_match.py` (done here), and in the companion repository `impact_orch/table_lookup.py` and `evaluation/Impact_analysis/routing_expectations.py` (open). A `write_only` question returns the `MERGE` writer.
+- [x] `MERGE` counts as a write access type: `_WRITE_ACCESS_TYPES` in `service/table_match.py`, and in the companion repository `impact_orch/table_lookup.py` and `evaluation/Impact_analysis/routing_expectations.py`. A `write_only` question returns the `MERGE` writer.
 - [x] A test uses the `dbo.usp_SOManagement_Save` statement of PUR, trimmed to its `MERGE`, and finds a write to `ShippingOrderD`.
-- [ ] The graph format version rises (done: 11, with its comment), and its comment states why the earlier graph is rejected. The local caches rebuild in the order of ticket 09 (open: only a copy was rebuilt, see the notes).
+- [x] The graph format version rises (11), and its comment states why the earlier graph is rejected. The local caches rebuild in the order of ticket 09 (backup, repair tool, index backfill tool, report; see the notes).
 - [x] A comparison of the graphs before and after the rebuild records each change. Expected: 2 new `MERGE` operations in PUR, and no change from the `INSERT` part.
-- [ ] The companion repository regenerates its routing expectations. An unexpected change becomes its own ticket.
-- [ ] Both repositories' whole suites show no new failure. (This repository: no new failure. Companion: open.)
+- [x] The companion repository regenerates its routing expectations. An unexpected change becomes its own ticket.
+- [x] Both repositories' whole suites show no new failure.
 
 ## Comments
 
@@ -56,10 +56,15 @@ Two writes in the `MERGE` test of a CTE target read `T` and `S` in a different o
 
 Whole suite of this repository (worktree, `data/` absent): 1403 passed, 4 failed, 2 collection errors. All 6 depend on files under `data/` or on the companion path, which a worktree lacks (`test_search_roles.py`, `test_sp_tables.py`, `test_program_refresh.py::test_refresh_does_not_write_wrapper_registry_or_system_catalog`, two in `test_semantic_binding_availability.py`). No failure comes from this change. See also the path-dependent tests in the user's notes.
 
-**Open operator items (not done by this job, because they change shared state):**
+**Real cache rebuild and companion repository, 2026-10-01 (after this branch landed in the main checkout).**
 
-1. The real cache rebuild, in the order of ticket 09, after this branch lands in the main checkout: back up with `cp -Rp data/sql_cache data/sql_cache_backup_v10_<date>`, then `python tools/repair_sql_execution_graphs.py`, then `python tools/backfill_object_location_indexes.py`, then `python tools/rebuild_report.py`.
-2. The companion repository `llamaindex-spec-rag`: add `MERGE` to `impact_orch/table_lookup.py` (`_WRITE_ACCESS_TYPES`) and `evaluation/Impact_analysis/routing_expectations.py`, set `GRAPH_VERSION = 11` in `tests/_sql_cache_fixtures.py`, regenerate `evaluation/Impact_analysis/results/routing_expectations.json` from the rebuilt caches, and run its whole suite. Its test `tests/test_table_lookup_write_access_types.py` is the place for a `MERGE` case.
+- The real caches: backup `data/sql_cache_backup_v10_20261001` (21 files, `cp -Rp`); the repair tool (seven caches, 10 to 11); the index backfill tool (run by the operator, in the main checkout); then the report. All seven caches are `graph_version 11`. Totals: empty schema 2453, CTE reads 0, alias writes 0, unproven targets 659, by source `module_schema` 10674, `system` 72, `unresolved` 2453, `written` 6961. PUR: 2 `MERGE` operations, as in the copy comparison above. The other six caches show no change from the `MERGE` and `INSERT` parts.
+- Whole suites after all changes: this repository, in the main checkout, 1466 passed, 0 failed (`tests/test_search_roles.py` and `tests/test_sp_tables.py` are left out: they connect to SQL Server at collection and the machine has no ODBC driver; they fail the same way before this change). The companion repository: 1221 passed.
+- The companion repository changed these files (commit `b3069ff`, branch `spec_extend_20260701`): `impact_orch/table_lookup.py` and `evaluation/Impact_analysis/routing_expectations.py` (`MERGE` in the write set), `tests/_sql_cache_fixtures.py` (`GRAPH_VERSION = 11`), `tests/test_table_lookup_write_access_types.py` (a `MERGE` case, and the parity test now reads `_WRITE_ACCESS_TYPES` in `service/table_match.py`, because the old `write_types` in `analyze_service.find_by_table()` moved there before this ticket and the test already failed), and `evaluation/Impact_analysis/results/routing_expectations.json`.
+- The regeneration of the routing expectations used `--seeds-from` the reviewed file, with no hand edit of any row: all 41 rows keep their targets. No seeded question names the two PUR `MERGE` statements. One number outside the rows changed: eFinance `unowned_call_targets` 21 to 47. The cause is ticket 12, not this ticket: the eFinance `calls` relationships are 92 at graph version 9, 118 at graph version 10, and 118 at graph version 11 (47 - 21 = 26 = 118 - 92). The previous regeneration ran at graph version 9. No row change, so no new ticket. `review_status` stays `reviewed` with the old reviewer fields, and the `review_notice` states this regeneration.
+- A first run without `--seeds-from` overwrote the reviewed file with 30 new draft questions. The reviewed file was restored from `HEAD` as the seed file and regenerated. The stray `routing_expectations.draft.json` it left was not committed and was deleted.
+
+Not covered, and not asked: a subquery inside a `MERGE ... OUTPUT` or `TOP` clause.
 
 **Evidence, 2026-10-01.** The analyzer host at commit `4c3358d`, through `_analyze_sql_text()` of `tests/test_static_analyzer_host.py`:
 
