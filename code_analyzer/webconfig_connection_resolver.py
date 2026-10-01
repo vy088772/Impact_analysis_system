@@ -26,7 +26,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, FrozenSet, Set, Union
+from typing import Dict, FrozenSet, Set, Tuple, Union
 
 from .connection_string_value import (
     ResolvedConnection,
@@ -39,6 +39,7 @@ from .connection_string_value import (
 __all__ = [
     "ResolvedConnection",
     "EntryBlocks",
+    "WebConfigTables",
     "WebConfigConnections",
     "parse_web_config_connections",
     "parse_web_config_file",
@@ -65,38 +66,42 @@ class EntryBlocks:
 
 
 @dataclass(frozen=True)
-class WebConfigConnections:
-    """一份 Web.config 解析後的連線查找表，依 XML 命名空間分成兩張獨立的表。
+class WebConfigTables:
+    """一個應用程式從一份 Web.config 讀到的兩張連線查找表，以及它擋下的上層項目。
 
     app_settings 對應 <appSettings><add key="..." value="..."/></appSettings>，
     connection_strings 對應
     <connectionStrings><add name="..." connectionString="..."/></connectionStrings>。
-
-    這兩張表是子應用程式會繼承的項目。位於
-    <location inheritInChildApplications="false"> 內的 section 只服務這份
-    Web.config 自己的應用程式，所以放在 own_only_* 兩張表，不會傳給子應用程式。
     app_settings_blocks 與 connection_strings_blocks 記錄 <clear/> 與 <remove>
     對「這份檔案上方」的繼承所造成的阻擋。
     """
 
     app_settings: Dict[str, ResolvedConnection] = field(default_factory=dict)
     connection_strings: Dict[str, ResolvedConnection] = field(default_factory=dict)
-    own_only_app_settings: Dict[str, ResolvedConnection] = field(default_factory=dict)
-    own_only_connection_strings: Dict[str, ResolvedConnection] = field(default_factory=dict)
     app_settings_blocks: EntryBlocks = EntryBlocks()
     connection_strings_blocks: EntryBlocks = EntryBlocks()
 
     def __bool__(self) -> bool:
-        return bool(
-            self.app_settings
-            or self.connection_strings
-            or self.own_only_app_settings
-            or self.own_only_connection_strings
-        )
+        return bool(self.app_settings or self.connection_strings)
 
     @property
     def blocks_inheritance(self) -> bool:
         return bool(self.app_settings_blocks or self.connection_strings_blocks)
+
+
+@dataclass(frozen=True)
+class WebConfigConnections(WebConfigTables):
+    """一份 Web.config 解析後的連線查找表，依 XML 命名空間分成兩張獨立的表。
+
+    繼承來的欄位是這份 Web.config 自己的應用程式讀到的結果：根層的 section，
+    加上 path 為空或 "." 的 <location> 內的 section。
+    for_child_applications 是子應用程式繼承的結果。它不含
+    <location inheritInChildApplications="false"> 內的 section，所以那些
+    section 裡的 <add>、<clear/> 與 <remove> 都只作用在這份 Web.config 自己的
+    應用程式。
+    """
+
+    for_child_applications: WebConfigTables = field(default_factory=WebConfigTables)
 
 
 # 一個 namespace 的 section 名稱、<add> 的鍵屬性與值屬性。<remove> 用鍵屬性。
@@ -176,32 +181,49 @@ def parse_web_config_connections(content: str) -> WebConfigConnections:
     except ET.ParseError:
         return WebConfigConnections()
 
-    shared = _new_sections()
-    own_only = _new_sections()
+    own_application = _new_sections()
+    child_applications = _new_sections()
 
     sections_by_name = {kind[0]: kind for kind in (_APP_SETTINGS, _CONNECTION_STRINGS)}
 
-    def read_sections(parent: ET.Element, target: Dict[tuple, _Section]) -> None:
-        for element in parent:
-            kind = sections_by_name.get(element.tag)
-            if kind is not None:
-                target[kind].read(element)
+    def read_section(element: ET.Element, readers: Tuple[Dict[tuple, _Section], ...]) -> None:
+        kind = sections_by_name.get(element.tag)
+        if kind is not None:
+            for sections in readers:
+                sections[kind].read(element)
 
-    # A section at the root and a section in a <location> share one document
-    # order, so a later <clear/> also clears an earlier <location> section.
+    # Each application reads its sections in one document order. So a later
+    # <clear/> at the root also clears an earlier <location> section, for each
+    # application that reads that section.
     for child in root:
-        if child.tag == "location" and _own_location(child):
-            read_sections(child, shared if _passes_to_children(child) else own_only)
-        elif child.tag in sections_by_name:
-            shared[sections_by_name[child.tag]].read(child)
+        if child.tag == "location":
+            if _own_location(child):
+                readers = (
+                    (own_application, child_applications)
+                    if _passes_to_children(child)
+                    else (own_application,)
+                )
+                for element in child:
+                    read_section(element, readers)
+        else:
+            read_section(child, (own_application, child_applications))
 
+    own = _tables_of(own_application)
     return WebConfigConnections(
-        app_settings=shared[_APP_SETTINGS].entries,
-        connection_strings=shared[_CONNECTION_STRINGS].entries,
-        own_only_app_settings=own_only[_APP_SETTINGS].entries,
-        own_only_connection_strings=own_only[_CONNECTION_STRINGS].entries,
-        app_settings_blocks=shared[_APP_SETTINGS].blocks,
-        connection_strings_blocks=shared[_CONNECTION_STRINGS].blocks,
+        app_settings=own.app_settings,
+        connection_strings=own.connection_strings,
+        app_settings_blocks=own.app_settings_blocks,
+        connection_strings_blocks=own.connection_strings_blocks,
+        for_child_applications=_tables_of(child_applications),
+    )
+
+
+def _tables_of(sections: Dict[tuple, _Section]) -> WebConfigTables:
+    return WebConfigTables(
+        app_settings=sections[_APP_SETTINGS].entries,
+        connection_strings=sections[_CONNECTION_STRINGS].entries,
+        app_settings_blocks=sections[_APP_SETTINGS].blocks,
+        connection_strings_blocks=sections[_CONNECTION_STRINGS].blocks,
     )
 
 

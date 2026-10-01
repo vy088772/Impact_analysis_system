@@ -26,8 +26,8 @@ class ConnectionInfo:
     line_number: int            # 宣告行號
     scope: str = "class"        # 作用域 (class, method, local)
     server: Optional[str] = None  # 伺服器位址 (例如: "vmsystest07")；未知時為 None
-    # 宣告這個連線查找鍵的設定檔，相對於 repository clone；把查找鍵當資料庫名稱的
-    # 猜測沒有宣告檔，為 None。
+    # 宣告這個連線查找鍵的設定檔，相對於 repository clone（找不到 clone root 時相
+    # 對於掃描根目錄）；把查找鍵當資料庫名稱的猜測沒有宣告檔，為 None。
     declared_in: Optional[str] = None
 
 
@@ -77,8 +77,8 @@ class DBConnectionTracker:
 
     除了向 view 問答案，tracker 只讀 view 的一個事實：這個原始檔是不是讀
     Application Settings File。ASP.NET Core 專屬的程式碼形狀只在那條路徑上
-    解析，也只在那條路徑上留下解析不出來的理由；Web.config 路徑的輸出因此不
-    變。
+    解析，也只在那條路徑上留下解析不出來的理由。Web.config 路徑只留下一個理
+    由：Parent Application 有歧義（ambiguous_parent_application，ADR-0038）。
     """
 
     APP_SETTINGS = connection_lookup.APP_SETTINGS

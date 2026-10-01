@@ -430,7 +430,9 @@ def test_a_child_application_resolves_a_key_that_only_its_parent_declares(tmp_pa
     )
 
 
-def test_a_child_application_with_no_web_config_inherits_from_its_parent(tmp_path: Path):
+def test_a_child_application_with_no_web_config_reads_its_parent_web_config_as_the_scan_root_table(
+    tmp_path: Path,
+):
     _clone(tmp_path)
     parent = _write_web_project(tmp_path / "Site", "http://localhost/Site")
     _write_web_config(parent, connection_strings={"PUR": "Server=sql01;Database=PurDb"})
@@ -567,6 +569,20 @@ def test_a_site_root_is_the_parent_of_an_application_below_it(tmp_path: Path):
     parent = _write_web_project(tmp_path / "Site", "http://host/")
     _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
     child = _write_web_project(tmp_path / "Child", "http://host/Child")
+    _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
+    source = _source_file(child / "Page.cs")
+
+    assert _lookup(tmp_path, source, "PUR").database == "PurDb"
+
+
+def test_a_project_file_suffix_in_upper_case_still_makes_a_web_application(tmp_path: Path):
+    """The search for the nearest project file and the search for a Parent
+    Application read a project file suffix with no regard to case."""
+    _clone(tmp_path)
+    parent = _write_web_project(tmp_path / "Site", "http://host/Site")
+    _write_web_config(parent, connection_strings={"PUR": "Server=s;Database=PurDb"})
+    child = _write_web_project(tmp_path / "Child", "http://host/Site/Child")
+    (child / "Child.csproj").rename(child / "Child.CSPROJ")
     _write_web_config(child, connection_strings={"Mine": "Server=s;Database=MineDb"})
     source = _source_file(child / "Page.cs")
 
@@ -950,6 +966,68 @@ def test_a_location_section_after_a_clear_of_the_same_file_survives(tmp_path: Pa
     )
 
     assert _lookup(tmp_path, source, "PUR").database == "PurDb"
+
+
+BLOCKS_CHILD_APPLICATIONS = '<location path="." inheritInChildApplications="false">{}</location>'
+
+
+def test_a_clear_in_a_location_that_blocks_child_applications_stops_the_inheritance_of_its_own_application(
+    tmp_path: Path,
+):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        PARENT_PUR,
+        BLOCKS_CHILD_APPLICATIONS.format("<connectionStrings><clear/></connectionStrings>"),
+    )
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "ATV") == ConnectionAnswer()
+
+
+def test_a_remove_in_a_location_that_blocks_child_applications_stops_that_key_for_its_own_application(
+    tmp_path: Path,
+):
+    _, _, source = _parent_and_child(
+        tmp_path,
+        PARENT_PUR,
+        BLOCKS_CHILD_APPLICATIONS.format('<connectionStrings><remove name="PUR"/></connectionStrings>'),
+    )
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "ATV").database == "AtvDb"
+
+
+def test_a_clear_in_a_location_that_blocks_child_applications_does_not_reach_the_child_applications(
+    tmp_path: Path,
+):
+    _clone(tmp_path)
+    grandparent = _write_web_project(tmp_path / "Root", "http://localhost/Root")
+    _write_raw_web_config(grandparent, PARENT_PUR)
+    parent = _write_web_project(tmp_path / "Root" / "Mid", "http://localhost/Root/Mid")
+    _write_raw_web_config(parent, BLOCKS_CHILD_APPLICATIONS.format("<connectionStrings><clear/></connectionStrings>"))
+    child = _write_web_project(tmp_path / "Root" / "Mid" / "Leaf", "http://localhost/Root/Mid/Leaf")
+    _write_raw_web_config(child, "<appSettings/>")
+
+    assert _lookup(tmp_path, _source_file(parent / "Mid.cs"), "PUR") == ConnectionAnswer()
+    assert _lookup(tmp_path, _source_file(child / "Leaf.cs"), "PUR") == ConnectionAnswer(
+        database="PurDb", server="sql01", declared_in="Root/Web.config"
+    )
+
+
+def test_a_clear_after_a_location_that_blocks_child_applications_also_clears_that_location(
+    tmp_path: Path,
+):
+    parent, _, _ = _parent_and_child(
+        tmp_path,
+        BLOCKS_CHILD_APPLICATIONS.format(PARENT_PUR)
+        + "<connectionStrings><clear/>"
+        '<add name="Kept" connectionString="Server=sql01;Database=KeptDb"/>'
+        "</connectionStrings>",
+    )
+    source = _source_file(parent / "Default.cs")
+
+    assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
+    assert _lookup(tmp_path, source, "Kept").database == "KeptDb"
 
 
 def test_a_remove_in_an_ancestor_stops_the_key_of_the_layers_above_it(tmp_path: Path):

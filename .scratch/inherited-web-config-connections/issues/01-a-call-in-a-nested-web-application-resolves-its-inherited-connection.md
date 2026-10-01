@@ -1,6 +1,6 @@
 # 01 — A call in a nested web application resolves its inherited connection
 
-**Status:** needs-triage
+**Status:** done (2026-10-01)
 
 **Found in:** canonical-object-identity ticket 13 (2026-09-29), when the
 routing expectations were regenerated.
@@ -48,12 +48,12 @@ the scan. We did not find the commit.
 
 **Done when:**
 
-- [ ] The service proves the `usp_CheckProgramAuth` call in
+- [x] The service proves the `usp_CheckProgramAuth` call in
       `Response/Response.Master.cs` against `PUR`, or a written decision says
       why it must not.
-- [ ] The rule is general: no system name, no path, and no Database name is
+- [x] The rule is general: no system name, no path, and no Database name is
       fixed in code or configuration.
-- [ ] In `llamaindex-spec-rag`, a regeneration with `--seeds-from` puts
+- [x] In `llamaindex-spec-rag`, a regeneration with `--seeds-from` puts
       `response.master` back in sp-001 with no hand edit. The file's
       `review_notice` and `routing_expectations_generated_vs_candidate.md`
       record the change.
@@ -79,3 +79,14 @@ the scan. We did not find the commit.
   `llamaindex-spec-rag` lists it under `unproven_programs` (tickets 08, 09).
 - Ticket 10 proved the call and restored `response.master` in sp-001 by
   regeneration.
+
+### 2026-10-01 — closed after the review of the whole effort
+
+- Each "Done when" box is complete. Ticket 10 proved the call against `PUR`.
+  The rule holds no System name, no path, and no Database name. The
+  regeneration restored `response.master` in sp-001.
+- One part of Q1 stays open: "was the old proof right for the right reason,
+  or right by accident?" The spec does not answer it. Its "Further Notes"
+  name one hypothesis that nobody examined: the service remap of a single
+  Legacy Connection Label onto the selected Database. A later ticket can
+  examine it.

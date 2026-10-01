@@ -394,6 +394,16 @@ def test_project_scanner_gives_two_web_applications_under_one_scan_root_their_ow
     assert scan_result.unresolved_connections == {}
 
 
+def _write_web_project_file(directory: Path, iis_url: str) -> None:
+    """在一個已存在的目錄寫一個宣告 IIS URL 的專案檔，檔名取目錄名稱。"""
+    (directory / f"{directory.name}.csproj").write_text(
+        "<Project><ProjectExtensions><VisualStudio><FlavorProperties>"
+        f"<WebProjectProperties><IISUrl>{iis_url}</IISUrl></WebProjectProperties>"
+        "</FlavorProperties></VisualStudio></ProjectExtensions></Project>",
+        encoding="utf-8",
+    )
+
+
 def test_project_scanner_writes_the_declaring_file_of_an_inherited_connection(
     tmp_path: Path,
 ):
@@ -404,13 +414,7 @@ def test_project_scanner_writes_the_declaring_file_of_an_inherited_connection(
     (tmp_path / ".git").mkdir()
     parent = tmp_path / "Site"
     parent.mkdir()
-    (parent / "Site.csproj").write_text(
-        "<Project><ProjectExtensions><VisualStudio><FlavorProperties>"
-        "<WebProjectProperties><IISUrl>http://localhost/Site</IISUrl>"
-        "</WebProjectProperties></FlavorProperties></VisualStudio>"
-        "</ProjectExtensions></Project>",
-        encoding="utf-8",
-    )
+    _write_web_project_file(parent, "http://localhost/Site")
     (parent / "Web.config").write_text(
         "<configuration><connectionStrings>"
         '<add name="Main" connectionString="Data Source=sql01;Initial Catalog=SiteDb"/>'
@@ -419,13 +423,7 @@ def test_project_scanner_writes_the_declaring_file_of_an_inherited_connection(
     )
     child = tmp_path / "Site" / "Child"
     source = _write_web_application(child, database="ChildDb", server="sql02")
-    (child / "Child.csproj").write_text(
-        "<Project><ProjectExtensions><VisualStudio><FlavorProperties>"
-        "<WebProjectProperties><IISUrl>http://localhost/Site/Child</IISUrl>"
-        "</WebProjectProperties></FlavorProperties></VisualStudio>"
-        "</ProjectExtensions></Project>",
-        encoding="utf-8",
-    )
+    _write_web_project_file(child, "http://localhost/Site/Child")
     (child / "Web.config").write_text(
         "<configuration><connectionStrings>"
         '<add name="Other" connectionString="Data Source=sql02;Initial Catalog=OtherDb"/>'
@@ -478,21 +476,12 @@ def test_project_scanner_records_an_ambiguous_parent_application_and_adds_no_con
     unresolved connections of the C# Scan Result hold the reason. The
     key stays unresolved as before, so the rating of a call does not change."""
     (tmp_path / ".git").mkdir()
-    web_project = (
-        "<Project><ProjectExtensions><VisualStudio><FlavorProperties>"
-        "<WebProjectProperties><IISUrl>{url}</IISUrl></WebProjectProperties>"
-        "</FlavorProperties></VisualStudio></ProjectExtensions></Project>"
-    )
     for name in ("SiteA", "SiteB"):
         (tmp_path / name).mkdir()
-        (tmp_path / name / f"{name}.csproj").write_text(
-            web_project.format(url="http://localhost/Site"), encoding="utf-8"
-        )
+        _write_web_project_file(tmp_path / name, "http://localhost/Site")
     child = tmp_path / "Child"
     source = _write_web_application(child, database="ChildDb", server="sql02")
-    (child / "Child.csproj").write_text(
-        web_project.format(url="http://localhost/Site/Child"), encoding="utf-8"
-    )
+    _write_web_project_file(child, "http://localhost/Site/Child")
     (child / "Web.config").write_text(
         "<configuration><connectionStrings>"
         '<add name="Other" connectionString="Data Source=sql02;Initial Catalog=OtherDb"/>'

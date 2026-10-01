@@ -83,7 +83,8 @@ def resolved_entry(
     """The stored form of a Resolved Connection Source.
 
     `declared_in` names the configuration file that declared the lookup key, as
-    a path relative to the repository clone. It is None for a key-as-name
-    guess, because no file declares that Database.
+    a path relative to the repository clone, or to the scan root when the
+    analyzer finds no clone root. It is None for a key-as-name guess, because
+    no file declares that Database.
     """
     return {"database": database, "server": server, "declared_in": declared_in}

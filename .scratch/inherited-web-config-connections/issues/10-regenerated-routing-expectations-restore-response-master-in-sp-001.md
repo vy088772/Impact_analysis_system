@@ -56,3 +56,44 @@ Application declares; 09 — spec-rag lists likely callers under
 - Issue 01 now records the Q1 result and links to the spec.
 - Not done: the glossary entry for the status `likely` (see the notes of
   tickets 08 and 09).
+
+### 2026-10-01 — review of the whole effort
+
+- The review covered tickets 02 to 10 as one change: the Standards axis and
+  the Spec axis, a type check, and the full test suite.
+- Full suite in the main directory, before the corrections: 1437 passed, 0
+  failed. `tests/test_search_roles.py` and `tests/test_sp_tables.py` stay out,
+  because they need a live database.
+- The Spec axis found each case of "Testing Decisions" in the tests. The
+  `/find_by_sp` contract, ADR-0010, story 61, and the scan cache version
+  (42 to 43, one time) agree with the spec.
+- Corrections in this review:
+  - The type check of `code_analyzer/parent_application.py` gave 7 errors.
+    The note of ticket 05 said that it gave none. The search for project
+    files now returns no file when the analyzer finds no clone root.
+  - `ParentApplications.parent_of` and `chain_of` had no caller after ticket
+    07. They are gone (story 61).
+  - The search for the nearest project file compared the suffix with case.
+    The search for a Parent Application did not. A `Child.CSPROJ` with an IIS
+    URL then got no Parent Application. The two searches now ignore case. A
+    new Seam A test pins this. No local clone has a project file suffix in
+    upper case, so no scan output changes.
+  - Four descriptions did not agree with the code: the `ConnectionAnswer`
+    description (the base of `declared_in`), the tracker description (the
+    `Web.config` path now records one reason), the scanner comment on the
+    shape of an entry, and the fallback base in two `declared_in`
+    descriptions.
+  - Ticket 07 gains a correction of one decision note.
+- Test result in the worktree after the corrections: 1436 passed, 2 failed.
+  The two failures depend on the path of the working directory
+  (`test_refresh_does_not_write_wrapper_registry_or_system_catalog` and
+  `test_decompile_wrapper_classifies_sqlfunc_dll_end_to_end`).
+- One open decision for the maintainer: ticket 06 reads a `<location>`
+  section for the application itself. The spec, section "Out of Scope", says
+  that this spec does not change that. No local `Web.config` holds a
+  `<location>` element, so no scan output changes today.
+- Smells that stay, as a judgement: `_resolve` in the tracker returns a
+  3-tuple; three directory walks skip `IGNORED_DIRECTORY_NAMES` with the same
+  loop; `AMBIGUOUS_PARENT_APPLICATION` is not beside the other reason
+  constants; story 45 keeps `declared_in` in the scan result, but no response
+  schema returns it.

@@ -27,7 +27,8 @@ file beside the `Web.config` that supplied the table. The own entry of the
 application wins over an inherited entry. Each namespace inherits only from the
 same namespace. A `<clear/>` or a `<remove>` in a `Web.config` stops the
 inheritance from above it, and a section in a `<location>` that has
-`inheritInChildApplications="false"` does not pass to child applications. After
+`inheritInChildApplications="false"` does not pass to child applications. Its
+`<clear/>` and `<remove>` stop the inheritance of its own application only. After
 the inheritance, rule 6 gives the guess only when the own table and each
 inherited table are empty.
 
@@ -55,10 +56,10 @@ from .project_connection_scope import (
     CONTEXT_TYPE_NOT_REGISTERED,
     IGNORED_DIRECTORY_NAMES,
     NO_PROJECT_CONNECTION_SCOPE,
-    PROJECT_FILE_SUFFIXES,
     ROOT_CONFIGURATION_NAMESPACE,
     ProjectConnectionScope,
     build_project_connection_scope,
+    is_project_file,
 )
 from .webconfig_connection_resolver import (
     EntryBlocks,
@@ -102,7 +103,8 @@ class ConnectionAnswer:
     """The answer of a view for one lookup key in one namespace.
 
     `declared_in` names the configuration file that declared the key, as a
-    path relative to the scan root. `reason` states why the lookup failed. One
+    path relative to the clone root, or to the scan root when the analyzer
+    finds no clone root. `reason` states why the lookup failed. One
     answer holds all four fields, so a caller cannot lose the reason.
     """
 
@@ -381,28 +383,23 @@ class ConnectionLookup:
         layers = []
         for position, path in enumerate([web_config, *parent_web_configs]):
             parsed = self._parse_web_config(path)
-            # The own layer serves its own application, so it also holds the
-            # sections that a `<location>` keeps from child applications.
-            own = position == 0
-            layer = TableLayer(
-                tables={
-                    APP_SETTINGS: {
-                        **parsed.app_settings,
-                        **(parsed.own_only_app_settings if own else {}),
-                    },
-                    CONNECTION_STRINGS: {
-                        **parsed.connection_strings,
-                        **(parsed.own_only_connection_strings if own else {}),
-                    },
-                },
-                declared_in=self._relative_path(path),
-                blocks={
-                    APP_SETTINGS: parsed.app_settings_blocks,
-                    CONNECTION_STRINGS: parsed.connection_strings_blocks,
-                },
-            )
-            if any(layer.tables.values()) or parsed.blocks_inheritance:
-                layers.append(layer)
+            # The own `Web.config` serves its own application. Each ancestor
+            # passes only what reaches a child application.
+            tables = parsed if position == 0 else parsed.for_child_applications
+            if tables or tables.blocks_inheritance:
+                layers.append(
+                    TableLayer(
+                        tables={
+                            APP_SETTINGS: tables.app_settings,
+                            CONNECTION_STRINGS: tables.connection_strings,
+                        },
+                        declared_in=self._relative_path(path),
+                        blocks={
+                            APP_SETTINGS: tables.app_settings_blocks,
+                            CONNECTION_STRINGS: tables.connection_strings_blocks,
+                        },
+                    )
+                )
         if not any(any(layer.tables.values()) for layer in layers):
             return FileConnections(ambiguous_parent=ambiguous, blocking_layers=layers)
         return FileConnections(layers=layers, ambiguous_parent=ambiguous)
@@ -463,15 +460,23 @@ class ConnectionLookup:
 
     @staticmethod
     def _project_file_beside(directory: Path) -> Optional[Path]:
+        """The first project file in a directory, in name order.
+
+        The suffix comparison ignores case, as the search for a Parent
+        Application does.
+        """
         try:
-            project_files = sorted(
-                found
-                for suffix in PROJECT_FILE_SUFFIXES
-                for found in directory.glob(f"*{suffix}")
-            )
+            entries = sorted(directory.iterdir())
         except OSError:
             return None
-        return project_files[0] if project_files else None
+        return next(
+            (
+                entry
+                for entry in entries
+                if is_project_file(entry.name) and entry.is_file()
+            ),
+            None,
+        )
 
     def _project_file_for(self, source_file: Union[str, Path]) -> Optional[Path]:
         """The nearest project file above a source file.

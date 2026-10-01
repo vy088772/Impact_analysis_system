@@ -23,7 +23,7 @@ The analyzer finds the Parent Application of a web application. The connection l
 - The analyzer reads the project file and the `Web.config` of an ancestor. It does not scan the code of an ancestor.
 - The Application Settings File path does not inherit. ASP.NET Core does not merge the configuration of a parent application.
 - Inheritance stops where IIS stops it. A `<clear/>` in a section stops all inheritance of that namespace from above the file. A `<remove>` stops one key, with no regard to case. The analyzer applies `<clear/>`, `<remove>`, and `<add>` in document order, so a `<remove>` of a key that the same file adds later keeps the later entry.
-- A section inside a `<location>` element with `inheritInChildApplications="false"` serves the application of its own file and does not pass to child applications. The analyzer reads a `<location>` element only when its `path` is empty or `.`.
+- A section inside a `<location>` element with `inheritInChildApplications="false"` serves the application of its own file and does not pass to child applications. A `<clear/>` or a `<remove>` in that section stops the inheritance of its own application only. The analyzer reads a `<location>` element only when its `path` is empty or `.`. Each application reads the root sections and the `<location>` sections that it sees in one document order.
 - The Resolved Connection Source records the declaring file in `declared_in`, as a path relative to the clone root.
 
 The rule uses no System name, no path, and no Database name.

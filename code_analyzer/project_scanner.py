@@ -159,7 +159,8 @@ class ProjectScanResult:
     source_snapshots: Dict[str, SourceSnapshot] = field(default_factory=dict)
     db_invocations: Dict[str, List[Dict]] = field(default_factory=dict)
     # 每個變數解析後的連線來源；值為舊制的純資料庫名稱字串，或
-    # {"database": ..., "server": ...} 這種由 Web.config 解析器產生的新形狀
+    # {"database": ..., "server": ..., "declared_in": ...} 這種由 Connection
+    # Lookup 解析出的新形狀
     # （兩種形狀只有 connection_source_entry 模組認得，讀寫都經過它）。
     connection_sources: Dict[str, Dict[str, ConnectionSourceEntry]] = field(default_factory=dict)
     contract_preflight_proposals: List[Dict] = field(default_factory=list)
@@ -300,7 +301,7 @@ class ProjectScanResult:
                         "database": str(
                             record.get("database")
                             or database_of(resolved_source)
-                            or "unknown"
+                            or UNRESOLVED_CONNECTION_DATABASE
                         ),
                         "connection_variable": connection_variable,
                         "invocation_kind": str(record.get("invocation_kind") or "direct_sqlclient"),

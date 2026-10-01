@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import urlsplit
 
-from .project_connection_scope import IGNORED_DIRECTORY_NAMES, PROJECT_FILE_SUFFIXES
+from .project_connection_scope import IGNORED_DIRECTORY_NAMES, is_project_file
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -105,24 +105,13 @@ class ParentApplications:
             self._urls[project_file] = read_iis_url(project_file)
         return self._urls[project_file]
 
-    def parent_of(self, project_file: Path) -> Optional[Path]:
-        """The Parent Application of a project, or None.
-
-        Gives None when the project has no IIS URL, when the analyzer finds no
-        clone root, when no project qualifies, and when the nearest ancestor is
-        ambiguous.
-        """
-        return self._nearest_ancestor(project_file)[0]
-
-    def chain_of(self, project_file: Path) -> List[Path]:
-        """The Parent Applications of a project, nearest first."""
-        return self.ancestry_of(project_file)[0]
-
     def ancestry_of(self, project_file: Path) -> Tuple[List[Path], bool]:
         """The Parent Applications of a project, nearest first, and if the chain is ambiguous.
 
-        The chain ends at the first link with no single Parent Application. The
-        flag is true when that link is ambiguous, not when it has no candidate.
+        The chain is empty when the project has no IIS URL or when the analyzer
+        finds no clone root. The chain ends at the first link with no single
+        Parent Application. The flag is true when that link is ambiguous, not
+        when it has no candidate.
         """
         chain: List[Path] = []
         current = project_file
@@ -169,6 +158,8 @@ class ParentApplications:
 
     def _project_files(self) -> List[Path]:
         found: List[Path] = []
+        if self._clone_root is None:
+            return found
         for directory, directory_names, file_names in os.walk(self._clone_root):
             directory_names[:] = sorted(
                 name
@@ -178,6 +169,6 @@ class ParentApplications:
             found.extend(
                 Path(directory) / name
                 for name in sorted(file_names)
-                if name.casefold().endswith(PROJECT_FILE_SUFFIXES)
+                if is_project_file(name)
             )
         return found
