@@ -514,9 +514,10 @@ def build_backward_chains(
     # 2) Inline C# SQL remains a separate direct source fact. It does not infer
     # stored-procedure relationships and is never used to reconstruct SQL calls.
     # The by-table query gives the same answers as find_by_table(): it resolves an
-    # unstated schema, and it takes the Database from the rated invocation.
+    # unstated schema, it takes the Database from the rated invocation, and a read of
+    # a View or a Function reaches the tables behind it in the graph.
     question = TableQuestion.of(table_name, database)
-    for answer in inline_table_relations.by_table(scan, question, invocations, root):
+    for answer in inline_table_relations.by_table(scan, question, invocations, root, graph or None):
         rel = answer.relation
         add_chain(
             rel.csharp_file,

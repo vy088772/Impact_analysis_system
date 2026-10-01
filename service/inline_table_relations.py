@@ -11,7 +11,9 @@ The module has two queries:
   unstated schema before it matches, as Schema Resolution outside a module
   requires. It pairs a parsed relation with its rated Database Invocation by
   the source span, and takes the Database, the database candidates, and the
-  Database attribution from that rating.
+  Database attribution from that rating. A relation that reads a listed View
+  or Function of the request's SQL Execution Graph also reaches each table
+  behind that object, by the lineage rule of the graph queries.
 - The by-method query returns each relation whose `MethodSite` passes the
   caller's test. It holds no ownership rule. `/flow_chain` forward, the
   `/analyze` screen table list, and the shared component table list call it
@@ -25,16 +27,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 import schema_resolution
 from canonical_object_identity import ObjectName, bare_name, full_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation
-from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
+from code_analyzer.project_scanner import INLINE_SQL_PARSED, CSharpTableRelation, ProjectScanResult
 
 from . import sql_cache_store
 from .execution_path_builder import database_attribution
-from .table_match import TableMatch, TableQuestion
+from .graph_queries import LineageIndex
+from .table_match import TableMatch, TableQuestion, names_another_database
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,21 @@ class InlineTableAnswer:
     database: str
     database_candidates: tuple[str, ...]
     database_attribution: str
+    # The View or the Function that a reached answer passes through, with its schema.
+    # A direct answer has none.
+    through: Optional[ObjectName] = None
+
+    @property
+    def access_type(self) -> str:
+        """The access type of the answer.
+
+        A direct answer keeps the access type of its relation. A reached answer is
+        `READ_INDIRECT` from a parsed relation, and `UNRESOLVED` from a fallback
+        relation (ADR-0015).
+        """
+        if self.through is None:
+            return self.relation.access_type
+        return "READ_INDIRECT" if self.relation.reason == INLINE_SQL_PARSED else "UNRESOLVED"
 
 
 def by_table(
@@ -63,15 +81,22 @@ def by_table(
     question: TableQuestion,
     rated_invocations: Sequence[DbInvocation],
     root: Path,
+    graph: Optional[Mapping[str, Any]],
 ) -> List[InlineTableAnswer]:
     """Return one answer for each relation of the scan that matches the question.
 
     ``rated_invocations`` are the rated Database Invocations of the scan, and ``root`` is the
-    directory that their source paths count from. The caller gives an empty list when the request
-    names no Database, because the rating runs only then.
+    directory that their source paths count from. ``graph`` is the SQL Execution Graph of the
+    request's Database. The caller gives an empty list and no graph when the request names no
+    Database, because the rating and the graph exist only then.
+
+    A relation gives its direct answer when its own object matches. When its object is a listed
+    View or Function of the graph, the relation also gives one answer for each table behind that
+    object that matches.
     """
     resolver = _InlineSchemaResolver()
     rated = _rated_by_span(rated_invocations)
+    lineage = _InlineLineage(graph, resolver) if graph is not None else None
     answers: List[InlineTableAnswer] = []
     for relation in scan.table_relations:
         key = _span_key(relation.csharp_file, relation.invocation_span, root)
@@ -87,20 +112,27 @@ def by_table(
             # Database out of the match. A fallback relation always takes this branch.
             database = relation.connection_database
             candidates = ()
-        table, schema_source = resolver.resolve(relation.table, database)
-        match = question.match(table, database, schema_source)
-        if match is None:
-            continue
-        answers.append(
-            InlineTableAnswer(
+
+        def answer(table: ObjectName, match: TableMatch, through: Optional[ObjectName] = None) -> InlineTableAnswer:
+            return InlineTableAnswer(
                 relation=relation,
                 table=table,
                 match=match,
                 database=database,
                 database_candidates=candidates,
                 database_attribution=database_attribution(database, candidates),
+                through=through,
             )
-        )
+
+        table, schema_source = resolver.resolve(relation.table, database)
+        match = question.match(table, database, schema_source)
+        if match is not None:
+            answers.append(answer(table, match))
+        if lineage is not None:
+            answers.extend(
+                answer(reached, reached_match, through)
+                for through, reached, reached_match in lineage.reached(relation.table, database, question)
+            )
     return answers
 
 
@@ -147,6 +179,52 @@ def _rated_by_span(rated_invocations: Sequence[DbInvocation]) -> Dict[tuple[str,
         key = (source.relative_path.replace("\\", "/").casefold(), source.start_offset, source.end_offset)
         rated.setdefault(key, invocation)
     return rated
+
+
+class _InlineLineage:
+    """The tables that an inline read of a View or a Function reaches in one SQL Execution Graph.
+
+    The object of a relation names a node by the rule of the graph build: after Schema
+    Resolution against the graph's Database, a stated schema and the bare name name a listed
+    View or Function node. A relation of another Database names no node, because the graph
+    holds no definition of that object. The reached tables come from the lineage index of the
+    graph queries, so the inline answer and the Execution Path answer keep one lineage rule.
+    """
+
+    def __init__(self, graph: Mapping[str, Any], resolver: "_InlineSchemaResolver") -> None:
+        self._database = str(graph.get("database") or "")
+        self._resolver = resolver
+        self._index = LineageIndex(graph)
+        self._nodes: Dict[tuple[str, str], tuple[str, ObjectName]] = {}
+        for node in graph.get("nodes", []) or []:
+            if node.get("type") not in {"view", "function"}:
+                continue
+            schema, name = str(node.get("schema") or ""), str(node.get("name") or "")
+            self._nodes.setdefault(
+                (schema.casefold(), name.casefold()), (str(node.get("id")), ObjectName("", "", schema, name))
+            )
+
+    def reached(
+        self, read: ObjectName, database: str, question: TableQuestion
+    ) -> List[tuple[ObjectName, ObjectName, TableMatch]]:
+        """Return (the View or Function, a reached table, its match) for each reached table that matches.
+
+        ``read`` is the object of the relation, and ``database`` is the Database of the relation.
+        A relation whose Database is another Database than the graph's reaches nothing.
+        """
+        if names_another_database(read.database or database, self._database):
+            return []
+        resolved, _source = self._resolver.resolve(read, self._database)
+        node = self._nodes.get((resolved.schema.casefold(), resolved.name.casefold())) if resolved.schema else None
+        if node is None:
+            return []
+        node_id, through = node
+        answers: List[tuple[ObjectName, ObjectName, TableMatch]] = []
+        for table, schema_source in self._index.reachable_tables(node_id):
+            match = question.match(table, self._database, schema_source)
+            if match is not None:
+                answers.append((through, table, match))
+        return answers
 
 
 class _InlineSchemaResolver:

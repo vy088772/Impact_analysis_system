@@ -6,7 +6,7 @@ The rescan of ticket 08 found this change. The first title was "A table-valued f
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done (2026-10-01). See "Implementation notes" at the end.
 
 **The local cases (rescan of 2026-10-01):**
 
@@ -81,19 +81,19 @@ An Inline SQL Table Relation that reads a view or a table-valued function names 
 
 **Acceptance criteria:**
 
-- [ ] A parsed relation that reads a view, which reads table `T`, gives a `READ_INDIRECT` answer to the question `T`, and the answer names the view.
-- [ ] The same relation still gives its `SELECT` answer to the question that names the view.
-- [ ] A fallback relation that reads the same view gives an `UNRESOLVED` answer to the question `T`.
-- [ ] A view that reads a table-valued function, which reads `T`, gives the answer to `T`, and the answer names the view that the relation reads.
-- [ ] A view and a function that read each other give a finite answer.
-- [ ] With no graph (no Database in the request), the question `T` gives no answer from that relation.
-- [ ] A relation that states another Database gives no reached answer.
-- [ ] When one file reads `T` directly and through a view, `/find_by_table T` gives one inline record for that file, with the direct access type.
-- [ ] `/find_by_table T write_only=True` does not count a reached answer as a write.
-- [ ] `/flow_chain` backward for `T` lists the method of the relation with `via` `direct_sql`.
-- [ ] `/flow_chain` forward and the `/analyze` screen table list still give the view name, and not `T`.
-- [ ] On the live TTPUR scan, `/find_by_table RoleOrderAuth` with the Database `PUR` names `PUR_BillConfirm.aspx.cs` with `READ_INDIRECT` through `dbo.fun_GetRoleOrderTypeList`.
-- [ ] The tests of the graph queries and of the inline table relations module pass. Compare the Impact suite with its baseline: three ids differ between a worktree and the main checkout, and that difference is not a regression.
+- [x] A parsed relation that reads a view, which reads table `T`, gives a `READ_INDIRECT` answer to the question `T`, and the answer names the view.
+- [x] The same relation still gives its `SELECT` answer to the question that names the view.
+- [x] A fallback relation that reads the same view gives an `UNRESOLVED` answer to the question `T`.
+- [x] A view that reads a table-valued function, which reads `T`, gives the answer to `T`, and the answer names the view that the relation reads.
+- [x] A view and a function that read each other give a finite answer.
+- [x] With no graph (no Database in the request), the question `T` gives no answer from that relation.
+- [x] A relation that states another Database gives no reached answer.
+- [x] When one file reads `T` directly and through a view, `/find_by_table T` gives one inline record for that file, with the direct access type.
+- [x] `/find_by_table T write_only=True` does not count a reached answer as a write.
+- [x] `/flow_chain` backward for `T` lists the method of the relation with `via` `direct_sql`.
+- [x] `/flow_chain` forward and the `/analyze` screen table list still give the view name, and not `T`.
+- [x] On the live TTPUR scan, `/find_by_table RoleOrderAuth` with the Database `PUR` names `PUR_BillConfirm.aspx.cs` with `READ_INDIRECT` through `dbo.fun_GetRoleOrderTypeList`.
+- [x] The tests of the graph queries and of the inline table relations module pass. Compare the Impact suite with its baseline: three ids differ between a worktree and the main checkout, and that difference is not a regression.
 
 **Out of scope:**
 
@@ -104,3 +104,33 @@ An Inline SQL Table Relation that reads a view or a table-valued function names 
 - A write to a view or a function. No local relation does this.
 - The access type label of a direct inline read (`SELECT`) against a graph read (`READ`).
 - A change in the Object Location Index.
+
+## Implementation notes (2026-10-01)
+
+The work ran on the branch `ticket10-view-lineage`, in the worktree `.claude/worktrees/ticket10-view-lineage`, because ticket 09 ran at the same time.
+
+**Changed files:**
+
+- `service/graph_queries.py`: `_LineageIndex` became `LineageIndex`, because the inline module now uses it. `_ensure_built` keeps the reachable tables of each View or Function in `_containers`. The new query `reachable_tables(node_id)` gives them, each as an `ObjectName` with its schema source. The worklist fixed point does not change, so the Execution Path lineage keeps its behavior.
+- `service/sql_execution_graph.py`: one comment names `graph_queries.LineageIndex`.
+- `service/inline_table_relations.py`: `by_table` takes a fifth argument, `graph` (the SQL Execution Graph of the request's Database, or `None`). The new class `_InlineLineage` finds the listed View or Function node of a relation and asks `LineageIndex.reachable_tables`. `InlineTableAnswer` gains `through` (the View or the Function, with its schema; `None` for a direct answer) and the property `access_type`.
+- `service/schemas.py`: `TableMatchProgram` gains `read_through` (for example `dbo.fun_GetRoleOrderTypeList`). It is empty for a direct answer.
+- `service/analyze_service.py` (`find_by_table`): it gives the graph to `by_table`. A record takes `answer.access_type` and `read_through`. A reached record names the table by its node name, as the lineage record of an Execution Path does. The new `_inline_match_rank` keeps a direct read above a reached read in the one inline record of a file.
+- `service/flow_chain_builder.py` (`build_backward_chains`): it gives its graph, or `None` for an empty graph, to `by_table`.
+- `tests/test_inline_read_through_view.py` (new): 15 tests. Ten ask `by_table` with a graph that `build_sql_execution_graph` builds from a cache payload. Five ask `find_by_table` and `flow_chain`.
+
+**Decisions:**
+
+- The node lookup takes the rule of the graph build (`_referenced_node_id`): Schema Resolution against the graph's Database, then a stated schema and the bare name. A relation with no schema reaches through `dbo.V` only when the Object Location Index of the graph's Database lists `dbo.V`.
+- "Another Database" includes the Database of the connection, not only the Database that the SQL text states. The rule reads `relation.table.database or <the Database of the relation>`. The direct answer has the same rule: a relation of another Database does not match a question on the request's Database. A relation with an unresolved Database or with candidates uses the graph (Q3).
+- `find_by_table` builds a second `LineageIndex` for the same graph, beside the one of `filter_table_accesses`. The build is lazy, so it runs only when one relation reads a listed View or Function. One shared index needs a change of the `filter_table_accesses` interface, so this ticket does not do it.
+
+**Verification:**
+
+- Live TTPUR (`find_by_table RoleOrderAuth`, Database `PUR`, `cache_only=True`): 5 inline records, each `READ_INDIRECT` through `dbo.fun_GetRoleOrderTypeList` with `inline_sql_parsed`. They are `PUR_BillConfirm.aspx.cs`, `PUR_BalanceOrder.aspx.cs`, `PUR_POPublish.aspx.cs`, `PUR_SOMaintain.aspx.cs`, and `PUR_SOPublish.aspx.cs`. The response holds no graph record. `fun_SplitToTable` (`HomePage1.aspx.cs`) is not in this answer, because it does not reach `RoleOrderAuth`.
+- The focused tests (the new file, `test_graph_queries.py`, `test_flow_chain_inline_tables.py`, `test_inline_sql_table_answer.py`, `test_inline_sql_table_database.py`, `test_table_match.py`, `test_derived_execution_evidence_reuse_table.py`, `test_graph_reverse_lookup.py`, `test_table_reverse_lookup_traffic_record.py`, `test_derived_execution_evidence_disk_retention.py`) give 122 passed.
+- mypy: the five changed service files hold 281 errors. No error is in the changed lines. (A first version made `graph` in `find_by_table` optional, and mypy found one new error at the `filter_table_accesses` call. The variable `inline_graph` fixes it.)
+- The whole suite (in the worktree, without `test_search_roles.py` and `test_sp_tables.py`, which stop at collection with `KeyError: 'PUR'` because they need a Database connection) gave 3 failed and 1481 passed. Two failures depend on the checkout path, and ticket 06 found them also: `test_program_refresh.py::test_refresh_does_not_write_wrapper_registry_or_system_catalog` and `test_wrapper_decompilation.py::test_decompile_wrapper_classifies_sqlfunc_dll_end_to_end`. The third failure was `test_export_openapi_schema.py::test_committed_export_matches_live_app_schema`, because of the new field `read_through`. `python -m tools.export_openapi_schema` regenerated `docs/openapi/openapi.json` (one field added), and the test now passes. The focused tests plus that test give 125 passed.
+- `docs/openapi/openapi.json`: the regenerated export holds `read_through` in `TableMatchProgram`.
+
+**Review:** the `code-review` skill is off for model calls, so the review ran inline. It found one defect, and this commit fixes it: a Python rewrite changed the CRLF line ends of `graph_queries.py` and `sql_execution_graph.py` to LF. The commit restores CRLF.
