@@ -1007,6 +1007,17 @@ def test_a_merge_written_columns_hold_the_update_set_and_insert_columns() -> Non
     assert operation["written_columns"] == ["a", "b", "c", "d"]
 
 
+def test_a_merge_with_a_by_source_clause_keeps_its_write_and_its_written_columns() -> None:
+    operation = _write_test_statement(
+        f"{_MERGE_HEAD} WHEN NOT MATCHED BY SOURCE THEN UPDATE SET t.gone = 1 "
+        "WHEN NOT MATCHED BY TARGET THEN INSERT DEFAULT VALUES;"
+    )
+
+    assert operation["operation_type"] == "MERGE"
+    assert operation["write_tables"] == [_reference("", "", "dbo", "T")]
+    assert operation["written_columns"] == ["gone"]
+
+
 def test_a_merge_source_that_reads_the_target_gives_no_read_of_the_target() -> None:
     operation = _write_test_statement(
         "MERGE dbo.T AS t USING (SELECT id FROM dbo.T) AS s ON t.id = s.id "

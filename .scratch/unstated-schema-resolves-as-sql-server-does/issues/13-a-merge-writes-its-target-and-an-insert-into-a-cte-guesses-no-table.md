@@ -37,7 +37,8 @@ The `MERGE`:
 - `service/table_match.py`: `MERGE` joins `_WRITE_ACCESS_TYPES`.
 - `service/sql_execution_graph.py`: `GRAPH_VERSION` 10 to 11, and its comment.
 - `tests/test_static_analyzer_host.py`: 11 new tests (2 for the `INSERT`, 9 for the `MERGE`).
-- `tests/test_table_match.py`: `is_write_access("MERGE")`.
+- `tests/test_table_match.py`: `is_write_access("MERGE")`, and a `write_only` question through `find_by_table` that returns the `MERGE` writer. (Added after the code review.)
+- `tests/test_static_analyzer_host.py` also holds a `WHEN NOT MATCHED BY SOURCE` / `INSERT DEFAULT VALUES` case (after the code review). Not covered, and not asked: a subquery inside a `MERGE ... OUTPUT` clause or a `TOP` clause.
 - `tests/test_sql_execution_graph.py`: the stale-version test asserts 11; a new test builds a graph from the trimmed `MERGE` of `usp_SOManagement_Save` and finds the write to `ShippingOrderD`.
 - `tests/test_inline_sql_regex_fallback.py`: the host test that pinned "a `MERGE` text gives no operation" now expects one `MERGE` operation (that behaviour is what this ticket reverses).
 - `tests/cross_repository_agreement.json`: the sample cache holds `graph_version` 11.

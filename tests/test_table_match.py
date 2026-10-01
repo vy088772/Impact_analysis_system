@@ -514,3 +514,15 @@ def test_a_merge_access_type_counts_as_a_write() -> None:
 
     assert is_write_access("MERGE")
     assert is_write_access("merge")
+
+
+def test_a_write_only_question_returns_the_merge_writer(monkeypatch, tmp_path) -> None:
+    graph = _graph({"usp_Save": [("writes", "dbo", "ShippingOrderD", None)]})
+    for node in graph["nodes"]:
+        if node.get("type") == "dml_operation":
+            node["operation_type"] = "MERGE"
+
+    matches = _ask(monkeypatch, tmp_path, graph, ["usp_Save"], "dbo.ShippingOrderD", write_only=True)
+
+    assert _tables(matches) == ["dbo.ShippingOrderD"]
+    assert matches[0].access_type == "MERGE"
