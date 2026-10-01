@@ -65,6 +65,14 @@ _Avoid_: cached results, invocation cache, precomputed paths
 A typed static graph of stored procedures, views, functions, tables, calls, and DML operations produced from SQL AST analysis. It is the sole source of SQL relationship and flow evidence.
 _Avoid_: dependencies, depends_on, depended_by
 
+**SQL Text Analysis**:
+The one operation that gives the analyzer host's SQL answer for a sequence of SQL texts. The `code_analyzer/sql_text_analysis.py` module holds it. It returns one typed result for each text, in input order. A result holds the operations of the text and the parse errors of the text. A typed operation holds every field that the host reports, and each object reference has the four parts of the Canonical Object Identity.
+
+SQL Text Analysis removes nothing from the answer, so a `#temp` table stays. A temporary file path never leaves it. So a text outside a SQL module gets the module type `unknown` and no module name. When the host fails on one text, it raises an error that holds the index of that text. Each caller turns the index into its own name.
+
+The graph build and the C# scan both read the host's SQL answer through it. The host adapter writes each text to a temporary file and runs the host. It is the only product code that reads the host's SQL answer by string keys. The in-memory adapter holds a table from a text to its operations, so a test starts no host. See [ADR-0039](docs/adr/0039-inline-sql-tables-come-from-the-parser.md).
+_Avoid_: SQL parser call, host SQL command wrapper
+
 **Execution Path**:
 A traceable route from a C# entry method through zero or more stored-procedure calls to one terminal DML operation, identified by a stable `path_id`.
 _Avoid_: generic dependency, flow chain
@@ -117,6 +125,16 @@ _Avoid_: assumed SP call
 **Embedded Procedure Target**:
 The stored procedure an inline SQL command text turns out to execute, rated against the SP Catalog for the invocation's resolved database. The text names it either with an explicit `EXEC`/`EXECUTE` or by being nothing but the procedure name, which T-SQL executes just the same; `target_source` keeps the two tellable apart. It is additional evidence beside the invocation, never a replacement for the `procedure_name` the call itself declared.
 _Avoid_: inline SP call, exec target, promoted procedure
+
+**Inline SQL Table Relation**:
+One table that one inline SQL text reads or writes, with its source file and its method. The C# Scan Result holds the relations in `table_relations`. Each relation has its own access type. Its `reason` names one of two sources:
+- `inline_sql_parsed`: the analyzer host's SQL command parsed the text through SQL Text Analysis. A written table takes the operation type `INSERT`, `UPDATE`, `DELETE`, or `SELECT_INTO`. A read table takes `SELECT`. The relation carries the source span of its Database Invocation.
+- `inline_sql_regex`: the regular expressions of the C# parser guessed the table. The access type is always `UNRESOLVED`, so a `write_only` question leaves it out and counts it.
+
+The fallback relations of a text stay in three cases. The scan did not send the text to the host, the host reported a parse error, or no operation read or wrote a table. A parsed text replaces the fallback relations of the same text in the same file. A table that an `UPDATE` or a `DELETE` writes carries only the write. A `/find_by_table` record of either source has the Evidence Status `not_applicable`.
+
+Every reader that applies a rule reads the relations through the inline table relations module (`service/inline_table_relations.py`). These readers are `/find_by_table`, `/flow_chain` forward and backward, the `/analyze` screen table list, and the shared component table list. The module resolves an unstated schema before it matches a table question. It pairs a parsed relation with its rated Database Invocation by the source span, and takes the Database from that rating. The scan statistics, the merge of scans, and the HTML report apply no rule, and they read the stored fields. See [ADR-0039](docs/adr/0039-inline-sql-tables-come-from-the-parser.md) and [ADR-0015](docs/adr/0015-an-unproven-execution-path-is-reported-not-dropped.md).
+_Avoid_: inline SQL fact, `inline_sql_source_fact`, regex table
 
 **Executed Procedure Name**:
 Which stored procedure one Database Invocation runs, whichever field knows: the `procedure_name` the call declared, or a `proven` Embedded Procedure Target when the call declared none. A rating below `proven` answers nothing, because a candidate is not a call. It is the one question `/find_by_sp` asks of an invocation, so no caller has to remember to read two fields.

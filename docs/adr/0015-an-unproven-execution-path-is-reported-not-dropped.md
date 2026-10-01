@@ -78,3 +78,5 @@ response could not express it, so a repair alone leaves the same blind spot in p
 only its unresolvable targets. This is a larger change to `_build_path()` and to the meaning of
 a path's evidence value, and it does not help Unresolved Dynamic SQL, where the whole operation
 is unknown. It remains available later; this decision does not block it.
+
+See also [ADR-0039](0039-inline-sql-tables-come-from-the-parser.md): an inline SQL table relation from a regular expression carries the access type `UNRESOLVED` by the same rule.
