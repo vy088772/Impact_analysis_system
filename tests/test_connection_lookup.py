@@ -968,7 +968,7 @@ def test_a_location_section_after_a_clear_of_the_same_file_survives(tmp_path: Pa
     assert _lookup(tmp_path, source, "PUR").database == "PurDb"
 
 
-OWN_ONLY = '<location path="." inheritInChildApplications="false">{}</location>'
+BLOCKS_CHILD_APPLICATIONS = '<location path="." inheritInChildApplications="false">{}</location>'
 
 
 def test_a_clear_in_a_location_that_blocks_child_applications_stops_the_inheritance_of_its_own_application(
@@ -977,7 +977,7 @@ def test_a_clear_in_a_location_that_blocks_child_applications_stops_the_inherita
     _, _, source = _parent_and_child(
         tmp_path,
         PARENT_PUR,
-        OWN_ONLY.format("<connectionStrings><clear/></connectionStrings>"),
+        BLOCKS_CHILD_APPLICATIONS.format("<connectionStrings><clear/></connectionStrings>"),
     )
 
     assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
@@ -990,7 +990,7 @@ def test_a_remove_in_a_location_that_blocks_child_applications_stops_that_key_fo
     _, _, source = _parent_and_child(
         tmp_path,
         PARENT_PUR,
-        OWN_ONLY.format('<connectionStrings><remove name="PUR"/></connectionStrings>'),
+        BLOCKS_CHILD_APPLICATIONS.format('<connectionStrings><remove name="PUR"/></connectionStrings>'),
     )
 
     assert _lookup(tmp_path, source, "PUR") == ConnectionAnswer()
@@ -1004,7 +1004,7 @@ def test_a_clear_in_a_location_that_blocks_child_applications_does_not_reach_the
     grandparent = _write_web_project(tmp_path / "Root", "http://localhost/Root")
     _write_raw_web_config(grandparent, PARENT_PUR)
     parent = _write_web_project(tmp_path / "Root" / "Mid", "http://localhost/Root/Mid")
-    _write_raw_web_config(parent, OWN_ONLY.format("<connectionStrings><clear/></connectionStrings>"))
+    _write_raw_web_config(parent, BLOCKS_CHILD_APPLICATIONS.format("<connectionStrings><clear/></connectionStrings>"))
     child = _write_web_project(tmp_path / "Root" / "Mid" / "Leaf", "http://localhost/Root/Mid/Leaf")
     _write_raw_web_config(child, "<appSettings/>")
 
@@ -1019,7 +1019,7 @@ def test_a_clear_after_a_location_that_blocks_child_applications_also_clears_tha
 ):
     parent, _, _ = _parent_and_child(
         tmp_path,
-        OWN_ONLY.format(PARENT_PUR)
+        BLOCKS_CHILD_APPLICATIONS.format(PARENT_PUR)
         + "<connectionStrings><clear/>"
         '<add name="Kept" connectionString="Server=sql01;Database=KeptDb"/>'
         "</connectionStrings>",

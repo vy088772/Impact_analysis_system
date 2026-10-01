@@ -383,8 +383,8 @@ class ConnectionLookup:
         layers = []
         for position, path in enumerate([web_config, *parent_web_configs]):
             parsed = self._parse_web_config(path)
-            # The own `Web.config` serves its own application. A Parent
-            # Application passes only what reaches a child application.
+            # The own `Web.config` serves its own application. Each ancestor
+            # passes only what reaches a child application.
             tables = parsed if position == 0 else parsed.for_child_applications
             if tables or tables.blocks_inheritance:
                 layers.append(

@@ -1,6 +1,6 @@
 # Inherited Web.config Connections
 
-Status: ready-for-agent
+Status: done
 
 This spec covers two repositories. This repository holds the analysis service.
 The companion repository, `llamaindex-spec-rag`, holds the evaluation code that
@@ -452,9 +452,11 @@ the Parent Application rule goes into the Connection Lookup.
 - After step 2, the view gives the key-as-name guess only when the own table
   and each inherited table are empty.
 - This rule removes the guess from a child application whose own table is
-  empty, when an ancestor declares an entry. Stories 17 and 38 do not cover
-  this case. On 2026-10-01, each local child application had an entry in its
-  own table, so no call lost its Evidence Status. (Note of 2026-10-01.)
+  empty, when an ancestor declares an entry. This disagrees with story 17,
+  which says that this change does not demote any call. The code follows this
+  rule. Issue 11 holds the open decision. On 2026-10-01, each local child
+  application had an entry in its own table, so no call lost its Evidence
+  Status. (Note of 2026-10-01.)
 - Step 2 adds `declared_in` to the builder of the stored form.
 - The service remaps a connection onto the selected Database in some cases.
   That remap keeps `declared_in`, because the step 0 operation copies each
