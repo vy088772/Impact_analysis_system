@@ -73,3 +73,28 @@ ticket. I did not run the multi-agent `/code-review`; I did a self-review.
   an own-only entry beats a shared entry with the same key; a file with only
   `<clear/>` and no inherited entry still gives the key-as-name guess.
 - Test result: 1428 passed (same two files left out).
+
+### 2026-10-01 — correction after the second review of the whole effort
+
+- This correction reverses the second decision above ("`<clear/>` or
+  `<remove>` inside a `location` that blocks children does not stop
+  inheritance from above"). That decision did not agree with story 7: "a
+  `<clear/>` in the `<connectionStrings>` of a child application [stops] the
+  inheritance of all parent connection strings". IIS also applies a
+  `<location path=".">` section to its own application.
+- The parser now gives two views of one `Web.config`. The fields of
+  `WebConfigConnections` hold what the application itself reads.
+  `for_child_applications` holds what a child application inherits. Each view
+  reads its sections in one document order.
+- Results:
+  - A `<clear/>` or a `<remove>` in a blocking `<location>` stops the
+    inheritance of its own application. A child application does not see it.
+  - A root `<clear/>` after a blocking `<location>` also clears the entries of
+    that `<location>`. The comment in the parser said this before, but the
+    code did not do it.
+  - The `own_only_*` fields are gone.
+- The spec, section "Out of Scope", gains an amendment: the parser reads a
+  `<location>` element with an empty `path` or the `path` `.`. ADR-0038 gains
+  the rule for `<clear/>` and `<remove>` in a blocking `<location>`.
+- No local `Web.config` holds a `<location>` element, so no scan output
+  changes. Four new Seam A tests pin the rules.

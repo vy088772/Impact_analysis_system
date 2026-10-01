@@ -430,6 +430,15 @@ the Parent Application rule goes into the Connection Lookup.
   from above that level. A `<remove>` stops one key.
 - A section inside a `<location>` element with
   `inheritInChildApplications="false"` does not pass to child applications.
+- A section inside a `<location>` element with an empty `path` or the `path`
+  `.` serves the application of its own file. Without
+  `inheritInChildApplications="false"`, it also passes to child applications.
+  Each application reads its sections in one document order. (Amendment of
+  2026-10-01.)
+- A `<clear/>` or a `<remove>` inside a `<location>` element with
+  `inheritInChildApplications="false"` stops the inheritance of its own
+  application only. A child application does not see it. (Amendment of
+  2026-10-01, for story 7.)
 - The inheritance rule applies only to the `Web.config` path. The Application
   Settings File path of ADR-0018 does not inherit.
 - The Resolved Connection Source gains the configuration file that declared
@@ -442,6 +451,10 @@ the Parent Application rule goes into the Connection Lookup.
 - A key-as-name guess has no declaring file.
 - After step 2, the view gives the key-as-name guess only when the own table
   and each inherited table are empty.
+- This rule removes the guess from a child application whose own table is
+  empty, when an ancestor declares an entry. Stories 17 and 38 do not cover
+  this case. On 2026-10-01, each local child application had an entry in its
+  own table, so no call lost its Evidence Status. (Note of 2026-10-01.)
 - Step 2 adds `declared_in` to the builder of the stored form.
 - The service remaps a connection onto the selected Database in some cases.
   That remap keeps `declared_in`, because the step 0 operation copies each
@@ -605,9 +618,11 @@ the Parent Application rule goes into the Connection Lookup.
 - Inheritance from `machine.config` or the root `web.config` of the .NET
   Framework.
 - Reading the production IIS configuration. The repository does not hold it.
-- Connections that a `<location>` element holds for the parent application
-  itself. The current parser does not read them, and this spec does not
-  change that.
+- A `<location>` element whose `path` is not empty and is not `.`. The parser
+  does not read it. (Amendment of 2026-10-01: the first text kept each
+  `<location>` element out of scope. Ticket 06 reads the elements with an
+  empty `path` or the `path` `.`, and the review of the whole effort accepted
+  this. See "Inherited lookup tables" and ADR-0038.)
 - `unresolved` callers in the `/find_by_sp` answer. Only `likely` callers gain
   a list.
 - Configuration transforms such as `Web.Release.config`.
