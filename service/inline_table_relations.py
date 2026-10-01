@@ -7,17 +7,17 @@ companion repository loads it as an inert record.
 The module has two queries:
 
 - The by-table query returns one answer for each relation that matches a table
-  question. It resolves an unstated schema before it matches, as Schema
-  Resolution outside a module requires. It pairs a parsed relation with its
-  rated Database Invocation by the source span, and takes the Database, the
-  database candidates, and the Database attribution from that rating.
+  question. `/find_by_table` and `/flow_chain` backward call it. It resolves an
+  unstated schema before it matches, as Schema Resolution outside a module
+  requires. It pairs a parsed relation with its rated Database Invocation by
+  the source span, and takes the Database, the database candidates, and the
+  Database attribution from that rating.
 - The by-method query returns each relation whose source file and method pass
-  the caller's test. It holds no ownership rule.
+  the caller's test. It holds no ownership rule. `/flow_chain` forward, the
+  `/analyze` screen table list, and the shared component table list call it.
 
 Three readers apply no rule, and they read the stored fields: the relation
 count of the scan statistics, the merge of scans, and the HTML report.
-`/flow_chain` backward still reads the relations itself. Ticket 06 of
-`.scratch/inline-sql-tables-come-from-the-parser/` moves it here.
 """
 
 from __future__ import annotations

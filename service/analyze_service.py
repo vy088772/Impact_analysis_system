@@ -3267,6 +3267,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
         )
 
     forward = flow_chain_builder.build_forward_chain(
+        scan,
         matched_files,
         req.anchor_method,
         graph=execution_graph,

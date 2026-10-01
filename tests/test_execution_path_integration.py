@@ -8,7 +8,8 @@ import shutil
 import tempfile
 
 from code_analyzer.models import ClassInfo, FileAnalysisResult, FrameworkType, MethodInfo, FileType
-from code_analyzer.project_scanner import CSharpSPRelation, ProjectScanResult
+from canonical_object_identity import ObjectName
+from code_analyzer.project_scanner import CSharpSPRelation, CSharpTableRelation, INLINE_SQL_PARSED, ProjectScanResult
 from config.settings import settings
 from service import analyze_service
 from service import flow_chain_builder
@@ -460,6 +461,17 @@ def test_analyze_passes_request_max_paths_into_compact_path_builder(
     assert captured["max_paths"] == 37
 
 
+def _scan_of(file_result: FileAnalysisResult, table_relations=()) -> ProjectScanResult:
+    """The C# Scan Result of one file, as the forward builder takes it."""
+    return ProjectScanResult(
+        project_root=str(Path(file_result.file_path).parent),
+        project_name="orders",
+        scan_time=datetime.now(),
+        csharp_results=[file_result],
+        table_relations=list(table_relations),
+    )
+
+
 def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_path: Path) -> None:
     source_file = tmp_path / "OrderPage.cs"
     file_result = FileAnalysisResult(
@@ -510,6 +522,7 @@ def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_pat
     )
 
     response = flow_chain_builder.build_forward_chain(
+        _scan_of(file_result),
         [file_result],
         "SaveData",
         graph=graph,
@@ -580,6 +593,7 @@ def test_forward_chain_sends_a_truncated_nested_sp_path_to_diagnostics_only(tmp_
     )
 
     response = flow_chain_builder.build_forward_chain(
+        _scan_of(file_result),
         [file_result],
         "SaveData",
         graph=graph,
@@ -612,19 +626,28 @@ def test_forward_chain_without_graph_keeps_inline_sql(
                 name="OrderPage",
                 namespace="",
                 file_path=str(source_file),
-                methods=[
-                    MethodInfo(
-                        name="SaveData",
-                        access_modifier="private",
-                        return_type="void",
-                        sql_queries=["SELECT * FROM dbo.SOrder"],
-                    )
-                ],
+                methods=[MethodInfo(name="SaveData", access_modifier="private", return_type="void")],
+            )
+        ],
+    )
+    scan = _scan_of(
+        file_result,
+        table_relations=[
+            CSharpTableRelation(
+                csharp_file=str(source_file),
+                class_name="OrderPage",
+                method_name="SaveData",
+                line_number=1,
+                table=ObjectName("", "", "dbo", "SOrder"),
+                database="OrdersDb",
+                access_type="SELECT",
+                reason=INLINE_SQL_PARSED,
             )
         ],
     )
 
     response = flow_chain_builder.build_forward_chain(
+        scan,
         [file_result],
         "SaveData",
         graph=None,

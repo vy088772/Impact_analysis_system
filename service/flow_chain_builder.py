@@ -11,13 +11,18 @@
   - forward（build_forward_chain）：從指定的錨點方法（通常是 spec-rag 端依
     UI 動作用語意檢索，從 ui_fields 的 events 挑出的候選 handler 方法名稱）出發，
     走方法呼叫鏈，再依 SQL Execution Graph 的 sp_chain 列出 SP（含巢狀呼叫），
-    最後彙整這些 SP 引用的資料表；同時也會補上可達方法「自己方法體內裸 SQL
-    字串」引用的資料表（`inline_sql_tables`，見 _inline_sql_tables），涵蓋
+    最後彙整這些 SP 引用的資料表；同時也會補上可達方法的 inline SQL table
+    relation（C# Scan Result 的 table_relations，經 inline table relations
+    module 的 by-method query 取得）所列的資料表（`inline_sql_tables`），涵蓋
     完全沒呼叫 SP、只靠內嵌 SQL 查表的方法（例如只是組 DropDownList 選項的
     BindXxx 方法）。
   - backward（build_backward_chains）：從指定的資料表（可選：欄位名稱）出發，
     反查哪些 SP 引用了這張表，再反查哪些 C# 方法呼叫了這些 SP（或直接用 SQL
-    存取這張表），最後反查哪個 UI 控制項事件會觸發這個方法。
+    存取這張表，經 inline table relations module 的 by-table query 取得），
+    最後反查哪個 UI 控制項事件會觸發這個方法。
+
+兩個方向讀同一份 table_relations，所以同一個方法在兩個方向列出同一批 inline
+SQL 資料表。
 
 已知限制（誠實標注，不假裝是保證）：
   - 欄位（column）層級的比對是「SQL Execution Graph 路徑中繼資料（written_columns、
@@ -37,7 +42,8 @@ from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 from canonical_object_identity import bare_key, bare_name
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
 from code_analyzer.models import FileAnalysisResult
-from code_analyzer.sql_analyzer import extract_tables_from_definition
+from code_analyzer.project_scanner import ProjectScanResult
+from . import inline_table_relations
 from .graph_queries import query_table_accesses
 from .table_match import TableQuestion
 from .execution_path_builder import build_execution_paths
@@ -86,27 +92,25 @@ def _method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List[str]]:
     return adj
 
 
-def _inline_sql_tables(matched_files: List[FileAnalysisResult], reachable_methods: Set[str]) -> Set[str]:
-    """從可達方法「自己方法體內的裸 SQL 字串」提取資料表，補足 SP 鏈以外的來源。
+def _inline_sql_tables(
+    scan: ProjectScanResult, matched_files: List[FileAnalysisResult], reachable_methods: Set[str]
+) -> Set[str]:
+    """列出可達方法的 inline SQL table relation 所指的資料表名稱，補足 SP 鏈以外的來源。
 
     有些方法（例如只組 DropDownList 選項的 BindXxx）直接用
     `obj.CreateReader("select ... from Table")` 這種內嵌 SQL 字串查資料，完全
     沒有 database invocation，這種情況下只看 SQL Execution Graph path 也不會涵蓋它。
-    csharp_parser 其實已經把每個方法體內解析到的裸 SQL 文字存進
-    `MethodInfo.sql_queries`（純字串清單，見 csharp_parser._extract_sql_in_text），
-    這裡只是把「屬於可達方法範圍內」的那些字串挑出來，重用既有的
-    `extract_tables_from_definition`（純字串分析，同一套規則）解析出表名，
-    不需要新增任何解析規則。
+    掃描時已經把這些 SQL 轉成 table relation；這裡只挑出「屬於 matched_files
+    裡可達方法」的那些 relation。
     """
-    tables: Set[str] = set()
-    for fr in matched_files:
-        for cls in fr.classes:
-            for m in cls.methods:
-                if m.name not in reachable_methods or not m.sql_queries:
-                    continue
-                for sql_text in m.sql_queries:
-                    tables.update(bare_name(table) for table in extract_tables_from_definition(sql_text))
-    return tables
+    matched_paths = {fr.file_path for fr in matched_files}
+    return {
+        bare_name(relation.table)
+        for relation in inline_table_relations.by_method(
+            scan,
+            lambda file_path, method_name: file_path in matched_paths and method_name in reachable_methods,
+        )
+    }
 
 
 def _reachable_from(start: str, adj: Dict[str, List[str]], max_depth: int = 8) -> Tuple[List[str], Set[str]]:
@@ -143,6 +147,7 @@ def _reachable_from(start: str, adj: Dict[str, List[str]], max_depth: int = 8) -
 
 
 def build_forward_chain(
+    scan: ProjectScanResult,
     matched_files: List[FileAnalysisResult],
     anchor_method: str,
     graph: Optional[Mapping[str, object]] = None,
@@ -153,6 +158,9 @@ def build_forward_chain(
     anchor_method：通常由 spec-rag 端依使用者問題的 UI 動作描述，用語意檢索從
     ui_fields 的 events 挑出的候選 handler 方法名稱（見這個模組頂部說明）；這裡
     只管照著這個名稱組鏈，不判斷這個名稱選得準不準。
+
+    scan：ProjectScanResult，inline SQL 資料表取自它的 table_relations；
+    matched_files 是 scan.csharp_results 裡屬於這支程式的檔案。
 
     回傳 None 代表在 matched_files 裡完全找不到這個方法名稱（呼叫端應視為此
     錨點無效，換下一個候選）。
@@ -219,11 +227,11 @@ def build_forward_chain(
 
     sp_chain = formal_sp_chain
 
-    # 補上「可達方法自己方法體內裸 SQL」引用的資料表（見 _inline_sql_tables 說明）——
+    # 補上可達方法的 inline SQL table relation 所列的資料表（見 _inline_sql_tables 說明）——
     # 有些方法完全沒呼叫 SP，只靠內嵌 SQL 字串查表，單看 sp_chain 會漏掉這些表。
     # 獨立回傳一份（inline_sql_tables）方便呼叫端知道「這些表不是從哪支 SP 來的」，
     # 同時也併入 all_tables，讓 tables/FK 展開跟 SP 來源的表一視同仁。
-    inline_tables = _inline_sql_tables(matched_files, reachable_methods)
+    inline_tables = _inline_sql_tables(scan, matched_files, reachable_methods)
     all_tables.update(inline_tables)
 
     return {
@@ -380,6 +388,7 @@ def build_backward_chains(
     關聯，只是方法名稱剛好相同）。限縮在同一檔案後，仍能正確處理「事件處理常式
     呼叫同頁面內的其他方法」這個常見情境，但不會再跨無關頁面誤配。
     """
+    invocations = list(invocations)
     chains: List[dict] = []
     seen: Set[Tuple[str, str]] = set()
     rev_adj_cache: Dict[str, Dict[str, List[str]]] = {}
@@ -502,13 +511,11 @@ def build_backward_chains(
 
     # 2) Inline C# SQL remains a separate direct source fact. It does not infer
     # stored-procedure relationships and is never used to reconstruct SQL calls.
+    # The by-table query gives the same answers as find_by_table(): it resolves an
+    # unstated schema, and it takes the Database from the rated invocation.
     question = TableQuestion.of(table_name, database)
-    for rel in scan.table_relations:
-        # A relation that states no Database takes the Database of its C# connection,
-        # and a connection the parser cannot resolve leaves the Database out of the match.
-        database = rel.connection_database
-        if question.match(rel.table, database) is None:
-            continue
+    for answer in inline_table_relations.by_table(scan, question, invocations, root):
+        rel = answer.relation
         add_chain(
             rel.csharp_file,
             rel.class_name,

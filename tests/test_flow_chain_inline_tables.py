@@ -1,0 +1,150 @@
+"""Seam 2: `/flow_chain` reads the inline SQL table relations in both directions.
+
+Each test builds a C# Scan Result with table relations and asks `/flow_chain`,
+and the schema case also asks `/find_by_table`. Forward takes the relations of
+the reachable methods, and backward takes the relations that match the table
+question, so both directions name the same inline SQL tables for one method.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+from canonical_object_identity import ObjectName
+from code_analyzer.models import MethodInfo
+from code_analyzer.project_scanner import CSharpTableRelation, INLINE_SQL_PARSED, ProjectScanResult
+from service import analyze_service
+from service.schemas import AzureSource, FindByTableRequest, FlowChainRequest
+from service.sql_cache_store import CacheIdentity, build_object_location_index
+from tests.sql_cache_fixtures import cache_payload
+from tests.test_graph_reverse_lookup import _file
+
+_SOURCE = AzureSource(project="orders", repo="orders")
+
+
+def _relation(root: Path, method: str, table: ObjectName, access_type: str = "SELECT") -> CSharpTableRelation:
+    return CSharpTableRelation(
+        csharp_file=str(root / "OrderPage.cs"),
+        class_name="OrderPage",
+        method_name=method,
+        line_number=1,
+        table=table,
+        database="Response",
+        access_type=access_type,
+        reason=INLINE_SQL_PARSED,
+    )
+
+
+def _scan(root: Path, methods: list[MethodInfo], relations: list[CSharpTableRelation]) -> ProjectScanResult:
+    return ProjectScanResult(
+        project_root=str(root),
+        project_name="orders",
+        scan_time=datetime.now(),
+        csharp_results=[_file(root, "OrderPage.cs", methods)],
+        aspx_results=[],
+        table_relations=relations,
+    )
+
+
+def _serve(monkeypatch, root: Path, scan: ProjectScanResult, listed_tables: list[str] | None = None) -> None:
+    """Serve the scan to every question. ``listed_tables`` are the objects of the Object Location Index."""
+    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda given, refresh=False: scan)
+    if listed_tables is None:
+        monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: None)
+        return
+    identity = CacheIdentity.of("vmsystest07", "Response")
+    index = build_object_location_index(identity, cache_payload("Response", tables=listed_tables))
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: identity)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_object_location_index", lambda given: index)
+
+
+def _forward(anchor: str) -> dict:
+    response = analyze_service.flow_chain(
+        FlowChainRequest(
+            source=_SOURCE, direction="forward", program_name="OrderPage", anchor_method=anchor, cache_only=False
+        )
+    )
+    assert response.forward_chain is not None
+    return response.forward_chain
+
+
+def _backward_methods(table_name: str) -> list[str]:
+    response = analyze_service.flow_chain(
+        FlowChainRequest(source=_SOURCE, direction="backward", table_name=table_name, cache_only=False)
+    )
+    return [chain["method"] for chain in response.backward_chains if chain["via"] == "direct_sql"]
+
+
+def _find_by_table_methods(table_name: str) -> list[str]:
+    response = analyze_service.find_by_table(
+        FindByTableRequest(source=_SOURCE, table_name=table_name, cache_only=False)
+    )
+    return [match.caller_method for match in response.matches]
+
+
+def test_a_function_in_the_sql_string_gives_no_table_in_either_direction(monkeypatch, tmp_path) -> None:
+    # The parser gives a relation for the table and none for the function.
+    load = MethodInfo(
+        name="Load",
+        access_modifier="private",
+        return_type="void",
+        sql_queries=["SELECT * FROM dbo.fnList(1) f JOIN dbo.Orders o ON o.Id = f.Id"],
+    )
+    scan = _scan(tmp_path, [load], [_relation(tmp_path, "Load", ObjectName("", "", "dbo", "Orders"))])
+    _serve(monkeypatch, tmp_path, scan)
+
+    forward = _forward("Load")
+
+    assert forward["inline_sql_tables"] == ["Orders"]
+    assert "fnList" not in forward["tables"]
+    assert _backward_methods("dbo.fnList") == []
+    assert _backward_methods("dbo.Orders") == ["Load"]
+
+
+def test_a_relation_that_resolves_to_dbo_never_answers_another_schema_backward(monkeypatch, tmp_path) -> None:
+    load = MethodInfo(name="Load", access_modifier="private", return_type="void")
+    scan = _scan(tmp_path, [load], [_relation(tmp_path, "Load", ObjectName("", "", "", "AVM"))])
+    _serve(monkeypatch, tmp_path, scan, listed_tables=["dbo.AVM"])
+
+    assert _backward_methods("COMMON.AVM") == []
+    assert _find_by_table_methods("COMMON.AVM") == []
+    # The proof that the two asserts above are not empty: the resolved schema answers.
+    assert _backward_methods("dbo.AVM") == ["Load"]
+    assert _find_by_table_methods("dbo.AVM") == ["Load"]
+
+
+def test_forward_and_backward_give_the_same_inline_tables_for_one_method(monkeypatch, tmp_path) -> None:
+    save = MethodInfo(name="SaveData", access_modifier="private", return_type="void", calls=["WriteAudit"])
+    audit = MethodInfo(name="WriteAudit", access_modifier="private", return_type="void")
+    relations = [
+        _relation(tmp_path, "SaveData", ObjectName("", "", "dbo", "Orders"), "UPDATE"),
+        _relation(tmp_path, "SaveData", ObjectName("", "", "dbo", "Items")),
+        _relation(tmp_path, "WriteAudit", ObjectName("", "", "dbo", "AuditLog"), "INSERT"),
+    ]
+    _serve(monkeypatch, tmp_path, _scan(tmp_path, [save, audit], relations))
+
+    forward = _forward("SaveData")
+
+    assert forward["inline_sql_tables"] == ["AuditLog", "Items", "Orders"]
+    for table in forward["inline_sql_tables"]:
+        reachable_writers = set(_backward_methods(table)) & set(forward["reachable_methods"])
+        assert reachable_writers, table
+    assert _backward_methods("dbo.Items") == ["SaveData"]
+    assert _backward_methods("dbo.AuditLog") == ["WriteAudit"]
+
+
+def test_a_relation_of_a_method_that_is_not_reachable_stays_out_of_forward(monkeypatch, tmp_path) -> None:
+    save = MethodInfo(name="SaveData", access_modifier="private", return_type="void")
+    other = MethodInfo(name="BindOther", access_modifier="private", return_type="void")
+    relations = [
+        _relation(tmp_path, "SaveData", ObjectName("", "", "dbo", "Orders")),
+        _relation(tmp_path, "BindOther", ObjectName("", "", "dbo", "Customers")),
+    ]
+    _serve(monkeypatch, tmp_path, _scan(tmp_path, [save, other], relations))
+
+    forward = _forward("SaveData")
+
+    assert forward["inline_sql_tables"] == ["Orders"]
+    assert forward["tables"] == ["Orders"]
