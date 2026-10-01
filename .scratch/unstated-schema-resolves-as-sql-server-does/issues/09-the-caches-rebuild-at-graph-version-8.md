@@ -66,7 +66,9 @@ The code review of 2026-09-30 found four wrong explanations in the first version
 - No module lost an answer. A check of each (module, object with a schema) pair shows no lost `writes` pair and no lost `calls` pair. 23 `reads` pairs are gone, and in each one the module now writes that table.
 - Remaining unresolved: 2419 relationships (659 targets).
   - 2393 name a `#temp` table.
-  - 24 `reads` name a plain table that the listing of its Database does not hold: `syscomments` (10, in PUR and Response), `FAQTable` (7) and `RoleFAQ` (6) in STC `dbo.spFAQQry_V2`, and `ETONLog` (1) in PUR `dbo.spSelETONPODLQry`. These are unlisted or broken references. They keep the Unproven Schema mark, as user story 6 says.
+  - 24 `reads` name an object that the listing of its Database does not hold.
+    - `syscomments` (10, in PUR and Response) is a SQL Server system view, `sys.syscomments`. SQL Server finds it in `sys`. The `sys` step of the rule covers only an `sp_` or `xp_` call, so these 10 reads keep the Unproven Schema mark.
+    - `FAQTable` (7) and `RoleFAQ` (6) in STC `dbo.spFAQQry_V2`, and `ETONLog` (1) in PUR `dbo.spSelETONPODLQry`, are unlisted or broken references. They keep the Unproven Schema mark, as user story 6 says.
   - 2 name an object of another Database: `master..xp_cmdshell` (PUR) and `Common..Users` (Response).
   - No reference names a table variable.
 - The spec's 3107 unlisted names use the same unit as this report. Its three numbers (9845 + 3107 + 3) give 12955, and the v7 baseline holds 13017. The gap is 62: the 61 no-schema calls of v7, and 1 table reference that states another Database (`Common..Users`). The second review below gives the count.
@@ -146,3 +148,5 @@ The four differences:
   - The other 62 are the 61 calls with no schema and 1 table reference that states another Database (`Common..Users`).
 
 Each sum agrees with the totals above. No difference stays open.
+
+**Correction, 2026-10-01.** A bug and gap review of the whole feature found one wrong explanation above. The first version called the 10 `syscomments` reads unlisted or broken references. `syscomments` is a SQL Server system view, so the reference is valid. The rule does not resolve a system view, so the mark stays. A change to the `sys` step is a separate decision, and no ticket holds it yet.

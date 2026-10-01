@@ -58,7 +58,7 @@ The 64 operations miss 65 table reads. Temp tables and table variables are not i
 
 **What the analyst sees today.** `/find_by_table` for a table such as `SOrder`, with read access, does not list a program that reaches `dbo.s_GOPorderRecive` only through those operations. The write answer is correct.
 
-**Why the status is `needs-triage`.** The fix changes graph content, so it needs a new graph format version and one more rebuild on each operator machine. The operator decides when that rebuild runs, and whether it joins another change that also raises the version.
+**Why the status was `needs-triage`.** The fix changes graph content, so it needs a new graph format version and one more rebuild on each operator machine. The operator decides when that rebuild runs, and whether it joins another change that also raises the version. The operator decided to run the rebuild in this ticket, at graph version 9 (see the implementation notes below).
 
 **Seen beside this defect, not in this ticket.** `UPDATE dbo.T SET a = 1 OUTPUT inserted.a INTO dbo.L WHERE id = 1;` writes `dbo.T` only. The write to `dbo.L` through `OUTPUT ... INTO` is missing. No count of the caches exists for it yet.
 
@@ -94,3 +94,5 @@ The rebuild adds reads and removes none. The 336 PUR reads sit on 143 operations
 **Whole suites.** Analyzer host tests: 51 pass. Companion repository: 1218 pass, 2 fail (`test_table_lookup_write_access_types`: the sibling checkout path is missing; they fail the same without this change). Impact repository: 1361 pass, 16 fail, 2 collection errors (`test_search_roles`, `test_sp_tables` need SQL Server). The same 16 fail when this ticket's two code files return to HEAD, so no failure is new.
 
 **Not done.** Another operator machine must run the repair tool, then the index backfill tool. `OUTPUT ... INTO` still gives no write to its target table (beside this defect, not in this ticket).
+
+**`OUTPUT ... INTO` scale, 2026-10-01.** A regex count of the module definitions in the seven caches finds no real table as an `OUTPUT ... INTO` target. The targets are 50 table variables (PUR 46, eFinance 3, ETON 1) and one temp table: `#TempForOneTime` in PUR `usp_CDCU_RMCDRequest_Qry`. Four other matches were the `OUTPUT` keyword of a parameter, not an `OUTPUT` clause. A `SELECT ... INTO` from `wrkRMCDPrice` already writes `#TempForOneTime`, and the missing `OUTPUT` write comes from an `UPDATE` of the same table. So the lineage of that temp table reaches the same base table. The missing write changes no table answer today, and no ticket holds it.
