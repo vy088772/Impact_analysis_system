@@ -357,7 +357,8 @@ def build_backward_chains(
     graph: Optional[Mapping[str, object]] = None,
     invocations: Iterable[DbInvocation] = (),
     database: str = "",
-    sql_cache_identity: Optional[CacheIdentity] = None,
+    *,
+    sql_cache_identity: Optional[CacheIdentity],
 ) -> List[dict]:
     """從指定的資料表（可選：欄位）出發，組出反向鏈候選清單。
 

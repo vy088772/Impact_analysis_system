@@ -64,4 +64,17 @@ Rules from the spec:
     two pairs. The client keeps both. The blank-host request lets the server
     pick the host from the disk.
   - The resolver compares the Database name with case. `candidate_database_set`
-    compares it with `casefold`. This difference was there before.
+    compares it with `casefold`. This difference was there before. The
+    two-axis review closed it (see below).
+
+## Follow-up of the two-axis review (2026-10-02)
+
+- The resolver and `candidate_database_set` share one comparison key:
+  `sql_cache_identity.database_identity()`. It normalizes the host and compares
+  the name without case. A catalog that declares `PUR` and `pur` on one host
+  gets one request.
+- `_with_db_server` removes white space from the host. A host of spaces only
+  sends no `db_server`. Its docstring names the catalog as the only source of
+  the host.
+- The spec section **Implementation Outcome** records the `/analyze` and
+  `/flow_chain` fan-out effect.

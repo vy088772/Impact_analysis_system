@@ -1422,17 +1422,16 @@ def _rated_invocations_validity_stamp(
 ) -> _RatedInvocationsValidityStamp:
     """Take a fresh reading of every input `_rated_execution_invocations` depends on."""
     identity = scope.sql_cache_identity
-    cached = sql_cache_store.load_cached(identity) if identity is not None else None
     # The repair tool rebuilds the graph and keeps the Scan Record's saved_at,
     # so the graph version joins the save time: a rebuilt graph invalidates.
-    sql_cache_freshness = (
-        (
-            _freshness_or_sentinel(sql_cache_store.cached_saved_at(identity)),
-            (cached.get("sql_execution_graph") or {}).get("graph_version"),
-        )
-        if cached is not None and identity is not None
-        else None
-    )
+    sql_cache_freshness = None
+    if identity is not None:
+        cached = sql_cache_store.load_cached(identity)
+        if cached is not None:
+            sql_cache_freshness = (
+                _freshness_or_sentinel(sql_cache_store.cached_saved_at(identity)),
+                (cached.get("sql_execution_graph") or {}).get("graph_version"),
+            )
     external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
         _rating_config_inputs(scope)
     )
@@ -2771,13 +2770,14 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         return FindBySPResponse(sp_name=sp_name, matches=[])
     # The refusal of a Database on several hosts comes before any source scan
     # and before the cache_only skip, so it costs one directory listing.
-    sql_cache_identity = (
+    found = (
         sql_cache_store.CacheIdentity.of(req.db_server, req.database)
         if req.db_server.strip() and req.database.strip()
         else sql_cache_store.find_cache_identity(req.database)
     )
-    if isinstance(sql_cache_identity, sql_cache_store.AmbiguousServer):
-        raise AmbiguousDatabaseError(sql_cache_identity)
+    if isinstance(found, sql_cache_store.AmbiguousServer):
+        raise AmbiguousDatabaseError(found)
+    sql_cache_identity = found
 
     project = req.source.project if req.source else ""
     repo = req.source.repo if req.source else ""
@@ -2907,7 +2907,7 @@ def _record_table_reverse_lookup(table_name: str, scope: DerivedExecutionEvidenc
     print(
         "🔎 資料表反查："
         f"table={table_name!r} scope_database={scope.database!r} "
-        f"scope_sql_cache={scope.sql_cache_identity!r} scope_db_name={scope.db_name!r} "
+        f"scope_sql_cache_identity={scope.sql_cache_identity!r} scope_db_name={scope.db_name!r} "
         f"scope_repo_roots={scope.repo_roots!r} scope_wrapper_contract={scope.wrapper_contract!r}"
     )
 
@@ -2924,13 +2924,14 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         return FindByTableResponse(table_name=table_name, matches=[])
     # The refusal of a Database on several hosts comes before any source scan
     # and before the cache_only skip, so it costs one directory listing.
-    sql_cache_identity = (
+    found = (
         sql_cache_store.CacheIdentity.of(req.db_server, req.database)
         if req.db_server.strip() and req.database.strip()
         else sql_cache_store.find_cache_identity(req.database)
     )
-    if isinstance(sql_cache_identity, sql_cache_store.AmbiguousServer):
-        raise AmbiguousDatabaseError(sql_cache_identity)
+    if isinstance(found, sql_cache_store.AmbiguousServer):
+        raise AmbiguousDatabaseError(found)
+    sql_cache_identity = found
 
     project = req.source.project if req.source else ""
     repo = req.source.repo if req.source else ""

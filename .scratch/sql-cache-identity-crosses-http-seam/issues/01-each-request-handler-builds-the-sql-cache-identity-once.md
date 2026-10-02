@@ -129,3 +129,19 @@ Files of the follow-up: `service/analyze_service.py`,
 After the follow-up, these call `find_cache_identity()`: the five handlers,
 `load_sp_catalog()` (the refresh path and the wrapper discovery tool), and the
 inline schema resolver for a connection Database with another name.
+
+### Follow-up of the two-axis review (2026-10-02)
+
+- `flow_chain_builder.build_backward_chains` takes `sql_cache_identity` as a
+  required keyword. It has no default. A caller that forgets it gets an error,
+  not a silent disk lookup.
+- `/find_by_sp` and `/find_by_table` name the lookup result `found`, as the
+  other three handlers do. They name it `sql_cache_identity` only after the
+  ambiguity refusal.
+- `_rated_invocations_validity_stamp` reads the cache only when the scope has
+  an identity. The extra `identity is not None` condition went away.
+- The `find_by_table` log line uses the key `scope_sql_cache_identity=`, as the
+  scope eviction log does.
+- The spec section **Implementation Outcome** records the two answer changes,
+  the inline schema exception to user stories 12 and 13, and the place of the
+  refresh disk lookup.

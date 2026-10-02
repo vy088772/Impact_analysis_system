@@ -197,4 +197,55 @@ Each slice starts with a failing test, then the change.
   keep its equality rules when the field changes from a host to an identity.
 - Two of the user-visible effects need the client slice: the correct host and
   the second same-name Database. The server slice alone changes no answer. It
-  removes the duplicate identity code and the second directory listing.
+  removes the duplicate identity code and the second directory listing. The
+  section **Implementation Outcome** lists two answers that changed after all.
+
+## Implementation Outcome (2026-10-02)
+
+The code review of both slices found these differences from the text above.
+The user accepted each one. The text above stays as the grilling record.
+
+### Answers that changed on the server
+
+- **The literal procedure of `/path_evidence`.** The definition now comes from
+  the cache of the handler identity, which holds the joined graph. When the
+  path names another Database (its C# connection), the candidate can now show
+  `sql_cache_matched`. Before, the code looked for a cache with the name of the
+  path, and with no host it could read a cache on another host.
+- **The inline schema of `/find_by_table` and `/flow_chain` backward.** A
+  request that names a host, for a Database on two hosts, now resolves an
+  unstated inline schema to `dbo` (`schema_source` `default_schema`). Before,
+  the index lookup was ambiguous, and the schema stayed `unresolved`. This
+  change follows from user stories 1 and 13.
+
+### One exception to user stories 12 and 13
+
+The inline schema resolver reads the Object Location Index of the Database that
+the C# connection names. When that name is the name of the handler identity
+(the comparison ignores case), the resolver uses the handler identity. It reads
+no directory listing. When the connection names another Database, the request
+gives no host for it. The resolver then calls the disk lookup function with the
+name only. Thus a reverse lookup that reaches cross-Database inline SQL can list
+the cache directory more than one time, also when the request names a host.
+The `find_cache_identity()` docstring in `service/sql_cache_store.py` records
+this exception.
+
+### Where the refresh path reads the disk
+
+User story 23 asks the refresh path to state its disk lookup at its own call
+site. The disk lookup is in `load_sp_catalog()`, the public SP catalog loader
+that the refresh path and the wrapper discovery tool call. This agrees with the
+Implementation Decisions. `reconcile_refresh_wrappers` names the lookup in a
+comment only.
+
+### The client
+
+- The resolver of lookup Databases also feeds the `/analyze` and `/flow_chain`
+  fan-out. A System that declares one Database name on two hosts now sends one
+  request for each host on these endpoints too. A System with unique Database
+  names sends the same requests as before (user story 6).
+- The resolver compares the Database name without case, as the Candidate
+  Database Set does. Both use `sql_cache_identity.database_identity()`. A
+  catalog that declares `PUR` and `pur` on one host now gets one request.
+- The client removes white space from the declared host. A host of spaces only
+  sends no `db_server`, as the spec asks for a blank host.
