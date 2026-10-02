@@ -64,7 +64,6 @@ from .udf_fetcher import fetch_udf_definitions
 from .execution_path_builder import (
     MAX_COMPACT_PATHS,
     build_compact_execution_path_payload,
-    build_execution_paths,
 )
 from .graph_queries import filter_table_accesses
 from .table_match import (
@@ -81,12 +80,17 @@ from .program_screen import (
     razor_page_model_path,
     view_identity,
 )
-from .shared_component import VIEW_COMPONENT, resolve_shared_components
+from .shared_component import (
+    VIEW_COMPONENT,
+    SharedComponentContribution,
+    resolve_shared_components,
+)
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import cache_status, cached_commit, get_or_scan, has_cache, save_scan
 from . import sql_cache_store
 from .derived_execution_evidence import (
+    DerivedExecutionEvidence,
     DerivedExecutionEvidenceScope,
     EvidenceSource,
     evidence_for_scope,
@@ -428,8 +432,9 @@ def _program_resolutions_for_names(
 ) -> Tuple[List[Any], List[_ProgramResolution]]:
     """The scanned C# files, once each, and the resolutions of several program names.
 
-    `/analyze` and `/path_evidence` both select program files through this, so
-    one name never matches different files on the two endpoints.
+    `/path_evidence` selects program files through this. `/analyze` resolves
+    each name through the same `_program_resolutions`, so one name never
+    matches different files on the two endpoints.
     """
     resolutions = [
         resolution for name in names for resolution in _program_resolutions(name, scan)
@@ -462,6 +467,13 @@ def _screen_files(screen: ProgramScreen, csharp_by_path: Dict[str, Any]) -> List
         seen.add(path)
         files.append(csharp_by_path[path])
     return files
+
+
+class _AnalyzedUnit(NamedTuple):
+    """One resolution of a requested name and the shared components its screen renders."""
+
+    resolution: _ProgramResolution
+    contributions: List[SharedComponentContribution]
 
 
 def _view_layer_summary(fr, root: Path) -> Dict:
@@ -1467,48 +1479,45 @@ def _invocation_diagnostic(
 
 def _build_program_execution_paths(
     req: AnalyzeRequest,
-    scan: ProjectScanResult,
-    matched_files: List,
-    root: Path,
+    evidence: DerivedExecutionEvidence,
+    invocations: List[DbInvocation],
     *,
     scope: DerivedExecutionEvidenceScope,
-    entry_filter: Optional[Callable[[DbInvocation], bool]] = None,
 ) -> Tuple[List[Dict], Dict[str, object]]:
-    """Join one program's raw C# facts to the selected SQL execution graph.
+    """The Execution Paths of the invocations one program reports.
 
-    `scope` is the request's `DerivedExecutionEvidenceScope`, built over the
-    full set of repository scan roots, so every derivation in one request
-    shares one scope identity and the SQL Cache Identity its handler built.
-
-    `entry_filter` narrows the invocations to the ones a Program Screen's own
-    actions reach. It is applied before the paths are built, so the compact
-    payload's counts describe the paths this program actually reports.
+    `invocations` come from `evidence.rated_invocations`, already filtered to
+    this program, so the compact payload's counts describe the paths this
+    program actually reports. The paths belong to the evidence, which is
+    read-only: the rewrite below changes a copy.
     """
     if req.database:
         _require_sql_execution_graph(req.database, scope.sql_cache_identity)
-    rated_invocations, graph = _rated_execution_invocations(scope, scan, matched_files, root)
-    if entry_filter is not None:
-        rated_invocations = [
-            invocation
-            for invocation in rated_invocations
-            if entry_filter(invocation)
+    paths = evidence.paths_of(invocations)
+    if not evidence.graph and not req.database:
+        paths = [
+            _unresolved_without_graph(path)
+            if path.get("unresolved_reason") == "not_in_resolved_catalog"
+            else path
+            for path in paths
         ]
-
-    paths = build_execution_paths(rated_invocations, graph)
-    if not graph and not req.database:
-        for path in paths:
-            if path.get("unresolved_reason") == "not_in_resolved_catalog":
-                path["unresolved_reason"] = "stored_procedure_not_in_graph"
-                targets = list(path.get("sp_chain") or [])
-                if targets and "." not in targets[0]:
-                    targets[0] = f"dbo.{targets[0]}"
-                path["unresolved_targets"] = targets[:1]
     compact_payload = build_compact_execution_path_payload(
         paths,
         max_paths=MAX_COMPACT_PATHS if req.max_paths is None else req.max_paths,
         question=req.question,
     )
     return paths, compact_payload
+
+
+def _unresolved_without_graph(path: Dict) -> Dict:
+    """A copy of `path` that names the missing SQL graph as its unresolved reason."""
+    path = dict(path)
+    path["unresolved_reason"] = "stored_procedure_not_in_graph"
+    targets = list(path.get("sp_chain") or [])
+    if targets and "." not in targets[0]:
+        targets[0] = f"dbo.{targets[0]}"
+    path["unresolved_targets"] = targets[:1]
+    return path
 
 
 def get_path_evidence(
@@ -1954,8 +1963,17 @@ def _utf16_index(text: str, offset: int) -> int:
 # 主分析
 # ─────────────────────────────────────────────────────────────────────────────
 
-def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
-    """依 program_names 過濾掃描結果，組成回應（純靜態，無 AI）。"""
+def analyze(
+    req: AnalyzeRequest, evidence_source: EvidenceSource = evidence_for_scope
+) -> AnalyzeResponse:
+    """依 program_names 過濾掃描結果，組成回應（純靜態，無 AI）。
+
+    evidence_source 提供這個 scope 的 Derived Execution Evidence；預設是
+    derived_execution_evidence 模組本身，測試可以給一份固定的 evidence。
+    一個請求只向模組要一次 evidence：所有解析結果的檔案，加上它們共用元件
+    的檔案，當作 needed files（miss 時只 rate 這些檔案且不保留，ADR-0040）。
+    每個解析結果、每個共用元件都從這一份 evidence 過濾出自己的 invocation。
+    """
     # A Database on several hosts with no host named is "not scanned" here.
     found = (
         sql_cache_store.CacheIdentity.of(req.db_server, req.database)
@@ -1998,11 +2016,69 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         for cls in r.classes
     ]
 
+    # 先解析每個名稱和每個畫面渲染的共用元件，才能把需要的檔案一次交給模組。
+    planned: List[Tuple[str, List[_AnalyzedUnit]]] = []
+    needed_files: List[Any] = []
+    needed_paths: Set[str] = set()
     for raw_name in req.program_names:
-        resolutions = _program_resolutions(raw_name, scan)
+        units: List[_AnalyzedUnit] = []
+        for resolution in _program_resolutions(raw_name, scan):
+            contributions: List[SharedComponentContribution] = []
+            if resolution.screen is not None:
+                contributions = list(
+                    resolve_shared_components(
+                        resolution.screen.view_path,
+                        view_component_refs=view_component_refs_by_path,
+                        partial_view_refs=partial_view_refs_by_path,
+                        view_component_classes=view_component_classes,
+                        view_identities=view_identities,
+                    )
+                )
+            for result in [
+                *resolution.matched_files,
+                *(
+                    csharp_by_path[contribution.file_path]
+                    for contribution in contributions
+                    if contribution.file_path in csharp_by_path
+                ),
+            ]:
+                if result.file_path not in needed_paths:
+                    needed_paths.add(result.file_path)
+                    needed_files.append(result)
+            units.append(_AnalyzedUnit(resolution, contributions))
+        planned.append((raw_name, units))
+
+    evidence = (
+        evidence_source(
+            scope,
+            scans,
+            scan,
+            root,
+            needed_files=needed_files,
+            refresh=getattr(req, "refresh", False),
+        )
+        if needed_files
+        else DerivedExecutionEvidence([], {})
+    )
+    # 依來源檔分組；invocation 的 source 相對路徑就是 rating 時的 _rel(檔案, root)。
+    invocations_by_file: Dict[str, List[DbInvocation]] = {}
+    for invocation in evidence.rated_invocations:
+        invocations_by_file.setdefault(str(invocation.source.relative_path), []).append(
+            invocation
+        )
+
+    def invocations_in(files: Iterable[Any]) -> List[DbInvocation]:
+        """The rated invocations of `files`, in file order, as one rating of them gives."""
+        return [
+            invocation
+            for result in files
+            for invocation in invocations_by_file.get(_rel(result.file_path, root), [])
+        ]
+
+    for raw_name, units in planned:
         reported = False
 
-        for resolution in resolutions:
+        for resolution, contributions in units:
             matched_files = resolution.matched_files
 
             def owns_invocation(
@@ -2014,17 +2090,9 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 
             # 2) Join C# database facts through the Gateway; legacy relations are not
             # part of the formal response path.
-            rated_invocations: List[DbInvocation] = []
-            if matched_files:
-                rated_invocations, _ = _rated_execution_invocations(
-                    scope,
-                    scan,
-                    matched_files,
-                    root,
-                )
             rated_invocations = [
                 invocation
-                for invocation in rated_invocations
+                for invocation in invocations_in(matched_files)
                 if owns_invocation(invocation)
             ]
             sp_names: List[str] = []
@@ -2054,22 +2122,13 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             # 「來自共用元件」的標籤跟畫面自己的存取分開，不會混進 methods。
             shared_component_contributions: List[Dict] = []
             if resolution.screen is not None:
-                for contribution in resolve_shared_components(
-                    resolution.screen.view_path,
-                    view_component_refs=view_component_refs_by_path,
-                    partial_view_refs=partial_view_refs_by_path,
-                    view_component_classes=view_component_classes,
-                    view_identities=view_identities,
-                ):
+                for contribution in contributions:
                     component_file = csharp_by_path.get(contribution.file_path)
                     if component_file is None:
                         continue
-                    component_invocations, _ = _rated_execution_invocations(
-                        scope, scan, [component_file], root
-                    )
                     component_invocations = [
                         invocation
-                        for invocation in component_invocations
+                        for invocation in invocations_in([component_file])
                         if invocation.class_name == contribution.class_name
                         and _same_name(
                             _invocation_entry_method(invocation),
@@ -2244,14 +2303,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             compact_execution_paths_meta: Dict[str, int] = {}
             if req.include_execution_paths and matched_files:
                 execution_paths, compact_payload = _build_program_execution_paths(
-                    req,
-                    scan,
-                    matched_files,
-                    root,
-                    scope=scope,
-                    entry_filter=owns_invocation
-                    if resolution.is_program_screen
-                    else None,
+                    req, evidence, rated_invocations, scope=scope
                 )
                 compact_execution_paths = compact_payload["paths"]
                 compact_execution_paths_meta = {

@@ -30,11 +30,18 @@ def _build_paths_with_handler_scope(req: AnalyzeRequest, scan, matched_files, ro
 
     The handler builds the SQL Cache Identity once; these tests stub the disk
     lookup with `one_server_holds_every_database`, so the scope takes its answer.
+    The evidence comes from the module, with `matched_files` as the needed files,
+    as `/analyze` asks for it.
     """
     scope = analyze_service.DerivedExecutionEvidenceScope.of(
         req, [root], one_server_holds_every_database(req.database)
     )
-    return analyze_service._build_program_execution_paths(req, scan, matched_files, root, scope=scope)
+    evidence = analyze_service.evidence_for_scope(
+        scope, [scan], scan, root, needed_files=matched_files
+    )
+    return analyze_service._build_program_execution_paths(
+        req, evidence, evidence.rated_invocations, scope=scope
+    )
 
 
 def _cached_sql_graph() -> dict:

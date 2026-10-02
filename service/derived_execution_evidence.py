@@ -9,8 +9,8 @@ eviction, and the calls to the disk store. An endpoint asks
 reads no retention state itself, so the freshness rule lives here only.
 
 The rating step itself (`analyze_service._rated_execution_invocations`) still
-lives in `analyze_service`: `/analyze` and `/flow_chain` call it directly until
-they move onto this module too.
+lives in `analyze_service`: `/flow_chain` calls it directly until it moves onto
+this module too.
 """
 from __future__ import annotations
 
