@@ -45,6 +45,7 @@ from code_analyzer.models import FileAnalysisResult
 from code_analyzer.project_scanner import ProjectScanResult
 from . import inline_table_relations
 from .graph_queries import query_table_accesses
+from .sql_cache_store import CacheIdentity
 from .table_match import TableQuestion
 from .execution_path_builder import build_execution_paths
 
@@ -356,10 +357,12 @@ def build_backward_chains(
     graph: Optional[Mapping[str, object]] = None,
     invocations: Iterable[DbInvocation] = (),
     database: str = "",
+    sql_cache_identity: Optional[CacheIdentity] = None,
 ) -> List[dict]:
     """從指定的資料表（可選：欄位）出發，組出反向鏈候選清單。
 
     database：請求的 Database；資料表名稱沒寫 database 時取這個值，比對規則見 table_match。
+    sql_cache_identity：handler 建好的 SQL 快取身分（沒有時為 None）；inline SQL 補 schema 時用它。
 
     scan：ProjectScanResult（已合併好的整包掃描結果，含 csharp_results、
     aspx_results、raw database invocations 與 inline SQL facts）。
@@ -519,7 +522,9 @@ def build_backward_chains(
     question = TableQuestion.of(table_name, database)
     # A request with no Database gives an empty graph here; `by_table` takes `None` for
     # it, so an inline read of a View or a Function gives only its direct answer.
-    for answer in inline_table_relations.by_table(scan, question, invocations, root, graph or None):
+    for answer in inline_table_relations.by_table(
+        scan, question, invocations, root, graph or None, sql_cache_identity
+    ):
         rel = answer.relation
         add_chain(
             rel.csharp_file,

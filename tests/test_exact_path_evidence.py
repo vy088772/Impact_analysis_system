@@ -288,6 +288,7 @@ def test_path_evidence_preserves_wrapper_classification_and_database_evidence(tm
         scan,
         cached,
         cached["sql_execution_graph"],
+        sql_cache_identity=one_server_holds_every_database("OrdersDb"),
     )
 
     # Canonical wrapper-evidence keys only (ticket 02 collapses the alias
@@ -542,6 +543,7 @@ def test_path_evidence_materializes_unresolved_cycle_without_terminal_dml(tmp_pa
         scan,
         cached,
         graph,
+        sql_cache_identity=one_server_holds_every_database("OrdersDb"),
     )
 
     assert evidence.evidence_status == "unresolved"
@@ -590,6 +592,7 @@ def test_path_evidence_retains_unverified_literal_sp_candidate(monkeypatch, tmp_
         scan,
         cached,
         graph,
+        sql_cache_identity=one_server_holds_every_database("OrdersDb"),
     )
 
     assert evidence.evidence_status == "unresolved"
@@ -629,6 +632,7 @@ def test_path_evidence_skips_external_wrapper_method_span(tmp_path: Path) -> Non
         scan,
         cached,
         graph,
+        sql_cache_identity=one_server_holds_every_database("OrdersDb"),
     )
 
     assert [method["method"] for method in evidence.csharp_methods] == ["Save"]

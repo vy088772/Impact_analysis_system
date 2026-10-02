@@ -99,19 +99,22 @@ def by_table(
     rated_invocations: Sequence[DbInvocation],
     root: Path,
     graph: Optional[Mapping[str, Any]],
+    sql_cache_identity: Optional[sql_cache_store.CacheIdentity],
 ) -> List[InlineTableAnswer]:
     """Return one answer for each relation of the scan that matches the question.
 
     ``rated_invocations`` are the rated Database Invocations of the scan, and ``root`` is the
     directory that their source paths count from. ``graph`` is the SQL Execution Graph of the
     request's Database. The caller gives an empty list and no graph when the request names no
-    Database, because the rating and the graph exist only then.
+    Database, because the rating and the graph exist only then. ``sql_cache_identity`` is the
+    SQL Cache Identity that the request handler built, or ``None``; a connection Database with
+    its name reads that cache's index.
 
     A relation gives its direct answer when its own object matches. When its object is a listed
     View or Function of the graph, the relation also gives one answer for each table behind that
     object that matches.
     """
-    resolver = _InlineSchemaResolver()
+    resolver = _InlineSchemaResolver(sql_cache_identity)
     rated = _rated_by_span(rated_invocations)
     lineage = _InlineLineage(graph, resolver) if graph is not None else None
     answers: List[InlineTableAnswer] = []
@@ -257,9 +260,14 @@ class _InlineSchemaResolver:
     schema takes `dbo` when the Object Location Index of the connection's
     Database holds `dbo.name`. The index is the only source. This class opens no
     cache, and an absent, stale, or ambiguous index leaves the schema empty.
+
+    A connection Database with the name of the handler's SQL Cache Identity reads
+    the index of that identity, so a request that names a host reads that host and
+    lists no directory. Only a connection Database with another name reads the disk.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, sql_cache_identity: Optional[sql_cache_store.CacheIdentity]) -> None:
+        self._sql_cache_identity = sql_cache_identity
         self._indexes: Dict[str, Optional[sql_cache_store.ObjectLocationIndex]] = {}
 
     def resolve(self, table: ObjectName, connection_database: Optional[str]) -> tuple[ObjectName, str]:
@@ -282,7 +290,12 @@ class _InlineSchemaResolver:
 
     def _index(self, database: str) -> Optional[sql_cache_store.ObjectLocationIndex]:
         if database not in self._indexes:
-            identity = sql_cache_store.find_cache_identity(database)
+            known = self._sql_cache_identity
+            identity = (
+                known
+                if known is not None and known.database.casefold() == database.casefold()
+                else sql_cache_store.find_cache_identity(database)
+            )
             self._indexes[database] = (
                 sql_cache_store.load_object_location_index(identity)
                 if isinstance(identity, sql_cache_store.CacheIdentity)

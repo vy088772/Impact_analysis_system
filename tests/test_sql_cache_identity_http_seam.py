@@ -12,11 +12,17 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from service import sql_cache_store
+from canonical_object_identity import ObjectName
+from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
+from code_analyzer.project_scanner import CSharpTableRelation
+from service import analyze_service, sql_cache_store
 from service.api import app
+from service.execution_path_builder import build_execution_paths
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
-from tests.sql_cache_fixtures import CacheRoot
+from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache
+from tests.test_exact_path_evidence import _cached_path_fixture
 from tests.test_find_by_sp_likely_matches import _graph as _graph_with_shared_sp
+from tests.test_find_by_sp_likely_matches import _scan
 from tests.test_lookup_db_server_api import (
     HOST_WITH_THE_SP,
     HOST_WITHOUT_THE_SP,
@@ -173,3 +179,86 @@ def test_analyze_with_definitions_treats_a_blank_host_as_no_host(one_host, monke
     response = client.post("/analyze", json=_analyze_request(db_server="   "))
 
     assert response.status_code == 200
+
+
+# ------------------------------------------------ follow-up: the inline schema resolver
+
+
+def _write_host_with_the_table(cache_root, host: str) -> None:
+    identity = sql_cache_store.CacheIdentity.of(host, "OrdersDb")
+    payload = cache_payload("OrdersDb", tables=["SOrder"], graph=_graph_with_shared_sp())
+    write_cache(cache_root, identity, payload)
+    sql_cache_store.write_object_location_index(
+        identity, sql_cache_store.build_object_location_index(identity, payload)
+    )
+
+
+@pytest.fixture
+def two_hosts_and_an_inline_table(monkeypatch, tmp_path):
+    """Both hosts hold `dbo.SOrder`. A program reads `SOrder` with no schema in inline SQL."""
+    with RatedInvocationsRetention(), CacheRoot() as cache_root:
+        _write_host_with_the_table(cache_root, HOST_WITH_THE_SP)
+        _write_host_with_the_table(cache_root, HOST_WITHOUT_THE_SP)
+        scan = _scan(tmp_path)
+        scan.table_relations = [
+            CSharpTableRelation(
+                csharp_file=str(tmp_path / "ProvenPage.cs"),
+                class_name="ProvenPage",
+                method_name="SaveProven",
+                line_number=1,
+                table=ObjectName("", "", "", "SOrder"),
+                database="OrdersDb",
+                access_type="SELECT",
+            )
+        ]
+        monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
+        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+        monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
+        monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
+        yield cache_root
+
+
+def test_find_by_table_resolves_an_inline_schema_from_the_named_host_with_no_listing(
+    two_hosts_and_an_inline_table, listings
+) -> None:
+    response = client.post("/find_by_table", json=_table_request(db_server=HOST_WITH_THE_SP))
+
+    assert response.status_code == 200
+    assert [(match["program"], match["schema_source"]) for match in response.json()["matches"]] == [
+        ("provenpage", "default_schema")
+    ]
+    assert listings == []
+
+
+# ------------------------------------------ follow-up: the literal procedure of path evidence
+
+
+def test_path_evidence_reads_a_literal_procedure_from_the_requested_cache(tmp_path) -> None:
+    """The path names another Database than the request. The definition still comes
+    from the cache that the handler identity names, which holds the joined graph."""
+    scan, cached, _ = _cached_path_fixture(tmp_path)
+    graph = cached["sql_execution_graph"]
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="Save",
+        database="OrdersConnectionDb",
+        procedure_name="usp_saveorder",
+        evidence=InvocationEvidence.UNRESOLVED,
+        source=InvocationSourceSpan("OrderPage.cs", 0, 10),
+        reason="wrapper_source_unavailable",
+        procedure_schema="dbo",
+        method_chain=("Save",),
+        raw_command_text="[dbo].[usp_SaveOrder]",
+    )
+    path = build_execution_paths([invocation], graph)[0]
+    with CacheRoot() as cache_root:
+        identity = sql_cache_store.CacheIdentity.of(HOST_WITH_THE_SP, "OrdersDb")
+        write_cache(cache_root, identity, cached)
+
+        evidence = analyze_service._materialize_path_evidence(
+            path, invocation, scan, cached, graph, sql_cache_identity=identity
+        )
+
+    candidate = evidence.literal_sp_candidates[0]
+    assert candidate["sql_cache_matched"] is True
+    assert candidate["sql_cache_database"] == "OrdersDb"

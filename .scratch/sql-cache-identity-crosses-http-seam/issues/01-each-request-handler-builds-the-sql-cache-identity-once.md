@@ -98,15 +98,34 @@ Another session works on ticket 02 at the same time. Ticket 02 changes
   stored evidence is not found, and the next request derives it again. This
   loss recovers by itself, so the store version stays the same.
 
-### Left for a follow-up
+### Follow-up (done, 2026-10-02)
 
-- The literal-SP branch of `/path_evidence` (`_materialize_path_evidence`)
-  still builds an identity below the handler. It reads the cache of the
-  Database that the path names (`invocation.database`), which can differ from
-  the requested Database. A change to the handler identity changes the answer
-  when the two names differ, so it needs its own decision.
-- `inline_table_relations._InlineSchemaResolver` calls `find_cache_identity()`
-  for each connection Database. A `/find_by_table` request that names a host
-  can still list the directory when an inline table has no schema. The
-  zero-listing test passes because its fixture has no such table. This goes
-  against user story 13 and needs a decision.
+The user accepted option A for the two open points of the code review.
+
+- **The literal procedure of `/path_evidence`.** `_materialize_path_evidence`
+  takes the handler identity (`sql_cache_identity`, keyword, required) in
+  place of `db_server`. The definition comes from the requested cache, which
+  holds the joined graph, also when the path names another Database (its C#
+  connection). `sql_cache_database` now names the Database of that identity.
+  Answer change: when the two names differ, the candidate can now show
+  `sql_cache_matched`. Before, the branch looked for a cache with the name of
+  the path, and with no host it could read a cache on another host.
+- **The inline schema resolver of `/find_by_table` and `/flow_chain`
+  backward.** `inline_table_relations.by_table` takes the handler identity.
+  A connection Database with the name of that identity (case-insensitive)
+  reads the index of that identity, with no directory listing. A connection
+  Database with another name still calls `find_cache_identity()`, because no
+  host is known for it. `flow_chain_builder.build_backward_chains` passes the
+  identity through. Answer change: a request that names a host, for a
+  Database on two hosts, now resolves an unstated inline schema to `dbo`
+  (`schema_source` `default_schema`). Before, the index lookup was ambiguous
+  and the schema stayed `unresolved`.
+
+Files of the follow-up: `service/analyze_service.py`,
+`service/inline_table_relations.py`, `service/flow_chain_builder.py`,
+`service/sql_cache_store.py` (docstring), `tests/test_sql_cache_identity_http_seam.py`,
+`tests/test_exact_path_evidence.py`, `tests/test_inline_read_through_view.py`.
+
+After the follow-up, these call `find_cache_identity()`: the five handlers,
+`load_sp_catalog()` (the refresh path and the wrapper discovery tool), and the
+inline schema resolver for a connection Database with another name.

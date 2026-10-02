@@ -296,6 +296,8 @@ def find_cache_identity(database: str) -> Union[CacheIdentity, AmbiguousServer, 
     tools/discover_external_wrappers.py 經由它讀取）。/analyze、/path_evidence、
     /flow_chain、/find_by_sp、/find_by_table 的 handler 在最上方建一次身分：請求帶
     db_server 時用 CacheIdentity.of()，沒帶時呼叫這裡；handler 以下的函式只收那個身分。
+    唯一的例外是 inline_table_relations 補 schema：連線 Database 跟 handler 身分不同名時，
+    它沒有 server 可用，只能用名稱來這裡找。
     """
     database = str(database or "").strip()
     if not database:

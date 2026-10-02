@@ -1975,7 +1975,7 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
         scan,
         cached,
         joined_graph,
-        db_server=req.db_server,
+        sql_cache_identity=sql_cache_identity,
     )
 
 
@@ -1985,7 +1985,8 @@ def _materialize_path_evidence(
     scan: ProjectScanResult,
     cached: Mapping[str, object],
     graph: Mapping[str, object],
-    db_server: str = "",
+    *,
+    sql_cache_identity: Optional[sql_cache_store.CacheIdentity],
 ) -> PathEvidenceResponse:
     nodes = {
         str(node.get("id")): node
@@ -2064,32 +2065,19 @@ def _materialize_path_evidence(
         and invocation.raw_command_text is not None
     ):
         candidate = _serialize_db_invocation(invocation)
-        database_alias = str(
-            path.get("database")
-            or cached.get("database")
-            or graph.get("database")
-            or invocation.database
-            or ""
-        ).strip()
-        if database_alias:
-            # The path names its own Database, which can differ from the
-            # requested one, so this branch still reads the disk by that name
-            # (ticket 01 of .scratch/sql-cache-identity-crosses-http-seam/, notes).
-            found = (
-                sql_cache_store.CacheIdentity.of(db_server, database_alias)
-                if db_server.strip()
-                else sql_cache_store.find_cache_identity(database_alias)
-            )
+        # The handler's cache holds the joined graph, so the definition comes from
+        # it even when the path names another Database (its C# connection).
+        if sql_cache_identity is not None:
             definitions = fetch_sp_definitions(
                 [invocation.raw_command_text or invocation.procedure_name],
-                found if isinstance(found, sql_cache_store.CacheIdentity) else None,
+                sql_cache_identity,
             )
             if definitions:
                 definition = definitions[0]
                 candidate.update(definition)
                 if definition.get("dependency_source") == "execution_graph":
                     candidate["sql_cache_matched"] = True
-                    candidate["sql_cache_database"] = database_alias
+                    candidate["sql_cache_database"] = sql_cache_identity.database
         literal_sp_candidates.append(candidate)
     views: List[Dict] = []
     functions: List[Dict] = []
@@ -3001,7 +2989,9 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
             refresh=req.refresh,
         )
         inline_graph = graph
-    for answer in inline_table_relations.by_table(scan, question, rated_invocations, root, inline_graph):
+    for answer in inline_table_relations.by_table(
+        scan, question, rated_invocations, root, inline_graph, sql_cache_identity
+    ):
         rel = answer.relation
         caller_class = str(getattr(rel, "class_name", "") or "")
         caller_method = str(getattr(rel, "method_name", "") or "")
@@ -3330,6 +3320,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
             graph=execution_graph,
             invocations=rated_invocations,
             database=req.database or "",
+            sql_cache_identity=sql_cache_identity,
         )
         return FlowChainResponse(
             direction="backward",

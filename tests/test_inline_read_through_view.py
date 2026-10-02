@@ -76,7 +76,7 @@ def _answers(scan: ProjectScanResult, table_name: str, graph: Optional[dict], ro
             answer.through.schema if answer.through else None,
             answer.through.name if answer.through else None,
         )
-        for answer in inline_table_relations.by_table(scan, question, [], root, graph)
+        for answer in inline_table_relations.by_table(scan, question, [], root, graph, None)
     ]
 
 
