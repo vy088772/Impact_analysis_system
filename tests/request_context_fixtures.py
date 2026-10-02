@@ -55,6 +55,15 @@ class RequestStores:
             ),
         )
 
+    def install_path(self, monkeypatch) -> None:
+        handler = analyze_service.get_path_evidence
+        monkeypatch.setattr(
+            analyze_service, "get_path_evidence",
+            lambda request, *args, **kwargs: handler(
+                request, *args, scan_store=self.scan_store, cache_store=self.cache_store, **kwargs
+            ),
+        )
+
     def install_http(self, monkeypatch) -> None:
         handler = analyze_service.find_by_sp
         monkeypatch.setattr(

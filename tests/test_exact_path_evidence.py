@@ -33,9 +33,11 @@ from service.schemas import (
     TableMatchProgram,
 )
 from canonical_object_identity import parse
-from service.sql_cache_store import CacheIdentity
+from service.sql_cache_store import AmbiguousServer, CacheIdentity
 from service.sql_execution_graph import build_sql_execution_graph
+from service.request_context_adapters import InMemoryCacheStore, InMemoryScanStore
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
+from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     CacheRoot,
     analyzer_operation,
@@ -237,10 +239,66 @@ def _given_evidence_of(cached: dict):
 
 
 def _stub_sources(monkeypatch, root: Path, scan: ProjectScanResult, cached: dict) -> None:
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [root])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda r, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    RequestStores.of(root, scan).install_path(monkeypatch)
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: cached)
+
+
+@pytest.mark.parametrize("refresh", [False, True])
+def test_path_evidence_with_no_roots_raises_before_any_scan(
+    monkeypatch, tmp_path: Path, refresh: bool
+) -> None:
+    _, cached, path_id = _cached_path_fixture(tmp_path)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: cached)
+    scans = InMemoryScanStore(repository_root=tmp_path)
+    caches = InMemoryCacheStore({"OrdersDb": one_server_holds_every_database("OrdersDb")})
+
+    with pytest.raises(analyze_service.PathEvidenceError) as error:
+        analyze_service.get_path_evidence(
+            PathEvidenceRequest(path_id=path_id, database="OrdersDb", refresh=refresh),
+            scan_store=scans,
+            cache_store=caches,
+        )
+
+    assert error.value.code == "source_not_found"
+    assert str(error.value) == "找不到 path evidence 的原始碼來源"
+    assert "scan" not in scans.calls
+
+
+@pytest.mark.parametrize("db_server", ["", "   "])
+def test_path_evidence_reads_an_ambiguous_database_as_not_scanned_before_source_resolution(
+    tmp_path: Path, db_server: str
+) -> None:
+    scans = InMemoryScanStore(roots=[tmp_path])
+    caches = InMemoryCacheStore({"OrdersDb": AmbiguousServer("OrdersDb", ("host-a", "host-b"))})
+
+    with pytest.raises(analyze_service.SqlExecutionGraphRequiredError) as error:
+        analyze_service.get_path_evidence(
+            PathEvidenceRequest(path_id="any-path", database="OrdersDb", db_server=db_server),
+            scan_store=scans,
+            cache_store=caches,
+        )
+
+    assert error.value.code == "sql_execution_graph_required"
+    assert error.value.database == "OrdersDb"
+    assert error.value.reason == "missing_or_invalid"
+    assert error.value.rebuild_action == "POST /refresh_sql"
+    assert scans.calls == []
+
+
+def test_path_evidence_requires_a_sql_graph_before_the_empty_roots_check(tmp_path: Path) -> None:
+    identity = CacheIdentity.of("host", "OrdersDb")
+    scans = InMemoryScanStore(repository_root=tmp_path)
+    with CacheRoot():
+        with pytest.raises(analyze_service.SqlExecutionGraphRequiredError) as error:
+            analyze_service.get_path_evidence(
+                PathEvidenceRequest(path_id="any-path", database="OrdersDb"),
+                scan_store=scans,
+                cache_store=InMemoryCacheStore({"OrdersDb": identity}),
+            )
+
+    assert error.value.code == "sql_execution_graph_required"
+    assert error.value.reason == "missing_or_invalid"
+    assert scans.calls == []
 
 
 def test_path_evidence_finds_a_path_of_the_given_evidence(monkeypatch, tmp_path: Path) -> None:
@@ -273,14 +331,7 @@ def test_path_evidence_reports_a_path_id_missing_from_the_given_evidence(
 
 def test_path_evidence_returns_only_selected_branch_and_source_methods(monkeypatch, tmp_path: Path) -> None:
     scan, cached, path_id = _cached_path_fixture(tmp_path)
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
-    monkeypatch.setattr(
-        analyze_service.sql_cache_store,
-        "load_cached",
-        lambda identity: cached,
-    )
+    _stub_sources(monkeypatch, tmp_path, scan, cached)
 
     evidence = analyze_service.get_path_evidence(
         PathEvidenceRequest(
@@ -391,18 +442,15 @@ def test_multi_root_path_evidence_uses_repo_relative_source_snapshot(
         scan_time=datetime.now(),
     )
 
-    monkeypatch.setattr(
-        analyze_service,
-        "resolve_source",
-        lambda req: [child_root, sibling_root],
+    stores = RequestStores(
+        InMemoryScanStore(
+            roots=[child_root, sibling_root],
+            scans={child_root: scan, sibling_root: sibling_scan},
+            repository_root=tmp_path,
+        ),
+        InMemoryCacheStore({"OrdersDb": one_server_holds_every_database("OrdersDb")}),
     )
-    monkeypatch.setattr(
-        analyze_service,
-        "_get_scan",
-        lambda root, refresh=False: scan if root == child_root else sibling_scan,
-    )
-    monkeypatch.setattr(analyze_service, "repo_dir", lambda project, repo: tmp_path)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores.install_path(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -425,14 +473,7 @@ def test_multi_root_path_evidence_uses_repo_relative_source_snapshot(
 def test_path_evidence_rejects_stale_source_snapshot(monkeypatch, tmp_path: Path) -> None:
     scan, cached, path_id = _cached_path_fixture(tmp_path)
     scan.source_snapshots.clear()
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
-    monkeypatch.setattr(
-        analyze_service.sql_cache_store,
-        "load_cached",
-        lambda identity: cached,
-    )
+    _stub_sources(monkeypatch, tmp_path, scan, cached)
 
     with pytest.raises(analyze_service.PathEvidenceError) as error:
         analyze_service.get_path_evidence(
@@ -462,14 +503,7 @@ def test_path_evidence_rejects_drifted_sql_definition_offset(monkeypatch, tmp_pa
         "length": 1,
         "module_definition_length": len(definition) - 1,
     }
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
-    monkeypatch.setattr(
-        analyze_service.sql_cache_store,
-        "load_cached",
-        lambda identity: cached,
-    )
+    _stub_sources(monkeypatch, tmp_path, scan, cached)
 
     with pytest.raises(analyze_service.PathEvidenceError) as error:
         analyze_service.get_path_evidence(
@@ -498,14 +532,7 @@ def test_path_evidence_accepts_matching_sql_definition_offset(monkeypatch, tmp_p
         "length": 6,
         "module_definition_length": len(definition),
     }
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
-    monkeypatch.setattr(
-        analyze_service.sql_cache_store,
-        "load_cached",
-        lambda identity: cached,
-    )
+    _stub_sources(monkeypatch, tmp_path, scan, cached)
 
     evidence = analyze_service.get_path_evidence(
         PathEvidenceRequest(
@@ -520,14 +547,7 @@ def test_path_evidence_accepts_matching_sql_definition_offset(monkeypatch, tmp_p
 
 def test_path_evidence_rejects_unknown_path_id(monkeypatch, tmp_path: Path) -> None:
     scan, cached, _ = _cached_path_fixture(tmp_path)
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
-    monkeypatch.setattr(
-        analyze_service.sql_cache_store,
-        "load_cached",
-        lambda identity: cached,
-    )
+    _stub_sources(monkeypatch, tmp_path, scan, cached)
 
     with pytest.raises(analyze_service.PathEvidenceError) as error:
         analyze_service.get_path_evidence(
@@ -842,11 +862,12 @@ def test_path_evidence_holds_the_function_its_operation_calls(
         scan, path_id = _function_path_fixture(
             tmp_path, cache_root, procedure=procedure, call=call, functions=functions
         )
-        monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
-        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+        stores = RequestStores.of(tmp_path, scan, "Response")
 
         evidence = analyze_service.get_path_evidence(
-            PathEvidenceRequest(path_id=path_id, database="Response", program_names=["RatePage"])
+            PathEvidenceRequest(path_id=path_id, database="Response", program_names=["RatePage"]),
+            scan_store=stores.scan_store,
+            cache_store=stores.cache_store,
         )
 
     assert [item["name"] for item in evidence.stored_procedures] == [procedure]
@@ -877,11 +898,12 @@ def test_path_evidence_holds_every_function_a_reference_with_no_schema_can_name(
             functions=["COMMON.fn_Rate", "dbo.fn_Rate"],
             sql_text_analysis=sql_text_analysis,
         )
-        monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
-        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+        stores = RequestStores.of(tmp_path, scan, "Response")
 
         evidence = analyze_service.get_path_evidence(
-            PathEvidenceRequest(path_id=path_id, database="Response", program_names=["RatePage"])
+            PathEvidenceRequest(path_id=path_id, database="Response", program_names=["RatePage"]),
+            scan_store=stores.scan_store,
+            cache_store=stores.cache_store,
         )
 
     assert sorted(item["name"] for item in evidence.functions) == ["COMMON.fn_Rate", "dbo.fn_Rate"]

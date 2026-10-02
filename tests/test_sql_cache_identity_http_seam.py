@@ -121,7 +121,7 @@ def test_a_reverse_lookup_that_names_a_host_lists_the_cache_directory_zero_times
 
 
 def test_path_evidence_with_no_host_for_a_database_on_two_hosts_answers_not_scanned(two_hosts, monkeypatch) -> None:
-    two_hosts.install_legacy(monkeypatch)
+    two_hosts.install_path(monkeypatch)
     response = client.post(
         "/path_evidence",
         json={"path_id": "any-path", "source": {"project": "orders", "repo": "orders"}, "database": "OrdersDb"},

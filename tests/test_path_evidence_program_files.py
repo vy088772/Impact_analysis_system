@@ -24,7 +24,7 @@ from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.execution_path_builder import build_execution_paths
 from service.schemas import PathEvidenceRequest
 from tests.program_screen_fixtures import _analyze, _scan
-from tests.sql_cache_fixtures import one_server_holds_every_database
+from tests.request_context_fixtures import RequestStores
 
 _ORDER_CONTROLLERS = {
     "Controllers/OrdersController.cs": ["Index", "Delete"],
@@ -91,11 +91,7 @@ def _path_id_of(invocation: DbInvocation) -> str:
 
 
 def _stub_path_evidence_sources(monkeypatch, root: Path, scan) -> None:
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [root])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda r, refresh=False: scan)
-    monkeypatch.setattr(
-        analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database
-    )
+    RequestStores.of(root, scan).install_path(monkeypatch)
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: {})
     monkeypatch.setattr(
         analyze_service,

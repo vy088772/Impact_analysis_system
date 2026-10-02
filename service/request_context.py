@@ -33,6 +33,7 @@ def build_request_context(
     scan_store: ScanStore,
     cache_store: CacheStore,
     check_identity: Callable[[CacheIdentityResult], None] | None = None,
+    check_roots: Callable[[list[Path]], None] | None = None,
 ) -> RequestContext | Skipped:
     """Look up the identity, apply the handler's refusal, then prepare the scans.
 
@@ -55,6 +56,8 @@ def build_request_context(
         if not all(scan_store.has_cache(root) for root in candidates):
             return Skipped()
     roots = scan_store.resolve_scan_roots(source, refresh=refresh)
+    if check_roots is not None:
+        check_roots(roots)
     scans = [scan_store.get_scan(root, refresh=refresh) for root in roots]
     scan = scans[0] if len(scans) == 1 else merge_scans(scans)
     root = (

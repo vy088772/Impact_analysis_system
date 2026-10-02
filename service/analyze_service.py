@@ -1182,7 +1182,8 @@ def _unresolved_without_graph(path: Dict) -> Dict:
 
 
 def get_path_evidence(
-    req: PathEvidenceRequest, evidence_source: EvidenceSource = evidence_for_scope
+    req: PathEvidenceRequest, evidence_source: EvidenceSource = evidence_for_scope,
+    *, scan_store: ScanStore | None = None, cache_store: CacheStore | None = None,
 ) -> PathEvidenceResponse:
     """Expand one current Execution Path into source-backed, path-scoped evidence.
 
@@ -1196,23 +1197,29 @@ def get_path_evidence(
     if not path_id:
         raise PathEvidenceError("invalid_path_id", "path_id 不可為空")
 
-    # A Database on several hosts with no host named is "not scanned" here.
-    found = (
-        sql_cache_store.CacheIdentity.of(req.db_server, req.database)
-        if req.db_server.strip() and req.database.strip()
-        else sql_cache_store.find_cache_identity(req.database)
-    )
-    sql_cache_identity = found if isinstance(found, sql_cache_store.CacheIdentity) else None
-    cached, graph = _require_sql_execution_graph(req.database, sql_cache_identity)
+    cached: dict = {}
 
-    roots = resolve_source(req)  # type: ignore[arg-type]
-    if not roots:
-        raise PathEvidenceError("source_not_found", "找不到 path evidence 的原始碼來源")
-    scans = [_get_scan(root, refresh=req.refresh) for root in roots]
-    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
-    root = roots[0] if len(roots) == 1 else repo_dir(
-        req.source.project if req.source else "",
-        req.source.repo if req.source else "",
+    def check_identity(found: CacheIdentityResult) -> None:
+        nonlocal cached
+        identity = found if isinstance(found, sql_cache_store.CacheIdentity) else None
+        cached, _ = _require_sql_execution_graph(req.database, identity)
+
+    def check_roots(roots: list[Path]) -> None:
+        if not roots:
+            raise PathEvidenceError("source_not_found", "找不到 path evidence 的原始碼來源")
+
+    context = build_request_context(
+        req,
+        scan_store=scan_store if scan_store is not None else RealScanStore(),
+        cache_store=cache_store if cache_store is not None else RealCacheStore(),
+        check_identity=check_identity,
+        check_roots=check_roots,
+    )
+    assert not isinstance(context, Skipped)
+    scans, scan, root = context.scans, context.scan, context.root
+    sql_cache_identity = (
+        context.sql_cache_identity
+        if isinstance(context.sql_cache_identity, sql_cache_store.CacheIdentity) else None
     )
 
     if req.program_names:
@@ -1225,9 +1232,8 @@ def get_path_evidence(
         matched_files = list(scan.csharp_results)
         resolutions = []  # every file counts: no program filter below
 
-    scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
     evidence = evidence_source(
-        scope,
+        context.scope,
         scans,
         scan,
         root,  # type: ignore[arg-type]
