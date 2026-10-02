@@ -50,3 +50,18 @@ Rules from the spec:
   sets the host through `catalog_reader.list_systems`.
 - `mypy` reports 6 errors in `rag_client.py`. They are on lines that this
   ticket did not change, and they were there before.
+- Commits in `llamaindex-spec-rag`: `aeb746f` (the change) and `b3d81c1` (the
+  code-review fixes).
+- The review found that the `ambiguous_database` gap text told the analyst to
+  send `db_server`. No caller can send it now. The gap text in
+  `impact_orch/agent_tools.py` and the **Unread System** entry in `CONTEXT.md`
+  now tell the analyst to declare the host in the catalog. A parallel session
+  commit (`a9fa877`) took the `agent_tools.py` hunk with its own change.
+- Open points from the review. This ticket does not change them:
+  - The resolver also feeds the `/analyze` and `/flow_chain` fan-out. A System
+    that declares `PUR` on two hosts now sends two requests there too.
+  - A blank-host declaration and a declared-host declaration of one name are
+    two pairs. The client keeps both. The blank-host request lets the server
+    pick the host from the disk.
+  - The resolver compares the Database name with case. `candidate_database_set`
+    compares it with `casefold`. This difference was there before.
