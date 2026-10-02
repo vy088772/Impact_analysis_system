@@ -16,11 +16,12 @@ from code_analyzer.project_scanner import UNRESOLVED_CONNECTION_DATABASE, CSharp
 from service import analyze_service
 from service.sql_cache_store import CacheIdentity, build_object_location_index
 from service.schemas import FindByTableRequest
+from service.request_context_adapters import InMemoryCacheStore
+from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     analyzer_operation,
     cache_payload,
     execution_graph,
-    one_server_holds_every_database,
     with_schema_source,
 )
 from tests.test_graph_reverse_lookup import _file, _scan_with_calls
@@ -111,9 +112,7 @@ def _ask(
         )
         for sources in scan.connection_sources.values():
             sources["conn"] = DATABASE
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(tmp_path, scan, database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -126,7 +125,8 @@ def _ask(
             database=database,
             cache_only=False,
             write_only=write_only,
-        )
+        ),
+        scan_store=stores.scan_store, cache_store=stores.cache_store,
     ).matches
 
 
@@ -291,26 +291,25 @@ def _ask_inline(
     connection's Database holds. None means that no index exists. No case may open a cache.
     """
     scan = _inline_scan(tmp_path, table, connection_database)
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    stores = RequestStores.of(tmp_path, scan)
+    caches = InMemoryCacheStore()
 
     def fail_to_open_a_cache(identity):
         raise AssertionError("an inline C# SQL question must not open a cache")
 
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", fail_to_open_a_cache)
-    if listed_tables is None:
-        monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: None)
-    else:
+    if listed_tables is not None:
         identity = CacheIdentity.of("vmsystest07", connection_database)
         index = build_object_location_index(identity, cache_payload(connection_database, tables=listed_tables))
-        monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: identity)
+        caches.identities[""] = identity
         monkeypatch.setattr(analyze_service.sql_cache_store, "load_object_location_index", lambda given: index)
     return analyze_service.find_by_table(
         FindByTableRequest(
             source={"project": "orders", "repo": "orders"},
             table_name=asked,
             cache_only=False,
-        )
+        ),
+        scan_store=stores.scan_store, cache_store=caches,
     ).matches
 
 
@@ -363,9 +362,7 @@ def test_an_inline_write_outranks_the_read_of_its_file_and_stays_in_a_write_only
     read = scan.table_relations[0]
     scan.table_relations.append(replace(read, method_name="Save", access_type="INSERT"))
     scan.table_relations.append(replace(read, csharp_file=str(tmp_path / "ReadOnlyPage.cs")))
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: None)
+    stores = RequestStores.of(tmp_path, scan)
 
     def ask(write_only: bool):
         return analyze_service.find_by_table(
@@ -374,7 +371,8 @@ def test_an_inline_write_outranks_the_read_of_its_file_and_stays_in_a_write_only
                 table_name="dbo.Users",
                 cache_only=False,
                 write_only=write_only,
-            )
+            ),
+            scan_store=stores.scan_store, cache_store=InMemoryCacheStore(),
         )
 
     every_access = ask(write_only=False)

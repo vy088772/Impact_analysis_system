@@ -17,6 +17,8 @@ from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEviden
 from code_analyzer.project_scanner import CSharpTableRelation
 from service import analyze_service, derived_execution_evidence, sql_cache_store
 from service.api import app
+from service.request_context_adapters import RealCacheStore
+from tests.request_context_fixtures import RequestStores
 from service.execution_path_builder import build_execution_paths
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
 from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache
@@ -57,16 +59,16 @@ def two_hosts(monkeypatch, tmp_path):
     with RatedInvocationsRetention(), CacheRoot() as cache_root:
         _write_host(cache_root, HOST_WITH_THE_SP, _graph_with_shared_sp())
         _write_host(cache_root, HOST_WITHOUT_THE_SP, _graph_without_the_sp())
-        _wire_scan(monkeypatch, tmp_path)
-        yield cache_root
+        stores = _wire_scan(monkeypatch, tmp_path)
+        yield stores
 
 
 @pytest.fixture
 def one_host(monkeypatch, tmp_path):
     with RatedInvocationsRetention(), CacheRoot() as cache_root:
         _write_host(cache_root, HOST_WITH_THE_SP, _graph_with_shared_sp())
-        _wire_scan(monkeypatch, tmp_path)
-        yield cache_root
+        stores = _wire_scan(monkeypatch, tmp_path)
+        yield stores
 
 
 @pytest.fixture
@@ -118,7 +120,8 @@ def test_a_reverse_lookup_that_names_a_host_lists_the_cache_directory_zero_times
     assert listings == []
 
 
-def test_path_evidence_with_no_host_for_a_database_on_two_hosts_answers_not_scanned(two_hosts) -> None:
+def test_path_evidence_with_no_host_for_a_database_on_two_hosts_answers_not_scanned(two_hosts, monkeypatch) -> None:
+    two_hosts.install_legacy(monkeypatch)
     response = client.post(
         "/path_evidence",
         json={"path_id": "any-path", "source": {"project": "orders", "repo": "orders"}, "database": "OrdersDb"},
@@ -136,8 +139,9 @@ def test_path_evidence_with_no_host_for_a_database_on_two_hosts_answers_not_scan
     ],
 )
 def test_flow_chain_with_no_host_for_a_database_on_two_hosts_answers_not_scanned(
-    two_hosts, direction_fields: dict
+    two_hosts, monkeypatch, direction_fields: dict
 ) -> None:
+    two_hosts.install_legacy(monkeypatch)
     response = client.post(
         "/flow_chain",
         json={
@@ -165,6 +169,7 @@ def _analyze_request(**extra) -> dict:
 def test_analyze_with_definitions_and_no_host_lists_the_cache_directory_one_time(
     one_host, listings, monkeypatch, tmp_path
 ) -> None:
+    one_host.install_legacy(monkeypatch)
     monkeypatch.setattr("service.analyze_service.resolve_source", lambda req: [tmp_path])
 
     response = client.post("/analyze", json=_analyze_request())
@@ -174,6 +179,7 @@ def test_analyze_with_definitions_and_no_host_lists_the_cache_directory_one_time
 
 
 def test_analyze_with_definitions_treats_a_blank_host_as_no_host(one_host, monkeypatch, tmp_path) -> None:
+    one_host.install_legacy(monkeypatch)
     monkeypatch.setattr("service.analyze_service.resolve_source", lambda req: [tmp_path])
 
     response = client.post("/analyze", json=_analyze_request(db_server="   "))
@@ -211,8 +217,9 @@ def two_hosts_and_an_inline_table(monkeypatch, tmp_path):
                 access_type="SELECT",
             )
         ]
-        monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+        stores = RequestStores.of(tmp_path, scan)
+        stores.cache_store = RealCacheStore()
+        stores.install_http(monkeypatch)
         monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: "scan-v1")
         monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: "commit-v1")
         yield cache_root

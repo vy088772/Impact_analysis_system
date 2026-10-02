@@ -11,20 +11,21 @@ from canonical_object_identity import ObjectName
 from code_analyzer.project_scanner import INLINE_SQL_PARSED, INLINE_SQL_REGEX
 from service import analyze_service
 from service.schemas import FindByTableRequest
+from service.request_context_adapters import InMemoryCacheStore
+from tests.request_context_fixtures import RequestStores
 from tests.test_table_match import _inline_scan
 
 
 def _ask(monkeypatch, tmp_path, scan, table_name: str, write_only: bool = False):
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: None)
+    stores = RequestStores.of(tmp_path, scan)
     return analyze_service.find_by_table(
         FindByTableRequest(
             source={"project": "orders", "repo": "orders"},
             table_name=table_name,
             cache_only=False,
             write_only=write_only,
-        )
+        ),
+        scan_store=stores.scan_store, cache_store=InMemoryCacheStore(),
     )
 
 

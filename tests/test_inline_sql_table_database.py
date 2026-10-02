@@ -23,6 +23,8 @@ from code_analyzer.project_scanner import (
 from service import analyze_service
 from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FindByTableRequest
+from service.request_context_adapters import InMemoryCacheStore
+from tests.request_context_fixtures import RequestStores
 from tests.test_table_match import _inline_scan
 
 SPAN = (154, 310)
@@ -74,9 +76,7 @@ def _ask(
         rated_for.append(scope.database)
         return DerivedExecutionEvidence(list(invocations), {}, paths_by_invocation=[[] for _ in invocations])
 
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda name: None)
+    stores = RequestStores.of(tmp_path, scan)
     monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name, server="", **_: (None, {}))
     monkeypatch.setattr(analyze_service, "filter_table_accesses", lambda *args, **kwargs: [])
     response = analyze_service.find_by_table(
@@ -88,6 +88,7 @@ def _ask(
             write_only=write_only,
         ),
         evidence_source=rated,
+        scan_store=stores.scan_store, cache_store=InMemoryCacheStore(),
     )
     return response, rated_for
 

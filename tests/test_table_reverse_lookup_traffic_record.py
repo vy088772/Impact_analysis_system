@@ -16,11 +16,12 @@ from code_analyzer.project_scanner import ProjectScanResult
 from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, FrameworkType, MethodInfo
 from service import analyze_service
 from service.schemas import FindByTableRequest
+from service.request_context_adapters import InMemoryCacheStore, InMemoryScanStore
+from tests.request_context_fixtures import RequestStores
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
 from tests.sql_cache_fixtures import (
     cache_payload,
     execution_graph,
-    one_server_holds_every_database,
 )
 
 
@@ -53,9 +54,8 @@ def _scan(root: Path) -> ProjectScanResult:
     )
 
 
-def _wire(monkeypatch, scan: ProjectScanResult, tmp_path: Path) -> None:
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+def _wire(scan: ProjectScanResult, tmp_path: Path, database: str = "") -> RequestStores:
+    return RequestStores.of(tmp_path, scan, database)
 
 
 def _request(table_name: str, *, database: str = "") -> FindByTableRequest:
@@ -70,9 +70,9 @@ def _request(table_name: str, *, database: str = "") -> FindByTableRequest:
 def test_lookup_records_the_table_name_and_the_scope(monkeypatch, tmp_path: Path, capsys) -> None:
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path)
+        stores = _wire(scan, tmp_path)
 
-        analyze_service.find_by_table(_request("TableA"))
+        analyze_service.find_by_table(_request("TableA"), scan_store=stores.scan_store, cache_store=stores.cache_store)
 
         printed = capsys.readouterr().out
         assert "TableA" in printed
@@ -84,9 +84,11 @@ def test_lookup_before_an_agent_exists_is_recorded_the_same_way(monkeypatch, tmp
     (Object Kind Ambiguity, per the ticket) -- it must still be recorded."""
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path)
+        stores = _wire(scan, tmp_path)
 
-        analyze_service.find_by_table(_request("TableA", database=""))
+        analyze_service.find_by_table(
+            _request("TableA", database=""), scan_store=stores.scan_store, cache_store=stores.cache_store,
+        )
 
         printed = capsys.readouterr().out
         assert "TableA" in printed
@@ -101,23 +103,22 @@ def test_two_systems_asking_about_one_table_stay_distinguishable(monkeypatch, tm
     empty_graph = execution_graph("")
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
-        "find_cache_identity",
-        one_server_holds_every_database,
-    )
-    monkeypatch.setattr(
-        analyze_service.sql_cache_store,
         "load_cached",
         lambda identity: cache_payload(identity.database, graph=empty_graph),
     )
 
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path)
-        analyze_service.find_by_table(_request("TableA", database="OrdersDb"))
+        stores = _wire(scan, tmp_path, "OrdersDb")
+        analyze_service.find_by_table(
+            _request("TableA", database="OrdersDb"), scan_store=stores.scan_store, cache_store=stores.cache_store,
+        )
         first_record = capsys.readouterr().out
 
-        monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [other_root])
-        analyze_service.find_by_table(_request("TableA", database="BillingDb"))
+        stores = _wire(scan, other_root, "BillingDb")
+        analyze_service.find_by_table(
+            _request("TableA", database="BillingDb"), scan_store=stores.scan_store, cache_store=stores.cache_store,
+        )
         second_record = capsys.readouterr().out
 
         assert first_record != second_record
@@ -130,9 +131,11 @@ def test_records_returned_are_unchanged_by_the_added_record(monkeypatch, tmp_pat
     returns."""
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path)
+        stores = _wire(scan, tmp_path)
 
-        response = analyze_service.find_by_table(_request("TableA"))
+        response = analyze_service.find_by_table(
+            _request("TableA"), scan_store=stores.scan_store, cache_store=stores.cache_store,
+        )
 
         assert response.table_name == "TableA"
         assert response.skipped is False
@@ -144,21 +147,18 @@ def test_a_skipped_cache_only_lookup_never_reaches_the_scan_it_would_need_to_rec
     """A `cache_only` miss returns before any repo scan is resolved; recording
     it would require doing exactly the scan work `cache_only` exists to
     avoid, so it stays unrecorded and unscanned."""
-    monkeypatch.setattr(analyze_service, "peek_scan_roots", lambda source: [tmp_path])
-    monkeypatch.setattr(analyze_service, "has_cache", lambda root: False)
-
-    def _fail_resolve(source, refresh=False):
-        raise AssertionError("cache_only miss must not resolve scan roots")
-
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", _fail_resolve)
+    scans = InMemoryScanStore(roots=[tmp_path])
 
     response = analyze_service.find_by_table(
         FindByTableRequest(
             source={"project": "orders", "repo": "orders"},
             table_name="TableA",
             cache_only=True,
-        )
+        ),
+        scan_store=scans, cache_store=InMemoryCacheStore(),
     )
 
     assert response.skipped is True
     assert capsys.readouterr().out == ""
+    assert "resolve" not in scans.calls
+    assert "scan" not in scans.calls

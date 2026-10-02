@@ -50,7 +50,6 @@ def _wire_scan(monkeypatch, tmp_path: Path) -> RequestStores:
     scan = _scan(tmp_path)
     stores = RequestStores.of(tmp_path, scan)
     stores.cache_store = RealCacheStore()
-    stores.install_legacy(monkeypatch)
     stores.install_http(monkeypatch)
     monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: "scan-v1")
     monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: "commit-v1")
@@ -185,9 +184,6 @@ def test_the_ambiguous_code_comes_before_the_cache_only_skip(
     two_hosts, monkeypatch, endpoint: str, payload: dict
 ) -> None:
     two_hosts.scan_store.cached_roots.clear()
-    if endpoint != "/find_by_sp":
-        monkeypatch.setattr(analyze_service, "peek_scan_roots", lambda source: [Path("unscanned")])
-        monkeypatch.setattr(analyze_service, "has_cache", lambda root: False)
 
     response = client.post(endpoint, json=payload)
 
@@ -202,12 +198,7 @@ def test_the_ambiguous_code_comes_before_the_cache_only_skip(
 def test_an_ambiguous_database_is_refused_before_any_source_scan(
     two_hosts, monkeypatch, endpoint: str, payload: dict
 ) -> None:
-    def must_not_scan(source, refresh=False):
-        raise AssertionError("an ambiguous Database must not resolve or scan source")
-
     two_hosts.scan_store.calls.clear()
-    if endpoint != "/find_by_sp":
-        monkeypatch.setattr(analyze_service, "resolve_scan_roots", must_not_scan)
 
     response = client.post(endpoint, json=payload)
 

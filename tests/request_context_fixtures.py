@@ -28,9 +28,29 @@ class RequestStores:
         if isinstance(self.cache_store, InMemoryCacheStore):
             monkeypatch.setattr(sql_cache_store, "find_cache_identity", self.cache_store.find_cache_identity)
 
+    def install_table(self, monkeypatch) -> None:
+        handler = analyze_service.find_by_table
+        monkeypatch.setattr(
+            analyze_service, "find_by_table",
+            lambda request, *args, **kwargs: handler(
+                request, *args, scan_store=self.scan_store, cache_store=self.cache_store, **kwargs
+            ),
+        )
+
+    def install_legacy_flow(self, monkeypatch) -> None:
+        handler = analyze_service.flow_chain
+
+        def flow(request, *args, **kwargs):
+            with monkeypatch.context() as legacy:
+                self.install_legacy(legacy)
+                return handler(request, *args, **kwargs)
+
+        monkeypatch.setattr(analyze_service, "flow_chain", flow)
+
     def install_http(self, monkeypatch) -> None:
         handler = analyze_service.find_by_sp
         monkeypatch.setattr(
             analyze_service, "find_by_sp",
             lambda request: handler(request, scan_store=self.scan_store, cache_store=self.cache_store),
         )
+        self.install_table(monkeypatch)

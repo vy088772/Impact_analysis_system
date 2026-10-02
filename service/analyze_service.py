@@ -2213,7 +2213,8 @@ def _record_table_reverse_lookup(table_name: str, scope: DerivedExecutionEvidenc
 
 
 def find_by_table(
-    req: FindByTableRequest, evidence_source: EvidenceSource = evidence_for_scope
+    req: FindByTableRequest, evidence_source: EvidenceSource = evidence_for_scope,
+    *, scan_store: ScanStore | None = None, cache_store: CacheStore | None = None,
 ) -> FindByTableResponse:
     """反查「哪些程式存取了這張資料表」，結合 inline SQL facts 與 SQL Execution Graph，無 AI。
 
@@ -2227,40 +2228,21 @@ def find_by_table(
     table_name = (req.table_name or "").strip()
     if not table_name:
         return FindByTableResponse(table_name=table_name, matches=[])
-    # The refusal of a Database on several hosts comes before any source scan
-    # and before the cache_only skip, so it costs one directory listing.
-    found = (
-        sql_cache_store.CacheIdentity.of(req.db_server, req.database)
-        if req.db_server.strip() and req.database.strip()
-        else sql_cache_store.find_cache_identity(req.database)
+    def check_identity(found: CacheIdentityResult) -> None:
+        if isinstance(found, sql_cache_store.AmbiguousServer):
+            raise AmbiguousDatabaseError(found)
+
+    context = build_request_context(
+        req,
+        scan_store=scan_store if scan_store is not None else RealScanStore(),
+        cache_store=cache_store if cache_store is not None else RealCacheStore(),
+        check_identity=check_identity,
     )
-    if isinstance(found, sql_cache_store.AmbiguousServer):
-        raise AmbiguousDatabaseError(found)
-    sql_cache_identity = found
-
-    project = req.source.project if req.source else ""
-    repo = req.source.repo if req.source else ""
-    sub_path = req.source.path if req.source else ""
-
-    if req.cache_only and not req.refresh:
-        candidate_roots = peek_scan_roots({"project": project, "repo": repo, "path": sub_path})
-        if not all(has_cache(r) for r in candidate_roots):
-            return FindByTableResponse(table_name=table_name, matches=[], skipped=True)
-
-    source = {
-        "project": project,
-        "repo": repo,
-        "branch": req.source.branch if req.source else "",
-        "path": sub_path,
-    }
-    roots = resolve_scan_roots(source, refresh=req.refresh)
-    scans = [_get_scan(r, refresh=req.refresh) for r in roots]
-    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
-    root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
-
-    # 這一份 scope 是每個請求唯一組裝的一份身分（見 DerivedExecutionEvidenceScope.of
-    # docstring）；下面的 graph 查詢重用它，不重新組裝，避免兩份身分互相脫鉤。
-    scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
+    if isinstance(context, Skipped):
+        return FindByTableResponse(table_name=table_name, matches=[], skipped=True)
+    scans, scan, root = context.scans, context.scan, context.root
+    scope = context.scope
+    sql_cache_identity = scope.sql_cache_identity
     _record_table_reverse_lookup(table_name, scope)
 
     question = TableQuestion.of(table_name, req.database or "")

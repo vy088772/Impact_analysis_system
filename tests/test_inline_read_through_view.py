@@ -21,10 +21,13 @@ from code_analyzer.project_scanner import INLINE_SQL_PARSED, INLINE_SQL_REGEX, P
 from service import analyze_service, inline_table_relations
 from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import AnalyzeRequest, AzureSource, FindByTableRequest, FlowChainRequest
+from service.request_context_adapters import InMemoryCacheStore
+from tests.request_context_fixtures import RequestStores
 from service.sql_cache_store import CacheIdentity, build_object_location_index
 from service.sql_execution_graph import build_sql_execution_graph
 from service.table_match import TableQuestion
 from tests.sql_cache_fixtures import (
+    CacheRoot,
     analyzer_operation,
     cache_payload,
     in_memory_sql_text_analysis,
@@ -37,8 +40,9 @@ _SOURCE = AzureSource(project="orders", repo="orders")
 
 
 @pytest.fixture(autouse=True)
-def _no_object_location_index(monkeypatch) -> None:
-    monkeypatch.setattr(inline_table_relations.sql_cache_store, "find_cache_identity", lambda database: None)
+def _no_object_location_index():
+    with CacheRoot():
+        yield
 
 
 def _graph(
@@ -179,15 +183,17 @@ _served: Dict[str, DerivedExecutionEvidence] = {}
 
 def _serve(
     monkeypatch, root: Path, scan: ProjectScanResult, graph: dict, rated: Sequence[DbInvocation] = ()
-) -> None:
+) -> RequestStores:
     """Serve the scan, the graph, and the rated invocations to `/find_by_table` and `/flow_chain`.
 
     No Execution Path exists.
     """
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda given, refresh=False: scan)
+    stores = RequestStores.of(root, scan)
+    stores.cache_store = InMemoryCacheStore()
+    stores.install_table(monkeypatch)
     monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name, server="", **_: (None, graph))
     monkeypatch.setitem(_served, "evidence", DerivedExecutionEvidence(list(rated), graph, paths_by_invocation=[[] for _ in rated]))
+    return stores
 
 
 def _find_by_table(table_name: str, write_only: bool = False):
@@ -275,9 +281,10 @@ def test_write_only_does_not_count_a_reached_read_as_a_write(monkeypatch, tmp_pa
 
 
 def test_flow_chain_backward_lists_the_method_that_reads_through_a_view(monkeypatch, tmp_path) -> None:
-    _serve(monkeypatch, tmp_path, _view_reader_scan(tmp_path, ("dbo.vOrder", "SELECT")), _graph(
+    stores = _serve(monkeypatch, tmp_path, _view_reader_scan(tmp_path, ("dbo.vOrder", "SELECT")), _graph(
         views={"dbo.vOrder": ["dbo.Orders"]}
     ))
+    stores.install_legacy(monkeypatch)
 
     response = analyze_service.flow_chain(
         FlowChainRequest(source=_SOURCE, direction="backward", table_name="Orders", database="PUR", cache_only=False),
@@ -288,9 +295,10 @@ def test_flow_chain_backward_lists_the_method_that_reads_through_a_view(monkeypa
 
 
 def test_flow_chain_forward_still_lists_the_view_and_not_the_table_behind_it(monkeypatch, tmp_path) -> None:
-    _serve(monkeypatch, tmp_path, _view_reader_scan(tmp_path, ("dbo.vOrder", "SELECT")), _graph(
+    stores = _serve(monkeypatch, tmp_path, _view_reader_scan(tmp_path, ("dbo.vOrder", "SELECT")), _graph(
         views={"dbo.vOrder": ["dbo.Orders"]}
     ))
+    stores.install_legacy(monkeypatch)
 
     response = analyze_service.flow_chain(
         FlowChainRequest(

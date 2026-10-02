@@ -293,9 +293,7 @@ def test_find_by_table_reports_writes_regardless_of_stored_procedure_case(
         ],
     )
     graph = build_sql_execution_graph(case_variant_table_write_data())
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    RequestStores.of(tmp_path, scan).install_table(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -333,9 +331,7 @@ def test_find_by_table_keeps_a_real_write_behind_a_case_variant_temp_table_read(
         [("TempPage.cs", "TempPage", "SaveWithTemp", "dbo.usp_WriteWithTemp")],
     )
     graph = build_sql_execution_graph(case_variant_temp_table_write_data())
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    RequestStores.of(tmp_path, scan).install_table(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -358,9 +354,7 @@ def test_find_by_table_keeps_a_real_write_behind_a_case_variant_temp_table_read(
 
 def test_find_by_table_write_only_uses_graph_writers(monkeypatch, tmp_path: Path) -> None:
     scan = _scan(tmp_path)
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    RequestStores.of(tmp_path, scan).install_table(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -404,7 +398,7 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
     )
     monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
     stores = RequestStores.of(tmp_path, scan)
-    stores.install_legacy(monkeypatch)
+    stores.install_legacy_flow(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -415,14 +409,16 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
         ),
     )
 
-    analyze_response = analyze_service.analyze(
-        AnalyzeRequest(
-            database="OrdersDb",
-            program_names=["DirectPage"],
-            include_snippets=False,
-            wrapper_contract="sqlobject",
+    with monkeypatch.context() as legacy:
+        stores.install_legacy(legacy)
+        analyze_response = analyze_service.analyze(
+            AnalyzeRequest(
+                database="OrdersDb",
+                program_names=["DirectPage"],
+                include_snippets=False,
+                wrapper_contract="sqlobject",
+            )
         )
-    )
     invocation = analyze_response.programs[0].database_invocations[0]
     path = analyze_response.programs[0].execution_paths[0]
 
@@ -445,7 +441,8 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
             cache_only=False,
             write_only=True,
             wrapper_contract="sqlobject",
-        )
+        ),
+        scan_store=stores.scan_store, cache_store=stores.cache_store,
     )
     flow_response = analyze_service.flow_chain(
         FlowChainRequest(
@@ -640,9 +637,7 @@ def test_backward_flow_preserves_graph_path_and_ui_anchor(monkeypatch, tmp_path:
 def test_find_by_table_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_path: Path) -> None:
     scan = _scan(tmp_path)
     scan.connection_sources.pop(str((tmp_path / "DirectPage.cs").resolve()))
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    RequestStores.of(tmp_path, scan).install_table(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -796,9 +791,7 @@ END;
         tmp_path,
         [("DynamicPage.cs", "DynamicPage", "SaveDynamic", "dbo.usp_Dynamic")],
     )
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    RequestStores.of(tmp_path, scan).install_table(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -865,9 +858,7 @@ def test_find_by_table_reports_one_record_per_stored_procedure_reaching_the_tabl
         "LedgerPage",
         [("SaveA", "dbo.usp_WriteA"), ("SaveB", "dbo.usp_WriteB")],
     )
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    RequestStores.of(tmp_path, scan).install_table(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -918,9 +909,7 @@ def test_find_by_table_reports_a_read_and_a_write_from_the_same_program(
         "LedgerPage",
         [("Load", "dbo.usp_ReadLedger"), ("Save", "dbo.usp_WriteLedger")],
     )
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    RequestStores.of(tmp_path, scan).install_table(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -1023,9 +1012,7 @@ def test_find_by_table_reports_a_proven_read_beside_an_unproven_write_from_the_s
         "LedgerPage",
         [("Load", "dbo.usp_ReadLedger"), ("Save", "dbo.usp_WriteLedger")],
     )
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    RequestStores.of(tmp_path, scan).install_table(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -1106,9 +1093,7 @@ def test_find_by_table_collapses_two_identical_execution_paths_into_one_record(
         db_invocations={str(file_path.resolve()): [dict(duplicate_call), dict(duplicate_call)]},
         connection_sources={str(file_path.resolve()): {"conn": "OrdersDb"}},
     )
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    RequestStores.of(tmp_path, scan).install_table(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",

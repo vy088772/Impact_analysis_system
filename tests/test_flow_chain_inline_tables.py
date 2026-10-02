@@ -18,6 +18,8 @@ from service.schemas import AzureSource, FindByTableRequest, FlowChainRequest
 from service.sql_cache_store import CacheIdentity, build_object_location_index
 from tests.sql_cache_fixtures import cache_payload
 from tests.scan_fixtures import csharp_file, scan_of
+from service.request_context_adapters import InMemoryCacheStore
+from tests.request_context_fixtures import RequestStores
 
 _SOURCE = AzureSource(project="orders", repo="orders")
 
@@ -41,14 +43,17 @@ def _scan(root: Path, methods: list[MethodInfo], relations: list[CSharpTableRela
 
 def _serve(monkeypatch, root: Path, scan: ProjectScanResult, listed_tables: list[str] | None = None) -> None:
     """Serve the scan to every question. ``listed_tables`` are the objects of the Object Location Index."""
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda given, refresh=False: scan)
+    stores = RequestStores.of(root, scan)
+    stores.cache_store = InMemoryCacheStore()
     if listed_tables is None:
-        monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: None)
+        stores.install_legacy_flow(monkeypatch)
+        stores.install_table(monkeypatch)
         return
     identity = CacheIdentity.of("vmsystest07", "Response")
     index = build_object_location_index(identity, cache_payload("Response", tables=listed_tables))
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda database: identity)
+    stores.cache_store.identities.update({"": identity, "Response": identity})
+    stores.install_legacy_flow(monkeypatch)
+    stores.install_table(monkeypatch)
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_object_location_index", lambda given: index)
 
 

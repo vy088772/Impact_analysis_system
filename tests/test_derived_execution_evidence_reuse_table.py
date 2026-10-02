@@ -22,10 +22,10 @@ from service import analyze_service, derived_execution_evidence
 from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FindByTableRequest, FlowChainRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
+from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     cache_payload,
     execution_graph,
-    one_server_holds_every_database,
 )
 
 
@@ -144,20 +144,13 @@ def _wire(
     scan_saved_at: str = "scan-v1",
     scan_commit: Optional[str] = "commit-v1",
     sql_cache_saved_at: str = "sql-cache-v1",
-) -> None:
+) -> RequestStores:
     """Same wiring as ticket 04's tests: fixed recorded state across calls, see
     that file's `_wire` docstring for why the freshness reads are stubbed
     explicitly (ticket 05 keys reuse off recorded save time, not identity)."""
     sql_payload = cache_payload("OrdersDb", graph=graph)
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: scan_saved_at)
     monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: scan_commit)
-    monkeypatch.setattr(
-        analyze_service.sql_cache_store,
-        "find_cache_identity",
-        one_server_holds_every_database,
-    )
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -168,6 +161,7 @@ def _wire(
         "cached_saved_at",
         lambda identity: sql_cache_saved_at,
     )
+    return RequestStores.of(tmp_path, scan)
 
 
 def _request(table_name: str, *, write_only: bool = False, refresh: bool = False) -> FindByTableRequest:
@@ -189,7 +183,8 @@ def test_backward_flow_uses_the_given_scope_paths_and_diagnostics(
     monkeypatch, tmp_path: Path, database: str
 ) -> None:
     scan = _scan(tmp_path)
-    _wire(monkeypatch, scan, tmp_path, _graph())
+    stores = _wire(monkeypatch, scan, tmp_path, _graph())
+    stores.install_legacy(monkeypatch)
     proven = DbInvocation(
         class_name="AlphaPage",
         method_name="SaveAlpha",
@@ -261,7 +256,7 @@ def test_find_by_table_filters_the_evidence_it_is_given(monkeypatch, tmp_path: P
     """The lookup keeps the paths that reach the asked table and nothing else."""
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph())
+        stores = _wire(monkeypatch, scan, tmp_path, _graph())
         rated = [
             DbInvocation(
                 class_name=class_name,
@@ -281,6 +276,7 @@ def test_find_by_table_filters_the_evidence_it_is_given(monkeypatch, tmp_path: P
         response = analyze_service.find_by_table(
             _request("TableB"),
             evidence_source=lambda scope, per_root_scans, merged_scan, root, *, refresh=False: given,
+            scan_store=stores.scan_store, cache_store=stores.cache_store,
         )
 
         assert [(m.program, m.file, m.access_type) for m in response.matches] == [
@@ -293,7 +289,8 @@ def test_backward_flow_reuses_the_whole_evidence_of_an_earlier_request(
     monkeypatch, tmp_path: Path, first_endpoint: str
 ) -> None:
     with RatedInvocationsRetention():
-        _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph())
+        stores = _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph())
+        stores.install_legacy_flow(monkeypatch)
 
         def backward(table_name: str):
             return analyze_service.flow_chain(
@@ -310,10 +307,13 @@ def test_backward_flow_reuses_the_whole_evidence_of_an_earlier_request(
             first = backward("TableA")
             assert [chain["method"] for chain in first.backward_chains] == ["SaveAlpha"]
         else:
-            lookup = analyze_service.find_by_table(_request("TableA"))
+            lookup = analyze_service.find_by_table(
+                _request("TableA"), scan_store=stores.scan_store, cache_store=stores.cache_store,
+            )
             assert [match.caller_method for match in lookup.matches] == ["SaveAlpha"]
 
         _wire(monkeypatch, _scan(tmp_path, alpha_calls="usp_Beta"), tmp_path, _graph())
+        stores.scan_store.scans[tmp_path] = _scan(tmp_path, alpha_calls="usp_Beta")
         retained = backward("TableA")
         second = backward("TableB")
 
@@ -329,10 +329,14 @@ def test_backward_flow_reuses_the_whole_evidence_of_an_earlier_request(
 def test_two_different_table_names_in_one_scope_get_their_own_programs(monkeypatch, tmp_path: Path) -> None:
     """The evidence does not depend on which table was asked about (ADR-0013)."""
     with RatedInvocationsRetention():
-        _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph())
+        stores = _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph())
 
-        table_a = analyze_service.find_by_table(_request("TableA"))
-        table_b = analyze_service.find_by_table(_request("TableB"))
+        table_a = analyze_service.find_by_table(
+            _request("TableA"), scan_store=stores.scan_store, cache_store=stores.cache_store,
+        )
+        table_b = analyze_service.find_by_table(
+            _request("TableB"), scan_store=stores.scan_store, cache_store=stores.cache_store,
+        )
 
         assert [m.program for m in table_a.matches] == ["alphapage"]
         assert [m.program for m in table_b.matches] == ["betapage"]
@@ -344,7 +348,8 @@ def test_two_different_table_names_in_one_scope_get_their_own_programs(monkeypat
 def test_answer_identical_with_reuse_active_and_defeated_for_a_match(monkeypatch, tmp_path: Path) -> None:
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph())
+        stores = _wire(monkeypatch, scan, tmp_path, _graph())
+        stores.install_table(monkeypatch)
 
         analyze_service.find_by_table(_request("TableA"))
         reused = analyze_service.find_by_table(_request("TableA"))
@@ -359,7 +364,8 @@ def test_answer_identical_with_reuse_active_and_defeated_for_a_match(monkeypatch
 def test_answer_identical_with_reuse_active_and_defeated_for_no_match(monkeypatch, tmp_path: Path) -> None:
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph())
+        stores = _wire(monkeypatch, scan, tmp_path, _graph())
+        stores.install_table(monkeypatch)
 
         analyze_service.find_by_table(_request("TableMissing"))
         reused = analyze_service.find_by_table(_request("TableMissing"))
@@ -372,7 +378,8 @@ def test_answer_identical_with_reuse_active_and_defeated_for_no_match(monkeypatc
 def test_answer_identical_with_reuse_active_and_defeated_for_write_only(monkeypatch, tmp_path: Path) -> None:
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph())
+        stores = _wire(monkeypatch, scan, tmp_path, _graph())
+        stores.install_table(monkeypatch)
 
         analyze_service.find_by_table(_request("TableA", write_only=True))
         reused = analyze_service.find_by_table(_request("TableA", write_only=True))
@@ -415,7 +422,8 @@ def test_write_only_still_excludes_reads(monkeypatch, tmp_path: Path) -> None:
             }
         )
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, graph)
+        stores = _wire(monkeypatch, scan, tmp_path, graph)
+        stores.install_table(monkeypatch)
 
         all_access = analyze_service.find_by_table(_request("TableC", write_only=False))
         write_only = analyze_service.find_by_table(_request("TableC", write_only=True))
@@ -442,7 +450,8 @@ def test_embedded_sql_and_graph_derived_preference_rule_is_unchanged(monkeypatch
                 access_type="READ",
             )
         )
-        _wire(monkeypatch, scan, tmp_path, _graph())
+        stores = _wire(monkeypatch, scan, tmp_path, _graph())
+        stores.install_table(monkeypatch)
 
         result = analyze_service.find_by_table(_request("TableA"))
 
@@ -461,7 +470,8 @@ def test_response_field_shape_matches_a_fresh_scope(monkeypatch, tmp_path: Path)
     anything on `TableMatchProgram`."""
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph())
+        stores = _wire(monkeypatch, scan, tmp_path, _graph())
+        stores.install_table(monkeypatch)
 
         analyze_service.find_by_table(_request("TableA"))
         reused = analyze_service.find_by_table(_request("TableA"))
