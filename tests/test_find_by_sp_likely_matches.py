@@ -17,10 +17,10 @@ from service import analyze_service, derived_execution_evidence
 from service.api import app
 from service.schemas import FindBySPRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
+from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     cache_payload,
     execution_graph,
-    one_server_holds_every_database,
 )
 
 _PROGRAMS = (
@@ -87,15 +87,13 @@ def _scan(root: Path) -> ProjectScanResult:
     )
 
 
-def _wire(monkeypatch, scan: ProjectScanResult, tmp_path: Path) -> None:
+def _wire(monkeypatch, scan: ProjectScanResult, tmp_path: Path) -> RequestStores:
     sql_payload = cache_payload("OrdersDb", graph=_graph())
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: "scan-v1")
     monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: "commit-v1")
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: sql_payload)
     monkeypatch.setattr(analyze_service.sql_cache_store, "cached_saved_at", lambda identity: "sql-cache-v1")
+    return RequestStores.of(tmp_path, scan)
 
 
 def _request() -> FindBySPRequest:
@@ -109,9 +107,9 @@ def _request() -> FindBySPRequest:
 
 def test_a_likely_caller_goes_into_likely_matches_beside_a_proven_caller(monkeypatch, tmp_path: Path) -> None:
     with RatedInvocationsRetention():
-        _wire(monkeypatch, _scan(tmp_path), tmp_path)
+        stores = _wire(monkeypatch, _scan(tmp_path), tmp_path)
 
-        response = analyze_service.find_by_sp(_request())
+        response = analyze_service.find_by_sp(_request(), scan_store=stores.scan_store, cache_store=stores.cache_store)
 
     assert [(match.program, match.file, match.evidence_status) for match in response.matches] == [
         ("provenpage", "ProvenPage.cs", "proven")
@@ -156,12 +154,12 @@ def _invocation(evidence: InvocationEvidence, relative_path: str, *, reason: str
 
 def test_a_likely_caller_with_no_source_file_shows_in_diagnostics_only(monkeypatch, tmp_path: Path) -> None:
     with RatedInvocationsRetention():
-        _wire(monkeypatch, _scan(tmp_path), tmp_path)
+        stores = _wire(monkeypatch, _scan(tmp_path), tmp_path)
         given = _given_evidence(
             _invocation(InvocationEvidence.LIKELY, "Removed/GonePage.cs", reason="unique_across_catalogs"),
         )
 
-        response = analyze_service.find_by_sp(_request(), evidence_source=given)
+        response = analyze_service.find_by_sp(_request(), evidence_source=given, scan_store=stores.scan_store, cache_store=stores.cache_store)
 
     assert response.matches == []
     assert response.likely_matches == []
@@ -172,12 +170,12 @@ def test_a_likely_caller_with_no_source_file_shows_in_diagnostics_only(monkeypat
 
 def test_an_unresolved_caller_does_not_go_into_likely_matches(monkeypatch, tmp_path: Path) -> None:
     with RatedInvocationsRetention():
-        _wire(monkeypatch, _scan(tmp_path), tmp_path)
+        stores = _wire(monkeypatch, _scan(tmp_path), tmp_path)
         given = _given_evidence(
             _invocation(InvocationEvidence.UNRESOLVED, "LikelyPage.cs", reason="not_in_resolved_catalog"),
         )
 
-        response = analyze_service.find_by_sp(_request(), evidence_source=given)
+        response = analyze_service.find_by_sp(_request(), evidence_source=given, scan_store=stores.scan_store, cache_store=stores.cache_store)
 
     assert response.matches == []
     assert response.likely_matches == []

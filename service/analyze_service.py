@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple
@@ -89,6 +89,8 @@ from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
 from .scan_store import cache_status, cached_commit, get_or_scan, has_cache, save_scan
 from . import sql_cache_store
+from .request_context import Skipped, build_request_context, merge_scans as _merge_scans
+from .request_context_adapters import CacheIdentityResult, CacheStore, RealCacheStore, RealScanStore, ScanStore
 from .derived_execution_evidence import (
     DerivedExecutionEvidence,
     DerivedExecutionEvidenceScope,
@@ -549,71 +551,6 @@ def resolve_source(req: AnalyzeRequest) -> List[Path]:
 def _get_scan(root: Path, refresh: bool = False) -> ProjectScanResult:
     """取得（或建立）指定路徑的掃描結果，使用持久化快取。analyze_sp=False → 不連資料庫。"""
     return get_or_scan(root, refresh=refresh)
-
-
-def _merge_scans(scans: List[ProjectScanResult]) -> ProjectScanResult:
-    """把同一系統底下、分散在多個子資料夾（同一套系統拆成多個 VS 專案）的多次
-    掃描結果合併成一個邏輯上的 ProjectScanResult，讓後續依檔名/SP 名比對的邏輯
-    可以直接沿用既有單一 scan 的處理方式，不需另外改寫。
-    """
-    merged = ProjectScanResult(
-        project_root=" + ".join(s.project_root for s in scans),
-        project_name=scans[0].project_name if scans else "",
-        scan_time=max((s.scan_time for s in scans), default=datetime.now()),
-    )
-    scan_roots = [str(Path(s.project_root).resolve()) for s in scans if s.project_root]
-    try:
-        canonical_root = Path(os.path.commonpath(scan_roots)).resolve()
-    except (ValueError, IndexError):
-        canonical_root = None
-    for s in scans:
-        merged.total_files += s.total_files
-        merged.scanned_files += s.scanned_files
-        merged.failed_files += s.failed_files
-        merged.csharp_results.extend(s.csharp_results)
-        for key, snapshot in getattr(s, "source_snapshots", {}).items():
-            relative_path = str(snapshot.relative_path or key).replace("\\", "/")
-            if canonical_root is not None:
-                source_path = Path(s.project_root) / relative_path
-                try:
-                    relative_path = source_path.resolve().relative_to(canonical_root).as_posix()
-                except ValueError:
-                    pass
-            merged.source_snapshots[relative_path] = replace(
-                snapshot,
-                relative_path=relative_path,
-            )
-        merged.db_invocations.update(getattr(s, "db_invocations", {}))
-        merged.connection_sources.update(getattr(s, "connection_sources", {}))
-        merged.contract_preflight_proposals.extend(
-            getattr(s, "contract_preflight_proposals", []) or []
-        )
-        merged.contract_proposals.extend(getattr(s, "contract_proposals", []) or [])
-        merged.verified_implementation_snapshots.extend(
-            getattr(s, "verified_implementation_snapshots", []) or []
-        )
-        merged.semantic_binding_availability.extend(
-            getattr(s, "semantic_binding_availability", []) or []
-        )
-        merged.framework_reports.extend(
-            getattr(s, "framework_reports", []) or []
-        )
-        merged.unresolved_connections.update(
-            getattr(s, "unresolved_connections", {}) or {}
-        )
-        merged.connection_observations.extend(
-            getattr(s, "connection_observations", []) or []
-        )
-        merged.aspx_results.extend(s.aspx_results)
-        merged.razor_results.extend(s.razor_results)
-        merged.vue_results.extend(s.vue_results)
-        merged.sp_relations.extend(s.sp_relations)
-        merged.legacy_sp_relations.extend(
-            getattr(s, "legacy_sp_relations", []) or []
-        )
-        merged.table_relations.extend(s.table_relations)
-    merged.calculate_statistics()
-    return merged
 
 
 def _wrapper_receiver_sources(
@@ -2132,7 +2069,8 @@ def _inline_match_rank(match: TableMatchProgram) -> tuple[bool, tuple[int, int, 
 
 
 def find_by_sp(
-    req: FindBySPRequest, evidence_source: EvidenceSource = evidence_for_scope
+    req: FindBySPRequest, evidence_source: EvidenceSource = evidence_for_scope,
+    *, scan_store: ScanStore | None = None, cache_store: CacheStore | None = None,
 ) -> FindBySPResponse:
     """反查「哪些程式呼叫了這支 SP」，使用 Gateway invocation 與 SQL Execution Graph，無 AI。
 
@@ -2158,41 +2096,20 @@ def find_by_sp(
     sp_name = (req.sp_name or "").strip()
     if not sp_name:
         return FindBySPResponse(sp_name=sp_name, matches=[])
-    # The refusal of a Database on several hosts comes before any source scan
-    # and before the cache_only skip, so it costs one directory listing.
-    found = (
-        sql_cache_store.CacheIdentity.of(req.db_server, req.database)
-        if req.db_server.strip() and req.database.strip()
-        else sql_cache_store.find_cache_identity(req.database)
+    def check_identity(found: CacheIdentityResult) -> None:
+        if isinstance(found, sql_cache_store.AmbiguousServer):
+            raise AmbiguousDatabaseError(found)
+
+    context = build_request_context(
+        req,
+        scan_store=scan_store if scan_store is not None else RealScanStore(),
+        cache_store=cache_store if cache_store is not None else RealCacheStore(),
+        check_identity=check_identity,
     )
-    if isinstance(found, sql_cache_store.AmbiguousServer):
-        raise AmbiguousDatabaseError(found)
-    sql_cache_identity = found
-
-    project = req.source.project if req.source else ""
-    repo = req.source.repo if req.source else ""
-    sub_path = req.source.path if req.source else ""
-
-    if req.cache_only and not req.refresh:
-        # 在不觸發 clone/pull 的前提下，推算這個系統實際會掃描的路徑清單
-        # （與 resolve_scan_roots() 內部邏輯一致：子路徑存在才用子路徑，
-        # 否則用整個 repo 根目錄），只用來檢查快取是否已存在。若 source.path 是
-        # 多個子資料夾清單，必須每個都已有快取才算「已分析過」，只要有任一個
-        # 尚未掃描就跳過，避免回傳部分過時的比對結果。
-        candidate_roots = peek_scan_roots({"project": project, "repo": repo, "path": sub_path})
-        if not all(has_cache(r) for r in candidate_roots):
-            return FindBySPResponse(sp_name=sp_name, matches=[], skipped=True)
-
-    source = {
-        "project": project,
-        "repo": repo,
-        "branch": req.source.branch if req.source else "",
-        "path": sub_path,
-    }
-    roots = resolve_scan_roots(source, refresh=req.refresh)
-    scans = [_get_scan(r, refresh=req.refresh) for r in roots]
-    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
-    root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
+    if isinstance(context, Skipped):
+        return FindBySPResponse(sp_name=sp_name, matches=[], skipped=True)
+    scans, scan, root = context.scans, context.scan, context.root
+    sql_cache_identity = context.scope.sql_cache_identity
 
     sp_lower = bare_key(sp_name)
     matches: List[SPMatchProgram] = []
@@ -2205,8 +2122,7 @@ def find_by_sp(
             "請提供 system_id 並先執行 refresh_sql_cli。"
         )
     _cached, _graph = _require_sql_execution_graph(req.database, sql_cache_identity)
-    scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
-    evidence = evidence_source(scope, scans, scan, root, refresh=req.refresh)
+    evidence = evidence_source(context.scope, scans, scan, root, refresh=req.refresh)
     rated_invocations = evidence.rated_invocations
     for invocation in rated_invocations:
         # `executed_procedure_name`, not `procedure_name`: a call whose inline SQL

@@ -16,6 +16,8 @@ from service import analyze_service, derived_execution_evidence
 from service.api import app
 from service.sql_cache_store import CacheIdentity, normalize_server
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
+from tests.request_context_fixtures import RequestStores
+from service.request_context_adapters import RealCacheStore
 from tests.sql_cache_fixtures import CacheRoot, cache_payload, execution_graph, write_cache
 from tests.test_find_by_sp_likely_matches import _graph as _graph_with_shared_sp
 from tests.test_find_by_sp_likely_matches import _scan
@@ -44,12 +46,15 @@ def _write_host(cache_root: Path, host: str, graph: dict) -> None:
     write_cache(cache_root, CacheIdentity.of(host, "OrdersDb"), cache_payload("OrdersDb", graph=graph))
 
 
-def _wire_scan(monkeypatch, tmp_path: Path) -> None:
+def _wire_scan(monkeypatch, tmp_path: Path) -> RequestStores:
     scan = _scan(tmp_path)
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    stores = RequestStores.of(tmp_path, scan)
+    stores.cache_store = RealCacheStore()
+    stores.install_legacy(monkeypatch)
+    stores.install_http(monkeypatch)
     monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: "scan-v1")
     monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: "commit-v1")
+    return stores
 
 
 def _sp_request(**extra) -> dict:
@@ -77,23 +82,23 @@ def two_hosts(monkeypatch, tmp_path):
     with RatedInvocationsRetention(), CacheRoot() as cache_root:
         _write_host(cache_root, HOST_WITH_THE_SP, _graph_with_shared_sp())
         _write_host(cache_root, HOST_WITHOUT_THE_SP, _graph_without_the_sp())
-        _wire_scan(monkeypatch, tmp_path)
-        yield cache_root
+        stores = _wire_scan(monkeypatch, tmp_path)
+        yield stores
 
 
 @pytest.fixture
 def one_host(monkeypatch, tmp_path):
     with RatedInvocationsRetention(), CacheRoot() as cache_root:
         _write_host(cache_root, HOST_WITH_THE_SP, _graph_with_shared_sp())
-        _wire_scan(monkeypatch, tmp_path)
-        yield cache_root
+        stores = _wire_scan(monkeypatch, tmp_path)
+        yield stores
 
 
 @pytest.fixture
 def no_host(monkeypatch, tmp_path):
     with RatedInvocationsRetention(), CacheRoot() as cache_root:
-        _wire_scan(monkeypatch, tmp_path)
-        yield cache_root
+        stores = _wire_scan(monkeypatch, tmp_path)
+        yield stores
 
 
 @pytest.mark.parametrize(
@@ -179,8 +184,10 @@ def test_a_call_without_a_host_for_a_database_on_one_host_keeps_today_behavior(
 def test_the_ambiguous_code_comes_before_the_cache_only_skip(
     two_hosts, monkeypatch, endpoint: str, payload: dict
 ) -> None:
-    monkeypatch.setattr(analyze_service, "peek_scan_roots", lambda source: [Path("unscanned")])
-    monkeypatch.setattr(analyze_service, "has_cache", lambda root: False)
+    two_hosts.scan_store.cached_roots.clear()
+    if endpoint != "/find_by_sp":
+        monkeypatch.setattr(analyze_service, "peek_scan_roots", lambda source: [Path("unscanned")])
+        monkeypatch.setattr(analyze_service, "has_cache", lambda root: False)
 
     response = client.post(endpoint, json=payload)
 
@@ -198,12 +205,15 @@ def test_an_ambiguous_database_is_refused_before_any_source_scan(
     def must_not_scan(source, refresh=False):
         raise AssertionError("an ambiguous Database must not resolve or scan source")
 
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", must_not_scan)
+    two_hosts.scan_store.calls.clear()
+    if endpoint != "/find_by_sp":
+        monkeypatch.setattr(analyze_service, "resolve_scan_roots", must_not_scan)
 
     response = client.post(endpoint, json=payload)
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "ambiguous_database"
+    assert two_hosts.scan_store.calls == []
 
 
 def test_a_blank_host_counts_as_no_host_named_for_a_database_on_two_hosts(two_hosts) -> None:

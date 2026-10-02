@@ -22,10 +22,10 @@ from service import analyze_service, derived_execution_evidence
 from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FindBySPRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
+from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     cache_payload,
     execution_graph,
-    one_server_holds_every_database,
 )
 
 
@@ -100,7 +100,7 @@ def _wire(
     scan_saved_at: str = "scan-v1",
     scan_commit: Optional[str] = "commit-v1",
     sql_cache_saved_at: str = "sql-cache-v1",
-) -> None:
+) -> RequestStores:
     """Wire scan/cache lookups so repeated calls see the same *recorded state*.
 
     Production reads the scan's and the SQL cache's recorded save time (ticket
@@ -114,15 +114,8 @@ def _wire(
     reuse for a reason unrelated to whatever a test is isolating.
     """
     sql_payload = cache_payload("OrdersDb", graph=graph)
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: scan_saved_at)
     monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: scan_commit)
-    monkeypatch.setattr(
-        analyze_service.sql_cache_store,
-        "find_cache_identity",
-        one_server_holds_every_database,
-    )
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -133,6 +126,7 @@ def _wire(
         "cached_saved_at",
         lambda identity: sql_cache_saved_at,
     )
+    return RequestStores.of(tmp_path, scan)
 
 
 def _request(sp_name: str, *, refresh: bool = False) -> FindBySPRequest:
@@ -163,7 +157,7 @@ def _proven(class_name: str, method_name: str, procedure_name: str) -> DbInvocat
 def test_find_by_sp_filters_the_evidence_it_is_given(monkeypatch, tmp_path: Path) -> None:
     """The lookup keeps the invocations of the asked procedure and nothing else."""
     with RatedInvocationsRetention():
-        _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph("usp_Alpha", "usp_Beta"))
+        stores = _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph("usp_Alpha", "usp_Beta"))
         # The scan has AlphaPage call usp_Alpha; this evidence says BetaPage does,
         # so the answer shows which of the two the lookup read.
         given = DerivedExecutionEvidence(
@@ -176,7 +170,10 @@ def test_find_by_sp_filters_the_evidence_it_is_given(monkeypatch, tmp_path: Path
             asked_scopes.append(scope)
             return given
 
-        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"), evidence_source=in_memory)
+        response = analyze_service.find_by_sp(
+            _request("dbo.usp_Alpha"), evidence_source=in_memory,
+            scan_store=stores.scan_store, cache_store=stores.cache_store,
+        )
 
         assert [(m.program, m.file, m.caller) for m in response.matches] == [
             ("betapage", "BetaPage.cs", "BetaPage.SaveBeta")
@@ -190,11 +187,11 @@ def test_find_by_sp_filters_the_evidence_it_is_given(monkeypatch, tmp_path: Path
 def test_answer_identical_with_reuse_active_and_defeated_for_a_match(monkeypatch, tmp_path: Path) -> None:
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
+        stores = _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
 
-        analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        reused = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        fresh = analyze_service.find_by_sp(_request("dbo.usp_Alpha", refresh=True))  # defeat reuse
+        analyze_service.find_by_sp(_request("dbo.usp_Alpha"), scan_store=stores.scan_store, cache_store=stores.cache_store)
+        reused = analyze_service.find_by_sp(_request("dbo.usp_Alpha"), scan_store=stores.scan_store, cache_store=stores.cache_store)
+        fresh = analyze_service.find_by_sp(_request("dbo.usp_Alpha", refresh=True), scan_store=stores.scan_store, cache_store=stores.cache_store)
 
         assert [(m.program, m.file) for m in reused.matches] == [(m.program, m.file) for m in fresh.matches]
         assert [m.program for m in reused.matches] == ["alphapage"]
@@ -203,11 +200,11 @@ def test_answer_identical_with_reuse_active_and_defeated_for_a_match(monkeypatch
 def test_answer_identical_with_reuse_active_and_defeated_for_no_match(monkeypatch, tmp_path: Path) -> None:
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
+        stores = _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
 
-        analyze_service.find_by_sp(_request("dbo.usp_Missing"))
-        reused = analyze_service.find_by_sp(_request("dbo.usp_Missing"))
-        fresh = analyze_service.find_by_sp(_request("dbo.usp_Missing", refresh=True))  # defeat reuse
+        analyze_service.find_by_sp(_request("dbo.usp_Missing"), scan_store=stores.scan_store, cache_store=stores.cache_store)
+        reused = analyze_service.find_by_sp(_request("dbo.usp_Missing"), scan_store=stores.scan_store, cache_store=stores.cache_store)
+        fresh = analyze_service.find_by_sp(_request("dbo.usp_Missing", refresh=True), scan_store=stores.scan_store, cache_store=stores.cache_store)
 
         assert reused.matches == [] == fresh.matches
 
@@ -215,10 +212,10 @@ def test_answer_identical_with_reuse_active_and_defeated_for_no_match(monkeypatc
 def test_two_different_sp_names_in_one_scope_get_their_own_programs(monkeypatch, tmp_path: Path) -> None:
     """The evidence does not depend on which SP was asked about (ADR-0013)."""
     with RatedInvocationsRetention():
-        _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph("usp_Alpha", "usp_Beta"))
+        stores = _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph("usp_Alpha", "usp_Beta"))
 
-        alpha_response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        beta_response = analyze_service.find_by_sp(_request("dbo.usp_Beta"))
+        alpha_response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"), scan_store=stores.scan_store, cache_store=stores.cache_store)
+        beta_response = analyze_service.find_by_sp(_request("dbo.usp_Beta"), scan_store=stores.scan_store, cache_store=stores.cache_store)
 
         assert [m.program for m in alpha_response.matches] == ["alphapage"]
         assert [m.program for m in beta_response.matches] == ["betapage"]
@@ -265,9 +262,9 @@ def test_find_by_sp_finds_a_procedure_run_by_a_bare_name_in_inline_sql(
     """
     with RatedInvocationsRetention():
         scan = _inline_scan(tmp_path, "[dbo].[usp_Alpha]")
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha"))
+        stores = _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha"))
 
-        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"), scan_store=stores.scan_store, cache_store=stores.cache_store)
 
         assert [match.program for match in response.matches] == ["alphapage"]
         # The row has to say which procedure it matched, and how it was named.
@@ -281,9 +278,9 @@ def test_find_by_sp_finds_a_procedure_run_by_inline_exec_text(
     """The same call, written with the EXECUTE keyword the batch may omit."""
     with RatedInvocationsRetention():
         scan = _inline_scan(tmp_path, "EXEC dbo.usp_Alpha @OrderId")
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha"))
+        stores = _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha"))
 
-        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"), scan_store=stores.scan_store, cache_store=stores.cache_store)
 
         assert [match.program for match in response.matches] == ["alphapage"]
         assert response.matches[0].procedure_name_source == "exec_keyword"
@@ -295,9 +292,9 @@ def test_find_by_sp_ignores_a_procedure_merely_named_inside_inline_sql(
     """A name inside a larger statement is not a call, and never becomes a match."""
     with RatedInvocationsRetention():
         scan = _inline_scan(tmp_path, "SELECT * FROM usp_Alpha")
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha"))
+        stores = _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha"))
 
-        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"), scan_store=stores.scan_store, cache_store=stores.cache_store)
 
         assert response.matches == []
         assert response.diagnostics == []
@@ -307,9 +304,9 @@ def test_find_by_sp_marks_a_declared_procedure_row_as_declared(monkeypatch, tmp_
     """A call that selected stored-procedure mode names its own procedure."""
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
+        stores = _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
 
-        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"), scan_store=stores.scan_store, cache_store=stores.cache_store)
 
         assert response.matches[0].procedure_name_source == "declared"
         assert response.matches[0].procedure_name == "usp_alpha"

@@ -11,6 +11,7 @@ from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 from service import analyze_service
 from service.schemas import AnalyzeRequest, FindBySPRequest, FindByTableRequest, FlowChainRequest
 from service.sql_execution_graph import build_sql_execution_graph
+from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     one_server_holds_every_database,
     analyzer_operation,
@@ -402,9 +403,8 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
         }
     )
     monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(tmp_path, scan)
+    stores.install_legacy(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -433,7 +433,9 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
             database="OrdersDb",
             cache_only=False,
             wrapper_contract="sqlobject",
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
     table_response = analyze_service.find_by_table(
         FindByTableRequest(
@@ -541,9 +543,7 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
 
 def test_find_by_sp_accepts_schema_qualified_name(monkeypatch, tmp_path: Path) -> None:
     scan = _scan(tmp_path)
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(tmp_path, scan)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -556,7 +556,9 @@ def test_find_by_sp_accepts_schema_qualified_name(monkeypatch, tmp_path: Path) -
             sp_name="dbo.usp_Direct",
             database="OrdersDb",
             cache_only=False,
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     assert [(match.program, match.file) for match in response.matches] == [
@@ -567,9 +569,7 @@ def test_find_by_sp_accepts_schema_qualified_name(monkeypatch, tmp_path: Path) -
 def test_find_by_sp_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_path: Path) -> None:
     scan = _scan(tmp_path)
     scan.connection_sources.pop(str((tmp_path / "DirectPage.cs").resolve()))
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(tmp_path, scan)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -582,7 +582,9 @@ def test_find_by_sp_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_pat
             sp_name="dbo.usp_Direct",
             database="OrdersDb",
             cache_only=False,
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     assert response.matches == []

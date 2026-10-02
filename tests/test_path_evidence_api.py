@@ -17,6 +17,7 @@ from service.schemas import (
     SPMatchProgram,
 )
 from tests.sql_cache_fixtures import one_server_holds_every_database
+from service.request_context_adapters import InMemoryCacheStore, InMemoryScanStore
 
 
 def test_path_evidence_route_rejects_empty_path_id() -> None:
@@ -253,26 +254,14 @@ def test_relationship_routes_map_graph_readiness_to_conflict(
 
 
 def test_find_by_sp_cache_only_skip_precedes_graph_readiness(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        analyze_service,
-        "peek_scan_roots",
-        lambda source: [tmp_path],
-    )
-    monkeypatch.setattr(analyze_service, "has_cache", lambda root: False)
-    monkeypatch.setattr(
-        analyze_service,
-        "resolve_scan_roots",
-        lambda source, refresh=False: (_ for _ in ()).throw(
-            AssertionError("cache-only skip must not resolve or scan source")
-        ),
-    )
-
     response = analyze_service.find_by_sp(
         FindBySPRequest(
             source={"project": "orders", "repo": "orders"},
             sp_name="dbo.usp_SaveOrder",
             database="OrdersDb",
-        )
+        ),
+        scan_store=InMemoryScanStore(roots=[tmp_path]),
+        cache_store=InMemoryCacheStore(),
     )
 
     assert response.skipped is True
