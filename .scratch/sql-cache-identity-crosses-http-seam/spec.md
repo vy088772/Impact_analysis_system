@@ -247,5 +247,8 @@ comment only.
 - The resolver compares the Database name without case, as the Candidate
   Database Set does. Both use `sql_cache_identity.database_identity()`. A
   catalog that declares `PUR` and `pur` on one host now gets one request.
-- The client removes white space from the declared host. A host of spaces only
-  sends no `db_server`, as the spec asks for a blank host.
+- On `/find_by_sp` and `/find_by_table`, the client removes white space from
+  the declared host. A host of spaces only sends no `db_server`, as the spec
+  asks for a blank host. The `/analyze` and `/flow_chain` fan-out sends the
+  declared host text with no change. The server removes the white space, so
+  the answer is the same.
