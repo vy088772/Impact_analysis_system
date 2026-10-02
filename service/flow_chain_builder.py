@@ -151,6 +151,7 @@ def build_forward_chain(
     anchor_method: str,
     *,
     owns_file: Callable[[str], bool],
+    owns_action: Callable[[str, str], bool] = lambda file_path, method_name: True,
     graph: Optional[Mapping[str, object]] = None,
     invocations: Iterable[DbInvocation] = (),
 ) -> Optional[dict]:
@@ -163,14 +164,19 @@ def build_forward_chain(
     scan：ProjectScanResult，inline SQL 資料表取自它的 table_relations。
     owns_file：一個檔案路徑是否屬於這支程式；這支程式的檔案就是
     scan.csharp_results 裡通過它的那些。
+    owns_action：這支程式是否擁有某檔案裡的某個 action；錨點必須是這支程式擁有的
+    action（WebForms 程式擁有檔案內所有方法）。
 
-    回傳 None 代表在這支程式的檔案裡完全找不到這個方法名稱（呼叫端應視為此
-    錨點無效，換下一個候選）。
+    回傳 None 代表在這支程式的檔案裡完全找不到這個方法名稱，或它不是這支程式
+    擁有的 action（呼叫端應視為此錨點無效，換下一個候選）。
     """
     matched_files = [fr for fr in scan.csharp_results if owns_file(fr.file_path)]
     adj = _method_adjacency(matched_files)
-    if anchor_method not in adj and not any(
-        anchor_method == m.name for fr in matched_files for cls in fr.classes for m in cls.methods
+    if not any(
+        anchor_method == m.name and owns_action(fr.file_path, m.name)
+        for fr in matched_files
+        for cls in fr.classes
+        for m in cls.methods
     ):
         return None
 

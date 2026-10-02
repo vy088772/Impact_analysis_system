@@ -427,6 +427,24 @@ def _resolution_owns_invocation(
     )
 
 
+def _invocation_owner(
+    resolutions: Sequence[_ProgramResolution], scan: ProjectScanResult, root: Path
+) -> Callable[[DbInvocation], bool]:
+    """A test for whether any of `resolutions` owns one Database Invocation's action."""
+    files_by_relative = {
+        _rel(result.file_path, root).casefold(): result.file_path
+        for result in scan.csharp_results
+    }
+
+    def owned(invocation: DbInvocation) -> bool:
+        return any(
+            _resolution_owns_invocation(resolution, invocation, files_by_relative)
+            for resolution in resolutions
+        )
+
+    return owned
+
+
 def _program_resolutions_for_names(
     names: Sequence[str], scan: ProjectScanResult
 ) -> Tuple[List[Any], List[_ProgramResolution]]:
@@ -1576,17 +1594,7 @@ def get_path_evidence(
     joined_graph = evidence.graph
     rated_invocations = evidence.rated_invocations
     if req.program_names:
-        files_by_relative = {
-            _rel(result.file_path, root).casefold(): result.file_path
-            for result in scan.csharp_results
-        }
-
-        def owned(invocation: DbInvocation) -> bool:
-            return any(
-                _resolution_owns_invocation(resolution, invocation, files_by_relative)
-                for resolution in resolutions
-            )
-
+        owned = _invocation_owner(resolutions, scan, root)
         rated_invocations = [invocation for invocation in rated_invocations if owned(invocation)]
     selected_path: Mapping[str, object] | None = None
     selected_invocation: DbInvocation | None = None
@@ -3022,30 +3030,33 @@ def flow_chain(
         )
 
     # direction == "forward"（預設）
-    program_base = _normalize_program(req.program_name)
-
-    def owns_file(file_path: str) -> bool:
-        return _file_matches(file_path, program_base)
-
-    matched_files = [r for r in scan.csharp_results if owns_file(r.file_path)]
+    # Same program resolution as /analyze: several screens of one name merge into one scope.
+    matched_files, resolutions = _program_resolutions_for_names([req.program_name], scan)
     if not matched_files:
         return FlowChainResponse(direction="forward", forward_chain=None, source_root=str(root))
+
+    def owns_file(file_path: str) -> bool:
+        return any(resolution.owns_file(file_path) for resolution in resolutions)
+
+    def owns_action(file_path: str, method_name: str) -> bool:
+        return any(resolution.owns_action(file_path, method_name) for resolution in resolutions)
 
     rated_invocations: List[DbInvocation] = []
     execution_graph: Dict[str, object] = {}
     if req.database:
-        _cached, execution_graph = _require_sql_execution_graph(req.database, sql_cache_identity)
-        rated_invocations, execution_graph = _rated_execution_invocations(
-            scope,
-            scan,
-            matched_files,
-            root,
+        _require_sql_execution_graph(req.database, sql_cache_identity)
+        evidence = evidence_source(
+            scope, scans, scan, root, needed_files=matched_files, refresh=req.refresh
         )
+        owned = _invocation_owner(resolutions, scan, root)
+        rated_invocations = [i for i in evidence.rated_invocations if owned(i)]
+        execution_graph = evidence.graph
 
     forward = flow_chain_builder.build_forward_chain(
         scan,
         req.anchor_method,
         owns_file=owns_file,
+        owns_action=owns_action,
         graph=execution_graph,
         invocations=rated_invocations,
     )
