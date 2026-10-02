@@ -10,18 +10,85 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from canonical_object_identity import ObjectName
 from code_analyzer.models import MethodInfo
 from code_analyzer.project_scanner import CSharpTableRelation, INLINE_SQL_PARSED, ProjectScanResult
 from service import analyze_service
 from service.schemas import AzureSource, FindByTableRequest, FlowChainRequest
-from service.sql_cache_store import CacheIdentity, build_object_location_index
+from service.sql_cache_store import AmbiguousServer, CacheIdentity, build_object_location_index
 from tests.sql_cache_fixtures import cache_payload
 from tests.scan_fixtures import csharp_file, scan_of
 from service.request_context_adapters import InMemoryCacheStore
 from tests.request_context_fixtures import RequestStores
 
 _SOURCE = AzureSource(project="orders", repo="orders")
+
+
+@pytest.mark.parametrize("direction", ["forward", "backward"])
+def test_flow_skips_when_one_candidate_root_has_no_scan_cache(tmp_path: Path, direction: str) -> None:
+    stores = RequestStores.of(tmp_path, scan_of(tmp_path, [], []))
+    stores.scan_store.candidate_roots = [tmp_path, tmp_path / "unscanned"]
+
+    response = analyze_service.flow_chain(
+        FlowChainRequest(source=_SOURCE, direction=direction),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
+    )
+
+    assert response.model_dump() == {
+        "direction": direction,
+        "forward_chain": None,
+        "backward_chains": [],
+        "diagnostics": [],
+        "source_root": "",
+        "skipped": True,
+    }
+
+
+@pytest.mark.parametrize("direction", ["forward", "backward"])
+def test_flow_reads_an_ambiguous_database_as_not_scanned(tmp_path: Path, direction: str) -> None:
+    load = MethodInfo(name="Load", access_modifier="private", return_type="void")
+    stores = RequestStores.of(tmp_path, _scan(tmp_path, [load], []))
+    stores.cache_store = InMemoryCacheStore({
+        "OrdersDb": AmbiguousServer("OrdersDb", ("host-a", "host-b")),
+    })
+
+    with pytest.raises(analyze_service.SqlExecutionGraphRequiredError) as caught:
+        analyze_service.flow_chain(
+            FlowChainRequest(
+                source=_SOURCE,
+                direction=direction,
+                program_name="OrderPage",
+                anchor_method="Load",
+                table_name="Orders",
+                database="OrdersDb",
+            ),
+            scan_store=stores.scan_store,
+            cache_store=stores.cache_store,
+        )
+
+    assert caught.value.code == "sql_execution_graph_required"
+    assert caught.value.reason == "missing_or_invalid"
+    assert caught.value.database == "OrdersDb"
+
+
+@pytest.mark.parametrize("direction", ["forward", "backward"])
+def test_flow_refresh_bypasses_a_missing_scan_cache(tmp_path: Path, direction: str) -> None:
+    stores = RequestStores.of(tmp_path, scan_of(tmp_path, [], []))
+    stores.scan_store.cached_roots.clear()
+
+    response = analyze_service.flow_chain(
+        FlowChainRequest(source=_SOURCE, direction=direction, refresh=True),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
+    )
+
+    assert response.skipped is False
+    assert response.source_root == str(tmp_path)
+    assert response.forward_chain is None
+    assert response.backward_chains == []
 
 
 def _relation(root: Path, method: str, table: ObjectName, access_type: str = "SELECT") -> CSharpTableRelation:
@@ -46,13 +113,13 @@ def _serve(monkeypatch, root: Path, scan: ProjectScanResult, listed_tables: list
     stores = RequestStores.of(root, scan)
     stores.cache_store = InMemoryCacheStore()
     if listed_tables is None:
-        stores.install_legacy_flow(monkeypatch)
+        stores.install_flow(monkeypatch)
         stores.install_table(monkeypatch)
         return
     identity = CacheIdentity.of("vmsystest07", "Response")
     index = build_object_location_index(identity, cache_payload("Response", tables=listed_tables))
     stores.cache_store.identities.update({"": identity, "Response": identity})
-    stores.install_legacy_flow(monkeypatch)
+    stores.install_flow(monkeypatch)
     stores.install_table(monkeypatch)
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_object_location_index", lambda given: index)
 

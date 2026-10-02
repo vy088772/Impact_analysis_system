@@ -398,7 +398,6 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
     )
     monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
     stores = RequestStores.of(tmp_path, scan)
-    stores.install_legacy_flow(monkeypatch)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -452,7 +451,9 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
             database="OrdersDb",
             cache_only=False,
             wrapper_contract="sqlobject",
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     sp_match = next(match for match in sp_response.matches if match.program == "directpage")
@@ -597,9 +598,7 @@ def test_find_by_sp_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_pat
 
 def test_backward_flow_preserves_graph_path_and_ui_anchor(monkeypatch, tmp_path: Path) -> None:
     scan = _scan(tmp_path)
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(tmp_path, scan)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -613,7 +612,9 @@ def test_backward_flow_preserves_graph_path_and_ui_anchor(monkeypatch, tmp_path:
             table_name="dbo.SOrder",
             database="OrdersDb",
             cache_only=False,
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     order_chain = next(
@@ -665,9 +666,7 @@ def test_find_by_table_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_
 def test_backward_flow_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_path: Path) -> None:
     scan = _scan(tmp_path)
     scan.connection_sources.pop(str((tmp_path / "DirectPage.cs").resolve()))
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(tmp_path, scan)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -681,7 +680,9 @@ def test_backward_flow_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_
             table_name="dbo.SOrder",
             database="OrdersDb",
             cache_only=False,
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     assert any(

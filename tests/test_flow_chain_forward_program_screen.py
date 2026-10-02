@@ -15,10 +15,10 @@ from service import analyze_service
 from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FlowChainRequest
 from tests.program_screen_fixtures import _scan
+from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     cache_payload,
     execution_graph,
-    one_server_holds_every_database,
 )
 
 _DATABASE = "OrdersDb"
@@ -88,9 +88,7 @@ def _forward(
     *,
     procedures: Sequence[str],
 ):
-    monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda src, refresh=False: [root])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda r, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(root, scan)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -107,6 +105,8 @@ def _forward(
             refresh=True,
         ),
         evidence_source=source,
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
 

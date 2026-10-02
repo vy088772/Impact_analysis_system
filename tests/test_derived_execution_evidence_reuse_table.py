@@ -184,7 +184,6 @@ def test_backward_flow_uses_the_given_scope_paths_and_diagnostics(
 ) -> None:
     scan = _scan(tmp_path)
     stores = _wire(monkeypatch, scan, tmp_path, _graph())
-    stores.install_legacy(monkeypatch)
     proven = DbInvocation(
         class_name="AlphaPage",
         method_name="SaveAlpha",
@@ -240,6 +239,8 @@ def test_backward_flow_uses_the_given_scope_paths_and_diagnostics(
             refresh=True,
         ),
         evidence_source=source,
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     assert requested_scopes == [database]
@@ -290,7 +291,6 @@ def test_backward_flow_reuses_the_whole_evidence_of_an_earlier_request(
 ) -> None:
     with RatedInvocationsRetention():
         stores = _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph())
-        stores.install_legacy_flow(monkeypatch)
 
         def backward(table_name: str):
             return analyze_service.flow_chain(
@@ -301,6 +301,8 @@ def test_backward_flow_reuses_the_whole_evidence_of_an_earlier_request(
                     database="OrdersDb",
                     cache_only=False,
                 ),
+                scan_store=stores.scan_store,
+                cache_store=stores.cache_store,
             )
 
         if first_endpoint == "backward":

@@ -141,7 +141,7 @@ def test_path_evidence_with_no_host_for_a_database_on_two_hosts_answers_not_scan
 def test_flow_chain_with_no_host_for_a_database_on_two_hosts_answers_not_scanned(
     two_hosts, monkeypatch, direction_fields: dict
 ) -> None:
-    two_hosts.install_legacy(monkeypatch)
+    two_hosts.install_flow(monkeypatch)
     response = client.post(
         "/flow_chain",
         json={

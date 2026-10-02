@@ -86,8 +86,8 @@ from .shared_component import (
     resolve_shared_components,
 )
 from .reference_expander import expand_related_programs
-from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
-from .scan_store import cache_status, cached_commit, get_or_scan, has_cache, save_scan
+from .repo_manager import repo_dir, resolve_scan_roots
+from .scan_store import cache_status, cached_commit, get_or_scan, save_scan
 from . import sql_cache_store
 from .request_context import Skipped, build_request_context, merge_scans as _merge_scans
 from .request_context_adapters import CacheIdentityResult, CacheStore, RealCacheStore, RealScanStore, ScanStore
@@ -2550,42 +2550,24 @@ def _full_key_parts(key: str) -> ObjectName:
 
 
 def flow_chain(
-    req: FlowChainRequest, evidence_source: EvidenceSource = evidence_for_scope
+    req: FlowChainRequest, evidence_source: EvidenceSource = evidence_for_scope,
+    *, scan_store: ScanStore | None = None, cache_store: CacheStore | None = None,
 ) -> FlowChainResponse:
     """組出「關係鏈」候選清單（純靜態組裝，見 flow_chain_builder.py，無 AI 判斷）。
 
-    cache_only 的 skip 判斷邏輯與 find_by_sp()/find_by_table() 完全對稱
-    （多子資料夾 source 需全部已有快取才算「已分析過」），詳見 find_by_sp()
-    的 docstring 說明為何不能只用 repo_manager.is_cloned() 判斷。
+    request context（請求共用上下文）統一準備掃描與證據範圍。
+    本處理器建立自己的跳過回應，並將未指定主機的同名多主機資料庫視為未掃描。
     """
-    # A Database on several hosts with no host named is "not scanned" here.
-    found = (
-        sql_cache_store.CacheIdentity.of(req.db_server, req.database)
-        if req.db_server.strip() and req.database.strip()
-        else sql_cache_store.find_cache_identity(req.database)
+    context = build_request_context(
+        req,
+        scan_store=scan_store if scan_store is not None else RealScanStore(),
+        cache_store=cache_store if cache_store is not None else RealCacheStore(),
     )
-    sql_cache_identity = found if isinstance(found, sql_cache_store.CacheIdentity) else None
-    project = req.source.project if req.source else ""
-    repo = req.source.repo if req.source else ""
-    sub_path = req.source.path if req.source else ""
-
-    if req.cache_only and not req.refresh:
-        candidate_roots = peek_scan_roots({"project": project, "repo": repo, "path": sub_path})
-        if not all(has_cache(r) for r in candidate_roots):
-            return FlowChainResponse(direction=req.direction, skipped=True)
-
-    source = {
-        "project": project,
-        "repo": repo,
-        "branch": req.source.branch if req.source else "",
-        "path": sub_path,
-    }
-    roots = resolve_scan_roots(source, refresh=req.refresh)
-    scans = [_get_scan(r, refresh=req.refresh) for r in roots]
-    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
-    root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
-
-    scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
+    if isinstance(context, Skipped):
+        return FlowChainResponse(direction=req.direction, skipped=True)
+    scans, scan, root = context.scans, context.scan, context.root
+    sql_cache_identity = context.scope.sql_cache_identity
+    scope = context.scope
 
     if req.direction == "backward":
         if req.database:

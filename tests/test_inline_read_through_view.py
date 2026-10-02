@@ -284,11 +284,12 @@ def test_flow_chain_backward_lists_the_method_that_reads_through_a_view(monkeypa
     stores = _serve(monkeypatch, tmp_path, _view_reader_scan(tmp_path, ("dbo.vOrder", "SELECT")), _graph(
         views={"dbo.vOrder": ["dbo.Orders"]}
     ))
-    stores.install_legacy(monkeypatch)
 
     response = analyze_service.flow_chain(
         FlowChainRequest(source=_SOURCE, direction="backward", table_name="Orders", database="PUR", cache_only=False),
         evidence_source=lambda scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False: _served["evidence"],
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     assert [(chain["method"], chain["via"]) for chain in response.backward_chains] == [("Load", "direct_sql")]
@@ -298,13 +299,14 @@ def test_flow_chain_forward_still_lists_the_view_and_not_the_table_behind_it(mon
     stores = _serve(monkeypatch, tmp_path, _view_reader_scan(tmp_path, ("dbo.vOrder", "SELECT")), _graph(
         views={"dbo.vOrder": ["dbo.Orders"]}
     ))
-    stores.install_legacy(monkeypatch)
 
     response = analyze_service.flow_chain(
         FlowChainRequest(
             source=_SOURCE, direction="forward", program_name="OrderPage", anchor_method="Load", cache_only=False
         ),
         evidence_source=lambda scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False: _served["evidence"],
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     assert response.forward_chain is not None

@@ -37,15 +37,14 @@ class RequestStores:
             ),
         )
 
-    def install_legacy_flow(self, monkeypatch) -> None:
+    def install_flow(self, monkeypatch) -> None:
         handler = analyze_service.flow_chain
-
-        def flow(request, *args, **kwargs):
-            with monkeypatch.context() as legacy:
-                self.install_legacy(legacy)
-                return handler(request, *args, **kwargs)
-
-        monkeypatch.setattr(analyze_service, "flow_chain", flow)
+        monkeypatch.setattr(
+            analyze_service, "flow_chain",
+            lambda request, *args, **kwargs: handler(
+                request, *args, scan_store=self.scan_store, cache_store=self.cache_store, **kwargs
+            ),
+        )
 
     def install_http(self, monkeypatch) -> None:
         handler = analyze_service.find_by_sp
