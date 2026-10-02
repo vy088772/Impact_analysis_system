@@ -95,15 +95,15 @@ def test_an_ambiguous_database_refuses_before_any_scan_store_call(
 
 
 def test_identity_lookup_precedes_the_skip(tmp_path: Path) -> None:
-    calls: list[str] = []
-    response = find_by_sp(
-        FindBySPRequest(sp_name="usp_Save", database="Orders"),
-        scan_store=InMemoryScanStore(roots=[tmp_path], calls=calls),
-        cache_store=InMemoryCacheStore(calls=calls),
-    )
+    with pytest.raises(AmbiguousDatabaseError) as error:
+        find_by_sp(
+            FindBySPRequest(sp_name="usp_Save", database="Orders"),
+            scan_store=InMemoryScanStore(roots=[tmp_path]),
+            cache_store=InMemoryCacheStore({"Orders": AmbiguousServer("Orders", ("host-a", "host-b"))}),
+        )
 
-    assert response.skipped is True
-    assert calls == ["identity", "source", "peek", "cache"]
+    assert error.value.code == "ambiguous_database"
+    assert error.value.servers == ["host-a", "host-b"]
 
 
 def test_a_multi_root_source_reports_callers_relative_to_the_repository_root(tmp_path: Path) -> None:

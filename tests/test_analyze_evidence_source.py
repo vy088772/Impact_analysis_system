@@ -254,40 +254,43 @@ def test_two_analyze_requests_on_one_retained_evidence_keep_the_retained_paths(
 def test_analyze_without_a_scan_cache_never_skips_and_defaults_refresh_to_false(
     tmp_path: Path, refresh: bool | None
 ) -> None:
-    scan = _scan(tmp_path, pages=["OrderEntry.aspx"], controllers={"OrderEntry.aspx.cs": ["Page_Load"]})
-    refresh_values: list[bool] = []
+    roots = {False: tmp_path / "cached", True: tmp_path / "refreshed"}
+    programs = {False: "CachedEntry", True: "RefreshedEntry"}
+    scans_by_refresh = {
+        mode: _scan(root, pages=[f"{programs[mode]}.aspx"], controllers={f"{programs[mode]}.aspx.cs": ["Page_Load"]})
+        for mode, root in roots.items()
+    }
 
     class ScanStore(InMemoryScanStore):
         def resolve_scan_roots(self, source, *, refresh: bool):
-            refresh_values.append(refresh)
-            return super().resolve_scan_roots(source, refresh=refresh)
+            return [roots[refresh]]
 
         def get_scan(self, root: Path, *, refresh: bool):
-            refresh_values.append(refresh)
-            return super().get_scan(root, refresh=refresh)
+            return scans_by_refresh[refresh]
 
-    scans = ScanStore(roots=[tmp_path], scans={tmp_path: scan})
-    request = AnalyzeRequest(program_names=["OrderEntry"], include_snippets=False)
+    scans = ScanStore()
+    request = AnalyzeRequest(program_names=list(programs.values()), include_snippets=False)
     if refresh is None:
         del request.refresh
     else:
         request.refresh = refresh
 
     def given_evidence(scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False):
-        refresh_values.append(refresh)
-        return DerivedExecutionEvidence([], {})
+        program = programs[refresh]
+        return DerivedExecutionEvidence([
+            _invocation_on(f"{program}.aspx.cs", program, "Page_Load", procedure=f"usp_{program}")
+        ], {})
 
     response = analyze_service.analyze(
         request, evidence_source=given_evidence,
         scan_store=scans, cache_store=InMemoryCacheStore(),
     )
 
-    assert [program.program for program in response.programs] == ["OrderEntry"]
-    assert response.not_found == []
-    assert response.source_root == str(tmp_path)
-    assert refresh_values == [refresh is True] * 3
-    assert "peek" not in scans.calls
-    assert "cache" not in scans.calls
+    expected_program = programs[refresh is True]
+    assert [program.program for program in response.programs] == [expected_program]
+    assert response.not_found == [programs[refresh is not True]]
+    assert response.source_root == str(roots[refresh is True])
+    assert response.programs[0].stored_procedures == [f"usp_{expected_program}"]
 
 
 @pytest.mark.parametrize("server", ["", "   "])

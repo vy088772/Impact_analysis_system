@@ -19,8 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple
 
-from config.settings import settings
-from code_analyzer.azure_fetcher import AzureDevOpsFetcher, AzureFetchError
+from code_analyzer.azure_fetcher import AzureFetchError
 from code_analyzer.connection_source_entry import database_of
 from canonical_object_identity import ObjectName, bare_key, full_key, parse, part_key
 from code_analyzer.csharp_analysis_gateway import (
@@ -527,31 +526,6 @@ def _view_layer_summary(fr, root: Path) -> Dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # 來源解析
 # ─────────────────────────────────────────────────────────────────────────────
-
-def resolve_source(req: AnalyzeRequest) -> List[Path]:
-    """
-    解析請求來源 → 回傳要掃描的本機路徑清單（一律位於 data/repos 之下）。
-
-    - 透過 repo_manager 確保程式碼已 clone 至 data/；不讀取任意本機路徑。
-    - req.refresh=True 時，已存在的 clone 會先 git pull 取得最新。
-    - source.path 通常只有一個子資料夾；若為清單（同一套系統拆成多個 VS 專案
-      資料夾），回傳多個路徑，呼叫端需各自取得掃描結果後合併（見 _merge_scans）。
-    """
-    return resolve_scan_roots(
-        {
-            "project": req.source.project if req.source else "",
-            "repo": req.source.repo if req.source else "",
-            "branch": req.source.branch if req.source else "",
-            "path": req.source.path if req.source else "",
-        },
-        refresh=getattr(req, "refresh", False),
-    )
-
-
-def _get_scan(root: Path, refresh: bool = False) -> ProjectScanResult:
-    """取得（或建立）指定路徑的掃描結果，使用持久化快取。analyze_sp=False → 不連資料庫。"""
-    return get_or_scan(root, refresh=refresh)
-
 
 def _wrapper_receiver_sources(
     scan: ProjectScanResult,

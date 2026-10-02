@@ -1,10 +1,10 @@
-"""Request stores shared by migrated handlers and the remaining legacy handlers."""
+"""Request stores shared by handlers that use injected request context adapters."""
 
 from dataclasses import dataclass
 from pathlib import Path
 
 from code_analyzer.project_scanner import ProjectScanResult
-from service import analyze_service, sql_cache_store
+from service import analyze_service
 from service.request_context_adapters import InMemoryCacheStore, InMemoryScanStore, RealCacheStore
 from tests.sql_cache_fixtures import one_server_holds_every_database
 
@@ -21,12 +21,6 @@ class RequestStores:
             InMemoryScanStore(roots=[root], scans={root: scan}, cached_roots={root}, repository_root=root),
             InMemoryCacheStore({database: identity}),
         )
-
-    def install_legacy(self, monkeypatch) -> None:
-        monkeypatch.setattr(analyze_service, "resolve_scan_roots", self.scan_store.resolve_scan_roots)
-        monkeypatch.setattr(analyze_service, "_get_scan", self.scan_store.get_scan)
-        if isinstance(self.cache_store, InMemoryCacheStore):
-            monkeypatch.setattr(sql_cache_store, "find_cache_identity", self.cache_store.find_cache_identity)
 
     def install_analyze(self, monkeypatch) -> None:
         handler = analyze_service.analyze
