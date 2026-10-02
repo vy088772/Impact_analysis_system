@@ -1,0 +1,136 @@
+........................................................................ [  4%]
+........................................................................ [  8%]
+........................................................................ [ 13%]
+........................................................................ [ 17%]
+........................................................................ [ 22%]
+........................................................................ [ 26%]
+........................................................................ [ 30%]
+........................................................................ [ 35%]
+........................................................................ [ 39%]
+........................................................................ [ 44%]
+........................................................................ [ 48%]
+........................................................................ [ 53%]
+........................................................................ [ 57%]
+........................................................................ [ 61%]
+........................................................................ [ 66%]
+........................................................................ [ 70%]
+........................................................................ [ 75%]
+........................................................................ [ 79%]
+........................................................................ [ 84%]
+........................................................................ [ 88%]
+........................................................................ [ 92%]
+........................................................................ [ 97%]
+...........................................                              [100%]
+==================================== ERRORS ====================================
+_________________ ERROR collecting tests/test_search_roles.py __________________
+tests/test_search_roles.py:15: in <module>
+    analyzer = scanner.sql_analyzers['PUR']
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'PUR'
+------------------------------- Captured stdout --------------------------------
+
+🔍 正在偵測專案類型...
+   檔案統計:
+      cs: 541
+      aspx: 247
+      ascx: 8
+      js: 21
+      ✓ Global.asax (ASP.NET Framework)
+      ✓ Web.config (ASP.NET Framework (WebForms/MVC))
+   判斷依據: ASPX 檔案 (255) + web.config
+   偵測結果: ASP.NET WebForms
+✅ 已載入預存程序偵測設定: /Users/topmost/yuhsienTseng/Impact_analysis_system/config/sp_detection_rules.json
+✅ C# 解析器已初始化
+✅ ASPX 解析器已初始化
+✅ 專案掃描器已初始化
+   專案: TTPUR
+   路徑: /Users/topmost/yuhsienTseng/Impact_analysis_system/data/repos/System_Dept_1/Y-DOCs/TTPUR
+   類型: ASP.NET WebForms
+   解析器: csharp_parser, aspx_parser
+   掃描檔案: *.cs, *.aspx, *.ascx
+
+🔍 正在尋找並解析 web.config...
+📖 讀取 web.config: /Users/topmost/yuhsienTseng/Impact_analysis_system/data/repos/System_Dept_1/Y-DOCs/TTPUR/web.config
+   從 web.config 發現 5 個連線字串
+   👉 發現設定: PUR -> PUR @ vmsystest07.topmost.com.tw
+      ℹ️  設定已存在，保留現有設定
+   👉 發現設定: TTOA -> EFNETDB @ vmsystest08.topmost.com.tw\vmsystest08_pdcs
+      ✅ 已加入可連線清單: TTOA -> vmsystest08.topmost.com.tw\vmsystest08_pdcs
+   👉 發現設定: STC -> STC @ vmsystest07.topmost.com.tw
+      ✅ 已加入可連線清單: STC -> vmsystest07.topmost.com.tw
+   👉 發現設定: ETON -> ETON @ vmsystest07.topmost.com.tw
+      ✅ 已加入可連線清單: ETON -> vmsystest07.topmost.com.tw
+   👉 發現設定: ErrLog -> SysErrorRecord @ vmsystest07.topmost.com.tw
+      ✅ 已加入可連線清單: ErrLog -> vmsystest07.topmost.com.tw
+
+🔌 初始化資料庫連線...
+✅ SQL 分析器已初始化: PUR (PUR)
+🔌 連接資料庫: PUR...
+❌ 連線失敗: ('01000', "[01000] [unixODBC][Driver Manager]Can't open lib 'ODBC Driver 17 for SQL Server' : file not found (0) (SQLDriverConnect)")
+   ⚠️ 未連接任何資料庫
+___________________ ERROR collecting tests/test_sp_tables.py ___________________
+tests/test_sp_tables.py:21: in <module>
+    analyzer = scanner.sql_analyzers['PUR']
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'PUR'
+------------------------------- Captured stdout --------------------------------
+================================================================================
+檢查 usp_CheckProgramAuth 的資料表
+================================================================================
+
+🔍 正在偵測專案類型...
+   檔案統計:
+      cs: 541
+      aspx: 247
+      ascx: 8
+      js: 21
+      ✓ Global.asax (ASP.NET Framework)
+      ✓ Web.config (ASP.NET Framework (WebForms/MVC))
+   判斷依據: ASPX 檔案 (255) + web.config
+   偵測結果: ASP.NET WebForms
+✅ 已載入預存程序偵測設定: /Users/topmost/yuhsienTseng/Impact_analysis_system/config/sp_detection_rules.json
+✅ C# 解析器已初始化
+✅ ASPX 解析器已初始化
+✅ 專案掃描器已初始化
+   專案: TTPUR
+   路徑: /Users/topmost/yuhsienTseng/Impact_analysis_system/data/repos/System_Dept_1/Y-DOCs/TTPUR
+   類型: ASP.NET WebForms
+   解析器: csharp_parser, aspx_parser
+   掃描檔案: *.cs, *.aspx, *.ascx
+
+🔍 正在尋找並解析 web.config...
+📖 讀取 web.config: /Users/topmost/yuhsienTseng/Impact_analysis_system/data/repos/System_Dept_1/Y-DOCs/TTPUR/web.config
+   從 web.config 發現 5 個連線字串
+   👉 發現設定: PUR -> PUR @ vmsystest07.topmost.com.tw
+      ℹ️  設定已存在，保留現有設定
+   👉 發現設定: TTOA -> EFNETDB @ vmsystest08.topmost.com.tw\vmsystest08_pdcs
+      ℹ️  設定已存在，保留現有設定
+   👉 發現設定: STC -> STC @ vmsystest07.topmost.com.tw
+      ℹ️  設定已存在，保留現有設定
+   👉 發現設定: ETON -> ETON @ vmsystest07.topmost.com.tw
+      ℹ️  設定已存在，保留現有設定
+   👉 發現設定: ErrLog -> SysErrorRecord @ vmsystest07.topmost.com.tw
+      ℹ️  設定已存在，保留現有設定
+
+🔌 初始化資料庫連線...
+✅ SQL 分析器已初始化: PUR (PUR)
+🔌 連接資料庫: PUR...
+❌ 連線失敗: ('01000', "[01000] [unixODBC][Driver Manager]Can't open lib 'ODBC Driver 17 for SQL Server' : file not found (0) (SQLDriverConnect)")
+   ⚠️ 未連接任何資料庫
+=============================== warnings summary ===============================
+.venv/lib/python3.14/site-packages/fastapi/testclient.py:1
+  /Users/topmost/yuhsienTseng/Impact_analysis_system/.venv/lib/python3.14/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+tests/test_execution_path_integration.py: 1 warning
+tests/test_sql_analyzer_object_listing.py: 31 warnings
+tests/test_sql_execution_graph.py: 7 warnings
+tests/test_static_analyzer_host.py: 1 warning
+  /Users/topmost/yuhsienTseng/Impact_analysis_system/.venv/lib/python3.14/site-packages/tqdm/std.py:580: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+    if rate and total else datetime.utcfromtimestamp(0))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+ERROR tests/test_search_roles.py - KeyError: 'PUR'
+ERROR tests/test_sp_tables.py - KeyError: 'PUR'
+1627 passed, 41 warnings, 2 errors in 143.85s (0:02:23)

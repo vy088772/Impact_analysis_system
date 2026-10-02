@@ -222,19 +222,17 @@ def _isolated_retention():
         yield
 
 
-def _given_evidence_of(scan: ProjectScanResult, root: Path):
+def _given_evidence_of(cached: dict):
     """An evidence source with the rated invocation of the fixture and its graph."""
-    scope = analyze_service.DerivedExecutionEvidenceScope(
-        repo_roots=(str(root),),
-        database="OrdersDb",
-        sql_cache_identity=one_server_holds_every_database("OrdersDb"),
-        db_name="",
-        wrapper_contract="",
-    )
-    rated, graph = analyze_service._rated_execution_invocations(
-        scope, scan, list(scan.csharp_results), root
-    )
-    given = DerivedExecutionEvidence(rated, graph)
+    given = DerivedExecutionEvidence([
+        DbInvocation(
+            class_name="OrderPage", method_name="Save", database="OrdersDb",
+            procedure_name="usp_SaveOrder", procedure_schema="dbo",
+            evidence=InvocationEvidence.PROVEN,
+            source=InvocationSourceSpan("OrderPage.cs", 0, 10),
+            method_chain=("Save",), source_snapshot_hash="snapshot-hash",
+        )
+    ], cached["sql_execution_graph"])
     return lambda scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False: given
 
 
@@ -248,11 +246,7 @@ def _stub_sources(monkeypatch, root: Path, scan: ProjectScanResult, cached: dict
 def test_path_evidence_finds_a_path_of_the_given_evidence(monkeypatch, tmp_path: Path) -> None:
     scan, cached, path_id = _cached_path_fixture(tmp_path)
     _stub_sources(monkeypatch, tmp_path, scan, cached)
-    given = _given_evidence_of(scan, tmp_path)
-    # The real source would rate the scan again. The given source proves that
-    # the endpoint reads only the evidence it receives.
-    monkeypatch.setattr(analyze_service, "_rated_execution_invocations", None)
-
+    given = _given_evidence_of(cached)
     evidence = analyze_service.get_path_evidence(
         PathEvidenceRequest(path_id=path_id, database="OrdersDb"), evidence_source=given
     )
@@ -267,7 +261,7 @@ def test_path_evidence_reports_a_path_id_missing_from_the_given_evidence(
 ) -> None:
     scan, cached, _ = _cached_path_fixture(tmp_path)
     _stub_sources(monkeypatch, tmp_path, scan, cached)
-    given = _given_evidence_of(scan, tmp_path)
+    given = _given_evidence_of(cached)
 
     with pytest.raises(analyze_service.PathEvidenceError) as error:
         analyze_service.get_path_evidence(

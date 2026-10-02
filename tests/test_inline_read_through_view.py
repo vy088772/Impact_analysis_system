@@ -188,7 +188,6 @@ def _serve(
     monkeypatch.setattr(analyze_service, "_get_scan", lambda given, refresh=False: scan)
     monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name, server="", **_: (None, graph))
     monkeypatch.setitem(_served, "evidence", DerivedExecutionEvidence(list(rated), graph, paths_by_invocation=[[] for _ in rated]))
-    monkeypatch.setattr(analyze_service, "_rated_execution_invocations", lambda *args, **kwargs: (list(rated), graph))
 
 
 def _find_by_table(table_name: str, write_only: bool = False):
@@ -281,7 +280,8 @@ def test_flow_chain_backward_lists_the_method_that_reads_through_a_view(monkeypa
     ))
 
     response = analyze_service.flow_chain(
-        FlowChainRequest(source=_SOURCE, direction="backward", table_name="Orders", database="PUR", cache_only=False)
+        FlowChainRequest(source=_SOURCE, direction="backward", table_name="Orders", database="PUR", cache_only=False),
+        evidence_source=lambda scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False: _served["evidence"],
     )
 
     assert [(chain["method"], chain["via"]) for chain in response.backward_chains] == [("Load", "direct_sql")]
@@ -295,7 +295,8 @@ def test_flow_chain_forward_still_lists_the_view_and_not_the_table_behind_it(mon
     response = analyze_service.flow_chain(
         FlowChainRequest(
             source=_SOURCE, direction="forward", program_name="OrderPage", anchor_method="Load", cache_only=False
-        )
+        ),
+        evidence_source=lambda scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False: _served["evidence"],
     )
 
     assert response.forward_chain is not None

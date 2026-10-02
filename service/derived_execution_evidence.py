@@ -8,24 +8,28 @@ eviction, and the calls to the disk store. An endpoint asks
 `evidence_for_scope` for the evidence of its scope and filters the answer. It
 reads no retention state itself, so the freshness rule lives here only.
 
-The rating step itself (`analyze_service._rated_execution_invocations`) still
-lives in `analyze_service`: `/flow_chain` calls it directly until it moves onto
-this module too.
+The rating step is private to this module. Endpoints only receive evidence
+through `evidence_for_scope`.
 """
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from config.settings import settings
+from canonical_object_identity import ObjectName, parse, schema_qualified
+from code_analyzer.connection_source_entry import database_of, has_resolved_shape, with_database
 from code_analyzer.csharp_analysis_gateway import (
+    CSharpAnalysisGateway,
     DbInvocation,
+    SpCatalog,
+    build_observed_call_evidence_index,
     load_external_wrapper_contract,
     load_wrapper_review_exclusions,
 )
-from code_analyzer.models import FileAnalysisResult
+from code_analyzer.models import FileAnalysisResult, MethodInfo
 from code_analyzer.project_scanner import ProjectScanResult
 
 from . import derived_execution_evidence_store
@@ -429,6 +433,266 @@ def _retain(
     return evidence
 
 
+def _execution_sql_context(
+    sql_cache_identity: Optional[sql_cache_store.CacheIdentity],
+    database_alias: str = "",
+) -> Tuple[SpCatalog, Dict, str]:
+    """Load one SQL cache and build its graph-backed SP catalog."""
+    database_alias = str(database_alias or "").strip()
+    cached = sql_cache_store.load_cached(sql_cache_identity) if sql_cache_identity is not None else None
+    graph = dict((cached or {}).get("sql_execution_graph") or {})
+    graph_database = str(
+        graph.get("database") or (cached or {}).get("database") or database_alias or ""
+    )
+    if graph_database and not graph.get("database"):
+        graph["database"] = graph_database
+
+    procedures_by_database: Dict[str, set[str]] = {}
+
+    def add_procedure(database: str, name: str) -> None:
+        database = database.strip()
+        name = name.strip()
+        if not database or not name or database.casefold() == "unknown":
+            return
+        procedures_by_database.setdefault(database, set()).add(name)
+
+    def qualified_procedure_name(item: Mapping[str, object]) -> str:
+        written = parse(str(item.get("name") or ""))
+        schema = written.schema or str(item.get("schema") or "").strip()
+        return schema_qualified(ObjectName("", "", schema, written.name))
+
+    for node in graph.get("nodes", []) or []:
+        if node.get("type") == "stored_procedure":
+            add_procedure(graph_database, qualified_procedure_name(node))
+    for procedure in (cached or {}).get("procedures", []) or []:
+        add_procedure(graph_database, qualified_procedure_name(procedure))
+    return SpCatalog.from_databases({name: names for name, names in procedures_by_database.items()}), graph, graph_database
+
+
+def _execution_connection_sources(
+    scan: ProjectScanResult,
+    file_path: str,
+    graph_database: str,
+    database_aliases: Iterable[str] = (),
+) -> Dict[str, Any]:
+    """Resolve connection expressions without remapping another resolved Database."""
+    file_key = str(Path(file_path).resolve())
+    sources = dict(getattr(scan, "connection_sources", {}).get(file_key, {}) or {})
+    if not graph_database:
+        return sources
+    known_databases = {
+        value.strip().casefold()
+        for value in (*database_aliases, graph_database)
+        if value and value.strip()
+    }
+    source_values = {
+        database_of(value).casefold()
+        for value in sources.values()
+        if database_of(value)
+    }
+    if not source_values:
+        return sources
+    holds_one_label = len(source_values) <= 1
+
+    def remapped_onto_scope(value: Any) -> Any:
+        names_the_scope = database_of(value).casefold() in known_databases
+        if names_the_scope or (holds_one_label and not has_resolved_shape(value)):
+            return with_database(value, graph_database)
+        return value
+
+    return {
+        expression: remapped_onto_scope(value)
+        for expression, value in sources.items()
+    }
+
+
+def _method_chain_for_file(
+    file_result: FileAnalysisResult,
+    class_name: str,
+    method_name: str,
+) -> List[str]:
+    """Return the longest deterministic same-file caller chain to a sink method."""
+    methods: Dict[Tuple[str, str], MethodInfo] = {}
+    methods_by_name: Dict[str, List[Tuple[str, str]]] = {}
+    for class_info in file_result.classes:
+        for method in class_info.methods:
+            key = (class_info.name, method.name)
+            methods[key] = method
+            methods_by_name.setdefault(method.name, []).append(key)
+    sink_candidates = [(class_name, method_name)]
+    if sink_candidates[0] not in methods:
+        sink_candidates = methods_by_name.get(method_name, []) if not class_name else []
+    if not sink_candidates:
+        return [method_name]
+    parents: Dict[Tuple[str, str], set[Tuple[str, str]]] = {}
+    for caller_key, method in methods.items():
+        caller_class, _ = caller_key
+        for call in method.calls:
+            target_name = str(call).rsplit(".", 1)[-1]
+            qualifier = str(call).rsplit(".", 1)[0] if "." in str(call) else ""
+            targets = [
+                candidate
+                for candidate in methods_by_name.get(target_name, [])
+                if candidate[0] == (qualifier or caller_class)
+            ]
+            if len(targets) == 1:
+                parents.setdefault(targets[0], set()).add(caller_key)
+
+    def expand(key: Tuple[str, str], visited: set[Tuple[str, str]]) -> List[List[str]]:
+        if key in visited or not parents.get(key):
+            return [[key[1]]]
+        chains: List[List[str]] = []
+        for parent in sorted(parents[key]):
+            for prefix in expand(parent, visited | {key}):
+                chains.append(prefix + [key[1]])
+        return chains or [[key[1]]]
+
+    candidates: List[List[str]] = []
+    for sink in sorted(sink_candidates):
+        candidates.extend(expand(sink, set()))
+    return max(candidates, key=lambda chain: (len(chain), tuple(chain)))
+
+
+def _merge_method_chains(caller_chain: List[str], invocation_chain: Tuple[str, ...]) -> List[str]:
+    """Append raw cross-boundary methods after the same-file caller chain."""
+    if not invocation_chain:
+        return caller_chain
+    max_overlap = min(len(caller_chain), len(invocation_chain))
+    overlap = 0
+    for size in range(1, max_overlap + 1):
+        if caller_chain[-size:] == list(invocation_chain[:size]):
+            overlap = size
+    return caller_chain + list(invocation_chain[overlap:])
+
+
+def _method_class_chain_for_file(
+    file_result: FileAnalysisResult, class_name: str, method_chain: List[str],
+) -> List[str]:
+    """Resolve method names to class hints without changing the public name chain."""
+    methods_by_class = {
+        class_info.name: {method.name: method for method in class_info.methods}
+        for class_info in file_result.classes
+    }
+    classes_by_method: Dict[str, List[str]] = {}
+    for class_info in file_result.classes:
+        for method in class_info.methods:
+            classes_by_method.setdefault(method.name, []).append(class_info.name)
+    result: List[str] = []
+    current_class = class_name
+    for index, method_name in enumerate(method_chain):
+        if index == 0:
+            result.append(current_class)
+            continue
+        if method_name in methods_by_class.get(current_class, {}):
+            result.append(current_class)
+            continue
+        matches = classes_by_method.get(method_name, [])
+        if len(matches) == 1:
+            current_class = matches[0]
+            result.append(current_class)
+            continue
+        result.append("")
+    return result
+
+
+def _overlay_method_class_chain(
+    method_chain: List[str], base_classes: List[str],
+    invocation_chain: Tuple[str, ...], invocation_classes: Tuple[str, ...],
+) -> List[str]:
+    """Overlay gateway-known cross-file classes onto the full caller chain."""
+    if not invocation_chain or not invocation_classes:
+        return base_classes
+    width = len(invocation_chain)
+    start = -1
+    for candidate in range(len(method_chain) - width + 1):
+        if method_chain[candidate : candidate + width] == list(invocation_chain):
+            start = candidate
+    if start < 0:
+        return base_classes
+    result = list(base_classes)
+    if len(invocation_classes) == 2 and width >= 2:
+        caller_class, wrapper_class = invocation_classes
+        if caller_class:
+            for offset in range(width - 1):
+                if start + offset < len(result):
+                    result[start + offset] = caller_class
+        if wrapper_class and start + width - 1 < len(result):
+            result[start + width - 1] = wrapper_class
+        return result
+    for offset, class_hint in enumerate(invocation_classes[:width]):
+        if class_hint and start + offset < len(result):
+            result[start + offset] = class_hint
+    return result
+
+
+def _find_source_snapshot(scan: ProjectScanResult, relative_path: str):
+    normalized = str(relative_path).replace("\\", "/").casefold()
+    for key, snapshot in getattr(scan, "source_snapshots", {}).items():
+        if str(key).replace("\\", "/").casefold() == normalized:
+            return snapshot
+    return None
+
+
+def _rel(file_path: str, root: Path) -> str:
+    try:
+        return Path(file_path).resolve().relative_to(root.resolve()).as_posix()
+    except Exception:
+        return str(file_path).replace("\\", "/")
+
+
+def _rated_execution_invocations(
+    scope: DerivedExecutionEvidenceScope,
+    scan: ProjectScanResult,
+    matched_files: List[FileAnalysisResult],
+    root: Path,
+) -> Tuple[List[DbInvocation], Dict[str, object]]:
+    """Rate the selected raw facts with the whole scan's observed call evidence."""
+    catalog, graph, graph_database = _execution_sql_context(
+        scope.sql_cache_identity, scope.database
+    )
+    rated_invocations = []
+    raw_by_file = getattr(scan, "db_invocations", {})
+    external_wrapper_contract, contract_registry, wrapper_review_exclusions = rating_config_inputs(scope)
+    observed_call_evidence_index = build_observed_call_evidence_index(raw_by_file, contract_registry)
+    for file_result in matched_files:
+        file_key = str(Path(file_result.file_path).resolve())
+        raw_invocations = raw_by_file.get(file_key, [])
+        if not raw_invocations:
+            continue
+        gateway = CSharpAnalysisGateway(
+            catalog,
+            connection_sources=_execution_connection_sources(
+                scan, file_result.file_path, graph_database,
+                database_aliases=(scope.database, scope.db_name),
+            ),
+            external_wrapper_contract=external_wrapper_contract,
+            external_wrapper_contracts=contract_registry,
+            wrapper_review_exclusions=wrapper_review_exclusions,
+            observed_call_evidence_index=observed_call_evidence_index,
+        )
+        relative_path = _rel(file_result.file_path, root)
+        for invocation in gateway.resolve_direct_invocations(
+            relative_path, raw_invocations, scan_root=str(root),
+            explicit_contract=scope.wrapper_contract or None,
+        ):
+            method_chain = _merge_method_chains(
+                _method_chain_for_file(file_result, invocation.class_name, invocation.method_name),
+                invocation.method_chain,
+            )
+            snapshot = _find_source_snapshot(scan, relative_path)
+            method_class_chain = _overlay_method_class_chain(
+                method_chain,
+                _method_class_chain_for_file(file_result, invocation.class_name, method_chain),
+                invocation.method_chain, invocation.method_class_chain,
+            )
+            rated_invocations.append(replace(
+                invocation, method_chain=tuple(method_chain),
+                method_class_chain=tuple(method_class_chain),
+                source_snapshot_hash=(snapshot.content_hash if snapshot else ""),
+            ))
+    return rated_invocations, graph
+
+
 def evidence_for_scope(
     scope: DerivedExecutionEvidenceScope,
     per_root_scans: List[ProjectScanResult],
@@ -470,12 +734,8 @@ def evidence_for_scope(
                 scope, stamp, stored.rated_invocations, stored.graph, stored.paths_by_invocation
             )
 
-    # The rating step still lives in `analyze_service`, which imports this
-    # module; the import waits until the first derivation to avoid the cycle.
-    from . import analyze_service
-
     files = merged_scan.csharp_results if needed_files is None else needed_files
-    rated_invocations, graph = analyze_service._rated_execution_invocations(
+    rated_invocations, graph = _rated_execution_invocations(
         scope, merged_scan, list(files), root
     )
     if needed_files is not None:

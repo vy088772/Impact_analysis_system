@@ -136,13 +136,10 @@ def test_a_likely_caller_goes_into_likely_matches_beside_a_proven_caller(monkeyp
     assert diagnostic["source_span"]["relative_path"] == "LikelyPage.cs"
 
 
-def _rate_as(monkeypatch, *invocations: DbInvocation) -> None:
-    """Replace the rating step, so a test can give a call the scan cannot produce."""
-    monkeypatch.setattr(
-        analyze_service,
-        "_rated_execution_invocations",
-        lambda scope, scan, matched_files, root: (list(invocations), {}),
-    )
+def _given_evidence(*invocations: DbInvocation):
+    """Give the endpoint fixed evidence that the scan cannot produce."""
+    given = derived_execution_evidence.DerivedExecutionEvidence(list(invocations), {})
+    return lambda scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False: given
 
 
 def _invocation(evidence: InvocationEvidence, relative_path: str, *, reason: str = "") -> DbInvocation:
@@ -160,12 +157,11 @@ def _invocation(evidence: InvocationEvidence, relative_path: str, *, reason: str
 def test_a_likely_caller_with_no_source_file_shows_in_diagnostics_only(monkeypatch, tmp_path: Path) -> None:
     with RatedInvocationsRetention():
         _wire(monkeypatch, _scan(tmp_path), tmp_path)
-        _rate_as(
-            monkeypatch,
+        given = _given_evidence(
             _invocation(InvocationEvidence.LIKELY, "Removed/GonePage.cs", reason="unique_across_catalogs"),
         )
 
-        response = analyze_service.find_by_sp(_request())
+        response = analyze_service.find_by_sp(_request(), evidence_source=given)
 
     assert response.matches == []
     assert response.likely_matches == []
@@ -177,12 +173,11 @@ def test_a_likely_caller_with_no_source_file_shows_in_diagnostics_only(monkeypat
 def test_an_unresolved_caller_does_not_go_into_likely_matches(monkeypatch, tmp_path: Path) -> None:
     with RatedInvocationsRetention():
         _wire(monkeypatch, _scan(tmp_path), tmp_path)
-        _rate_as(
-            monkeypatch,
+        given = _given_evidence(
             _invocation(InvocationEvidence.UNRESOLVED, "LikelyPage.cs", reason="not_in_resolved_catalog"),
         )
 
-        response = analyze_service.find_by_sp(_request())
+        response = analyze_service.find_by_sp(_request(), evidence_source=given)
 
     assert response.matches == []
     assert response.likely_matches == []

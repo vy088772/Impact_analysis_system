@@ -145,6 +145,8 @@ class Settings:
     # 完全發揮不到效果、卻還是要付出建置成本——這正是這個上限存在的理由：
     # 數字要對著這個造訪次數寫，不能憑空挑一個。目錄成長時只要調整這個環境
     # 變數即可放寬上限，不需要改程式碼。
+    # 上限維持 100：只有完整派生結果進入保留，且來源 scope 與改造前相同。
+    # 指定檔案的部分派生結果不保留，因此共用模組不會增加保留的 scope 數。
     DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT: int = int(
         os.getenv('DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT', '100')
     )
