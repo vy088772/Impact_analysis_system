@@ -169,8 +169,7 @@ def _analyze_request(**extra) -> dict:
 def test_analyze_with_definitions_and_no_host_lists_the_cache_directory_one_time(
     one_host, listings, monkeypatch, tmp_path
 ) -> None:
-    one_host.install_legacy(monkeypatch)
-    monkeypatch.setattr("service.analyze_service.resolve_source", lambda req: [tmp_path])
+    one_host.install_analyze(monkeypatch)
 
     response = client.post("/analyze", json=_analyze_request())
 
@@ -179,8 +178,7 @@ def test_analyze_with_definitions_and_no_host_lists_the_cache_directory_one_time
 
 
 def test_analyze_with_definitions_treats_a_blank_host_as_no_host(one_host, monkeypatch, tmp_path) -> None:
-    one_host.install_legacy(monkeypatch)
-    monkeypatch.setattr("service.analyze_service.resolve_source", lambda req: [tmp_path])
+    one_host.install_analyze(monkeypatch)
 
     response = client.post("/analyze", json=_analyze_request(db_server="   "))
 

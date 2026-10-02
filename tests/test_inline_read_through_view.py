@@ -316,9 +316,7 @@ def test_flow_chain_forward_still_lists_the_view_and_not_the_table_behind_it(mon
 def test_the_analyze_screen_table_list_still_lists_the_view(monkeypatch, tmp_path) -> None:
     graph = _graph(views={"dbo.vOrder": ["dbo.Orders"]})
     scan = _view_reader_scan(tmp_path, ("dbo.vOrder", "SELECT"))
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(tmp_path, scan, "PUR")
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -326,7 +324,9 @@ def test_the_analyze_screen_table_list_still_lists_the_view(monkeypatch, tmp_pat
     )
 
     response = analyze_service.analyze(
-        AnalyzeRequest(database="PUR", program_names=["OrderPage"], include_snippets=False)
+        AnalyzeRequest(database="PUR", program_names=["OrderPage"], include_snippets=False),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     assert response.programs[0].tables == ["vOrder"]

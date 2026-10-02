@@ -28,6 +28,15 @@ class RequestStores:
         if isinstance(self.cache_store, InMemoryCacheStore):
             monkeypatch.setattr(sql_cache_store, "find_cache_identity", self.cache_store.find_cache_identity)
 
+    def install_analyze(self, monkeypatch) -> None:
+        handler = analyze_service.analyze
+        monkeypatch.setattr(
+            analyze_service, "analyze",
+            lambda request, *args, **kwargs: handler(
+                request, *args, scan_store=self.scan_store, cache_store=self.cache_store, **kwargs
+            ),
+        )
+
     def install_table(self, monkeypatch) -> None:
         handler = analyze_service.find_by_table
         monkeypatch.setattr(

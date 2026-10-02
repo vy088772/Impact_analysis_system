@@ -1607,7 +1607,8 @@ def _utf16_index(text: str, offset: int) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def analyze(
-    req: AnalyzeRequest, evidence_source: EvidenceSource = evidence_for_scope
+    req: AnalyzeRequest, evidence_source: EvidenceSource = evidence_for_scope,
+    *, scan_store: ScanStore | None = None, cache_store: CacheStore | None = None,
 ) -> AnalyzeResponse:
     """依 program_names 過濾掃描結果，組成回應（純靜態，無 AI）。
 
@@ -1617,20 +1618,15 @@ def analyze(
     的檔案，當作 needed files（miss 時只 rate 這些檔案且不保留，ADR-0040）。
     每個解析結果、每個共用元件都從這一份 evidence 過濾出自己的 invocation。
     """
-    # A Database on several hosts with no host named is "not scanned" here.
-    found = (
-        sql_cache_store.CacheIdentity.of(req.db_server, req.database)
-        if req.db_server.strip() and req.database.strip()
-        else sql_cache_store.find_cache_identity(req.database)
+    context = build_request_context(
+        req,
+        scan_store=scan_store if scan_store is not None else RealScanStore(),
+        cache_store=cache_store if cache_store is not None else RealCacheStore(),
     )
+    assert not isinstance(context, Skipped)
+    found = context.sql_cache_identity
     sql_cache_identity = found if isinstance(found, sql_cache_store.CacheIdentity) else None
-    roots = resolve_source(req)
-    scans = [_get_scan(r, refresh=getattr(req, "refresh", False)) for r in roots]
-    scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
-    root = roots[0] if len(roots) == 1 else repo_dir(
-        req.source.project if req.source else "", req.source.repo if req.source else ""
-    )
-    scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
+    scans, scan, root, scope = context.scans, context.scan, context.root, context.scope
 
     programs: List[ProgramAnalysis] = []
     not_found: List[str] = []

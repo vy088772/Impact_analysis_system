@@ -17,6 +17,7 @@ from service import scan_store
 from service.schemas import AnalyzeRequest
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
 from tests.scan_fixtures import scan_of
+from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     analyzer_operation,
     cache_payload,
@@ -174,9 +175,7 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
         connection_sources={str(source_file.resolve()): {"conn": "PUR"}},
     )
 
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(tmp_path, scan)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -188,7 +187,9 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
             database="OrdersDb",
             program_names=["OrderPage"],
             include_snippets=False,
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     assert len(response.programs) == 1
@@ -266,9 +267,7 @@ def test_analyze_keeps_source_wrapper_method_flow_in_execution_path(monkeypatch,
         connection_sources={str(source_file.resolve()): {"conn": "PUR"}},
     )
 
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(tmp_path, scan)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -280,7 +279,9 @@ def test_analyze_keeps_source_wrapper_method_flow_in_execution_path(monkeypatch,
             database="OrdersDb",
             program_names=["OrderPage"],
             include_snippets=False,
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     path = response.programs[0].execution_paths[0]
@@ -856,8 +857,7 @@ def test_analyze_can_disable_execution_paths(monkeypatch, tmp_path: Path) -> Non
         csharp_results=[file_result],
         db_invocations={str(source_file.resolve()): [{"command_text": "dbo.usp_SaveOrder"}]},
     )
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    stores = RequestStores.of(tmp_path, scan)
     monkeypatch.setattr(
         analyze_service,
         "_build_program_execution_paths",
@@ -870,7 +870,9 @@ def test_analyze_can_disable_execution_paths(monkeypatch, tmp_path: Path) -> Non
             program_names=["OrderPage"],
             include_execution_paths=False,
             include_snippets=False,
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     assert response.programs[0].execution_paths == []

@@ -12,16 +12,21 @@ import copy
 from pathlib import Path
 from typing import List, Sequence
 
+import pytest
+
 from code_analyzer.csharp_analysis_gateway import (
     DbInvocation,
     InvocationEvidence,
     InvocationSourceSpan,
 )
 from service import analyze_service
-from service.derived_execution_evidence import DerivedExecutionEvidence
-from service.schemas import AnalyzeRequest
+from service.derived_execution_evidence import DerivedExecutionEvidence, DerivedExecutionEvidenceScope
+from service.request_context_adapters import InMemoryCacheStore, InMemoryScanStore
+from service.schemas import AnalyzeRequest, AzureSource
+from service.sql_cache_store import AmbiguousServer, CacheIdentity
 from tests.program_screen_fixtures import _scan
-from tests.sql_cache_fixtures import cache_with_procedures, one_server_holds_every_database
+from tests.request_context_fixtures import RequestStores
+from tests.sql_cache_fixtures import cache_with_procedures
 from tests.test_shared_component_contributions import (
     _scan as _component_scan,
     _view_component_result,
@@ -75,11 +80,7 @@ def _analyze(
     *,
     database: str = "OrdersDb",
 ):
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [root])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda r, refresh=False: scan)
-    monkeypatch.setattr(
-        analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database
-    )
+    stores = RequestStores.of(root, scan, database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store, "load_cached", lambda identity: cache_with_procedures()
     )
@@ -93,6 +94,8 @@ def _analyze(
             database=database, program_names=list(program_names), include_snippets=False
         ),
         evidence_source=source,
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
 
@@ -245,3 +248,119 @@ def test_two_analyze_requests_on_one_retained_evidence_keep_the_retained_paths(
         assert path["unresolved_targets"] == ["dbo.usp_Missing"]
     assert answers[0].programs[0].execution_paths == answers[1].programs[0].execution_paths
     assert source.evidence.paths_of([unresolved]) == retained
+
+
+@pytest.mark.parametrize("refresh", [None, False, True], ids=["absent", "false", "true"])
+def test_analyze_without_a_scan_cache_never_skips_and_defaults_refresh_to_false(
+    tmp_path: Path, refresh: bool | None
+) -> None:
+    scan = _scan(tmp_path, pages=["OrderEntry.aspx"], controllers={"OrderEntry.aspx.cs": ["Page_Load"]})
+    refresh_values: list[bool] = []
+
+    class ScanStore(InMemoryScanStore):
+        def resolve_scan_roots(self, source, *, refresh: bool):
+            refresh_values.append(refresh)
+            return super().resolve_scan_roots(source, refresh=refresh)
+
+        def get_scan(self, root: Path, *, refresh: bool):
+            refresh_values.append(refresh)
+            return super().get_scan(root, refresh=refresh)
+
+    scans = ScanStore(roots=[tmp_path], scans={tmp_path: scan})
+    request = AnalyzeRequest(program_names=["OrderEntry"], include_snippets=False)
+    if refresh is None:
+        del request.refresh
+    else:
+        request.refresh = refresh
+
+    def given_evidence(scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False):
+        refresh_values.append(refresh)
+        return DerivedExecutionEvidence([], {})
+
+    response = analyze_service.analyze(
+        request, evidence_source=given_evidence,
+        scan_store=scans, cache_store=InMemoryCacheStore(),
+    )
+
+    assert [program.program for program in response.programs] == ["OrderEntry"]
+    assert response.not_found == []
+    assert response.source_root == str(tmp_path)
+    assert refresh_values == [refresh is True] * 3
+    assert "peek" not in scans.calls
+    assert "cache" not in scans.calls
+
+
+@pytest.mark.parametrize("server", ["", "   "])
+def test_analyze_an_ambiguous_database_without_a_host_still_answers_not_scanned(
+    tmp_path: Path, server: str
+) -> None:
+    scan = _scan(tmp_path, pages=["OrderEntry.aspx"], controllers={"OrderEntry.aspx.cs": ["Page_Load"]})
+    scans = InMemoryScanStore(roots=[tmp_path], scans={tmp_path: scan})
+    caches = InMemoryCacheStore({"OrdersDb": AmbiguousServer("OrdersDb", ("host-a", "host-b"))})
+
+    with pytest.raises(analyze_service.SqlExecutionGraphRequiredError) as error:
+        analyze_service.analyze(
+            AnalyzeRequest(program_names=["OrderEntry"], database="OrdersDb", db_server=server),
+            evidence_source=_GivenEvidence(), scan_store=scans, cache_store=caches,
+        )
+
+    assert error.value.code == "sql_execution_graph_required"
+    assert error.value.database == "OrdersDb"
+    assert error.value.reason == "missing_or_invalid"
+
+
+@pytest.mark.parametrize("multiple_roots", [False, True], ids=["one-folder", "multi-folder"])
+def test_analyze_keeps_the_scope_scan_facts_and_chosen_root(
+    tmp_path: Path, multiple_roots: bool
+) -> None:
+    roots = [tmp_path / "orders", tmp_path / "billing"] if multiple_roots else [tmp_path / "orders"]
+    orders = _scan(roots[0], pages=["OrderEntry.aspx"], controllers={"OrderEntry.aspx.cs": ["Page_Load"]})
+    scans_by_root = {roots[0]: orders}
+    if multiple_roots:
+        scans_by_root[roots[1]] = _scan(
+            roots[1], pages=["Invoice.aspx"], controllers={"Invoice.aspx.cs": ["Page_Load"]}
+        )
+    scans = InMemoryScanStore(roots=roots, scans=scans_by_root, repository_root=tmp_path)
+    identity = CacheIdentity.of("host-a", "OrdersDb")
+    caches = InMemoryCacheStore({"OrdersDb": identity})
+    expected_root = tmp_path if multiple_roots else roots[0]
+    relative_files = ["orders/OrderEntry.aspx.cs"] if multiple_roots else ["OrderEntry.aspx.cs"]
+    if multiple_roots:
+        relative_files.append("billing/Invoice.aspx.cs")
+    expected_scope = DerivedExecutionEvidenceScope(
+        tuple(str(root) for root in roots), "OrdersDb", identity, "PhysicalOrders", "sqlobject"
+    )
+    evidence_by_scope = {
+        expected_scope: DerivedExecutionEvidence(
+            [
+                _invocation_on(relative_file, Path(relative_file).stem, "Page_Load")
+                for relative_file in relative_files
+            ],
+            {},
+        )
+    }
+
+    def given_evidence(scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False):
+        return evidence_by_scope.get(scope, DerivedExecutionEvidence([], {}))
+
+    response = analyze_service.analyze(
+        AnalyzeRequest(
+            source=AzureSource(
+                project="orders", repo="orders",
+                path=["orders", "billing"] if multiple_roots else "orders",
+            ),
+            program_names=["OrderEntry", "Invoice"], database="OrdersDb",
+            db_name="PhysicalOrders", wrapper_contract="sqlobject",
+            include_execution_paths=False, include_snippets=False,
+        ),
+        evidence_source=given_evidence, scan_store=scans, cache_store=caches,
+    )
+
+    assert response.source_root == str(expected_root)
+    assert [program.file for program in response.programs] == relative_files
+    assert [program.stored_procedures for program in response.programs] == [["usp_Save"]] * len(relative_files)
+    assert [program.methods for program in response.programs] == [
+        [{"name": "Page_Load", "class": "OrderEntry.aspx"}],
+        *([[{"name": "Page_Load", "class": "Invoice.aspx"}]] if multiple_roots else []),
+    ]
+    assert response.not_found == ([] if multiple_roots else ["Invoice"])

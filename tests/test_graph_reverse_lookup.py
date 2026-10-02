@@ -396,7 +396,6 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
             "wrapper_mode": "stored_procedure",
         }
     )
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
     stores = RequestStores.of(tmp_path, scan)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
@@ -408,16 +407,16 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
         ),
     )
 
-    with monkeypatch.context() as legacy:
-        stores.install_legacy(legacy)
-        analyze_response = analyze_service.analyze(
-            AnalyzeRequest(
-                database="OrdersDb",
-                program_names=["DirectPage"],
-                include_snippets=False,
-                wrapper_contract="sqlobject",
-            )
-        )
+    analyze_response = analyze_service.analyze(
+        AnalyzeRequest(
+            database="OrdersDb",
+            program_names=["DirectPage"],
+            include_snippets=False,
+            wrapper_contract="sqlobject",
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
+    )
     invocation = analyze_response.programs[0].database_invocations[0]
     path = analyze_response.programs[0].execution_paths[0]
 
@@ -696,9 +695,7 @@ def test_backward_flow_exposes_likely_invocation_as_diagnostic(monkeypatch, tmp_
 def test_analyze_keeps_likely_invocation_diagnostic_out_of_formal_counts(monkeypatch, tmp_path: Path) -> None:
     scan = _scan(tmp_path)
     scan.connection_sources.pop(str((tmp_path / "DirectPage.cs").resolve()))
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    stores = RequestStores.of(tmp_path, scan)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
@@ -710,7 +707,9 @@ def test_analyze_keeps_likely_invocation_diagnostic_out_of_formal_counts(monkeyp
             database="OrdersDb",
             program_names=["DirectPage"],
             include_snippets=False,
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     program = response.programs[0]
@@ -739,14 +738,15 @@ def test_analyze_without_database_keeps_source_facts_without_formal_relationship
             sql_preview="SELECT * FROM dbo.SOrder",
         )
     ]
-    monkeypatch.setattr(analyze_service, "resolve_source", lambda request: [tmp_path])
-    monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
+    stores = RequestStores.of(tmp_path, scan, "")
 
     response = analyze_service.analyze(
         AnalyzeRequest(
             program_names=["DirectPage"],
             include_snippets=False,
-        )
+        ),
+        scan_store=stores.scan_store,
+        cache_store=stores.cache_store,
     )
 
     program = response.programs[0]
