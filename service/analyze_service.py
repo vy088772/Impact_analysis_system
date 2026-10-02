@@ -1931,7 +1931,7 @@ def analyze(
                 }
 
             programs.append(
-                ProgramAnalysis(
+                ProgramAnalysis.model_validate(dict(
                     program=raw_name,
                     file=file_path,
                     framework=framework,
@@ -1951,7 +1951,7 @@ def analyze(
                     compact_execution_paths=compact_execution_paths,
                     compact_execution_paths_meta=compact_execution_paths_meta,
                     shared_component_contributions=shared_component_contributions,
-                )
+                ))
             )
             reported = True
 

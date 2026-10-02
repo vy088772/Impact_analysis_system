@@ -1,4 +1,79 @@
 {
+  "analyze_response": {
+    "invocation_ratings": ["proven", "likely", "unresolved"],
+    "wrapper_ratings": ["proven", "likely", "unresolved", "not_applicable"],
+    "samples": [
+      {"programs": [], "not_found": ["Missing"], "source_root": ""},
+      {
+        "programs": [{
+          "program": "Empty", "file": "Empty.cs", "framework": "",
+          "methods": [], "stored_procedures": [], "tables": [], "call_chains": [],
+          "code_snippets": [], "sp_definitions": [], "view_definitions": [],
+          "udf_definitions": [], "database_invocations": [], "diagnostics": [],
+          "related_programs": [], "view_layer": [], "execution_paths": [],
+          "compact_execution_paths": [], "compact_execution_paths_meta": {},
+          "shared_component_contributions": []
+        }], "not_found": [], "source_root": "fixture"
+      }
+    ],
+    "program": {
+      "program": "Orders", "file": "Views/Orders/Index.cshtml", "framework": "mvc",
+      "methods": [{"name": "Index", "class": "OrdersController", "strength": "determined"}, {"name": "Save", "class": "OrdersController"}],
+      "stored_procedures": ["dbo.usp_Save"], "tables": ["dbo.Orders"],
+      "call_chains": [["Index", "Save"]],
+      "code_snippets": [{"file": "Orders.cs", "label": "Orders.Save", "lines": "1-2", "text": "void Save() {}"}],
+      "sp_definitions": [{"name": "dbo.usp_Save", "exists": true, "definition": "UPDATE dbo.Orders SET Active = 1", "truncated": false, "parameters": ["@id int"], "tables": ["dbo.Orders"], "dependency_source": "execution_graph", "complexity": "simple"}],
+      "view_definitions": [{"name": "dbo.v_Orders", "exists": true, "definition": "SELECT * FROM dbo.Orders", "truncated": false}],
+      "udf_definitions": [{"name": "fn_Active", "exists": true, "definition": "RETURN 1", "truncated": false, "parameters": ["@id int"], "return_type": "int"}],
+      "related_programs": [{"file": "Helper.cs", "class": "Helper", "method": "Save", "called_by": "Index", "depth": 1}, {"file": "Helper.cs", "class": "Helper", "method": "Load", "called_by": "Index", "depth": 1, "lines": "1-2", "snippet": "void Load() {}"}],
+      "view_layer": [{
+        "file": "Orders.aspx", "type": "aspx", "framework": "webforms", "summary": ["Page"], "warnings": [],
+        "fields": [
+          {"kind": "header", "control": "asp:BoundField", "id": "id", "text": "Order", "data_field": "OrderID", "events": {"OnClick": "Save", "CustomEvent": "Load"}, "navigate_to": "Orders.aspx", "unresolved_reason": "resource_missing"},
+          {"kind": "label", "data_field": "Name"},
+          {"kind": "input", "data_field": "Code"},
+          {"kind": "value", "text": "Name"},
+          {"kind": "grid", "control": "asp:GridView", "id": "orders", "events": {"OnRowCommand": "Save"}, "fields": [{"kind": "header", "text": "ID"}]},
+          {"kind": "form", "label": "Order", "fields": [{"control": "asp:TextBox", "id": "order", "css_class": "required", "max_length": "10", "js_binding": "Autocomplete"}]},
+          {"kind": "form_group", "container": "table", "id": "form", "items": [{"label": "Name", "fields": [{"control": "asp:TextBox", "id": "name"}]}]},
+          {"kind": "script", "index": 0, "text": "save();"}
+        ]
+      }],
+      "compact_execution_paths_meta": {"total_paths": 2, "returned_paths": 1, "omitted_paths": 1},
+      "shared_component_contributions": [{"kind": "view_component", "name": "Menu", "file": "MenuViewComponent.cs", "class": "MenuViewComponent", "method": "InvokeAsync", "stored_procedures": ["dbo.usp_Menu"], "tables": ["dbo.Menu"]}]
+    },
+    "wrapper": {
+      "wrapper_kind": "external_wrapper", "status": "explicit_selected", "selection_source": "explicit", "contract": "sqlobject", "wrapper_contract_source": "explicit",
+      "contract_mode": "stored_procedure", "contract_sink": "ExecuteNonQuery", "candidate_contracts": ["sqlobject"], "wrapper_receiver_type": "SqlObject", "receiver_type": "ISqlObject", "scan_root": "fixture",
+      "source_available": false, "review_candidate": false, "classification_reason": "", "mode_reason": "", "wrapper_method": "Execute", "external_wrapper_method": "Execute", "stored_procedure_mode": true, "active_contract": true,
+      "evidence_status": "likely", "evidence_reason": "literal_name", "source_span": {"relative_path": "Orders.cs", "start_offset": 0, "end_offset": 10, "content_hash": "hash"}, "source_snapshot_hash": "hash",
+      "source_provenance": {"selection_source": "explicit", "source_available": false, "scan_root": "fixture", "source_span": {"relative_path": "Orders.cs", "start_offset": 0, "end_offset": 10}, "source_snapshot_hash": "hash", "source_snapshot_identity": "hash"},
+      "method_semantics": "stored_procedure", "invocation_mode": "stored_procedure", "command_text_kind": "literal", "command_type_mode": "stored_procedure", "command_text_argument": "name", "command_text_literal": null,
+      "command_text_source_span": {"relative_path": "Orders.cs", "start_offset": 1, "end_offset": 4}, "command_text_provenance": "source", "literal_value": null, "terminal_sink": "ExecuteNonQuery",
+      "embedded_target": {"procedure_name": "usp_Save", "procedure_schema": "dbo", "database": "OrdersDb", "database_candidates": [], "evidence": "proven", "evidence_status": "proven", "reason": "", "raw_target": "dbo.usp_Save", "target_source": "exec_keyword"},
+      "embedded_targets": [{"procedure_name": null, "procedure_schema": null, "database": null, "database_candidates": ["OrdersDb"], "evidence": "unresolved", "evidence_status": "unresolved", "reason": "not_in_catalog", "raw_target": "usp_Missing", "target_source": "implicit_exec"}],
+      "embedded_procedure_name": null, "embedded_procedure_schema": null, "embedded_procedure_evidence": null, "procedure_name_hint": null,
+      "receiver_name": "db", "connection_expression": "conn", "connection_expression_candidates": ["conn"], "connection_source": null, "provenance": "source",
+      "implementation_identity": "SqlObject", "assembly_identity": "SqlObject.dll", "assembly_revision": "hash", "method_identity": "Execute(string)", "method_arity": null, "parameter_types": ["string"], "overload_candidates": ["Execute(string)"],
+      "overload_candidate_facts": [{"method_name": "Execute", "method_identity": "Execute(string)", "implementation_identity": "SqlObject", "receiver_type": "SqlObject", "method_arity": 1, "parameter_types": ["string"]}, {"method_name": "Execute"}],
+      "receiver_expression": "db", "binding_provenance": "local", "receiver_construction_facts": ["new SqlObject(conn)"], "receiver_assignment_facts": ["db = wrapper"],
+      "wrapper_implementation_identity": "SqlObject", "wrapper_assembly_identity": "SqlObject.dll", "wrapper_assembly_revision": "hash", "wrapper_method_identity": "Execute(string)", "wrapper_method_arity": null, "wrapper_parameter_types": ["string"], "wrapper_method_semantics": "stored_procedure", "wrapper_overload_candidates": ["Execute(string)"],
+      "wrapper_overload_candidate_facts": [{"method_name": "Execute", "method_identity": "Execute(string)", "implementation_identity": "SqlObject", "receiver_type": "SqlObject", "method_arity": 1, "parameter_types": ["string"]}],
+      "contract_fingerprint": "hash", "contract_signature_version": "1", "contract_lifecycle_status": "selected", "evidence_kind": "decompiled_auto", "implementation_snapshot_reference": "snapshot.json", "comparison_report_reference": "comparison.json",
+      "source_contract_conflict": false, "source_contract_conflict_reason": "", "source_contract_semantics": "", "source_contract_sink": "", "contract_delegation_alias": "",
+      "wrapper_status": "explicit_selected", "wrapper_classification_status": "explicit_selected", "classification_status": "explicit_selected", "wrapper_selection_source": "explicit", "selected_contract": "sqlobject", "wrapper_contract_mode": "stored_procedure", "wrapper_contract_sink": "ExecuteNonQuery", "wrapper_contract_delegation_alias": "", "candidate_contract_names": ["sqlobject"], "wrapper_scan_root": "fixture", "wrapper_source_available": false, "wrapper_review_candidate": false, "semantic_binding_accepted": true, "wrapper_unresolved_reason": "", "wrapper_mode_reason": "", "observed_method": "Execute", "wrapper_stored_procedure_mode": true,
+      "server": null, "source_snapshot_identity": "hash", "signature_version": "1", "contract_status": "selected", "raw_command_text": null
+    },
+    "invocation": {
+      "class_name": "Orders", "method_name": "Save", "database": null, "database_candidates": ["OrdersDb"], "database_attribution": "candidate", "procedure_name": null, "procedure_schema": null, "evidence": "unresolved", "reason": "not_in_catalog", "caller": "Orders.Index", "caller_class": "Orders", "caller_method": "Save", "method_chain": ["Index", "Save"], "method_class_chain": ["Orders", "Orders"], "wrapper_contract": "sqlobject", "wrapper_contract_candidates": ["sqlobject"], "branch_context": ["active"], "unresolved_reason": "not_in_catalog"
+    },
+    "execution_path": {
+      "path_id": "path-1", "method_class_chain": ["Orders", "Orders"], "wrapper_contract": "sqlobject", "wrapper_contract_candidates": ["sqlobject"], "entry_method": "Orders.Index", "method_chain": ["Index", "Save"], "database": "OrdersDb", "database_candidates": [], "database_attribution": "resolved", "caller": "Orders.Index", "caller_class": "Orders", "caller_method": "Save", "procedure_name": "usp_Save", "procedure_schema": "dbo", "branch_context": ["active"], "sp_chain": ["dbo.usp_Save"], "module_chain_ids": ["sp:dbo.usp_Save"], "terminal_operation_id": "op:1", "terminal_operation": "UPDATE", "target": "dbo.Orders", "written_columns": ["Active"], "conditions": ["active"], "reads": ["dbo.Orders"], "writes": ["dbo.Orders"], "read_full_keys": [{"database": "OrdersDb", "schema": "dbo", "name": "Orders", "schema_source": "written"}], "write_full_keys": [{"database": "OrdersDb", "schema": "dbo", "name": "Orders", "schema_source": "written"}], "risk_flags": [], "evidence": "proven", "reason": "", "confirmed": true, "unresolved_reason": "", "unresolved_targets": []
+    },
+    "compact_path": {
+      "path_id": "path-1", "relevance_key": [0, -1, "Orders.Index", "path-1"], "entry_method": "Orders.Index", "method_chain": ["Index", "Save"], "sp_chain": ["dbo.usp_Save"], "terminal_operation_id": "op:1", "terminal_operation": null, "target": "dbo.Orders", "written_columns": ["Active"], "conditions": ["active"], "reads": ["dbo.Orders"], "writes": ["dbo.Orders"], "risk_flags": ["dynamic_sql"], "evidence": "unresolved", "unresolved_reason": "unresolved_dynamic_sql", "unresolved_targets": ["dynamic"]
+    }
+  },
   "object_names": [
     {
       "input": "Orders",

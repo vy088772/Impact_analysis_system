@@ -195,7 +195,7 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
     assert len(response.programs) == 1
     program = response.programs[0]
     assert len(program.execution_paths) == 1
-    path = program.execution_paths[0]
+    path = program.execution_paths[0].model_dump()
     assert path["entry_method"] == "OrderPage.HandleSave"
     assert path["method_chain"] == ["HandleSave", "SaveData"]
     assert path["sp_chain"] == ["dbo.usp_SaveOrder"]
@@ -203,8 +203,8 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
     assert path["target"] == "dbo.SOrder"
     assert path["conditions"] == ["if (useAlternate)", "Id = @Id"]
     assert path["evidence"] == "proven"
-    assert program.compact_execution_paths[0]["path_id"] == path["path_id"]
-    assert program.compact_execution_paths_meta == {
+    assert program.compact_execution_paths[0].path_id == path["path_id"]
+    assert program.compact_execution_paths_meta.model_dump() == {
         "total_paths": 1,
         "returned_paths": 1,
         "omitted_paths": 0,
@@ -284,7 +284,7 @@ def test_analyze_keeps_source_wrapper_method_flow_in_execution_path(monkeypatch,
         cache_store=stores.cache_store,
     )
 
-    path = response.programs[0].execution_paths[0]
+    path = response.programs[0].execution_paths[0].model_dump()
     assert path["entry_method"] == "OrderPage.HandleSave"
     assert path["method_chain"] == ["HandleSave", "SaveData", "Execute"]
 
@@ -877,7 +877,7 @@ def test_analyze_can_disable_execution_paths(monkeypatch, tmp_path: Path) -> Non
 
     assert response.programs[0].execution_paths == []
     assert response.programs[0].compact_execution_paths == []
-    assert response.programs[0].compact_execution_paths_meta == {}
+    assert response.programs[0].compact_execution_paths_meta.model_dump() == {}
 
 
 def test_scan_cache_round_trip_keeps_raw_db_invocations() -> None:

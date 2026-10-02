@@ -417,8 +417,8 @@ def test_wrapper_projection_matches_analyze_and_reverse_lookup_surfaces(
         scan_store=stores.scan_store,
         cache_store=stores.cache_store,
     )
-    invocation = analyze_response.programs[0].database_invocations[0]
-    path = analyze_response.programs[0].execution_paths[0]
+    invocation = analyze_response.programs[0].database_invocations[0].model_dump()
+    path = analyze_response.programs[0].execution_paths[0].model_dump()
 
     sp_response = analyze_service.find_by_sp(
         FindBySPRequest(
@@ -714,10 +714,10 @@ def test_analyze_keeps_likely_invocation_diagnostic_out_of_formal_counts(monkeyp
 
     program = response.programs[0]
     assert program.stored_procedures == []
-    assert program.database_invocations[0]["evidence"] == "likely"
-    assert program.diagnostics[0]["database_candidates"] == ["OrdersDb"]
-    assert program.execution_paths[0]["evidence"] == "likely"
-    assert program.execution_paths[0]["writes"] == []
+    assert program.database_invocations[0].evidence == "likely"
+    assert program.diagnostics[0].database_candidates == ["OrdersDb"]
+    assert program.execution_paths[0].evidence == "likely"
+    assert program.execution_paths[0].writes == []
 
 
 def test_analyze_without_database_keeps_source_facts_without_formal_relationships(
@@ -750,13 +750,13 @@ def test_analyze_without_database_keeps_source_facts_without_formal_relationship
     )
 
     program = response.programs[0]
-    assert program.methods == [{"name": "SaveDirect", "class": "DirectPage"}]
+    assert [entry.model_dump() for entry in program.methods] == [{"name": "SaveDirect", "class": "DirectPage"}]
     assert program.tables == ["SOrder"]
     assert program.stored_procedures == []
-    assert program.database_invocations[0]["procedure_name"] == "usp_direct"
-    assert program.database_invocations[0]["evidence"] == "unresolved"
-    assert program.execution_paths[0]["evidence"] == "unresolved"
-    assert program.execution_paths[0]["writes"] == []
+    assert program.database_invocations[0].procedure_name == "usp_direct"
+    assert program.database_invocations[0].evidence == "unresolved"
+    assert program.execution_paths[0].evidence == "unresolved"
+    assert program.execution_paths[0].writes == []
 
 
 # --------------------------------------------------- reverse-lookup-drops-proven-writes, ticket 02

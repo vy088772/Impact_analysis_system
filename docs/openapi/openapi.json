@@ -113,6 +113,7 @@
         "type": "object"
       },
       "AnalyzeResponse": {
+        "additionalProperties": false,
         "properties": {
           "not_found": {
             "items": {
@@ -129,11 +130,15 @@
             "type": "array"
           },
           "source_root": {
-            "default": "",
             "title": "Source Root",
             "type": "string"
           }
         },
+        "required": [
+          "programs",
+          "not_found",
+          "source_root"
+        ],
         "title": "AnalyzeResponse",
         "type": "object"
       },
@@ -174,32 +179,139 @@
         "title": "AzureSource",
         "type": "object"
       },
-      "CodeSnippet": {
+      "CompactPath": {
+        "additionalProperties": false,
         "properties": {
-          "file": {
-            "title": "File",
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "entry_method": {
+            "title": "Entry Method",
             "type": "string"
           },
-          "label": {
-            "default": "",
-            "title": "Label",
+          "evidence": {
+            "enum": [
+              "proven",
+              "likely",
+              "unresolved"
+            ],
+            "title": "Evidence",
             "type": "string"
           },
-          "lines": {
-            "default": "",
-            "title": "Lines",
+          "method_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Method Chain",
+            "type": "array"
+          },
+          "path_id": {
+            "title": "Path Id",
             "type": "string"
           },
-          "text": {
-            "default": "",
-            "title": "Text",
+          "reads": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reads",
+            "type": "array"
+          },
+          "relevance_key": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "title": "Relevance Key",
+            "type": "array"
+          },
+          "risk_flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Risk Flags",
+            "type": "array"
+          },
+          "sp_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sp Chain",
+            "type": "array"
+          },
+          "target": {
+            "title": "Target",
             "type": "string"
+          },
+          "terminal_operation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Operation"
+          },
+          "terminal_operation_id": {
+            "title": "Terminal Operation Id",
+            "type": "string"
+          },
+          "unresolved_reason": {
+            "default": "",
+            "title": "Unresolved Reason",
+            "type": "string"
+          },
+          "unresolved_targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved Targets",
+            "type": "array"
+          },
+          "writes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Writes",
+            "type": "array"
+          },
+          "written_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Written Columns",
+            "type": "array"
           }
         },
         "required": [
-          "file"
+          "path_id",
+          "relevance_key",
+          "entry_method",
+          "method_chain",
+          "sp_chain",
+          "terminal_operation_id",
+          "terminal_operation",
+          "target",
+          "written_columns",
+          "conditions",
+          "reads",
+          "writes",
+          "risk_flags",
+          "evidence",
+          "unresolved_targets"
         ],
-        "title": "CodeSnippet",
+        "title": "CompactPath",
         "type": "object"
       },
       "ContractTransactionSummary": {
@@ -229,6 +341,2591 @@
           }
         },
         "title": "ContractTransactionSummary",
+        "type": "object"
+      },
+      "DatabaseInvocation": {
+        "additionalProperties": false,
+        "properties": {
+          "active_contract": {
+            "title": "Active Contract",
+            "type": "boolean"
+          },
+          "assembly_identity": {
+            "title": "Assembly Identity",
+            "type": "string"
+          },
+          "assembly_revision": {
+            "title": "Assembly Revision",
+            "type": "string"
+          },
+          "binding_provenance": {
+            "title": "Binding Provenance",
+            "type": "string"
+          },
+          "branch_context": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Branch Context",
+            "type": "array"
+          },
+          "caller": {
+            "title": "Caller",
+            "type": "string"
+          },
+          "caller_class": {
+            "title": "Caller Class",
+            "type": "string"
+          },
+          "caller_method": {
+            "title": "Caller Method",
+            "type": "string"
+          },
+          "candidate_contract_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Contract Names",
+            "type": "array"
+          },
+          "candidate_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Contracts",
+            "type": "array"
+          },
+          "class_name": {
+            "title": "Class Name",
+            "type": "string"
+          },
+          "classification_reason": {
+            "title": "Classification Reason",
+            "type": "string"
+          },
+          "classification_status": {
+            "title": "Classification Status",
+            "type": "string"
+          },
+          "command_text_argument": {
+            "title": "Command Text Argument",
+            "type": "string"
+          },
+          "command_text_kind": {
+            "title": "Command Text Kind",
+            "type": "string"
+          },
+          "command_text_literal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Text Literal"
+          },
+          "command_text_provenance": {
+            "title": "Command Text Provenance",
+            "type": "string"
+          },
+          "command_text_source_span": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceSpan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "command_type_mode": {
+            "title": "Command Type Mode",
+            "type": "string"
+          },
+          "comparison_report_reference": {
+            "title": "Comparison Report Reference",
+            "type": "string"
+          },
+          "connection_expression": {
+            "title": "Connection Expression",
+            "type": "string"
+          },
+          "connection_expression_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Connection Expression Candidates",
+            "type": "array"
+          },
+          "connection_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Source"
+          },
+          "contract": {
+            "title": "Contract",
+            "type": "string"
+          },
+          "contract_delegation_alias": {
+            "title": "Contract Delegation Alias",
+            "type": "string"
+          },
+          "contract_fingerprint": {
+            "title": "Contract Fingerprint",
+            "type": "string"
+          },
+          "contract_lifecycle_status": {
+            "title": "Contract Lifecycle Status",
+            "type": "string"
+          },
+          "contract_mode": {
+            "title": "Contract Mode",
+            "type": "string"
+          },
+          "contract_signature_version": {
+            "title": "Contract Signature Version",
+            "type": "string"
+          },
+          "contract_sink": {
+            "title": "Contract Sink",
+            "type": "string"
+          },
+          "contract_status": {
+            "title": "Contract Status",
+            "type": "string"
+          },
+          "database": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database"
+          },
+          "database_attribution": {
+            "title": "Database Attribution",
+            "type": "string"
+          },
+          "database_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Database Candidates",
+            "type": "array"
+          },
+          "embedded_procedure_evidence": {
+            "anyOf": [
+              {
+                "enum": [
+                  "proven",
+                  "likely",
+                  "unresolved"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedded Procedure Evidence"
+          },
+          "embedded_procedure_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedded Procedure Name"
+          },
+          "embedded_procedure_schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedded Procedure Schema"
+          },
+          "embedded_target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbeddedTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "embedded_targets": {
+            "items": {
+              "$ref": "#/components/schemas/EmbeddedTarget"
+            },
+            "title": "Embedded Targets",
+            "type": "array"
+          },
+          "evidence": {
+            "enum": [
+              "proven",
+              "likely",
+              "unresolved"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "evidence_kind": {
+            "title": "Evidence Kind",
+            "type": "string"
+          },
+          "evidence_reason": {
+            "title": "Evidence Reason",
+            "type": "string"
+          },
+          "evidence_status": {
+            "enum": [
+              "proven",
+              "likely",
+              "unresolved",
+              "not_applicable"
+            ],
+            "title": "Evidence Status",
+            "type": "string"
+          },
+          "external_wrapper_method": {
+            "title": "External Wrapper Method",
+            "type": "string"
+          },
+          "implementation_identity": {
+            "title": "Implementation Identity",
+            "type": "string"
+          },
+          "implementation_snapshot_reference": {
+            "title": "Implementation Snapshot Reference",
+            "type": "string"
+          },
+          "invocation_mode": {
+            "title": "Invocation Mode",
+            "type": "string"
+          },
+          "literal_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Literal Value"
+          },
+          "method_arity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method Arity"
+          },
+          "method_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Method Chain",
+            "type": "array"
+          },
+          "method_class_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Method Class Chain",
+            "type": "array"
+          },
+          "method_identity": {
+            "title": "Method Identity",
+            "type": "string"
+          },
+          "method_name": {
+            "title": "Method Name",
+            "type": "string"
+          },
+          "method_semantics": {
+            "title": "Method Semantics",
+            "type": "string"
+          },
+          "mode_reason": {
+            "title": "Mode Reason",
+            "type": "string"
+          },
+          "observed_method": {
+            "title": "Observed Method",
+            "type": "string"
+          },
+          "overload_candidate_facts": {
+            "items": {
+              "$ref": "#/components/schemas/OverloadCandidate"
+            },
+            "title": "Overload Candidate Facts",
+            "type": "array"
+          },
+          "overload_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Overload Candidates",
+            "type": "array"
+          },
+          "parameter_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parameter Types",
+            "type": "array"
+          },
+          "procedure_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Name"
+          },
+          "procedure_name_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Name Hint"
+          },
+          "procedure_schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Schema"
+          },
+          "provenance": {
+            "title": "Provenance",
+            "type": "string"
+          },
+          "raw_command_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Command Text"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "receiver_assignment_facts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Receiver Assignment Facts",
+            "type": "array"
+          },
+          "receiver_construction_facts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Receiver Construction Facts",
+            "type": "array"
+          },
+          "receiver_expression": {
+            "title": "Receiver Expression",
+            "type": "string"
+          },
+          "receiver_name": {
+            "title": "Receiver Name",
+            "type": "string"
+          },
+          "receiver_type": {
+            "title": "Receiver Type",
+            "type": "string"
+          },
+          "review_candidate": {
+            "title": "Review Candidate",
+            "type": "boolean"
+          },
+          "scan_root": {
+            "title": "Scan Root",
+            "type": "string"
+          },
+          "selected_contract": {
+            "title": "Selected Contract",
+            "type": "string"
+          },
+          "selection_source": {
+            "title": "Selection Source",
+            "type": "string"
+          },
+          "semantic_binding_accepted": {
+            "title": "Semantic Binding Accepted",
+            "type": "boolean"
+          },
+          "server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server"
+          },
+          "shared_component": {
+            "$ref": "#/components/schemas/SharedComponentLabel"
+          },
+          "signature_version": {
+            "title": "Signature Version",
+            "type": "string"
+          },
+          "source_available": {
+            "title": "Source Available",
+            "type": "boolean"
+          },
+          "source_contract_conflict": {
+            "title": "Source Contract Conflict",
+            "type": "boolean"
+          },
+          "source_contract_conflict_reason": {
+            "title": "Source Contract Conflict Reason",
+            "type": "string"
+          },
+          "source_contract_semantics": {
+            "title": "Source Contract Semantics",
+            "type": "string"
+          },
+          "source_contract_sink": {
+            "title": "Source Contract Sink",
+            "type": "string"
+          },
+          "source_provenance": {
+            "$ref": "#/components/schemas/SourceProvenance"
+          },
+          "source_snapshot_hash": {
+            "title": "Source Snapshot Hash",
+            "type": "string"
+          },
+          "source_snapshot_identity": {
+            "title": "Source Snapshot Identity",
+            "type": "string"
+          },
+          "source_span": {
+            "$ref": "#/components/schemas/SourceSpan"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stored_procedure_mode": {
+            "title": "Stored Procedure Mode",
+            "type": "boolean"
+          },
+          "terminal_sink": {
+            "title": "Terminal Sink",
+            "type": "string"
+          },
+          "unresolved_reason": {
+            "title": "Unresolved Reason",
+            "type": "string"
+          },
+          "wrapper_assembly_identity": {
+            "title": "Wrapper Assembly Identity",
+            "type": "string"
+          },
+          "wrapper_assembly_revision": {
+            "title": "Wrapper Assembly Revision",
+            "type": "string"
+          },
+          "wrapper_classification_status": {
+            "title": "Wrapper Classification Status",
+            "type": "string"
+          },
+          "wrapper_contract": {
+            "title": "Wrapper Contract",
+            "type": "string"
+          },
+          "wrapper_contract_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Wrapper Contract Candidates",
+            "type": "array"
+          },
+          "wrapper_contract_delegation_alias": {
+            "title": "Wrapper Contract Delegation Alias",
+            "type": "string"
+          },
+          "wrapper_contract_mode": {
+            "title": "Wrapper Contract Mode",
+            "type": "string"
+          },
+          "wrapper_contract_sink": {
+            "title": "Wrapper Contract Sink",
+            "type": "string"
+          },
+          "wrapper_contract_source": {
+            "title": "Wrapper Contract Source",
+            "type": "string"
+          },
+          "wrapper_implementation_identity": {
+            "title": "Wrapper Implementation Identity",
+            "type": "string"
+          },
+          "wrapper_kind": {
+            "title": "Wrapper Kind",
+            "type": "string"
+          },
+          "wrapper_method": {
+            "title": "Wrapper Method",
+            "type": "string"
+          },
+          "wrapper_method_arity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wrapper Method Arity"
+          },
+          "wrapper_method_identity": {
+            "title": "Wrapper Method Identity",
+            "type": "string"
+          },
+          "wrapper_method_semantics": {
+            "title": "Wrapper Method Semantics",
+            "type": "string"
+          },
+          "wrapper_mode_reason": {
+            "title": "Wrapper Mode Reason",
+            "type": "string"
+          },
+          "wrapper_overload_candidate_facts": {
+            "items": {
+              "$ref": "#/components/schemas/OverloadCandidate"
+            },
+            "title": "Wrapper Overload Candidate Facts",
+            "type": "array"
+          },
+          "wrapper_overload_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Wrapper Overload Candidates",
+            "type": "array"
+          },
+          "wrapper_parameter_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Wrapper Parameter Types",
+            "type": "array"
+          },
+          "wrapper_receiver_type": {
+            "title": "Wrapper Receiver Type",
+            "type": "string"
+          },
+          "wrapper_review_candidate": {
+            "title": "Wrapper Review Candidate",
+            "type": "boolean"
+          },
+          "wrapper_scan_root": {
+            "title": "Wrapper Scan Root",
+            "type": "string"
+          },
+          "wrapper_selection_source": {
+            "title": "Wrapper Selection Source",
+            "type": "string"
+          },
+          "wrapper_source_available": {
+            "title": "Wrapper Source Available",
+            "type": "boolean"
+          },
+          "wrapper_status": {
+            "title": "Wrapper Status",
+            "type": "string"
+          },
+          "wrapper_stored_procedure_mode": {
+            "title": "Wrapper Stored Procedure Mode",
+            "type": "boolean"
+          },
+          "wrapper_unresolved_reason": {
+            "title": "Wrapper Unresolved Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wrapper_kind",
+          "status",
+          "selection_source",
+          "contract",
+          "wrapper_contract_source",
+          "contract_mode",
+          "contract_sink",
+          "candidate_contracts",
+          "wrapper_receiver_type",
+          "receiver_type",
+          "scan_root",
+          "source_available",
+          "review_candidate",
+          "classification_reason",
+          "mode_reason",
+          "wrapper_method",
+          "external_wrapper_method",
+          "stored_procedure_mode",
+          "active_contract",
+          "evidence_status",
+          "evidence_reason",
+          "source_span",
+          "source_snapshot_hash",
+          "source_provenance",
+          "method_semantics",
+          "invocation_mode",
+          "command_text_kind",
+          "command_type_mode",
+          "command_text_argument",
+          "command_text_literal",
+          "command_text_source_span",
+          "command_text_provenance",
+          "literal_value",
+          "terminal_sink",
+          "embedded_target",
+          "embedded_targets",
+          "embedded_procedure_name",
+          "embedded_procedure_schema",
+          "embedded_procedure_evidence",
+          "procedure_name_hint",
+          "receiver_name",
+          "connection_expression",
+          "connection_expression_candidates",
+          "connection_source",
+          "provenance",
+          "implementation_identity",
+          "assembly_identity",
+          "assembly_revision",
+          "method_identity",
+          "method_arity",
+          "parameter_types",
+          "overload_candidates",
+          "overload_candidate_facts",
+          "receiver_expression",
+          "binding_provenance",
+          "receiver_construction_facts",
+          "receiver_assignment_facts",
+          "wrapper_implementation_identity",
+          "wrapper_assembly_identity",
+          "wrapper_assembly_revision",
+          "wrapper_method_identity",
+          "wrapper_method_arity",
+          "wrapper_parameter_types",
+          "wrapper_method_semantics",
+          "wrapper_overload_candidates",
+          "wrapper_overload_candidate_facts",
+          "contract_fingerprint",
+          "contract_signature_version",
+          "contract_lifecycle_status",
+          "evidence_kind",
+          "implementation_snapshot_reference",
+          "comparison_report_reference",
+          "source_contract_conflict",
+          "source_contract_conflict_reason",
+          "source_contract_semantics",
+          "source_contract_sink",
+          "contract_delegation_alias",
+          "wrapper_status",
+          "wrapper_classification_status",
+          "classification_status",
+          "wrapper_selection_source",
+          "selected_contract",
+          "wrapper_contract_mode",
+          "wrapper_contract_sink",
+          "wrapper_contract_delegation_alias",
+          "candidate_contract_names",
+          "wrapper_scan_root",
+          "wrapper_source_available",
+          "wrapper_review_candidate",
+          "semantic_binding_accepted",
+          "wrapper_unresolved_reason",
+          "wrapper_mode_reason",
+          "observed_method",
+          "wrapper_stored_procedure_mode",
+          "server",
+          "source_snapshot_identity",
+          "signature_version",
+          "contract_status",
+          "raw_command_text",
+          "class_name",
+          "method_name",
+          "database",
+          "database_candidates",
+          "database_attribution",
+          "procedure_name",
+          "procedure_schema",
+          "evidence",
+          "reason",
+          "caller",
+          "caller_class",
+          "caller_method",
+          "method_chain",
+          "method_class_chain",
+          "wrapper_contract",
+          "wrapper_contract_candidates",
+          "branch_context",
+          "unresolved_reason"
+        ],
+        "title": "DatabaseInvocation",
+        "type": "object"
+      },
+      "Definition": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "title": "Definition",
+            "type": "string"
+          },
+          "exists": {
+            "title": "Exists",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "exists",
+          "definition",
+          "truncated"
+        ],
+        "title": "Definition",
+        "type": "object"
+      },
+      "Diagnostic": {
+        "additionalProperties": false,
+        "properties": {
+          "active_contract": {
+            "title": "Active Contract",
+            "type": "boolean"
+          },
+          "assembly_identity": {
+            "title": "Assembly Identity",
+            "type": "string"
+          },
+          "assembly_revision": {
+            "title": "Assembly Revision",
+            "type": "string"
+          },
+          "binding_provenance": {
+            "title": "Binding Provenance",
+            "type": "string"
+          },
+          "branch_context": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Branch Context",
+            "type": "array"
+          },
+          "caller": {
+            "title": "Caller",
+            "type": "string"
+          },
+          "caller_class": {
+            "title": "Caller Class",
+            "type": "string"
+          },
+          "caller_method": {
+            "title": "Caller Method",
+            "type": "string"
+          },
+          "candidate_contract_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Contract Names",
+            "type": "array"
+          },
+          "candidate_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Contracts",
+            "type": "array"
+          },
+          "class_name": {
+            "title": "Class Name",
+            "type": "string"
+          },
+          "classification_reason": {
+            "title": "Classification Reason",
+            "type": "string"
+          },
+          "classification_status": {
+            "title": "Classification Status",
+            "type": "string"
+          },
+          "command_text_argument": {
+            "title": "Command Text Argument",
+            "type": "string"
+          },
+          "command_text_kind": {
+            "title": "Command Text Kind",
+            "type": "string"
+          },
+          "command_text_literal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Text Literal"
+          },
+          "command_text_provenance": {
+            "title": "Command Text Provenance",
+            "type": "string"
+          },
+          "command_text_source_span": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceSpan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "command_type_mode": {
+            "title": "Command Type Mode",
+            "type": "string"
+          },
+          "comparison_report_reference": {
+            "title": "Comparison Report Reference",
+            "type": "string"
+          },
+          "connection_expression": {
+            "title": "Connection Expression",
+            "type": "string"
+          },
+          "connection_expression_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Connection Expression Candidates",
+            "type": "array"
+          },
+          "connection_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Source"
+          },
+          "contract": {
+            "title": "Contract",
+            "type": "string"
+          },
+          "contract_delegation_alias": {
+            "title": "Contract Delegation Alias",
+            "type": "string"
+          },
+          "contract_fingerprint": {
+            "title": "Contract Fingerprint",
+            "type": "string"
+          },
+          "contract_lifecycle_status": {
+            "title": "Contract Lifecycle Status",
+            "type": "string"
+          },
+          "contract_mode": {
+            "title": "Contract Mode",
+            "type": "string"
+          },
+          "contract_signature_version": {
+            "title": "Contract Signature Version",
+            "type": "string"
+          },
+          "contract_sink": {
+            "title": "Contract Sink",
+            "type": "string"
+          },
+          "contract_status": {
+            "title": "Contract Status",
+            "type": "string"
+          },
+          "database": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database"
+          },
+          "database_attribution": {
+            "title": "Database Attribution",
+            "type": "string"
+          },
+          "database_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Database Candidates",
+            "type": "array"
+          },
+          "diagnostic": {
+            "const": true,
+            "title": "Diagnostic",
+            "type": "boolean"
+          },
+          "embedded_procedure_evidence": {
+            "anyOf": [
+              {
+                "enum": [
+                  "proven",
+                  "likely",
+                  "unresolved"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedded Procedure Evidence"
+          },
+          "embedded_procedure_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedded Procedure Name"
+          },
+          "embedded_procedure_schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedded Procedure Schema"
+          },
+          "embedded_target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbeddedTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "embedded_targets": {
+            "items": {
+              "$ref": "#/components/schemas/EmbeddedTarget"
+            },
+            "title": "Embedded Targets",
+            "type": "array"
+          },
+          "evidence": {
+            "enum": [
+              "proven",
+              "likely",
+              "unresolved"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "evidence_kind": {
+            "title": "Evidence Kind",
+            "type": "string"
+          },
+          "evidence_reason": {
+            "title": "Evidence Reason",
+            "type": "string"
+          },
+          "evidence_status": {
+            "enum": [
+              "proven",
+              "likely",
+              "unresolved",
+              "not_applicable"
+            ],
+            "title": "Evidence Status",
+            "type": "string"
+          },
+          "external_wrapper_method": {
+            "title": "External Wrapper Method",
+            "type": "string"
+          },
+          "implementation_identity": {
+            "title": "Implementation Identity",
+            "type": "string"
+          },
+          "implementation_snapshot_reference": {
+            "title": "Implementation Snapshot Reference",
+            "type": "string"
+          },
+          "invocation_mode": {
+            "title": "Invocation Mode",
+            "type": "string"
+          },
+          "literal_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Literal Value"
+          },
+          "method_arity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method Arity"
+          },
+          "method_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Method Chain",
+            "type": "array"
+          },
+          "method_class_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Method Class Chain",
+            "type": "array"
+          },
+          "method_identity": {
+            "title": "Method Identity",
+            "type": "string"
+          },
+          "method_name": {
+            "title": "Method Name",
+            "type": "string"
+          },
+          "method_semantics": {
+            "title": "Method Semantics",
+            "type": "string"
+          },
+          "mode_reason": {
+            "title": "Mode Reason",
+            "type": "string"
+          },
+          "observed_method": {
+            "title": "Observed Method",
+            "type": "string"
+          },
+          "overload_candidate_facts": {
+            "items": {
+              "$ref": "#/components/schemas/OverloadCandidate"
+            },
+            "title": "Overload Candidate Facts",
+            "type": "array"
+          },
+          "overload_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Overload Candidates",
+            "type": "array"
+          },
+          "parameter_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parameter Types",
+            "type": "array"
+          },
+          "procedure_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Name"
+          },
+          "procedure_name_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Name Hint"
+          },
+          "procedure_schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Schema"
+          },
+          "provenance": {
+            "title": "Provenance",
+            "type": "string"
+          },
+          "raw_command_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Command Text"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "receiver_assignment_facts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Receiver Assignment Facts",
+            "type": "array"
+          },
+          "receiver_construction_facts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Receiver Construction Facts",
+            "type": "array"
+          },
+          "receiver_expression": {
+            "title": "Receiver Expression",
+            "type": "string"
+          },
+          "receiver_name": {
+            "title": "Receiver Name",
+            "type": "string"
+          },
+          "receiver_type": {
+            "title": "Receiver Type",
+            "type": "string"
+          },
+          "review_candidate": {
+            "title": "Review Candidate",
+            "type": "boolean"
+          },
+          "scan_root": {
+            "title": "Scan Root",
+            "type": "string"
+          },
+          "selected_contract": {
+            "title": "Selected Contract",
+            "type": "string"
+          },
+          "selection_source": {
+            "title": "Selection Source",
+            "type": "string"
+          },
+          "semantic_binding_accepted": {
+            "title": "Semantic Binding Accepted",
+            "type": "boolean"
+          },
+          "server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server"
+          },
+          "shared_component": {
+            "$ref": "#/components/schemas/SharedComponentLabel"
+          },
+          "signature_version": {
+            "title": "Signature Version",
+            "type": "string"
+          },
+          "source_available": {
+            "title": "Source Available",
+            "type": "boolean"
+          },
+          "source_contract_conflict": {
+            "title": "Source Contract Conflict",
+            "type": "boolean"
+          },
+          "source_contract_conflict_reason": {
+            "title": "Source Contract Conflict Reason",
+            "type": "string"
+          },
+          "source_contract_semantics": {
+            "title": "Source Contract Semantics",
+            "type": "string"
+          },
+          "source_contract_sink": {
+            "title": "Source Contract Sink",
+            "type": "string"
+          },
+          "source_provenance": {
+            "$ref": "#/components/schemas/SourceProvenance"
+          },
+          "source_snapshot_hash": {
+            "title": "Source Snapshot Hash",
+            "type": "string"
+          },
+          "source_snapshot_identity": {
+            "title": "Source Snapshot Identity",
+            "type": "string"
+          },
+          "source_span": {
+            "$ref": "#/components/schemas/SourceSpan"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stored_procedure_mode": {
+            "title": "Stored Procedure Mode",
+            "type": "boolean"
+          },
+          "terminal_sink": {
+            "title": "Terminal Sink",
+            "type": "string"
+          },
+          "unresolved_reason": {
+            "title": "Unresolved Reason",
+            "type": "string"
+          },
+          "wrapper_assembly_identity": {
+            "title": "Wrapper Assembly Identity",
+            "type": "string"
+          },
+          "wrapper_assembly_revision": {
+            "title": "Wrapper Assembly Revision",
+            "type": "string"
+          },
+          "wrapper_classification_status": {
+            "title": "Wrapper Classification Status",
+            "type": "string"
+          },
+          "wrapper_contract": {
+            "title": "Wrapper Contract",
+            "type": "string"
+          },
+          "wrapper_contract_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Wrapper Contract Candidates",
+            "type": "array"
+          },
+          "wrapper_contract_delegation_alias": {
+            "title": "Wrapper Contract Delegation Alias",
+            "type": "string"
+          },
+          "wrapper_contract_mode": {
+            "title": "Wrapper Contract Mode",
+            "type": "string"
+          },
+          "wrapper_contract_sink": {
+            "title": "Wrapper Contract Sink",
+            "type": "string"
+          },
+          "wrapper_contract_source": {
+            "title": "Wrapper Contract Source",
+            "type": "string"
+          },
+          "wrapper_implementation_identity": {
+            "title": "Wrapper Implementation Identity",
+            "type": "string"
+          },
+          "wrapper_kind": {
+            "title": "Wrapper Kind",
+            "type": "string"
+          },
+          "wrapper_method": {
+            "title": "Wrapper Method",
+            "type": "string"
+          },
+          "wrapper_method_arity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wrapper Method Arity"
+          },
+          "wrapper_method_identity": {
+            "title": "Wrapper Method Identity",
+            "type": "string"
+          },
+          "wrapper_method_semantics": {
+            "title": "Wrapper Method Semantics",
+            "type": "string"
+          },
+          "wrapper_mode_reason": {
+            "title": "Wrapper Mode Reason",
+            "type": "string"
+          },
+          "wrapper_overload_candidate_facts": {
+            "items": {
+              "$ref": "#/components/schemas/OverloadCandidate"
+            },
+            "title": "Wrapper Overload Candidate Facts",
+            "type": "array"
+          },
+          "wrapper_overload_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Wrapper Overload Candidates",
+            "type": "array"
+          },
+          "wrapper_parameter_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Wrapper Parameter Types",
+            "type": "array"
+          },
+          "wrapper_receiver_type": {
+            "title": "Wrapper Receiver Type",
+            "type": "string"
+          },
+          "wrapper_review_candidate": {
+            "title": "Wrapper Review Candidate",
+            "type": "boolean"
+          },
+          "wrapper_scan_root": {
+            "title": "Wrapper Scan Root",
+            "type": "string"
+          },
+          "wrapper_selection_source": {
+            "title": "Wrapper Selection Source",
+            "type": "string"
+          },
+          "wrapper_source_available": {
+            "title": "Wrapper Source Available",
+            "type": "boolean"
+          },
+          "wrapper_status": {
+            "title": "Wrapper Status",
+            "type": "string"
+          },
+          "wrapper_stored_procedure_mode": {
+            "title": "Wrapper Stored Procedure Mode",
+            "type": "boolean"
+          },
+          "wrapper_unresolved_reason": {
+            "title": "Wrapper Unresolved Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wrapper_kind",
+          "status",
+          "selection_source",
+          "contract",
+          "wrapper_contract_source",
+          "contract_mode",
+          "contract_sink",
+          "candidate_contracts",
+          "wrapper_receiver_type",
+          "receiver_type",
+          "scan_root",
+          "source_available",
+          "review_candidate",
+          "classification_reason",
+          "mode_reason",
+          "wrapper_method",
+          "external_wrapper_method",
+          "stored_procedure_mode",
+          "active_contract",
+          "evidence_status",
+          "evidence_reason",
+          "source_span",
+          "source_snapshot_hash",
+          "source_provenance",
+          "method_semantics",
+          "invocation_mode",
+          "command_text_kind",
+          "command_type_mode",
+          "command_text_argument",
+          "command_text_literal",
+          "command_text_source_span",
+          "command_text_provenance",
+          "literal_value",
+          "terminal_sink",
+          "embedded_target",
+          "embedded_targets",
+          "embedded_procedure_name",
+          "embedded_procedure_schema",
+          "embedded_procedure_evidence",
+          "procedure_name_hint",
+          "receiver_name",
+          "connection_expression",
+          "connection_expression_candidates",
+          "connection_source",
+          "provenance",
+          "implementation_identity",
+          "assembly_identity",
+          "assembly_revision",
+          "method_identity",
+          "method_arity",
+          "parameter_types",
+          "overload_candidates",
+          "overload_candidate_facts",
+          "receiver_expression",
+          "binding_provenance",
+          "receiver_construction_facts",
+          "receiver_assignment_facts",
+          "wrapper_implementation_identity",
+          "wrapper_assembly_identity",
+          "wrapper_assembly_revision",
+          "wrapper_method_identity",
+          "wrapper_method_arity",
+          "wrapper_parameter_types",
+          "wrapper_method_semantics",
+          "wrapper_overload_candidates",
+          "wrapper_overload_candidate_facts",
+          "contract_fingerprint",
+          "contract_signature_version",
+          "contract_lifecycle_status",
+          "evidence_kind",
+          "implementation_snapshot_reference",
+          "comparison_report_reference",
+          "source_contract_conflict",
+          "source_contract_conflict_reason",
+          "source_contract_semantics",
+          "source_contract_sink",
+          "contract_delegation_alias",
+          "wrapper_status",
+          "wrapper_classification_status",
+          "classification_status",
+          "wrapper_selection_source",
+          "selected_contract",
+          "wrapper_contract_mode",
+          "wrapper_contract_sink",
+          "wrapper_contract_delegation_alias",
+          "candidate_contract_names",
+          "wrapper_scan_root",
+          "wrapper_source_available",
+          "wrapper_review_candidate",
+          "semantic_binding_accepted",
+          "wrapper_unresolved_reason",
+          "wrapper_mode_reason",
+          "observed_method",
+          "wrapper_stored_procedure_mode",
+          "server",
+          "source_snapshot_identity",
+          "signature_version",
+          "contract_status",
+          "raw_command_text",
+          "class_name",
+          "method_name",
+          "database",
+          "database_candidates",
+          "database_attribution",
+          "procedure_name",
+          "procedure_schema",
+          "evidence",
+          "reason",
+          "caller",
+          "caller_class",
+          "caller_method",
+          "method_chain",
+          "method_class_chain",
+          "wrapper_contract",
+          "wrapper_contract_candidates",
+          "branch_context",
+          "unresolved_reason",
+          "diagnostic"
+        ],
+        "title": "Diagnostic",
+        "type": "object"
+      },
+      "DisplayField": {
+        "additionalProperties": false,
+        "properties": {
+          "control": {
+            "default": "",
+            "title": "Control",
+            "type": "string"
+          },
+          "data_field": {
+            "default": "",
+            "title": "Data Field",
+            "type": "string"
+          },
+          "events": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Events",
+            "type": "object"
+          },
+          "id": {
+            "default": "",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "header",
+              "label",
+              "input",
+              "value"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "navigate_to": {
+            "default": "",
+            "title": "Navigate To",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "unresolved_reason": {
+            "default": "",
+            "title": "Unresolved Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "DisplayField",
+        "type": "object"
+      },
+      "EmbeddedTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database"
+          },
+          "database_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Database Candidates",
+            "type": "array"
+          },
+          "evidence": {
+            "enum": [
+              "proven",
+              "likely",
+              "unresolved"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "evidence_status": {
+            "enum": [
+              "proven",
+              "likely",
+              "unresolved"
+            ],
+            "title": "Evidence Status",
+            "type": "string"
+          },
+          "procedure_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Name"
+          },
+          "procedure_schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Schema"
+          },
+          "raw_target": {
+            "title": "Raw Target",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "target_source": {
+            "title": "Target Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "procedure_name",
+          "procedure_schema",
+          "database",
+          "database_candidates",
+          "evidence",
+          "evidence_status",
+          "reason",
+          "raw_target",
+          "target_source"
+        ],
+        "title": "EmbeddedTarget",
+        "type": "object"
+      },
+      "EmptyPathCounts": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "EmptyPathCounts",
+        "type": "object"
+      },
+      "ExecutionPath": {
+        "additionalProperties": false,
+        "properties": {
+          "active_contract": {
+            "title": "Active Contract",
+            "type": "boolean"
+          },
+          "assembly_identity": {
+            "title": "Assembly Identity",
+            "type": "string"
+          },
+          "assembly_revision": {
+            "title": "Assembly Revision",
+            "type": "string"
+          },
+          "binding_provenance": {
+            "title": "Binding Provenance",
+            "type": "string"
+          },
+          "branch_context": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Branch Context",
+            "type": "array"
+          },
+          "caller": {
+            "title": "Caller",
+            "type": "string"
+          },
+          "caller_class": {
+            "title": "Caller Class",
+            "type": "string"
+          },
+          "caller_method": {
+            "title": "Caller Method",
+            "type": "string"
+          },
+          "candidate_contract_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Contract Names",
+            "type": "array"
+          },
+          "candidate_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Contracts",
+            "type": "array"
+          },
+          "classification_reason": {
+            "title": "Classification Reason",
+            "type": "string"
+          },
+          "classification_status": {
+            "title": "Classification Status",
+            "type": "string"
+          },
+          "command_text_argument": {
+            "title": "Command Text Argument",
+            "type": "string"
+          },
+          "command_text_kind": {
+            "title": "Command Text Kind",
+            "type": "string"
+          },
+          "command_text_literal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Text Literal"
+          },
+          "command_text_provenance": {
+            "title": "Command Text Provenance",
+            "type": "string"
+          },
+          "command_text_source_span": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceSpan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "command_type_mode": {
+            "title": "Command Type Mode",
+            "type": "string"
+          },
+          "comparison_report_reference": {
+            "title": "Comparison Report Reference",
+            "type": "string"
+          },
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "connection_expression": {
+            "title": "Connection Expression",
+            "type": "string"
+          },
+          "connection_expression_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Connection Expression Candidates",
+            "type": "array"
+          },
+          "connection_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Source"
+          },
+          "contract": {
+            "title": "Contract",
+            "type": "string"
+          },
+          "contract_delegation_alias": {
+            "title": "Contract Delegation Alias",
+            "type": "string"
+          },
+          "contract_fingerprint": {
+            "title": "Contract Fingerprint",
+            "type": "string"
+          },
+          "contract_lifecycle_status": {
+            "title": "Contract Lifecycle Status",
+            "type": "string"
+          },
+          "contract_mode": {
+            "title": "Contract Mode",
+            "type": "string"
+          },
+          "contract_signature_version": {
+            "title": "Contract Signature Version",
+            "type": "string"
+          },
+          "contract_sink": {
+            "title": "Contract Sink",
+            "type": "string"
+          },
+          "contract_status": {
+            "title": "Contract Status",
+            "type": "string"
+          },
+          "database": {
+            "title": "Database",
+            "type": "string"
+          },
+          "database_attribution": {
+            "title": "Database Attribution",
+            "type": "string"
+          },
+          "database_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Database Candidates",
+            "type": "array"
+          },
+          "embedded_procedure_evidence": {
+            "anyOf": [
+              {
+                "enum": [
+                  "proven",
+                  "likely",
+                  "unresolved"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedded Procedure Evidence"
+          },
+          "embedded_procedure_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedded Procedure Name"
+          },
+          "embedded_procedure_schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedded Procedure Schema"
+          },
+          "embedded_target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbeddedTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "embedded_targets": {
+            "items": {
+              "$ref": "#/components/schemas/EmbeddedTarget"
+            },
+            "title": "Embedded Targets",
+            "type": "array"
+          },
+          "entry_method": {
+            "title": "Entry Method",
+            "type": "string"
+          },
+          "evidence": {
+            "enum": [
+              "proven",
+              "likely",
+              "unresolved"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "evidence_kind": {
+            "title": "Evidence Kind",
+            "type": "string"
+          },
+          "evidence_reason": {
+            "title": "Evidence Reason",
+            "type": "string"
+          },
+          "evidence_status": {
+            "enum": [
+              "proven",
+              "likely",
+              "unresolved",
+              "not_applicable"
+            ],
+            "title": "Evidence Status",
+            "type": "string"
+          },
+          "external_wrapper_method": {
+            "title": "External Wrapper Method",
+            "type": "string"
+          },
+          "implementation_identity": {
+            "title": "Implementation Identity",
+            "type": "string"
+          },
+          "implementation_snapshot_reference": {
+            "title": "Implementation Snapshot Reference",
+            "type": "string"
+          },
+          "invocation_mode": {
+            "title": "Invocation Mode",
+            "type": "string"
+          },
+          "literal_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Literal Value"
+          },
+          "method_arity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method Arity"
+          },
+          "method_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Method Chain",
+            "type": "array"
+          },
+          "method_class_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Method Class Chain",
+            "type": "array"
+          },
+          "method_identity": {
+            "title": "Method Identity",
+            "type": "string"
+          },
+          "method_semantics": {
+            "title": "Method Semantics",
+            "type": "string"
+          },
+          "mode_reason": {
+            "title": "Mode Reason",
+            "type": "string"
+          },
+          "module_chain_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Module Chain Ids",
+            "type": "array"
+          },
+          "observed_method": {
+            "title": "Observed Method",
+            "type": "string"
+          },
+          "overload_candidate_facts": {
+            "items": {
+              "$ref": "#/components/schemas/OverloadCandidate"
+            },
+            "title": "Overload Candidate Facts",
+            "type": "array"
+          },
+          "overload_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Overload Candidates",
+            "type": "array"
+          },
+          "parameter_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parameter Types",
+            "type": "array"
+          },
+          "path_id": {
+            "title": "Path Id",
+            "type": "string"
+          },
+          "procedure_name": {
+            "title": "Procedure Name",
+            "type": "string"
+          },
+          "procedure_name_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Name Hint"
+          },
+          "procedure_schema": {
+            "title": "Procedure Schema",
+            "type": "string"
+          },
+          "provenance": {
+            "title": "Provenance",
+            "type": "string"
+          },
+          "raw_command_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Command Text"
+          },
+          "read_full_keys": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectReference"
+            },
+            "title": "Read Full Keys",
+            "type": "array"
+          },
+          "reads": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reads",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "receiver_assignment_facts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Receiver Assignment Facts",
+            "type": "array"
+          },
+          "receiver_construction_facts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Receiver Construction Facts",
+            "type": "array"
+          },
+          "receiver_expression": {
+            "title": "Receiver Expression",
+            "type": "string"
+          },
+          "receiver_name": {
+            "title": "Receiver Name",
+            "type": "string"
+          },
+          "receiver_type": {
+            "title": "Receiver Type",
+            "type": "string"
+          },
+          "review_candidate": {
+            "title": "Review Candidate",
+            "type": "boolean"
+          },
+          "risk_flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Risk Flags",
+            "type": "array"
+          },
+          "scan_root": {
+            "title": "Scan Root",
+            "type": "string"
+          },
+          "selected_contract": {
+            "title": "Selected Contract",
+            "type": "string"
+          },
+          "selection_source": {
+            "title": "Selection Source",
+            "type": "string"
+          },
+          "semantic_binding_accepted": {
+            "title": "Semantic Binding Accepted",
+            "type": "boolean"
+          },
+          "server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server"
+          },
+          "signature_version": {
+            "title": "Signature Version",
+            "type": "string"
+          },
+          "source_available": {
+            "title": "Source Available",
+            "type": "boolean"
+          },
+          "source_contract_conflict": {
+            "title": "Source Contract Conflict",
+            "type": "boolean"
+          },
+          "source_contract_conflict_reason": {
+            "title": "Source Contract Conflict Reason",
+            "type": "string"
+          },
+          "source_contract_semantics": {
+            "title": "Source Contract Semantics",
+            "type": "string"
+          },
+          "source_contract_sink": {
+            "title": "Source Contract Sink",
+            "type": "string"
+          },
+          "source_provenance": {
+            "$ref": "#/components/schemas/SourceProvenance"
+          },
+          "source_snapshot_hash": {
+            "title": "Source Snapshot Hash",
+            "type": "string"
+          },
+          "source_snapshot_identity": {
+            "title": "Source Snapshot Identity",
+            "type": "string"
+          },
+          "source_span": {
+            "$ref": "#/components/schemas/SourceSpan"
+          },
+          "sp_chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sp Chain",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stored_procedure_mode": {
+            "title": "Stored Procedure Mode",
+            "type": "boolean"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "terminal_operation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Operation"
+          },
+          "terminal_operation_id": {
+            "title": "Terminal Operation Id",
+            "type": "string"
+          },
+          "terminal_sink": {
+            "title": "Terminal Sink",
+            "type": "string"
+          },
+          "unresolved_reason": {
+            "title": "Unresolved Reason",
+            "type": "string"
+          },
+          "unresolved_targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved Targets",
+            "type": "array"
+          },
+          "wrapper_assembly_identity": {
+            "title": "Wrapper Assembly Identity",
+            "type": "string"
+          },
+          "wrapper_assembly_revision": {
+            "title": "Wrapper Assembly Revision",
+            "type": "string"
+          },
+          "wrapper_classification_status": {
+            "title": "Wrapper Classification Status",
+            "type": "string"
+          },
+          "wrapper_contract": {
+            "title": "Wrapper Contract",
+            "type": "string"
+          },
+          "wrapper_contract_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Wrapper Contract Candidates",
+            "type": "array"
+          },
+          "wrapper_contract_delegation_alias": {
+            "title": "Wrapper Contract Delegation Alias",
+            "type": "string"
+          },
+          "wrapper_contract_mode": {
+            "title": "Wrapper Contract Mode",
+            "type": "string"
+          },
+          "wrapper_contract_sink": {
+            "title": "Wrapper Contract Sink",
+            "type": "string"
+          },
+          "wrapper_contract_source": {
+            "title": "Wrapper Contract Source",
+            "type": "string"
+          },
+          "wrapper_implementation_identity": {
+            "title": "Wrapper Implementation Identity",
+            "type": "string"
+          },
+          "wrapper_kind": {
+            "title": "Wrapper Kind",
+            "type": "string"
+          },
+          "wrapper_method": {
+            "title": "Wrapper Method",
+            "type": "string"
+          },
+          "wrapper_method_arity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wrapper Method Arity"
+          },
+          "wrapper_method_identity": {
+            "title": "Wrapper Method Identity",
+            "type": "string"
+          },
+          "wrapper_method_semantics": {
+            "title": "Wrapper Method Semantics",
+            "type": "string"
+          },
+          "wrapper_mode_reason": {
+            "title": "Wrapper Mode Reason",
+            "type": "string"
+          },
+          "wrapper_overload_candidate_facts": {
+            "items": {
+              "$ref": "#/components/schemas/OverloadCandidate"
+            },
+            "title": "Wrapper Overload Candidate Facts",
+            "type": "array"
+          },
+          "wrapper_overload_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Wrapper Overload Candidates",
+            "type": "array"
+          },
+          "wrapper_parameter_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Wrapper Parameter Types",
+            "type": "array"
+          },
+          "wrapper_receiver_type": {
+            "title": "Wrapper Receiver Type",
+            "type": "string"
+          },
+          "wrapper_review_candidate": {
+            "title": "Wrapper Review Candidate",
+            "type": "boolean"
+          },
+          "wrapper_scan_root": {
+            "title": "Wrapper Scan Root",
+            "type": "string"
+          },
+          "wrapper_selection_source": {
+            "title": "Wrapper Selection Source",
+            "type": "string"
+          },
+          "wrapper_source_available": {
+            "title": "Wrapper Source Available",
+            "type": "boolean"
+          },
+          "wrapper_status": {
+            "title": "Wrapper Status",
+            "type": "string"
+          },
+          "wrapper_stored_procedure_mode": {
+            "title": "Wrapper Stored Procedure Mode",
+            "type": "boolean"
+          },
+          "wrapper_unresolved_reason": {
+            "title": "Wrapper Unresolved Reason",
+            "type": "string"
+          },
+          "write_full_keys": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectReference"
+            },
+            "title": "Write Full Keys",
+            "type": "array"
+          },
+          "writes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Writes",
+            "type": "array"
+          },
+          "written_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Written Columns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "wrapper_kind",
+          "status",
+          "selection_source",
+          "contract",
+          "wrapper_contract_source",
+          "contract_mode",
+          "contract_sink",
+          "candidate_contracts",
+          "wrapper_receiver_type",
+          "receiver_type",
+          "scan_root",
+          "source_available",
+          "review_candidate",
+          "classification_reason",
+          "mode_reason",
+          "wrapper_method",
+          "external_wrapper_method",
+          "stored_procedure_mode",
+          "active_contract",
+          "evidence_status",
+          "evidence_reason",
+          "source_span",
+          "source_snapshot_hash",
+          "source_provenance",
+          "method_semantics",
+          "invocation_mode",
+          "command_text_kind",
+          "command_type_mode",
+          "command_text_argument",
+          "command_text_literal",
+          "command_text_source_span",
+          "command_text_provenance",
+          "literal_value",
+          "terminal_sink",
+          "embedded_target",
+          "embedded_targets",
+          "embedded_procedure_name",
+          "embedded_procedure_schema",
+          "embedded_procedure_evidence",
+          "procedure_name_hint",
+          "receiver_name",
+          "connection_expression",
+          "connection_expression_candidates",
+          "connection_source",
+          "provenance",
+          "implementation_identity",
+          "assembly_identity",
+          "assembly_revision",
+          "method_identity",
+          "method_arity",
+          "parameter_types",
+          "overload_candidates",
+          "overload_candidate_facts",
+          "receiver_expression",
+          "binding_provenance",
+          "receiver_construction_facts",
+          "receiver_assignment_facts",
+          "wrapper_implementation_identity",
+          "wrapper_assembly_identity",
+          "wrapper_assembly_revision",
+          "wrapper_method_identity",
+          "wrapper_method_arity",
+          "wrapper_parameter_types",
+          "wrapper_method_semantics",
+          "wrapper_overload_candidates",
+          "wrapper_overload_candidate_facts",
+          "contract_fingerprint",
+          "contract_signature_version",
+          "contract_lifecycle_status",
+          "evidence_kind",
+          "implementation_snapshot_reference",
+          "comparison_report_reference",
+          "source_contract_conflict",
+          "source_contract_conflict_reason",
+          "source_contract_semantics",
+          "source_contract_sink",
+          "contract_delegation_alias",
+          "wrapper_status",
+          "wrapper_classification_status",
+          "classification_status",
+          "wrapper_selection_source",
+          "selected_contract",
+          "wrapper_contract_mode",
+          "wrapper_contract_sink",
+          "wrapper_contract_delegation_alias",
+          "candidate_contract_names",
+          "wrapper_scan_root",
+          "wrapper_source_available",
+          "wrapper_review_candidate",
+          "semantic_binding_accepted",
+          "wrapper_unresolved_reason",
+          "wrapper_mode_reason",
+          "observed_method",
+          "wrapper_stored_procedure_mode",
+          "server",
+          "source_snapshot_identity",
+          "signature_version",
+          "contract_status",
+          "raw_command_text",
+          "path_id",
+          "method_class_chain",
+          "wrapper_contract",
+          "wrapper_contract_candidates",
+          "entry_method",
+          "method_chain",
+          "database",
+          "database_candidates",
+          "database_attribution",
+          "caller",
+          "caller_class",
+          "caller_method",
+          "procedure_name",
+          "procedure_schema",
+          "branch_context",
+          "sp_chain",
+          "module_chain_ids",
+          "terminal_operation_id",
+          "terminal_operation",
+          "target",
+          "written_columns",
+          "conditions",
+          "reads",
+          "writes",
+          "read_full_keys",
+          "write_full_keys",
+          "risk_flags",
+          "evidence",
+          "reason",
+          "confirmed",
+          "unresolved_reason",
+          "unresolved_targets"
+        ],
+        "title": "ExecutionPath",
         "type": "object"
       },
       "FindBySPRequest": {
@@ -557,6 +3254,172 @@
         "title": "FlowChainResponse",
         "type": "object"
       },
+      "FormField": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/InputField"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "kind": {
+            "const": "form",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "fields",
+          "kind"
+        ],
+        "title": "FormField",
+        "type": "object"
+      },
+      "FormGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "container": {
+            "title": "Container",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FormItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "kind": {
+            "const": "form_group",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "container",
+          "id",
+          "items"
+        ],
+        "title": "FormGroup",
+        "type": "object"
+      },
+      "FormItem": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/InputField"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "fields"
+        ],
+        "title": "FormItem",
+        "type": "object"
+      },
+      "FunctionDefinition": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "title": "Definition",
+            "type": "string"
+          },
+          "exists": {
+            "title": "Exists",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parameters": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parameters",
+            "type": "array"
+          },
+          "return_type": {
+            "title": "Return Type",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "exists",
+          "definition",
+          "truncated",
+          "parameters",
+          "return_type"
+        ],
+        "title": "FunctionDefinition",
+        "type": "object"
+      },
+      "GridField": {
+        "additionalProperties": false,
+        "properties": {
+          "control": {
+            "title": "Control",
+            "type": "string"
+          },
+          "events": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Events",
+            "type": "object"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/DisplayField"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "grid",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "control",
+          "id",
+          "events",
+          "fields"
+        ],
+        "title": "GridField",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -568,6 +3431,40 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InputField": {
+        "additionalProperties": false,
+        "properties": {
+          "control": {
+            "title": "Control",
+            "type": "string"
+          },
+          "css_class": {
+            "default": "",
+            "title": "Css Class",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "js_binding": {
+            "default": "",
+            "title": "Js Binding",
+            "type": "string"
+          },
+          "max_length": {
+            "default": "",
+            "title": "Max Length",
+            "type": "string"
+          }
+        },
+        "required": [
+          "control",
+          "id"
+        ],
+        "title": "InputField",
         "type": "object"
       },
       "LocateObjectRequest": {
@@ -663,6 +3560,134 @@
           }
         },
         "title": "LocatedDatabase",
+        "type": "object"
+      },
+      "Method": {
+        "additionalProperties": false,
+        "properties": {
+          "class": {
+            "title": "Class",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "strength": {
+            "default": "determined",
+            "enum": [
+              "determined",
+              "likely"
+            ],
+            "title": "Strength",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "class"
+        ],
+        "title": "Method",
+        "type": "object"
+      },
+      "ObjectReference": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "title": "Database",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "schema": {
+            "title": "Schema",
+            "type": "string"
+          },
+          "schema_source": {
+            "title": "Schema Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "database",
+          "schema",
+          "name",
+          "schema_source"
+        ],
+        "title": "ObjectReference",
+        "type": "object"
+      },
+      "OverloadCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "implementation_identity": {
+            "default": "",
+            "title": "Implementation Identity",
+            "type": "string"
+          },
+          "method_arity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method Arity"
+          },
+          "method_identity": {
+            "default": "",
+            "title": "Method Identity",
+            "type": "string"
+          },
+          "method_name": {
+            "title": "Method Name",
+            "type": "string"
+          },
+          "parameter_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parameter Types",
+            "type": "array"
+          },
+          "receiver_type": {
+            "default": "",
+            "title": "Receiver Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "method_name"
+        ],
+        "title": "OverloadCandidate",
+        "type": "object"
+      },
+      "PathCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "omitted_paths": {
+            "title": "Omitted Paths",
+            "type": "integer"
+          },
+          "returned_paths": {
+            "title": "Returned Paths",
+            "type": "integer"
+          },
+          "total_paths": {
+            "title": "Total Paths",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_paths",
+          "returned_paths",
+          "omitted_paths"
+        ],
+        "title": "PathCounts",
         "type": "object"
       },
       "PathEvidenceRequest": {
@@ -1035,7 +4060,63 @@
         "title": "PathEvidenceResponse",
         "type": "object"
       },
+      "ProcedureDefinition": {
+        "additionalProperties": false,
+        "properties": {
+          "complexity": {
+            "title": "Complexity",
+            "type": "string"
+          },
+          "definition": {
+            "title": "Definition",
+            "type": "string"
+          },
+          "dependency_source": {
+            "title": "Dependency Source",
+            "type": "string"
+          },
+          "exists": {
+            "title": "Exists",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parameters": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parameters",
+            "type": "array"
+          },
+          "tables": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tables",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "exists",
+          "definition",
+          "truncated",
+          "parameters",
+          "tables",
+          "dependency_source",
+          "complexity"
+        ],
+        "title": "ProcedureDefinition",
+        "type": "object"
+      },
       "ProgramAnalysis": {
+        "additionalProperties": false,
         "description": "單一程式（檔案）的靜態分析結果。",
         "properties": {
           "call_chains": {
@@ -1050,46 +4131,46 @@
           },
           "code_snippets": {
             "items": {
-              "$ref": "#/components/schemas/CodeSnippet"
+              "$ref": "#/components/schemas/Snippet"
             },
             "title": "Code Snippets",
             "type": "array"
           },
           "compact_execution_paths": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/CompactPath"
             },
             "title": "Compact Execution Paths",
             "type": "array"
           },
           "compact_execution_paths_meta": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "title": "Compact Execution Paths Meta",
-            "type": "object"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PathCounts"
+              },
+              {
+                "$ref": "#/components/schemas/EmptyPathCounts"
+              }
+            ],
+            "title": "Compact Execution Paths Meta"
           },
           "database_invocations": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/DatabaseInvocation"
             },
             "title": "Database Invocations",
             "type": "array"
           },
           "diagnostics": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/Diagnostic"
             },
             "title": "Diagnostics",
             "type": "array"
           },
           "execution_paths": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/ExecutionPath"
             },
             "title": "Execution Paths",
             "type": "array"
@@ -1105,8 +4186,7 @@
           },
           "methods": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/Method"
             },
             "title": "Methods",
             "type": "array"
@@ -1117,24 +4197,21 @@
           },
           "related_programs": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/RelatedProgram"
             },
             "title": "Related Programs",
             "type": "array"
           },
           "shared_component_contributions": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/SharedComponentContribution"
             },
             "title": "Shared Component Contributions",
             "type": "array"
           },
           "sp_definitions": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/ProcedureDefinition"
             },
             "title": "Sp Definitions",
             "type": "array"
@@ -1155,24 +4232,21 @@
           },
           "udf_definitions": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/FunctionDefinition"
             },
             "title": "Udf Definitions",
             "type": "array"
           },
           "view_definitions": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/Definition"
             },
             "title": "View Definitions",
             "type": "array"
           },
           "view_layer": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/ViewLayer"
             },
             "title": "View Layer",
             "type": "array"
@@ -1456,6 +4530,50 @@
           }
         },
         "title": "RefreshSqlResponse",
+        "type": "object"
+      },
+      "RelatedProgram": {
+        "additionalProperties": false,
+        "properties": {
+          "called_by": {
+            "title": "Called By",
+            "type": "string"
+          },
+          "class": {
+            "title": "Class",
+            "type": "string"
+          },
+          "depth": {
+            "title": "Depth",
+            "type": "integer"
+          },
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "lines": {
+            "default": "",
+            "title": "Lines",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "snippet": {
+            "default": "",
+            "title": "Snippet",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "class",
+          "method",
+          "called_by",
+          "depth"
+        ],
+        "title": "RelatedProgram",
         "type": "object"
       },
       "SPMatchProgram": {
@@ -1759,6 +4877,198 @@
           }
         },
         "title": "ScanRecordListResponse",
+        "type": "object"
+      },
+      "ScriptField": {
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "kind": {
+            "const": "script",
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "index",
+          "text"
+        ],
+        "title": "ScriptField",
+        "type": "object"
+      },
+      "SharedComponentContribution": {
+        "additionalProperties": false,
+        "properties": {
+          "class": {
+            "title": "Class",
+            "type": "string"
+          },
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "kind": {
+            "const": "view_component",
+            "title": "Kind",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "stored_procedures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stored Procedures",
+            "type": "array"
+          },
+          "tables": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tables",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "file",
+          "class",
+          "method",
+          "stored_procedures",
+          "tables"
+        ],
+        "title": "SharedComponentContribution",
+        "type": "object"
+      },
+      "SharedComponentLabel": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "view_component",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "title": "SharedComponentLabel",
+        "type": "object"
+      },
+      "Snippet": {
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lines": {
+            "title": "Lines",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "label",
+          "lines",
+          "text"
+        ],
+        "title": "Snippet",
+        "type": "object"
+      },
+      "SourceProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "scan_root": {
+            "title": "Scan Root",
+            "type": "string"
+          },
+          "selection_source": {
+            "title": "Selection Source",
+            "type": "string"
+          },
+          "source_available": {
+            "title": "Source Available",
+            "type": "boolean"
+          },
+          "source_snapshot_hash": {
+            "title": "Source Snapshot Hash",
+            "type": "string"
+          },
+          "source_snapshot_identity": {
+            "title": "Source Snapshot Identity",
+            "type": "string"
+          },
+          "source_span": {
+            "$ref": "#/components/schemas/SourceSpan"
+          }
+        },
+        "required": [
+          "selection_source",
+          "source_available",
+          "scan_root",
+          "source_span",
+          "source_snapshot_hash",
+          "source_snapshot_identity"
+        ],
+        "title": "SourceProvenance",
+        "type": "object"
+      },
+      "SourceSpan": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "default": "",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "end_offset": {
+            "title": "End Offset",
+            "type": "integer"
+          },
+          "relative_path": {
+            "title": "Relative Path",
+            "type": "string"
+          },
+          "start_offset": {
+            "title": "Start Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "relative_path",
+          "start_offset",
+          "end_offset"
+        ],
+        "title": "SourceSpan",
         "type": "object"
       },
       "TableMatchProgram": {
@@ -2126,6 +5436,70 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "ViewLayer": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DisplayField"
+                },
+                {
+                  "$ref": "#/components/schemas/GridField"
+                },
+                {
+                  "$ref": "#/components/schemas/FormField"
+                },
+                {
+                  "$ref": "#/components/schemas/FormGroup"
+                },
+                {
+                  "$ref": "#/components/schemas/ScriptField"
+                }
+              ]
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "framework": {
+            "title": "Framework",
+            "type": "string"
+          },
+          "summary": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Summary",
+            "type": "array"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "file",
+          "type",
+          "framework",
+          "summary",
+          "fields",
+          "warnings"
+        ],
+        "title": "ViewLayer",
         "type": "object"
       },
       "WrapperContractAcceptanceRequest": {

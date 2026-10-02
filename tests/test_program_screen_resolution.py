@@ -31,11 +31,11 @@ from tests.program_screen_fixtures import (  # noqa: F401
 
 
 def _actions(program) -> List[str]:
-    return [entry["name"] for entry in program.methods]
+    return [entry.name for entry in program.methods]
 
 
 def _strengths(program) -> Dict[str, str]:
-    return {entry["name"]: entry.get("strength", "") for entry in program.methods}
+    return {entry.name: entry.strength if "strength" in entry.model_fields_set else "" for entry in program.methods}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -192,7 +192,7 @@ def test_an_area_qualified_program_code_resolves_to_that_areas_view(
     program = response.programs[0]
     assert program.file == "Areas/Admin/Views/Report/Summary.cshtml"
     assert _actions(program) == ["Summary"]
-    assert program.methods[0]["class"] == "ReportController"
+    assert program.methods[0].class_ == "ReportController"
 
 
 def test_two_areas_holding_same_named_views_do_not_collide(
@@ -357,7 +357,7 @@ def test_a_resolved_program_screen_reports_its_own_view_in_the_view_layer(
         monkeypatch, tmp_path, scan, ["ImDecl"], include_view_layer=True
     )
 
-    assert [entry["file"] for entry in response.programs[0].view_layer] == [
+    assert [entry.file for entry in response.programs[0].view_layer] == [
         "Views/Import/ImDecl.cshtml"
     ]
 
@@ -578,7 +578,7 @@ def test_the_anchored_name_never_admits_the_same_name_on_the_screens_own_control
 
     program = response.programs[0]
     assert program.stored_procedures == ["usp_shareddetail"]
-    assert program.methods == [
+    assert [entry.model_dump() for entry in program.methods] == [
         {"name": "Detail", "class": "SharedApiController", "strength": "determined"}
     ]
 

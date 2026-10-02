@@ -8,6 +8,12 @@ from __future__ import annotations
 
 from typing import Any, List, Dict, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from .analyze_models import (
+    AnalyzeRecord, Method, Snippet, ProcedureDefinition, Definition,
+    FunctionDefinition, DatabaseInvocation, Diagnostic, RelatedProgram,
+    ViewLayer, ExecutionPath, CompactPath, PathCounts, EmptyPathCounts,
+    SharedComponentContribution,
+)
 
 WrapperContractSelector = Union[str, List[str], None]
 
@@ -145,37 +151,39 @@ class CodeSnippet(BaseModel):
     text: str = ""
 
 
-class ProgramAnalysis(BaseModel):
+class ProgramAnalysis(AnalyzeRecord):
     """單一程式（檔案）的靜態分析結果。"""
     program: str                             # 對應請求的程式名
     file: str                                # 實際定位到的檔案路徑（相對 repo）
     framework: str = ""
-    methods: List[Dict] = Field(default_factory=list)
+    methods: List[Method] = Field(default_factory=list)
     stored_procedures: List[str] = Field(default_factory=list)
     tables: List[str] = Field(default_factory=list)
     call_chains: List[List[str]] = Field(default_factory=list)
-    code_snippets: List[CodeSnippet] = Field(default_factory=list)
-    sp_definitions: List[Dict] = Field(default_factory=list)  # SP 完整定義（include_sp_defs=True 時）
-    view_definitions: List[Dict] = Field(default_factory=list)  # SQL View 完整定義（include_sp_defs=True 且表名實際為 View 時）
-    udf_definitions: List[Dict] = Field(default_factory=list)  # UDF 完整定義（include_sp_defs=True 且程式 SQL 文字實際呼叫到該 UDF 時）
-    database_invocations: List[Dict] = Field(default_factory=list)
-    diagnostics: List[Dict] = Field(default_factory=list)
-    related_programs: List[Dict] = Field(default_factory=list)  # 跨程式呼叫展開（expand_depth>0 時）
-    view_layer: List[Dict] = Field(default_factory=list)  # View 層資訊（include_view_layer=True 時；aspx/razor/vue 摘要）
-    execution_paths: List[Dict] = Field(default_factory=list)
-    compact_execution_paths: List[Dict] = Field(default_factory=list)
-    compact_execution_paths_meta: Dict[str, int] = Field(default_factory=dict)
+    code_snippets: List[Snippet] = Field(default_factory=list)
+    sp_definitions: List[ProcedureDefinition] = Field(default_factory=list)
+    view_definitions: List[Definition] = Field(default_factory=list)
+    udf_definitions: List[FunctionDefinition] = Field(default_factory=list)
+    database_invocations: List[DatabaseInvocation] = Field(default_factory=list)
+    diagnostics: List[Diagnostic] = Field(default_factory=list)
+    related_programs: List[RelatedProgram] = Field(default_factory=list)
+    view_layer: List[ViewLayer] = Field(default_factory=list)
+    execution_paths: List[ExecutionPath] = Field(default_factory=list)
+    compact_execution_paths: List[CompactPath] = Field(default_factory=list)
+    compact_execution_paths_meta: Union[PathCounts, EmptyPathCounts] = Field(default_factory=EmptyPathCounts)
     # 這個畫面渲染的共用元件（ViewComponent／partial view）各自貢獻的 SP／資料表，
     # 跟畫面自己的 stored_procedures/tables 分開列出，方便分辨來源（見 spec.md
     # story 22-24）。已經合併進 stored_procedures/tables/database_invocations，
     # 這裡只是額外的、按元件分組的明細。
-    shared_component_contributions: List[Dict] = Field(default_factory=list)
+    shared_component_contributions: List[SharedComponentContribution] = Field(default_factory=list)
 
 
 class AnalyzeResponse(BaseModel):
-    programs: List[ProgramAnalysis] = Field(default_factory=list)
-    not_found: List[str] = Field(default_factory=list)
-    source_root: str = ""                    # 實際分析的本機路徑（除錯用）
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    programs: List[ProgramAnalysis]
+    not_found: List[str]
+    source_root: str
 
 
 class RefreshRequest(BaseModel):

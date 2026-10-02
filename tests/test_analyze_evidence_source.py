@@ -99,8 +99,8 @@ def _analyze(
     )
 
 
-def _callers(paths: Sequence[dict]) -> List[str]:
-    return sorted(str(path["caller"]) for path in paths)
+def _callers(paths) -> List[str]:
+    return sorted(path.caller for path in paths)
 
 
 def _component_screen(tmp_path: Path):
@@ -173,7 +173,7 @@ def test_a_webforms_program_reports_only_the_invocations_of_its_own_files(
     )
 
     program = response.programs[0]
-    assert [d["procedure_name"] for d in program.database_invocations] == ["usp_Own"]
+    assert [d.procedure_name for d in program.database_invocations] == ["usp_Own"]
     assert _callers(program.execution_paths) == ["OrderEntry.Page_Load"]
 
 
@@ -193,7 +193,7 @@ def test_an_mvc_program_screen_reports_only_the_invocations_of_its_own_actions(
     response = _analyze(monkeypatch, tmp_path, scan, ["Orders"], _GivenEvidence([index, delete]))
 
     program = response.programs[0]
-    assert [d["method_name"] for d in program.database_invocations] == ["Index"]
+    assert [d.method_name for d in program.database_invocations] == ["Index"]
     assert _callers(program.execution_paths) == ["OrdersController.Index"]
 
 
@@ -214,7 +214,7 @@ def test_a_shared_component_reports_the_invocations_of_its_entry_method(
 
     program = response.programs[0]
     assert [
-        (d["procedure_name"], d["shared_component"]["name"])
+        (d.procedure_name, d.shared_component.name)
         for d in program.database_invocations
     ] == [("usp_Menu", "Menu")]
     assert program.stored_procedures == ["usp_Menu"]
@@ -244,8 +244,8 @@ def test_two_analyze_requests_on_one_retained_evidence_keep_the_retained_paths(
 
     for answer in answers:
         path = answer.programs[0].execution_paths[0]
-        assert path["unresolved_reason"] == "stored_procedure_not_in_graph"
-        assert path["unresolved_targets"] == ["dbo.usp_Missing"]
+        assert path.unresolved_reason == "stored_procedure_not_in_graph"
+        assert path.unresolved_targets == ["dbo.usp_Missing"]
     assert answers[0].programs[0].execution_paths == answers[1].programs[0].execution_paths
     assert source.evidence.paths_of([unresolved]) == retained
 
@@ -362,7 +362,7 @@ def test_analyze_keeps_the_scope_scan_facts_and_chosen_root(
     assert response.source_root == str(expected_root)
     assert [program.file for program in response.programs] == relative_files
     assert [program.stored_procedures for program in response.programs] == [["usp_Save"]] * len(relative_files)
-    assert [program.methods for program in response.programs] == [
+    assert [[method.model_dump(by_alias=True) for method in program.methods] for program in response.programs] == [
         [{"name": "Page_Load", "class": "OrderEntry.aspx"}],
         *([[{"name": "Page_Load", "class": "Invoice.aspx"}]] if multiple_roots else []),
     ]

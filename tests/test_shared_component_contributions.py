@@ -270,14 +270,14 @@ def test_every_shared_component_contribution_is_labelled(
     )
 
     program = response.programs[0]
-    own = [inv for inv in program.database_invocations if inv["procedure_name"] == "usp_orderindex"]
-    shared = [inv for inv in program.database_invocations if inv["procedure_name"] == "usp_listmenu"]
-    assert own and "shared_component" not in own[0]
-    assert shared and shared[0]["shared_component"] == {
+    own = [inv for inv in program.database_invocations if inv.procedure_name == "usp_orderindex"]
+    shared = [inv for inv in program.database_invocations if inv.procedure_name == "usp_listmenu"]
+    assert own and "shared_component" not in own[0].model_fields_set
+    assert shared and shared[0].shared_component.model_dump() == {
         "kind": "view_component",
         "name": "Menu",
     }
-    assert program.shared_component_contributions == [
+    assert [entry.model_dump() for entry in program.shared_component_contributions] == [
         {
             "kind": "view_component",
             "name": "Menu",
@@ -320,7 +320,7 @@ def test_a_component_rendered_by_many_screens_contributes_to_each(
         "Views/Report/Index.cshtml": ["usp_listmenu"],
     }
     for program in response.programs:
-        assert program.shared_component_contributions[0]["name"] == "Menu"
+        assert program.shared_component_contributions[0].name == "Menu"
 
 
 def test_a_component_reaching_no_database_contributes_nothing(
@@ -347,7 +347,7 @@ def test_a_component_reaching_no_database_contributes_nothing(
     program = response.programs[0]
     assert program.stored_procedures == ["usp_orderindex"]
     assert program.shared_component_contributions == []
-    assert all("shared_component" not in inv for inv in program.database_invocations)
+    assert all("shared_component" not in inv.model_fields_set for inv in program.database_invocations)
 
 
 def test_a_view_component_reaches_the_screens_tables_too(
@@ -380,7 +380,7 @@ def test_a_view_component_reaches_the_screens_tables_too(
 
     program = response.programs[0]
     assert program.tables == ["MenuItems"]
-    assert program.shared_component_contributions == [
+    assert [entry.model_dump() for entry in program.shared_component_contributions] == [
         {
             "kind": "view_component",
             "name": "Menu",
@@ -452,7 +452,7 @@ def test_a_view_component_lists_the_tables_of_its_entry_method_only(
 
     program = response.programs[0]
     assert program.tables == ["MenuItems"]
-    assert [contribution["tables"] for contribution in program.shared_component_contributions] == [
+    assert [contribution.tables for contribution in program.shared_component_contributions] == [
         ["MenuItems"]
     ]
 
