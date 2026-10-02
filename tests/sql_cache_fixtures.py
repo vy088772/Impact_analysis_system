@@ -55,13 +55,16 @@ class CacheRoot:
         self._tmp.cleanup()
 
 
-def one_server_holds_every_database(database: str) -> CacheIdentity:
+def one_server_holds_every_database(database: str) -> Optional[CacheIdentity]:
     """Stand in for ``sql_cache_store.find_cache_identity()`` beside a stubbed reader.
 
     A test that replaces the cache reader has no cache files on disk, so the
     real lookup finds no server. This stand-in names one server for every
-    Database, and the stubbed reader then answers for it.
+    Database, and the stubbed reader then answers for it. A blank name finds
+    nothing, as in the real lookup.
     """
+    if not str(database or "").strip():
+        return None
     return CacheIdentity.of("vmsystest07", database)
 
 

@@ -115,7 +115,9 @@ def _request(database: str) -> FindBySPRequest:
 
 
 def _scope_for(database: str, tmp_path: Path) -> analyze_service.DerivedExecutionEvidenceScope:
-    return analyze_service.DerivedExecutionEvidenceScope.of(_request(database), [tmp_path])
+    return analyze_service.DerivedExecutionEvidenceScope.of(
+        _request(database), [tmp_path], one_server_holds_every_database(database)
+    )
 
 
 def _count_real_derivations(monkeypatch) -> list:

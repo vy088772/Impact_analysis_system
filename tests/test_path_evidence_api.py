@@ -157,11 +157,10 @@ def test_analyze_route_maps_graph_readiness_to_conflict(monkeypatch) -> None:
 
 
 def test_require_sql_execution_graph_exposes_machine_readable_failure(monkeypatch) -> None:
-    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: None)
 
     with pytest.raises(analyze_service.SqlExecutionGraphRequiredError) as error:
-        analyze_service._require_sql_execution_graph("OrdersDb")
+        analyze_service._require_sql_execution_graph("OrdersDb", one_server_holds_every_database("OrdersDb"))
 
     assert error.value.code == "sql_execution_graph_required"
     assert error.value.database == "OrdersDb"

@@ -136,7 +136,9 @@ def _table_request(table_name: str = "TableA", *, refresh: bool = False) -> Find
 
 
 def _scope(tmp_path: Path) -> analyze_service.DerivedExecutionEvidenceScope:
-    return analyze_service.DerivedExecutionEvidenceScope.of(_sp_request(), [tmp_path])
+    return analyze_service.DerivedExecutionEvidenceScope.of(
+        _sp_request(), [tmp_path], one_server_holds_every_database("OrdersDb")
+    )
 
 
 def _count_real_rating_derivations(monkeypatch) -> list:
@@ -238,7 +240,7 @@ def test_a_scope_evicted_from_memory_is_served_from_disk(monkeypatch, tmp_path: 
             lambda identity: cache_payload(identity.database, graph=_graph("usp_Alpha", "usp_Other")),
         )
         analyze_service.find_by_sp(other_request)
-        first_scope = analyze_service.DerivedExecutionEvidenceScope.of(_sp_request(), [tmp_path])
+        first_scope = _scope(tmp_path)
         assert first_scope not in analyze_service._rated_invocations_retention
 
         again = analyze_service.find_by_sp(_sp_request("dbo.usp_Alpha"))

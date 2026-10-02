@@ -613,7 +613,9 @@ def test_the_analyze_read_path_reads_the_server_the_request_named() -> None:
             _payload_with_procedure("PUR", "spOnEight"),
         )
 
-        catalog, _graph, _database = analyze_service._execution_sql_context("PUR", "vmsystest08")
+        catalog, _graph, _database = analyze_service._execution_sql_context(
+            CacheIdentity.of("vmsystest08", "PUR")
+        )
 
         assert catalog.contains("PUR", "sponeight") is True
         assert catalog.contains("PUR", "sponseven") is False
@@ -633,10 +635,14 @@ def test_the_analyze_read_path_without_a_server_cannot_pick_between_two() -> Non
             _payload_with_procedure("PUR", "spOnEight"),
         )
 
+        ambiguous = sql_cache_store.find_cache_identity("PUR")
+        assert isinstance(ambiguous, sql_cache_store.AmbiguousServer)
         with pytest.raises(analyze_service.SqlExecutionGraphRequiredError):
-            analyze_service._require_sql_execution_graph("PUR")
+            analyze_service._require_sql_execution_graph("PUR", None)
 
-        cached, _graph = analyze_service._require_sql_execution_graph("PUR", "vmsystest07")
+        cached, _graph = analyze_service._require_sql_execution_graph(
+            "PUR", CacheIdentity.of("vmsystest07", "PUR")
+        )
         assert cached["database"] == "PUR"
 
 
@@ -1081,7 +1087,7 @@ def test_the_catalog_reads_each_procedure_with_its_own_schema() -> None:
         )
         sql_cache_store._save(identity, _payload("PUR", procedures=procedures, graph_nodes=graph_nodes))
 
-        catalog, _graph, _database = analyze_service._execution_sql_context("PUR", "vmsystest07")
+        catalog, _graph, _database = analyze_service._execution_sql_context(identity)
 
         assert catalog.match_reason("PUR", "usp_load", "common") == ""
         assert catalog.match_reason("PUR", "usp_load", "hr") == ""

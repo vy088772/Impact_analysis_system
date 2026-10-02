@@ -292,10 +292,10 @@ def find_cache_identity(database: str) -> Union[CacheIdentity, AmbiguousServer, 
     檔名尾綴。檔名裡的 Database 是 _safe_name() 過的片段，所以只取它的 server，
     回傳的身分仍用呼叫端給的 database——跟快取內容記錄的名字一致。
 
-    結構上沒有 server 可帶的呼叫端只有 refresh 流程的
-    analyze_service.reconcile_refresh_wrappers()（含 tools/discover_external_wrappers.py）。
-    /analyze、/path_evidence、/flow_chain、/find_by_sp、/find_by_table 會把請求的 db_server 一路帶到讀取端，
-    指名讀哪一台；那些請求沒填 db_server 時同樣改走這裡。
+    結構上沒有 server 可帶的呼叫端是 analyze_service.load_sp_catalog()（refresh 流程與
+    tools/discover_external_wrappers.py 經由它讀取）。/analyze、/path_evidence、
+    /flow_chain、/find_by_sp、/find_by_table 的 handler 在最上方建一次身分：請求帶
+    db_server 時用 CacheIdentity.of()，沒帶時呼叫這裡；handler 以下的函式只收那個身分。
     """
     database = str(database or "").strip()
     if not database:

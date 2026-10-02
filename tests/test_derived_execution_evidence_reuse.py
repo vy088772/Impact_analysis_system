@@ -470,7 +470,7 @@ def test_retention_fixture_snapshots_and_restores_around_a_test() -> None:
     leak into the next test, and a pre-existing entry from outside the test
     must not leak into it either."""
     scope = analyze_service.DerivedExecutionEvidenceScope(
-        repo_roots=("preexisting",), database="Db", db_server="", db_name="", wrapper_contract=""
+        repo_roots=("preexisting",), database="Db", sql_cache_identity=None, db_name="", wrapper_contract=""
     )
     stamp = analyze_service._RatedInvocationsValidityStamp(
         scan_freshness=(("saved-v1", "commit-v1"),),
@@ -484,7 +484,7 @@ def test_retention_fixture_snapshots_and_restores_around_a_test() -> None:
     with RatedInvocationsRetention() as retention:
         assert scope not in retention  # cleared on entry, not visible inside the test
         other_scope = analyze_service.DerivedExecutionEvidenceScope(
-            repo_roots=("during-test",), database="Db", db_server="", db_name="", wrapper_contract=""
+            repo_roots=("during-test",), database="Db", sql_cache_identity=None, db_name="", wrapper_contract=""
         )
         retention[other_scope] = analyze_service._RetainedRatedInvocations(stamp, [], {})
 

@@ -975,25 +975,17 @@ def _populate_decompilation_proposals(
 
 
 def _execution_sql_context(
-    database_alias: str,
-    db_server: str = "",
+    sql_cache_identity: Optional[sql_cache_store.CacheIdentity],
+    database_alias: str = "",
 ) -> Tuple[SpCatalog, Dict, str]:
-    """Load one SQL cache scope and build its graph-backed SP catalog.
+    """Load one SQL cache and build its graph-backed SP catalog.
 
-    ``db_server`` names the server whose cache to read. Requests that carry a
-    ``db_server`` always pass it, so the lookup never depends on which other
-    cache files happen to sit in the cache directory.
+    ``sql_cache_identity`` is the identity the caller already built; this function
+    never reads the cache directory. ``database_alias`` only names the graph
+    when no cache answers.
     """
     database_alias = str(database_alias or "").strip()
-    cached = None
-    if database_alias:
-        identity = (
-            sql_cache_store.CacheIdentity.of(db_server, database_alias)
-            if db_server
-            else sql_cache_store.find_cache_identity(database_alias)
-        )
-        if isinstance(identity, sql_cache_store.CacheIdentity):
-            cached = sql_cache_store.load_cached(identity)
+    cached = sql_cache_store.load_cached(sql_cache_identity) if sql_cache_identity is not None else None
     graph = dict((cached or {}).get("sql_execution_graph") or {})
     graph_database = str(
         graph.get("database")
@@ -1033,45 +1025,32 @@ def load_sp_catalog(database: str = "") -> SpCatalog:
     """Return the read-only stored-procedure catalog for a SQL cache scope.
 
     No caller of this one has a server to give: the refresh path and
-    tools/discover_external_wrappers.py only know a database name.
+    tools/discover_external_wrappers.py only know a database name, so the disk
+    lookup happens here, at the call site.
     """
-    catalog, _, _ = _execution_sql_context(database)
+    identity = sql_cache_store.find_cache_identity(database)
+    catalog, _, _ = _execution_sql_context(
+        identity if isinstance(identity, sql_cache_store.CacheIdentity) else None,
+        database,
+    )
     return catalog
 
 
-def _reject_ambiguous_database(database: str, db_server: str) -> None:
-    """Raise when a lookup names a Database on several hosts and names no host.
+def _require_sql_execution_graph(
+    database: str,
+    sql_cache_identity: Optional[sql_cache_store.CacheIdentity],
+) -> Tuple[Dict, Dict]:
+    """Return the cache and graph of the identity the handler built, or raise "not scanned".
 
-    The two lookup endpoints call this first, before any source scan, so a
-    Database that no host name can settle costs only one directory listing.
-    Every other case passes: a named host, no Database, a Database on one host,
-    and a Database that is not scanned (that one is
-    ``SqlExecutionGraphRequiredError``, raised later).
+    ``database`` is the requested name; it only names the error. A missing
+    identity (no cache, or a Database on several hosts) is "not scanned".
     """
-    database = str(database or "").strip()
-    if not database or db_server:
-        return
-    identity = sql_cache_store.find_cache_identity(database)
-    if isinstance(identity, sql_cache_store.AmbiguousServer):
-        raise AmbiguousDatabaseError(identity)
-
-
-def _require_sql_execution_graph(database: str, db_server: str = "") -> Tuple[Dict, Dict]:
     database = str(database or "").strip()
     if not database:
         raise ValueError(
             "database 不可為空；Gateway path analysis 需要指定 SQL execution graph cache。"
         )
-    identity = (
-        sql_cache_store.CacheIdentity.of(db_server, database)
-        if db_server
-        else sql_cache_store.find_cache_identity(database)
-    )
-    cached = (
-        sql_cache_store.load_cached(identity)
-        if isinstance(identity, sql_cache_store.CacheIdentity)
-        else None
-    )
+    cached = sql_cache_store.load_cached(sql_cache_identity) if sql_cache_identity is not None else None
     graph = (cached or {}).get("sql_execution_graph") if cached else None
     if not cached or not graph:
         raise SqlExecutionGraphRequiredError(
@@ -1308,24 +1287,30 @@ class DerivedExecutionEvidenceScope:
 
     repo_roots: Tuple[str, ...]
     database: str
-    db_server: str
+    sql_cache_identity: Optional[sql_cache_store.CacheIdentity]
     db_name: str
     wrapper_contract: str
 
     @classmethod
-    def of(cls, req: object, roots: Iterable[Path]) -> DerivedExecutionEvidenceScope:
-        """Build the scope from a request and its already-resolved scan roots.
+    def of(
+        cls,
+        req: object,
+        roots: Iterable[Path],
+        sql_cache_identity: Optional[sql_cache_store.CacheIdentity],
+    ) -> DerivedExecutionEvidenceScope:
+        """Build the scope from a request, its already-resolved scan roots,
+        and the SQL Cache Identity its handler built.
 
         This is the one place a scope is assembled; every derivation call
         site is handed the result rather than reaching into ``req`` itself.
+        ``database`` stays next to ``sql_cache_identity``: the wrapper review exclusions
+        and the connection aliases read the requested name only.
         """
         wrapper_contract = getattr(req, "wrapper_contract", "")
         return cls(
             repo_roots=tuple(str(Path(root)) for root in roots),
             database=str(getattr(req, "database", "") or "").strip(),
-            db_server=sql_cache_store.normalize_server(
-                str(getattr(req, "db_server", "") or "")
-            ),
+            sql_cache_identity=sql_cache_identity,
             db_name=str(getattr(req, "db_name", "") or "").strip(),
             wrapper_contract=(
                 wrapper_contract if isinstance(wrapper_contract, str) else ""
@@ -1436,26 +1421,16 @@ def _rated_invocations_validity_stamp(
     scans: Iterable[ProjectScanResult],
 ) -> _RatedInvocationsValidityStamp:
     """Take a fresh reading of every input `_rated_execution_invocations` depends on."""
-    identity = None
-    if scope.database:
-        identity = (
-            sql_cache_store.CacheIdentity.of(scope.db_server, scope.database)
-            if scope.db_server
-            else sql_cache_store.find_cache_identity(scope.database)
-        )
-    sql_cache = (
-        sql_cache_store.load_cached(identity)
-        if isinstance(identity, sql_cache_store.CacheIdentity)
-        else None
-    )
+    identity = scope.sql_cache_identity
+    cached = sql_cache_store.load_cached(identity) if identity is not None else None
     # The repair tool rebuilds the graph and keeps the Scan Record's saved_at,
     # so the graph version joins the save time: a rebuilt graph invalidates.
     sql_cache_freshness = (
         (
             _freshness_or_sentinel(sql_cache_store.cached_saved_at(identity)),
-            (sql_cache.get("sql_execution_graph") or {}).get("graph_version"),
+            (cached.get("sql_execution_graph") or {}).get("graph_version"),
         )
-        if sql_cache is not None and isinstance(identity, sql_cache_store.CacheIdentity)
+        if cached is not None and identity is not None
         else None
     )
     external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
@@ -1558,9 +1533,9 @@ def _evict_for_new_scope(scope: DerivedExecutionEvidenceScope) -> None:
     print(
         "⚠️  Derived Execution Evidence retention 已達上限"
         f"（limit={limit}），淘汰最舊的 scope 以容納新的 scope："
-        f"evicted database={evicted_scope.database!r} db_server={evicted_scope.db_server!r} "
+        f"evicted database={evicted_scope.database!r} sql_cache_identity={evicted_scope.sql_cache_identity!r} "
         f"repo_roots={evicted_scope.repo_roots!r} / "
-        f"new database={scope.database!r} db_server={scope.db_server!r} "
+        f"new database={scope.database!r} sql_cache_identity={scope.sql_cache_identity!r} "
         f"repo_roots={scope.repo_roots!r}"
     )
 
@@ -1688,8 +1663,8 @@ def _rated_execution_invocations(
 ) -> Tuple[List[DbInvocation], Dict[str, object]]:
     """Rate raw C# facts once so path discovery and evidence use the same join."""
     catalog, graph, graph_database = _execution_sql_context(
+        scope.sql_cache_identity,
         scope.database,
-        scope.db_server,
     )
     rated_invocations = []
     raw_by_file = getattr(scan, "db_invocations", {})
@@ -1877,26 +1852,21 @@ def _build_program_execution_paths(
     matched_files: List,
     root: Path,
     *,
-    scope: Optional[DerivedExecutionEvidenceScope] = None,
+    scope: DerivedExecutionEvidenceScope,
     entry_filter: Optional[Callable[[DbInvocation], bool]] = None,
 ) -> Tuple[List[Dict], Dict[str, object]]:
     """Join one program's raw C# facts to the selected SQL execution graph.
 
-    `scope` lets a caller that already built the request's
-    `DerivedExecutionEvidenceScope` -- because it derives over the full set
-    of repository scan roots, not just this one merged `root` -- pass it
-    through so every derivation in one request shares one scope identity.
-    A caller with no such scope (including the direct unit tests exercising
-    this function below the request layer) gets one built from `root` alone.
+    `scope` is the request's `DerivedExecutionEvidenceScope`, built over the
+    full set of repository scan roots, so every derivation in one request
+    shares one scope identity and the SQL Cache Identity its handler built.
 
     `entry_filter` narrows the invocations to the ones a Program Screen's own
     actions reach. It is applied before the paths are built, so the compact
     payload's counts describe the paths this program actually reports.
     """
     if req.database:
-        _require_sql_execution_graph(req.database, req.db_server)
-    if scope is None:
-        scope = DerivedExecutionEvidenceScope.of(req, [root])
+        _require_sql_execution_graph(req.database, scope.sql_cache_identity)
     rated_invocations, graph = _rated_execution_invocations(scope, scan, matched_files, root)
     if entry_filter is not None:
         rated_invocations = [
@@ -1928,7 +1898,14 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
     if not path_id:
         raise PathEvidenceError("invalid_path_id", "path_id 不可為空")
 
-    cached, graph = _require_sql_execution_graph(req.database, req.db_server)
+    # A Database on several hosts with no host named is "not scanned" here.
+    found = (
+        sql_cache_store.CacheIdentity.of(req.db_server, req.database)
+        if req.db_server.strip() and req.database.strip()
+        else sql_cache_store.find_cache_identity(req.database)
+    )
+    sql_cache_identity = found if isinstance(found, sql_cache_store.CacheIdentity) else None
+    cached, graph = _require_sql_execution_graph(req.database, sql_cache_identity)
 
     roots = resolve_source(req)  # type: ignore[arg-type]
     if not roots:
@@ -1950,7 +1927,7 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
         matched_files = list(scan.csharp_results)
         resolutions = []  # every file counts: no program filter below
 
-    scope = DerivedExecutionEvidenceScope.of(req, roots)
+    scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
     rated_invocations, joined_graph = _rated_execution_invocations(
         scope, scan, matched_files, root  # type: ignore[arg-type]
     )
@@ -2095,10 +2072,17 @@ def _materialize_path_evidence(
             or ""
         ).strip()
         if database_alias:
+            # The path names its own Database, which can differ from the
+            # requested one, so this branch still reads the disk by that name
+            # (ticket 01 of .scratch/sql-cache-identity-crosses-http-seam/, notes).
+            found = (
+                sql_cache_store.CacheIdentity.of(db_server, database_alias)
+                if db_server.strip()
+                else sql_cache_store.find_cache_identity(database_alias)
+            )
             definitions = fetch_sp_definitions(
                 [invocation.raw_command_text or invocation.procedure_name],
-                database_alias=database_alias,
-                db_server=db_server or None,
+                found if isinstance(found, sql_cache_store.CacheIdentity) else None,
             )
             if definitions:
                 definition = definitions[0]
@@ -2350,13 +2334,20 @@ def _utf16_index(text: str, offset: int) -> int:
 
 def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     """依 program_names 過濾掃描結果，組成回應（純靜態，無 AI）。"""
+    # A Database on several hosts with no host named is "not scanned" here.
+    found = (
+        sql_cache_store.CacheIdentity.of(req.db_server, req.database)
+        if req.db_server.strip() and req.database.strip()
+        else sql_cache_store.find_cache_identity(req.database)
+    )
+    sql_cache_identity = found if isinstance(found, sql_cache_store.CacheIdentity) else None
     roots = resolve_source(req)
     scans = [_get_scan(r, refresh=getattr(req, "refresh", False)) for r in roots]
     scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
     root = roots[0] if len(roots) == 1 else repo_dir(
         req.source.project if req.source else "", req.source.repo if req.source else ""
     )
-    scope = DerivedExecutionEvidenceScope.of(req, roots)
+    scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
 
     programs: List[ProgramAnalysis] = []
     not_found: List[str] = []
@@ -2552,11 +2543,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             # SP 完整定義（選用，需 DB 連線；讓 AI 看得到 SP 實際邏輯）
             sp_definitions: List[Dict] = []
             if req.include_sp_defs and sp_names:
-                sp_definitions = fetch_sp_definitions(
-                    sp_names,
-                    database_alias=req.database or None,
-                    db_server=req.db_server or None,
-                )
+                sp_definitions = fetch_sp_definitions(sp_names, sql_cache_identity)
 
             # SQL View 完整定義（選用）：table_names 裡如果其實是 View（而非一般資料表），
             # 從本機 SQL 快取（sql_cache_store，由 /refresh_sql 落地）取得其完整定義，
@@ -2564,11 +2551,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             # （見 view_fetcher.py 說明），避免每個表名都額外連線判斷是否為 View。
             view_definitions: List[Dict] = []
             if req.include_sp_defs and table_names:
-                view_definitions = fetch_view_definitions(
-                    table_names,
-                    database_alias=req.database or None,
-                    db_server=req.db_server or None,
-                )
+                view_definitions = fetch_view_definitions(table_names, sql_cache_identity)
 
             # 使用者定義函數（UDF）完整定義（選用）：靜態解析沒有專門的「UDF 呼叫」
             # 關聯（沒有專門的 database invocation fact），改用「比對」取代「解析」——把該程式自己
@@ -2584,11 +2567,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                     if getattr(q, "query_text", "")
                 ]
                 if sql_texts:
-                    udf_definitions = fetch_udf_definitions(
-                        sql_texts,
-                        database_alias=req.database or None,
-                        db_server=req.db_server or None,
-                    )
+                    udf_definitions = fetch_udf_definitions(sql_texts, sql_cache_identity)
 
             # 跨程式呼叫參照展開（類似 Copilot 跟隨參照）：
             # 找出這支程式呼叫了、但定義在「其他檔案」的方法，帶入相關程式碼片段。
@@ -2802,7 +2781,15 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
     sp_name = (req.sp_name or "").strip()
     if not sp_name:
         return FindBySPResponse(sp_name=sp_name, matches=[])
-    _reject_ambiguous_database(req.database, req.db_server)
+    # The refusal of a Database on several hosts comes before any source scan
+    # and before the cache_only skip, so it costs one directory listing.
+    sql_cache_identity = (
+        sql_cache_store.CacheIdentity.of(req.db_server, req.database)
+        if req.db_server.strip() and req.database.strip()
+        else sql_cache_store.find_cache_identity(req.database)
+    )
+    if isinstance(sql_cache_identity, sql_cache_store.AmbiguousServer):
+        raise AmbiguousDatabaseError(sql_cache_identity)
 
     project = req.source.project if req.source else ""
     repo = req.source.repo if req.source else ""
@@ -2839,10 +2826,8 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
             "find_by_sp 需要 database 以載入 SQL execution graph；"
             "請提供 system_id 並先執行 refresh_sql_cli。"
         )
-    # 請求帶 db_server 就讀那一台；沒帶時由 find_cache_identity() 從磁碟找唯一
-    # 一份同名快取（同名快取在多台主機上的情況已在函式開頭擋下）。
-    _cached, _graph = _require_sql_execution_graph(req.database, req.db_server)
-    scope = DerivedExecutionEvidenceScope.of(req, roots)
+    _cached, _graph = _require_sql_execution_graph(req.database, sql_cache_identity)
+    scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
     rated_invocations, _ = _rated_execution_invocations_for_scope(
         scope,
         scans,
@@ -2934,7 +2919,7 @@ def _record_table_reverse_lookup(table_name: str, scope: DerivedExecutionEvidenc
     print(
         "🔎 資料表反查："
         f"table={table_name!r} scope_database={scope.database!r} "
-        f"scope_db_server={scope.db_server!r} scope_db_name={scope.db_name!r} "
+        f"scope_sql_cache={scope.sql_cache_identity!r} scope_db_name={scope.db_name!r} "
         f"scope_repo_roots={scope.repo_roots!r} scope_wrapper_contract={scope.wrapper_contract!r}"
     )
 
@@ -2949,7 +2934,15 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     table_name = (req.table_name or "").strip()
     if not table_name:
         return FindByTableResponse(table_name=table_name, matches=[])
-    _reject_ambiguous_database(req.database, req.db_server)
+    # The refusal of a Database on several hosts comes before any source scan
+    # and before the cache_only skip, so it costs one directory listing.
+    sql_cache_identity = (
+        sql_cache_store.CacheIdentity.of(req.db_server, req.database)
+        if req.db_server.strip() and req.database.strip()
+        else sql_cache_store.find_cache_identity(req.database)
+    )
+    if isinstance(sql_cache_identity, sql_cache_store.AmbiguousServer):
+        raise AmbiguousDatabaseError(sql_cache_identity)
 
     project = req.source.project if req.source else ""
     repo = req.source.repo if req.source else ""
@@ -2973,7 +2966,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
 
     # 這一份 scope 是每個請求唯一組裝的一份身分（見 DerivedExecutionEvidenceScope.of
     # docstring）；下面的 graph 查詢重用它，不重新組裝，避免兩份身分互相脫鉤。
-    scope = DerivedExecutionEvidenceScope.of(req, roots)
+    scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
     _record_table_reverse_lookup(table_name, scope)
 
     question = TableQuestion.of(table_name, req.database or "")
@@ -2993,8 +2986,7 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     # reaches the tables behind it only when the request names a Database.
     inline_graph: Optional[Mapping[str, Any]] = None
     if req.database:
-        # db_server 的處理與 find_by_sp 相同。
-        _sql_cache, graph = _require_sql_execution_graph(req.database, req.db_server)
+        _sql_cache, graph = _require_sql_execution_graph(req.database, sql_cache_identity)
         # 重用同一 scope 的 rated invocations 與 Execution Paths（ticket 04/05）：
         # 同一 scope 內問第二個 table，不必重新 rate C# facts、也不必重建
         # Execution Paths —— 兩者共用 find_by_sp() 已經在用的同一份 retention
@@ -3285,6 +3277,13 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     （多子資料夾 source 需全部已有快取才算「已分析過」），詳見 find_by_sp()
     的 docstring 說明為何不能只用 repo_manager.is_cloned() 判斷。
     """
+    # A Database on several hosts with no host named is "not scanned" here.
+    found = (
+        sql_cache_store.CacheIdentity.of(req.db_server, req.database)
+        if req.db_server.strip() and req.database.strip()
+        else sql_cache_store.find_cache_identity(req.database)
+    )
+    sql_cache_identity = found if isinstance(found, sql_cache_store.CacheIdentity) else None
     project = req.source.project if req.source else ""
     repo = req.source.repo if req.source else ""
     sub_path = req.source.path if req.source else ""
@@ -3305,13 +3304,13 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
     root = roots[0] if len(roots) == 1 else repo_dir(project, repo)
 
-    scope = DerivedExecutionEvidenceScope.of(req, roots)
+    scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
 
     if req.direction == "backward":
         rated_invocations: List[DbInvocation] = []
         execution_graph: Dict[str, object] = {}
         if req.database:
-            _cached, execution_graph = _require_sql_execution_graph(req.database, req.db_server)
+            _cached, execution_graph = _require_sql_execution_graph(req.database, sql_cache_identity)
             rated_invocations, execution_graph = _rated_execution_invocations(
                 scope,
                 scan,
@@ -3352,7 +3351,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     rated_invocations: List[DbInvocation] = []
     execution_graph: Dict[str, object] = {}
     if req.database:
-        _cached, execution_graph = _require_sql_execution_graph(req.database, req.db_server)
+        _cached, execution_graph = _require_sql_execution_graph(req.database, sql_cache_identity)
         rated_invocations, execution_graph = _rated_execution_invocations(
             scope,
             scan,
@@ -3529,7 +3528,7 @@ def reconcile_refresh_wrappers(
     else:
         normalized_contract = explicit_contract
     # refresh 流程只知道 database 名稱（沒有請求帶 db_server 進來），
-    # 由 sql_cache_store.find_cache_identity() 從磁碟找。
+    # load_sp_catalog() 在它自己的呼叫點用 sql_cache_store.find_cache_identity() 從磁碟找。
     #
     # `database` here is frequently a system id (a whole-system /refresh's
     # `req.system`, e.g. "Y-Docs_TTPUR"), not any one real SQL database --

@@ -60,7 +60,7 @@ def _stub_path_evidence_sources(monkeypatch, root: Path, scan) -> None:
     monkeypatch.setattr(
         analyze_service,
         "_require_sql_execution_graph",
-        lambda database, db_server: ({}, {}),
+        lambda database, sql_cache: ({}, {}),
     )
 
 

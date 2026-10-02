@@ -61,19 +61,17 @@ def _cache_with_one_procedure() -> dict:
 
 
 def test_missing_name_returns_no_definition_and_opens_no_connection(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sp_fetcher, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(sp_fetcher, "load_cached", lambda *a, **k: _cache_with_one_procedure())
 
-    results = sp_fetcher.fetch_sp_definitions(["usp_Unknown"], database_alias="OrdersDb")
+    results = sp_fetcher.fetch_sp_definitions(["usp_Unknown"], one_server_holds_every_database("OrdersDb"))
 
     assert results == []
 
 
 def test_cached_name_returns_same_definition_and_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sp_fetcher, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(sp_fetcher, "load_cached", lambda *a, **k: _cache_with_one_procedure())
 
-    results = sp_fetcher.fetch_sp_definitions(["usp_Known"], database_alias="OrdersDb")
+    results = sp_fetcher.fetch_sp_definitions(["usp_Known"], one_server_holds_every_database("OrdersDb"))
 
     assert len(results) == 1
     entry = results[0]
@@ -85,20 +83,18 @@ def test_cached_name_returns_same_definition_and_provenance(monkeypatch: pytest.
 
 
 def test_mixed_names_only_return_cached_entries(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sp_fetcher, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(sp_fetcher, "load_cached", lambda *a, **k: _cache_with_one_procedure())
 
     results = sp_fetcher.fetch_sp_definitions(
-        ["usp_Known", "usp_Unknown"], database_alias="OrdersDb"
+        ["usp_Known", "usp_Unknown"], one_server_holds_every_database("OrdersDb")
     )
 
     assert [entry["name"] for entry in results] == ["usp_Known"]
 
 
 def test_no_sql_cache_returns_empty_and_opens_no_connection(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sp_fetcher, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(sp_fetcher, "load_cached", lambda *a, **k: None)
 
-    results = sp_fetcher.fetch_sp_definitions(["usp_Anything"], database_alias="OrdersDb")
+    results = sp_fetcher.fetch_sp_definitions(["usp_Anything"], one_server_holds_every_database("OrdersDb"))
 
     assert results == []

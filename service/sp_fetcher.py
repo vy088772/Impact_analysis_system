@@ -16,7 +16,7 @@ from typing import List, Optional
 
 from canonical_object_identity import ObjectName, bare_key, schema_qualified
 
-from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
+from .sql_cache_store import CacheIdentity, load_cached
 from code_analyzer.sql_analyzer import estimate_complexity_from_definition
 
 
@@ -75,23 +75,13 @@ def _graph_tables_for_procedure(cached: dict, procedure_name: str) -> List[str]:
 
 def _from_cache(
     sp_names: List[str],
-    database_alias: Optional[str],
+    sql_cache_identity: Optional[CacheIdentity],
     max_def_chars: int,
-    db_server: Optional[str] = None,
 ) -> tuple[List[dict], List[str]]:
     """從本機 SQL 快取查找；回傳 (已找到的定義清單, 快取中找不到的名稱清單)。
-    快取本身不存在（從未 /refresh_sql 過）時，全部視為「找不到」。
-    db_server 指名要讀哪一台伺服器的快取；省略時由 sql_cache_store 從磁碟回推。
+    沒有身分、或快取本身不存在（從未 /refresh_sql 過）時，全部視為「找不到」。
     """
-    if not database_alias:
-        return [], sp_names
-
-    identity = (
-        CacheIdentity.of(db_server, database_alias)
-        if db_server
-        else find_cache_identity(database_alias)
-    )
-    cached = load_cached(identity) if isinstance(identity, CacheIdentity) else None
+    cached = load_cached(sql_cache_identity) if sql_cache_identity is not None else None
     if not cached:
         return [], sp_names
 
@@ -122,9 +112,8 @@ def _from_cache(
 
 def fetch_sp_definitions(
     sp_names: List[str],
-    database_alias: Optional[str] = None,
+    sql_cache_identity: Optional[CacheIdentity],
     max_def_chars: int = 8000,
-    db_server: Optional[str] = None,
 ) -> List[dict]:
     """回傳每個 SP 的定義摘要清單。
 
@@ -132,10 +121,12 @@ def fetch_sp_definitions(
     只讀本機 SQL 快取；快取版的 tables 來自 SQL Execution Graph。快取沒有的
     名稱直接略過，不即時連線補查（見 docs/adr/0011-remove-live-query-fallbacks.md）。
     無資料庫或無快取時回傳空清單。
+
+    sql_cache_identity：呼叫端已建好的 SQL 快取身分；這裡從不讀快取目錄。
     """
     if not sp_names:
         return []
 
-    found, _missing = _from_cache(sp_names, database_alias, max_def_chars, db_server)
+    found, _missing = _from_cache(sp_names, sql_cache_identity, max_def_chars)
     return found
 

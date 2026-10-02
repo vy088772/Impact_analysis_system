@@ -25,6 +25,18 @@ from tests.sql_cache_fixtures import (
 )
 
 
+def _build_paths_with_handler_scope(req: AnalyzeRequest, scan, matched_files, root: Path):
+    """Call the path builder with the scope the `/analyze` handler builds.
+
+    The handler builds the SQL Cache Identity once; these tests stub the disk
+    lookup with `one_server_holds_every_database`, so the scope takes its answer.
+    """
+    scope = analyze_service.DerivedExecutionEvidenceScope.of(
+        req, [root], one_server_holds_every_database(req.database)
+    )
+    return analyze_service._build_program_execution_paths(req, scan, matched_files, root, scope=scope)
+
+
 def _cached_sql_graph() -> dict:
     return cache_payload(
         "OrdersDb",
@@ -330,7 +342,7 @@ def test_analyze_keeps_missing_graph_target_as_unresolved(monkeypatch, tmp_path:
     monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: None)
 
-    paths, compact_payload = analyze_service._build_program_execution_paths(
+    paths, compact_payload = _build_paths_with_handler_scope(
         AnalyzeRequest(program_names=["OrderPage"], include_snippets=False),
         scan,
         [file_result],
@@ -405,7 +417,7 @@ def _captured_question_reaching_ranking(monkeypatch, tmp_path: Path, *, question
     kwargs = {"program_names": ["OrderPage"], "include_snippets": False}
     if question:
         kwargs["question"] = question
-    analyze_service._build_program_execution_paths(
+    _build_paths_with_handler_scope(
         AnalyzeRequest(**kwargs), scan, [file_result], tmp_path,
     )
     return captured["question"]
@@ -452,7 +464,7 @@ def test_analyze_passes_request_max_paths_into_compact_path_builder(
         return original_payload(paths, max_paths=max_paths, question=question)
 
     monkeypatch.setattr(analyze_service, "build_compact_execution_path_payload", spy_payload)
-    analyze_service._build_program_execution_paths(
+    _build_paths_with_handler_scope(
         AnalyzeRequest(program_names=["OrderPage"], max_paths=37),
         scan,
         [file_result],
@@ -711,7 +723,7 @@ def test_analyze_keeps_multiple_connection_labels_database_scoped(monkeypatch, t
     monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: _cached_sql_graph())
 
-    paths, _ = analyze_service._build_program_execution_paths(
+    paths, _ = _build_paths_with_handler_scope(
         AnalyzeRequest(database="OrdersDb", program_names=["OrderPage"], include_snippets=False),
         scan,
         [file_result],
@@ -769,7 +781,7 @@ def test_analyze_catalog_preserves_schema_qualified_procedure(monkeypatch, tmp_p
         lambda identity: _cached_schema_sql_graph(),
     )
 
-    paths, _ = analyze_service._build_program_execution_paths(
+    paths, _ = _build_paths_with_handler_scope(
         AnalyzeRequest(database="OrdersDb", program_names=["OrderPage"], include_snippets=False),
         scan,
         [file_result],

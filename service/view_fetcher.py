@@ -15,25 +15,17 @@ from typing import List, Optional
 
 from canonical_object_identity import bare_key
 
-from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
+from .sql_cache_store import CacheIdentity, load_cached
 
 
 def _from_cache(
     table_names: List[str],
-    database_alias: Optional[str],
+    sql_cache_identity: Optional[CacheIdentity],
     max_def_chars: int,
-    db_server: Optional[str] = None,
 ) -> List[dict]:
     """回傳 table_names 中是快取 View 的定義清單；不是 View 的名稱直接略過。"""
-    if not database_alias:
-        return []  # 無資料庫可查，視為「無法判斷」，不當作快取缺漏去即時連線（避免誤連）
-
-    identity = (
-        CacheIdentity.of(db_server, database_alias)
-        if db_server
-        else find_cache_identity(database_alias)
-    )
-    cached = load_cached(identity) if isinstance(identity, CacheIdentity) else None
+    # 沒有身分（無資料庫或無快取）視為「無法判斷」，不當作快取缺漏去即時連線（避免誤連）
+    cached = load_cached(sql_cache_identity) if sql_cache_identity is not None else None
     if not cached:
         return []
 
@@ -58,9 +50,8 @@ def _from_cache(
 
 def fetch_view_definitions(
     table_names: List[str],
-    database_alias: Optional[str] = None,
+    sql_cache_identity: Optional[CacheIdentity],
     max_def_chars: int = 8000,
-    db_server: Optional[str] = None,
 ) -> List[dict]:
     """從 table_names 中挑出「其實是 View」的項目，回傳其完整定義清單。
 
@@ -68,9 +59,9 @@ def fetch_view_definitions(
     裡（沒有「不存在」的空白項目，避免跟一般資料表混淆）。無資料庫或無快取時
     回傳空清單（純資料表分析仍可正常運作，不影響主流程）。
 
-    db_server：要讀哪一台伺服器上的快取；省略時由 sql_cache_store 從磁碟回推。
+    sql_cache_identity：呼叫端已建好的 SQL 快取身分；這裡從不讀快取目錄。
     """
     if not table_names:
         return []
-    found = _from_cache(table_names, database_alias, max_def_chars, db_server)
+    found = _from_cache(table_names, sql_cache_identity, max_def_chars)
     return found

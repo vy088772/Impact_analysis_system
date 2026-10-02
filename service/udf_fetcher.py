@@ -20,14 +20,13 @@ from typing import List, Optional
 
 from canonical_object_identity import bare_key
 
-from .sql_cache_store import CacheIdentity, find_cache_identity, load_cached
+from .sql_cache_store import CacheIdentity, load_cached
 
 
 def fetch_udf_definitions(
     sql_texts: List[str],
-    database_alias: Optional[str] = None,
+    sql_cache_identity: Optional[CacheIdentity],
     max_def_chars: int = 8000,
-    db_server: Optional[str] = None,
 ) -> List[dict]:
     """從程式自己的 SQL 查詢文字中，比對出實際有呼叫到的 UDF，回傳其完整定義。
 
@@ -40,17 +39,12 @@ def fetch_udf_definitions(
     避免欄位名稱恰好跟函數同名卻沒有實際呼叫的誤判）；無資料庫、無快取、或程式
     本身沒有 SQL 查詢文字時回傳空清單（不影響主流程）。
 
-    db_server：要讀哪一台伺服器上的快取；省略時由 sql_cache_store 從磁碟回推。
+    sql_cache_identity：呼叫端已建好的 SQL 快取身分；這裡從不讀快取目錄。
     """
-    if not sql_texts or not database_alias:
+    if not sql_texts or sql_cache_identity is None:
         return []
 
-    identity = (
-        CacheIdentity.of(db_server, database_alias)
-        if db_server
-        else find_cache_identity(database_alias)
-    )
-    cached = load_cached(identity) if isinstance(identity, CacheIdentity) else None
+    cached = load_cached(sql_cache_identity)
     if not cached:
         return []
 

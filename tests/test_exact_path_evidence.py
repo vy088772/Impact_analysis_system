@@ -559,7 +559,7 @@ def test_path_evidence_retains_unverified_literal_sp_candidate(monkeypatch, tmp_
     monkeypatch.setattr(
         analyze_service,
         "fetch_sp_definitions",
-        lambda sp_names, database_alias=None, db_server=None: [
+        lambda sp_names, sql_cache_identity: [
             {
                 "name": sp_names[0],
                 "exists": True,

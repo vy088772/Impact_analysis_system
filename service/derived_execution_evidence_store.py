@@ -95,14 +95,16 @@ def _key(scope: "DerivedExecutionEvidenceScope") -> str:
     """A stable, filesystem-safe identity for `scope` alone.
 
     Built from exactly the fields `DerivedExecutionEvidenceScope` declares
-    (repo_roots, database, db_server, db_name, wrapper_contract) -- nothing
-    a request carries beyond that, matching the scope's own equality.
+    (repo_roots, database, sql_cache_identity, db_name, wrapper_contract) -- nothing
+    a request carries beyond that, matching the scope's own equality. The
+    SQL Cache Identity enters as its cache key, so two Databases with one
+    name on two hosts get two keys.
     """
     canonical = repr(
         (
             scope.repo_roots,
             scope.database,
-            scope.db_server,
+            scope.sql_cache_identity.key if scope.sql_cache_identity is not None else "",
             scope.db_name,
             scope.wrapper_contract,
         )

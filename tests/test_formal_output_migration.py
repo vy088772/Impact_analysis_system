@@ -83,7 +83,6 @@ def test_sp_fetcher_uses_graph_lineage_and_keeps_dynamic_sql_unresolved(monkeypa
             {"type": "contains", "source": "sp:dynamic", "target": "op:dynamic"},
         ],
     }
-    monkeypatch.setattr(sp_fetcher, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         sp_fetcher,
         "load_cached",
@@ -92,7 +91,7 @@ def test_sp_fetcher_uses_graph_lineage_and_keeps_dynamic_sql_unresolved(monkeypa
 
     results = sp_fetcher.fetch_sp_definitions(
         ["usp_Direct", "usp_Entry", "usp_ReadModules", "usp_Dynamic"],
-        database_alias="OrdersDb",
+        one_server_holds_every_database("OrdersDb"),
     )
     by_name = {item["name"]: item for item in results}
 
