@@ -187,7 +187,7 @@ def _serve(
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda given, refresh=False: scan)
     monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name, server="", **_: (None, graph))
-    monkeypatch.setitem(_served, "evidence", DerivedExecutionEvidence(list(rated), graph, execution_paths=[]))
+    monkeypatch.setitem(_served, "evidence", DerivedExecutionEvidence(list(rated), graph, paths_by_invocation=[[] for _ in rated]))
     monkeypatch.setattr(analyze_service, "_rated_execution_invocations", lambda *args, **kwargs: (list(rated), graph))
 
 

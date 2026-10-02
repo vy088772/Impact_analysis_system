@@ -24,6 +24,7 @@ from code_analyzer.csharp_analysis_gateway import (
     InvocationSourceSpan,
 )
 from service import analyze_service
+from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.execution_path_builder import build_execution_paths
 from service.schemas import (
     PathEvidenceRequest,
@@ -34,6 +35,7 @@ from service.schemas import (
 from canonical_object_identity import parse
 from service.sql_cache_store import CacheIdentity
 from service.sql_execution_graph import build_sql_execution_graph
+from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
 from tests.sql_cache_fixtures import (
     CacheRoot,
     analyzer_operation,
@@ -211,6 +213,68 @@ def _cached_path_fixture(
     )
     path_id = build_execution_paths([path_invocation], graph)[0]["path_id"]
     return scan, cached, path_id
+
+
+@pytest.fixture(autouse=True)
+def _isolated_retention():
+    """A request without program names retains the scope in memory and on disk."""
+    with RatedInvocationsRetention():
+        yield
+
+
+def _given_evidence_of(scan: ProjectScanResult, root: Path):
+    """An evidence source with the rated invocation of the fixture and its graph."""
+    scope = analyze_service.DerivedExecutionEvidenceScope(
+        repo_roots=(str(root),),
+        database="OrdersDb",
+        sql_cache_identity=one_server_holds_every_database("OrdersDb"),
+        db_name="",
+        wrapper_contract="",
+    )
+    rated, graph = analyze_service._rated_execution_invocations(
+        scope, scan, list(scan.csharp_results), root
+    )
+    given = DerivedExecutionEvidence(rated, graph)
+    return lambda scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False: given
+
+
+def _stub_sources(monkeypatch, root: Path, scan: ProjectScanResult, cached: dict) -> None:
+    monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [root])
+    monkeypatch.setattr(analyze_service, "_get_scan", lambda r, refresh=False: scan)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: cached)
+
+
+def test_path_evidence_finds_a_path_of_the_given_evidence(monkeypatch, tmp_path: Path) -> None:
+    scan, cached, path_id = _cached_path_fixture(tmp_path)
+    _stub_sources(monkeypatch, tmp_path, scan, cached)
+    given = _given_evidence_of(scan, tmp_path)
+    # The real source would rate the scan again. The given source proves that
+    # the endpoint reads only the evidence it receives.
+    monkeypatch.setattr(analyze_service, "_rated_execution_invocations", None)
+
+    evidence = analyze_service.get_path_evidence(
+        PathEvidenceRequest(path_id=path_id, database="OrdersDb"), evidence_source=given
+    )
+
+    assert evidence.path_id == path_id
+    assert evidence.caller == "OrderPage.Save"
+    assert [operation["operation_type"] for operation in evidence.operations] == ["UPDATE"]
+
+
+def test_path_evidence_reports_a_path_id_missing_from_the_given_evidence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan, cached, _ = _cached_path_fixture(tmp_path)
+    _stub_sources(monkeypatch, tmp_path, scan, cached)
+    given = _given_evidence_of(scan, tmp_path)
+
+    with pytest.raises(analyze_service.PathEvidenceError) as error:
+        analyze_service.get_path_evidence(
+            PathEvidenceRequest(path_id="no-such-path", database="OrdersDb"), evidence_source=given
+        )
+
+    assert error.value.code == "path_not_found"
 
 
 def test_path_evidence_returns_only_selected_branch_and_source_methods(monkeypatch, tmp_path: Path) -> None:

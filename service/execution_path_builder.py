@@ -37,6 +37,29 @@ def build_execution_paths(
     input for ``path_id`` but complete source and SQL definitions are not copied
     into an Execution Path.
     """
+    invocations = list(invocations)
+    return ordered_execution_paths(
+        zip(
+            invocations,
+            build_execution_paths_by_invocation(
+                invocations, graph, max_call_depth=max_call_depth
+            ),
+        )
+    )
+
+
+def build_execution_paths_by_invocation(
+    invocations: Sequence[DbInvocation],
+    graph: Mapping[str, Any],
+    *,
+    max_call_depth: int = 5,
+) -> list[list[dict[str, Any]]]:
+    """The Execution Paths of each invocation, in the order of `invocations`.
+
+    A path depends only on its own invocation and the graph, so the paths of
+    one invocation stay the same in any batch. The graph index is built once
+    per call, not once per invocation.
+    """
     nodes = {
         str(node.get("id")): node
         for node in graph.get("nodes", []) or []
@@ -53,13 +76,12 @@ def build_execution_paths(
         for node in module_nodes
         if node.get("id")
     }
-    paths: list[dict[str, Any]] = []
     max_call_depth = max(0, max_call_depth)
     graph_database = part_key(graph.get("database"))
 
-    for invocation in sorted(invocations, key=_invocation_sort_key):
+    def paths_of(invocation: DbInvocation) -> list[dict[str, Any]]:
         if invocation.invocation_mode and invocation.invocation_mode != "stored_procedure":
-            continue
+            return []
         evidence = _evidence_value(invocation.evidence)
         if evidence != InvocationEvidence.PROVEN.value:
             diagnostic_evidence = (
@@ -70,26 +92,23 @@ def build_execution_paths(
                 }
                 else InvocationEvidence.UNRESOLVED.value
             )
-            paths.append(
+            return [
                 _unresolved_path(
                     invocation,
                     invocation.reason or "unresolved_invocation",
                     evidence=diagnostic_evidence,
                 )
-            )
-            continue
+            ]
         if not invocation.procedure_name:
-            paths.append(_unresolved_path(invocation, "missing_procedure_name"))
-            continue
+            return [_unresolved_path(invocation, "missing_procedure_name")]
         if graph_database and part_key(invocation.database) != graph_database:
-            paths.append(
+            return [
                 _unresolved_path(
                     invocation,
                     "graph_database_mismatch",
                     unresolved_targets=[f"database:{graph.get('database')}"],
                 )
-            )
-            continue
+            ]
 
         matches = [
             node
@@ -103,20 +122,18 @@ def build_execution_paths(
                 if matches
                 else [schema_qualified(_invocation_object_name(invocation))]
             )
-            paths.append(
+            return [
                 _unresolved_path(
                     invocation,
                     reason,
                     unresolved_targets=unresolved_targets,
                 )
-            )
-            continue
+            ]
 
-        module = matches[0]
-        paths.extend(
+        return list(
             _paths_from_module(
                 invocation,
-                module,
+                matches[0],
                 module_nodes_by_id,
                 relationships,
                 nodes,
@@ -126,6 +143,18 @@ def build_execution_paths(
             )
         )
 
+    return [paths_of(invocation) for invocation in invocations]
+
+
+def ordered_execution_paths(
+    paths_by_invocation: Iterable[tuple[DbInvocation, Sequence[Mapping[str, Any]]]],
+) -> list[dict[str, Any]]:
+    """Join the paths of several invocations in the order `build_execution_paths` gives."""
+    paths: list[dict[str, Any]] = []
+    for _, invocation_paths in sorted(
+        paths_by_invocation, key=lambda pair: _invocation_sort_key(pair[0])
+    ):
+        paths.extend(invocation_paths)  # type: ignore[arg-type]
     return sorted(paths, key=_path_sort_key)
 
 

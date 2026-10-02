@@ -72,7 +72,7 @@ def _ask(
 
     def rated(scope, scans, merged, root, *, refresh=False):
         rated_for.append(scope.database)
-        return DerivedExecutionEvidence(list(invocations), {}, execution_paths=[])
+        return DerivedExecutionEvidence(list(invocations), {}, paths_by_invocation=[[] for _ in invocations])
 
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)

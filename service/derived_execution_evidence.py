@@ -9,15 +9,15 @@ eviction, and the calls to the disk store. An endpoint asks
 reads no retention state itself, so the freshness rule lives here only.
 
 The rating step itself (`analyze_service._rated_execution_invocations`) still
-lives in `analyze_service`: `/analyze`, `/path_evidence` and `/flow_chain` call
-it directly until they move onto this module too.
+lives in `analyze_service`: `/analyze` and `/flow_chain` call it directly until
+they move onto this module too.
 """
 from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
 
 from config.settings import settings
 from code_analyzer.csharp_analysis_gateway import (
@@ -25,12 +25,16 @@ from code_analyzer.csharp_analysis_gateway import (
     load_external_wrapper_contract,
     load_wrapper_review_exclusions,
 )
+from code_analyzer.models import FileAnalysisResult
 from code_analyzer.project_scanner import ProjectScanResult
 
 from . import derived_execution_evidence_store
 from . import sql_cache_store
 from .contract_registry import load_contract_registry
-from .execution_path_builder import build_execution_paths
+from .execution_path_builder import (
+    build_execution_paths_by_invocation,
+    ordered_execution_paths,
+)
 from .scan_store import cached_commit, cached_saved_at
 
 
@@ -208,41 +212,101 @@ def _validity_stamp(
     )
 
 
+ExecutionPath = Dict[str, object]
+
+
 class DerivedExecutionEvidence:
     """One scope's Derived Execution Evidence, as an endpoint receives it.
 
-    `rated_invocations` and `graph` come from one rating. `execution_paths()`
-    builds the Execution Paths of the whole scope on first use and keeps them.
-    The paths are a pure function of the other two parts, so whatever
-    invalidates the rating invalidates the paths too, and they need no stamp
-    of their own. `on_paths_built` lets the retention write the completed
-    evidence to disk; an in-memory evidence source in a test leaves it out.
+    `rated_invocations` and `graph` come from one rating. The Execution Paths
+    are kept per invocation and built on first use: `paths_of()` gives the
+    paths of the invocations an endpoint selected, and `path_by_id()` finds
+    one path through an index by path_id. The paths are a pure function of
+    the other two parts, so whatever invalidates the rating invalidates the
+    paths too, and they need no stamp of their own.
+
+    `on_paths_built` lets the retention write the evidence to disk again when
+    the last invocation gets its paths. A partial build stays in memory only:
+    a lost partial build costs one rebuild, not a wrong answer. An in-memory
+    evidence source in a test, and a partial rating, leave it out.
+
+    The evidence is read-only for every endpoint. An endpoint that changes a
+    path copies it first.
     """
 
     def __init__(
         self,
         rated_invocations: List[DbInvocation],
         graph: Dict[str, object],
-        execution_paths: Optional[List[Dict[str, object]]] = None,
+        paths_by_invocation: Optional[Sequence[List[ExecutionPath]]] = None,
         on_paths_built: Optional[Callable[["DerivedExecutionEvidence"], None]] = None,
     ) -> None:
         self.rated_invocations = rated_invocations
         self.graph = graph
-        self._execution_paths = execution_paths
+        self._paths_by_invocation: List[Optional[List[ExecutionPath]]] = (
+            list(paths_by_invocation)
+            if paths_by_invocation is not None
+            else [None] * len(rated_invocations)
+        )
+        # Positions by object identity: an endpoint selects invocations from
+        # `rated_invocations` and hands the same objects back.
+        self._positions = {id(invocation): i for i, invocation in enumerate(rated_invocations)}
         self._on_paths_built = on_paths_built
+        self._path_index: Optional[Dict[str, List[Tuple[ExecutionPath, DbInvocation]]]] = None
 
-    def execution_paths(self) -> List[Dict[str, object]]:
-        """The Execution Paths of the scope, built at most one time."""
-        if self._execution_paths is None:
-            self._execution_paths = build_execution_paths(self.rated_invocations, self.graph)
-            if self._on_paths_built is not None:
+    def paths_of(self, invocations: Iterable[DbInvocation]) -> List[ExecutionPath]:
+        """The Execution Paths of `invocations`, in the order of one build over them."""
+        invocations = list(invocations)
+        positions = [self._positions[id(invocation)] for invocation in invocations]
+        missing = sorted({p for p in positions if self._paths_by_invocation[p] is None})
+        if missing:
+            built = build_execution_paths_by_invocation(
+                [self.rated_invocations[p] for p in missing], self.graph
+            )
+            for position, paths in zip(missing, built):
+                self._paths_by_invocation[position] = paths
+            if self._on_paths_built is not None and self.built_paths_by_invocation is not None:
                 self._on_paths_built(self)
-        return self._execution_paths
+        return ordered_execution_paths(
+            (invocation, self._paths_by_invocation[position] or [])
+            for invocation, position in zip(invocations, positions)
+        )
+
+    def execution_paths(self) -> List[ExecutionPath]:
+        """The Execution Paths of the whole scope."""
+        return self.paths_of(self.rated_invocations)
+
+    def path_by_id(
+        self,
+        path_id: str,
+        produced_by: Callable[[DbInvocation], bool] = lambda invocation: True,
+    ) -> Optional[Tuple[ExecutionPath, DbInvocation]]:
+        """The path with `path_id` and the invocation that produced it, or `None`.
+
+        The first call builds the paths of every invocation and indexes them.
+        A path_id depends only on its own invocation, but two scan roots can
+        hold one relative path. So the index keeps every match, and
+        `produced_by` selects among them before the first match wins.
+        """
+        if self._path_index is None:
+            self.paths_of(self.rated_invocations)
+            self._path_index = {}
+            for invocation, paths in zip(self.rated_invocations, self._paths_by_invocation):
+                for path in paths or []:
+                    self._path_index.setdefault(str(path.get("path_id") or ""), []).append(
+                        (path, invocation)
+                    )
+        return next(
+            (match for match in self._path_index.get(path_id, []) if produced_by(match[1])),
+            None,
+        )
 
     @property
-    def built_execution_paths(self) -> Optional[List[Dict[str, object]]]:
-        """The paths if `execution_paths()` already built them, else `None`."""
-        return self._execution_paths
+    def built_paths_by_invocation(self) -> Optional[List[List[ExecutionPath]]]:
+        """The paths of every invocation if all of them are built, else `None`."""
+        if any(paths is None for paths in self._paths_by_invocation):
+            return None
+        return [paths or [] for paths in self._paths_by_invocation]
 
 
 class EvidenceSource(Protocol):
@@ -259,6 +323,7 @@ class EvidenceSource(Protocol):
         merged_scan: ProjectScanResult,
         root: Path,
         *,
+        needed_files: Optional[List[FileAnalysisResult]] = None,
         refresh: bool = False,
     ) -> DerivedExecutionEvidence: ...
 
@@ -333,16 +398,17 @@ def _retain(
     stamp: ValidityStamp,
     rated_invocations: List[DbInvocation],
     graph: Dict[str, object],
-    execution_paths: Optional[List[Dict[str, object]]],
+    paths_by_invocation: Optional[List[List[ExecutionPath]]],
 ) -> DerivedExecutionEvidence:
     """Make room for `scope` if needed, then retain its evidence as the newest entry.
 
     The one call a fresh derivation or a disk hit makes to enter `scope` into
-    `_retention`. The evidence writes itself to disk again once it builds its
-    Execution Paths: a disk hit may supply the rating without paths yet built
-    (a scope that had only ever answered `find_by_sp()`), so the file is
-    written again to carry the paths -- the same "write on every cold
-    derivation" rule, applied to the half of the evidence that just went cold.
+    `_retention`. The evidence writes itself to disk again once every
+    invocation has its Execution Paths: a disk hit may supply the rating
+    without paths yet built (a scope that had only ever answered
+    `find_by_sp()`), so the file is written again to carry the paths -- the
+    same "write on every cold derivation" rule, applied to the half of the
+    evidence that just went cold.
     """
 
     def store_with_paths(evidence: DerivedExecutionEvidence) -> None:
@@ -351,11 +417,11 @@ def _retain(
             stamp,
             evidence.rated_invocations,
             evidence.graph,
-            execution_paths=evidence.built_execution_paths,
+            paths_by_invocation=evidence.built_paths_by_invocation,
         )
 
     evidence = DerivedExecutionEvidence(
-        rated_invocations, graph, execution_paths, on_paths_built=store_with_paths
+        rated_invocations, graph, paths_by_invocation, on_paths_built=store_with_paths
     )
     _evict_for_new_scope(scope)
     _retention[scope] = _RetainedEvidence(stamp, evidence)
@@ -369,6 +435,7 @@ def evidence_for_scope(
     merged_scan: ProjectScanResult,
     root: Path,
     *,
+    needed_files: Optional[List[FileAnalysisResult]] = None,
     refresh: bool = False,
 ) -> DerivedExecutionEvidence:
     """The Derived Execution Evidence of `scope`, reused across requests (ADR-0013).
@@ -378,6 +445,13 @@ def evidence_for_scope(
     derives again and replaces what is retained. `refresh` always derives
     again: the one action a caller takes to force freshness skips both the
     memory copy and the disk copy, whatever their stamps say.
+
+    `needed_files` changes only the miss (ADR-0040). Without it, a miss derives
+    the whole scope and retains it in memory and on disk. With it, a miss rates
+    those C# file results only and retains nothing: the request gets a partial
+    evidence, and the next request still finds no retained copy. A hit serves
+    the whole scope either way, and the endpoint filters it. Rating is
+    independent per file, so a filtered whole result equals a partial one.
 
     `per_root_scans` is the caller's list of per-root scans, taken *before*
     any multi-root merge -- the stamp reads each root's recorded scan state.
@@ -393,18 +467,23 @@ def evidence_for_scope(
         stored = derived_execution_evidence_store.load(scope)
         if stored is not None and stored.stamp == stamp:
             return _retain(
-                scope, stamp, stored.rated_invocations, stored.graph, stored.execution_paths
+                scope, stamp, stored.rated_invocations, stored.graph, stored.paths_by_invocation
             )
 
     # The rating step still lives in `analyze_service`, which imports this
     # module; the import waits until the first derivation to avoid the cycle.
     from . import analyze_service
 
+    files = merged_scan.csharp_results if needed_files is None else needed_files
     rated_invocations, graph = analyze_service._rated_execution_invocations(
-        scope, merged_scan, list(merged_scan.csharp_results), root
+        scope, merged_scan, list(files), root
     )
+    if needed_files is not None:
+        return DerivedExecutionEvidence(rated_invocations, graph)  # not retained (ADR-0040)
     evidence = _retain(scope, stamp, rated_invocations, graph, None)
-    derived_execution_evidence_store.store(scope, stamp, rated_invocations, graph, execution_paths=None)
+    derived_execution_evidence_store.store(
+        scope, stamp, rated_invocations, graph, paths_by_invocation=None
+    )
     return evidence
 
 

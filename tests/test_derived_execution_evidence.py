@@ -32,6 +32,7 @@ from service.derived_execution_evidence import (
     DerivedExecutionEvidenceScope,
     evidence_for_scope,
 )
+from service.execution_path_builder import build_execution_paths
 from service.sql_execution_graph import GRAPH_VERSION
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
 from tests.sql_cache_fixtures import cache_payload, execution_graph, one_server_holds_every_database
@@ -47,50 +48,54 @@ def _graph(*procedure_names: str) -> dict:
     )
 
 
-_ALL_PROCEDURES = ("usp_Alpha", "usp_Gamma")
+_ALL_PROCEDURES = ("usp_Alpha", "usp_Beta", "usp_Gamma")
 
 
-def _file(root: Path) -> FileAnalysisResult:
-    path = root / "AlphaPage.cs"
+def _file(root: Path, program: str = "Alpha") -> FileAnalysisResult:
+    path = root / f"{program}Page.cs"
     return FileAnalysisResult(
         file_path=str(path),
         file_type=FileType.CSHARP,
         framework=FrameworkType.WEBFORMS,
         classes=[
             ClassInfo(
-                name="AlphaPage",
+                name=f"{program}Page",
                 namespace="",
                 file_path=str(path),
-                methods=[MethodInfo(name="SaveAlpha", access_modifier="private", return_type="void")],
+                methods=[MethodInfo(name=f"Save{program}", access_modifier="private", return_type="void")],
             )
         ],
     )
 
 
-def _scan(root: Path, alpha_calls: str = "usp_Alpha") -> ProjectScanResult:
-    """One repository scan with one program that calls one stored procedure."""
-    raw = {
-        str((root / "AlphaPage.cs").resolve()): [
-            {
-                "class_name": "AlphaPage",
-                "method_name": "SaveAlpha",
-                "command_text_kind": "literal",
-                "command_text": f"dbo.{alpha_calls}",
-                "command_type_stored_procedure": True,
-                "terminal_sink": "ExecuteNonQuery",
-                "connection_expression": "conn",
-                "start_offset": 10,
-                "end_offset": 90,
-            }
-        ]
+def _raw_call(program: str, procedure: str) -> dict:
+    return {
+        "class_name": f"{program}Page",
+        "method_name": f"Save{program}",
+        "command_text_kind": "literal",
+        "command_text": f"dbo.{procedure}",
+        "command_type_stored_procedure": True,
+        "terminal_sink": "ExecuteNonQuery",
+        "connection_expression": "conn",
+        "start_offset": 10,
+        "end_offset": 90,
     }
+
+
+def _scan(root: Path, alpha_calls: str = "usp_Alpha", *, beta_calls: str = "") -> ProjectScanResult:
+    """One repository scan with one program that calls one stored procedure.
+
+    With `beta_calls`, a second program BetaPage calls that stored procedure.
+    """
+    calls = {"Alpha": alpha_calls, **({"Beta": beta_calls} if beta_calls else {})}
+    files = {program: str((root / f"{program}Page.cs").resolve()) for program in calls}
     return ProjectScanResult(
         project_root=str(root),
         project_name="orders",
         scan_time=datetime.now(),
-        csharp_results=[_file(root)],
-        db_invocations=raw,
-        connection_sources={str((root / "AlphaPage.cs").resolve()): {"conn": "OrdersDb"}},
+        csharp_results=[_file(root, program) for program in calls],
+        db_invocations={files[program]: [_raw_call(program, procedure)] for program, procedure in calls.items()},
+        connection_sources={file: {"conn": "OrdersDb"} for file in files.values()},
     )
 
 
@@ -132,10 +137,24 @@ def _scope(root: Path, database: str = "OrdersDb") -> DerivedExecutionEvidenceSc
 
 
 def _evidence(
-    root: Path, alpha_calls: str = "usp_Alpha", *, database: str = "OrdersDb", refresh: bool = False
+    root: Path,
+    alpha_calls: str = "usp_Alpha",
+    *,
+    beta_calls: str = "",
+    needed: Optional[List[str]] = None,
+    database: str = "OrdersDb",
+    refresh: bool = False,
 ) -> DerivedExecutionEvidence:
-    scan = _scan(root, alpha_calls)
-    return evidence_for_scope(_scope(root, database), [scan], scan, root, refresh=refresh)
+    """The evidence of one request. `needed` names the programs whose files the request needs."""
+    scan = _scan(root, alpha_calls, beta_calls=beta_calls)
+    needed_files = (
+        None
+        if needed is None
+        else [result for result in scan.csharp_results if Path(result.file_path).stem in needed]
+    )
+    return evidence_for_scope(
+        _scope(root, database), [scan], scan, root, needed_files=needed_files, refresh=refresh
+    )
 
 
 def _procedures(evidence: DerivedExecutionEvidence) -> List[str]:
@@ -161,7 +180,7 @@ def _forbid_path_builds(monkeypatch) -> None:
     def fail(*args, **kwargs):
         raise AssertionError("the Execution Paths were built again")
 
-    monkeypatch.setattr(derived_execution_evidence, "build_execution_paths", fail)
+    monkeypatch.setattr(derived_execution_evidence, "build_execution_paths_by_invocation", fail)
 
 
 # ----------------------------------------------------------------------- reuse
@@ -361,8 +380,8 @@ def test_two_equal_writes_of_one_scope_leave_one_valid_file(inputs, retention, t
     scope = _scope(tmp_path)
     stamp = store.load(scope).stamp
 
-    store.store(scope, stamp, evidence.rated_invocations, evidence.graph, execution_paths=None)
-    store.store(scope, stamp, evidence.rated_invocations, evidence.graph, execution_paths=None)
+    store.store(scope, stamp, evidence.rated_invocations, evidence.graph, paths_by_invocation=None)
+    store.store(scope, stamp, evidence.rated_invocations, evidence.graph, paths_by_invocation=None)
 
     assert len([p for p in retention.store_root.iterdir() if p.is_file()]) == 1
     assert store.load(scope).stamp == stamp
@@ -380,6 +399,127 @@ def test_a_damaged_file_counts_as_a_miss(damage, inputs, retention, tmp_path: Pa
     retention.simulate_restart()
 
     assert _procedures(_evidence(tmp_path, "usp_Gamma")) == ["usp_gamma"]
+
+
+def test_a_file_of_the_previous_format_version_counts_as_a_miss(inputs, retention, tmp_path: Path) -> None:
+    """Version 5 keeps the paths per invocation. A version 4 file holds one flat list."""
+    _evidence(tmp_path, "usp_Alpha")
+    [only_file] = [p for p in retention.store_root.iterdir() if p.is_file()]
+    stored = store.pickle.loads(only_file.read_bytes())
+    stored.store_version = 4
+    only_file.write_bytes(store.pickle.dumps(stored))
+    retention.simulate_restart()
+
+    assert _procedures(_evidence(tmp_path, "usp_Gamma")) == ["usp_gamma"]
+
+
+# ---------------------------------------------------------------- needed files
+
+
+def test_a_miss_with_needed_files_rates_those_files_only(inputs, tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, "usp_Alpha", beta_calls="usp_Beta", needed=["BetaPage"])
+
+    assert _procedures(evidence) == ["usp_beta"]
+
+
+def test_a_partial_miss_leaves_the_retention_and_the_disk_folder_empty(
+    inputs, retention, tmp_path: Path
+) -> None:
+    partial = _evidence(tmp_path, "usp_Alpha", beta_calls="usp_Beta", needed=["AlphaPage"])
+    partial.execution_paths()  # building paths must not write either
+
+    assert list(retention.store_root.iterdir()) == []
+    # Nothing in memory: a full request with new content derives again.
+    assert _procedures(_evidence(tmp_path, "usp_Gamma", beta_calls="usp_Beta")) == [
+        "usp_gamma",
+        "usp_beta",
+    ]
+
+
+def test_a_hit_with_needed_files_gets_the_retained_evidence_of_the_whole_scope(
+    inputs, tmp_path: Path
+) -> None:
+    _evidence(tmp_path, "usp_Alpha", beta_calls="usp_Beta")
+
+    hit = _evidence(tmp_path, "usp_Gamma", beta_calls="usp_Beta", needed=["BetaPage"])
+
+    assert _procedures(hit) == ["usp_alpha", "usp_beta"]
+
+
+def test_a_disk_hit_with_needed_files_gets_the_evidence_of_the_whole_scope(
+    inputs, retention, tmp_path: Path
+) -> None:
+    _evidence(tmp_path, "usp_Alpha", beta_calls="usp_Beta")
+    retention.simulate_restart()
+
+    hit = _evidence(tmp_path, "usp_Gamma", beta_calls="usp_Beta", needed=["BetaPage"])
+
+    assert _procedures(hit) == ["usp_alpha", "usp_beta"]
+
+
+# ------------------------------------------------------- paths per invocation
+
+
+def _procedure_of(path: dict) -> str:
+    return str(path["procedure_name"]).rsplit(".", 1)[-1]
+
+
+def test_the_paths_of_given_invocations_are_the_paths_of_those_invocations_only(
+    inputs, tmp_path: Path
+) -> None:
+    evidence = _evidence(tmp_path, "usp_Alpha", beta_calls="usp_Beta")
+    beta = [i for i in evidence.rated_invocations if i.executed_procedure_name == "usp_beta"]
+
+    assert [_procedure_of(path) for path in evidence.paths_of(beta)] == ["usp_beta"]
+
+
+def test_the_paths_of_the_scope_equal_one_build_over_every_invocation(inputs, tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, "usp_Alpha", beta_calls="usp_Beta")
+    evidence.paths_of(evidence.rated_invocations[1:])  # one invocation built first
+
+    assert evidence.execution_paths() == build_execution_paths(evidence.rated_invocations, evidence.graph)
+
+
+def test_the_paths_of_an_invocation_are_built_one_time(monkeypatch, inputs, tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, "usp_Alpha", beta_calls="usp_Beta")
+    first = evidence.paths_of(evidence.rated_invocations)
+    _forbid_path_builds(monkeypatch)
+
+    assert evidence.paths_of(evidence.rated_invocations) == first
+
+
+def test_a_path_id_gives_its_path_and_the_invocation_that_produced_it(inputs, tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, "usp_Alpha", beta_calls="usp_Beta")
+    beta = [i for i in evidence.rated_invocations if i.executed_procedure_name == "usp_beta"]
+    [beta_path] = build_execution_paths(beta, evidence.graph)
+
+    found = evidence.path_by_id(str(beta_path["path_id"]))
+
+    assert found == (beta_path, beta[0])
+
+
+def test_a_path_id_gives_nothing_when_its_invocation_is_not_selected(inputs, tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, "usp_Alpha")
+    [path] = evidence.execution_paths()
+
+    assert evidence.path_by_id(str(path["path_id"]), produced_by=lambda invocation: False) is None
+
+
+def test_an_unknown_path_id_gives_nothing(inputs, tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, "usp_Alpha")
+
+    assert evidence.path_by_id("no-such-path") is None
+
+
+def test_the_paths_found_by_path_id_survive_a_restart(monkeypatch, inputs, retention, tmp_path: Path) -> None:
+    built = _evidence(tmp_path, "usp_Alpha", beta_calls="usp_Beta").execution_paths()
+    retention.simulate_restart()
+    _forbid_path_builds(monkeypatch)
+
+    found = _evidence(tmp_path, "usp_Alpha", beta_calls="usp_Beta").path_by_id(str(built[0]["path_id"]))
+
+    assert found is not None
+    assert found[0] == built[0]
 
 
 # -------------------------------------------------------------------- eviction

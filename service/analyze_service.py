@@ -1511,8 +1511,17 @@ def _build_program_execution_paths(
     return paths, compact_payload
 
 
-def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
-    """Expand one current Execution Path into source-backed, path-scoped evidence."""
+def get_path_evidence(
+    req: PathEvidenceRequest, evidence_source: EvidenceSource = evidence_for_scope
+) -> PathEvidenceResponse:
+    """Expand one current Execution Path into source-backed, path-scoped evidence.
+
+    evidence_source 提供這個 scope 的 Derived Execution Evidence；預設是
+    derived_execution_evidence 模組本身，測試可以給一份固定的 evidence。
+    有 program_names 時把這些程式的檔案當作 needed files 交給模組：miss 時只
+    rate 這些檔案，且不保留（ADR-0040）。沒有 program_names 時要整個 scope。
+    path 透過 evidence 的 path_id 索引找出，不再逐一 invocation 重建。
+    """
     path_id = (req.path_id or "").strip()
     if not path_id:
         raise PathEvidenceError("invalid_path_id", "path_id 不可為空")
@@ -1547,32 +1556,38 @@ def get_path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
         resolutions = []  # every file counts: no program filter below
 
     scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
-    rated_invocations, joined_graph = _rated_execution_invocations(
-        scope, scan, matched_files, root  # type: ignore[arg-type]
+    evidence = evidence_source(
+        scope,
+        scans,
+        scan,
+        root,  # type: ignore[arg-type]
+        needed_files=matched_files if req.program_names else None,
+        refresh=req.refresh,
     )
+    joined_graph = evidence.graph
+    rated_invocations = evidence.rated_invocations
     if req.program_names:
         files_by_relative = {
             _rel(result.file_path, root).casefold(): result.file_path
             for result in scan.csharp_results
         }
-        rated_invocations = [
-            invocation
-            for invocation in rated_invocations
-            if any(
+
+        def owned(invocation: DbInvocation) -> bool:
+            return any(
                 _resolution_owns_invocation(resolution, invocation, files_by_relative)
                 for resolution in resolutions
             )
-        ]
-    selected_path: Dict | None = None
+
+        rated_invocations = [invocation for invocation in rated_invocations if owned(invocation)]
+    selected_path: Mapping[str, object] | None = None
     selected_invocation: DbInvocation | None = None
-    for invocation in rated_invocations:
-        for candidate in build_execution_paths([invocation], joined_graph):
-            if candidate.get("path_id") == path_id:
-                selected_path = candidate
-                selected_invocation = invocation
-                break
-        if selected_path is not None:
-            break
+    located = (
+        evidence.path_by_id(path_id, produced_by=owned)
+        if req.program_names
+        else evidence.path_by_id(path_id)
+    )
+    if located is not None:
+        selected_path, selected_invocation = located
 
     if selected_path is None or selected_invocation is None:
         missing_snapshot = any(

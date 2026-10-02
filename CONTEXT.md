@@ -62,7 +62,7 @@ See [ADR-0012](docs/adr/0012-object-location-index-authoritative-pruning.md) and
 _Avoid_: name list, cache summary, object catalog
 
 **Derived Execution Evidence**:
-The full set of evidence-rated Database Invocations and the Execution Paths built from them, for one repository scan crossed with one SQL Cache Identity. It is independent of any object a question names — the name filters this evidence only at the end, and never scopes how the evidence is built. Its identity is the pair of repository scan and SQL Cache Identity it was derived from; either one changing invalidates it. See [ADR-0013](docs/adr/0013-derived-execution-evidence-computed-once-per-scope.md).
+The full set of evidence-rated Database Invocations and the Execution Paths built from them, for one repository scan crossed with one SQL Cache Identity. It is independent of any object a question names — the name filters this evidence only at the end, and never scopes how the evidence is built. Its identity is the pair of repository scan and SQL Cache Identity it was derived from; either one changing invalidates it. See [ADR-0013](docs/adr/0013-derived-execution-evidence-computed-once-per-scope.md). A miss of a request that names its files is the one exception: see [ADR-0040](docs/adr/0040-a-request-that-names-its-files-rates-them-without-retention.md).
 _Avoid_: cached results, invocation cache, precomputed paths
 
 **SQL Execution Graph**:

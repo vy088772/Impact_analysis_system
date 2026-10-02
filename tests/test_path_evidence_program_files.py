@@ -9,7 +9,7 @@ invocations on that screen's actions.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import List, Sequence
 
 import pytest
 
@@ -18,7 +18,10 @@ from code_analyzer.csharp_analysis_gateway import (
     InvocationEvidence,
     InvocationSourceSpan,
 )
+from code_analyzer.models import MethodSourceSpan, SourceSnapshot
 from service import analyze_service
+from service.derived_execution_evidence import DerivedExecutionEvidence
+from service.execution_path_builder import build_execution_paths
 from service.schemas import PathEvidenceRequest
 from tests.program_screen_fixtures import _analyze, _scan
 from tests.sql_cache_fixtures import one_server_holds_every_database
@@ -29,11 +32,22 @@ _ORDER_CONTROLLERS = {
 }
 
 
-class _Reached(Exception):
-    """Raised by a stub to hand what `/path_evidence` selected back to the test."""
+_NOT_CALLED = object()
 
-    def __init__(self, selected: List) -> None:
-        self.selected = selected
+
+class _GivenEvidence:
+    """An evidence source with fixed invocations and no graph.
+
+    It records the needed files that `/path_evidence` gives it.
+    """
+
+    def __init__(self, invocations: Sequence[DbInvocation] = ()) -> None:
+        self.invocations = list(invocations)
+        self.needed_files: object = _NOT_CALLED
+
+    def __call__(self, scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False):
+        self.needed_files = needed_files
+        return DerivedExecutionEvidence(self.invocations, {})
 
 
 def _invocation_on(relative_path: str, class_name: str, method: str) -> DbInvocation:
@@ -50,6 +64,32 @@ def _invocation_on(relative_path: str, class_name: str, method: str) -> DbInvoca
     )
 
 
+def _with_controller_source(scan):
+    """The scan with a source snapshot of OrdersController, so a found path can show its source."""
+    content = (
+        "class OrdersController\n{\n"
+        "    public void Index() { }\n"
+        "    public void Delete() { }\n"
+        "}\n"
+    )
+
+    def span(method: str) -> MethodSourceSpan:
+        start = content.index(f"    public void {method}()")
+        return MethodSourceSpan("OrdersController", method, start, content.index("}", start) + 1)
+
+    scan.source_snapshots["Controllers/OrdersController.cs"] = SourceSnapshot(
+        relative_path="Controllers/OrdersController.cs",
+        content_hash="snapshot-hash",
+        content=content,
+        method_spans=[span("Index"), span("Delete")],
+    )
+    return scan
+
+
+def _path_id_of(invocation: DbInvocation) -> str:
+    return str(build_execution_paths([invocation], {})[0]["path_id"])
+
+
 def _stub_path_evidence_sources(monkeypatch, root: Path, scan) -> None:
     monkeypatch.setattr(analyze_service, "resolve_source", lambda req: [root])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda r, refresh=False: scan)
@@ -64,43 +104,23 @@ def _stub_path_evidence_sources(monkeypatch, root: Path, scan) -> None:
     )
 
 
-def _path_evidence_files(monkeypatch, root: Path, scan, program_names: List[str]) -> List[str]:
-    """The base names of the C# files `/path_evidence` rates for the names."""
-    _stub_path_evidence_sources(monkeypatch, root, scan)
-
-    def stop_at_rating(scope, scan_, matched_files, root_):
-        raise _Reached(list(matched_files))
-
-    monkeypatch.setattr(analyze_service, "_rated_execution_invocations", stop_at_rating)
-    with pytest.raises(_Reached) as reached:
-        analyze_service.get_path_evidence(
-            PathEvidenceRequest(path_id="P-1", database="OrdersDb", program_names=program_names)
-        )
-    return sorted(Path(r.file_path).name for r in reached.value.selected)
-
-
-def _path_evidence_methods(
-    monkeypatch, root: Path, scan, program_names: List[str], invocations: List[DbInvocation]
-) -> List[str]:
-    """The methods whose invocations `/path_evidence` searches for the path."""
-    _stub_path_evidence_sources(monkeypatch, root, scan)
-    monkeypatch.setattr(
-        analyze_service,
-        "_rated_execution_invocations",
-        lambda scope, scan_, matched_files, root_: (list(invocations), {}),
+def _path_evidence(
+    source: _GivenEvidence, path_id: str, program_names: List[str]
+) -> analyze_service.PathEvidenceResponse:
+    return analyze_service.get_path_evidence(
+        PathEvidenceRequest(path_id=path_id, database="OrdersDb", program_names=program_names),
+        evidence_source=source,
     )
-    searched: List[str] = []
 
-    def record(invocation_list, graph):
-        searched.extend(i.method_name for i in invocation_list)
-        return []
 
-    monkeypatch.setattr(analyze_service, "build_execution_paths", record)
+def _path_evidence_files(monkeypatch, root: Path, scan, program_names: List[str]) -> List[str]:
+    """The base names of the C# files `/path_evidence` names as needed for the names."""
+    _stub_path_evidence_sources(monkeypatch, root, scan)
+    source = _GivenEvidence()
     with pytest.raises(analyze_service.PathEvidenceError):
-        analyze_service.get_path_evidence(
-            PathEvidenceRequest(path_id="P-1", database="OrdersDb", program_names=program_names)
-        )
-    return searched
+        _path_evidence(source, "P-1", program_names)
+    assert isinstance(source.needed_files, list)
+    return sorted(Path(r.file_path).name for r in source.needed_files)
 
 
 def test_a_name_analyze_reports_not_found_matches_no_file_in_path_evidence(
@@ -132,21 +152,47 @@ def test_a_name_that_resolves_to_a_screen_reaches_that_screens_controller_in_pat
     assert files == ["OrdersController.cs"]
 
 
-def test_a_resolved_screen_reaches_only_the_invocations_on_its_own_actions(
+def test_a_resolved_screen_finds_the_path_of_its_own_action(monkeypatch, tmp_path: Path) -> None:
+    scan = _with_controller_source(
+        _scan(tmp_path, views=["Views/Orders/Index.cshtml"], controllers=_ORDER_CONTROLLERS)
+    )
+    index = _invocation_on("Controllers/OrdersController.cs", "OrdersController", "Index")
+    delete = _invocation_on("Controllers/OrdersController.cs", "OrdersController", "Delete")
+    _stub_path_evidence_sources(monkeypatch, tmp_path, scan)
+
+    found = _path_evidence(_GivenEvidence([index, delete]), _path_id_of(index), ["Orders"])
+
+    assert found.path_id == _path_id_of(index)
+    assert found.caller_method == "Index"
+
+
+def test_a_resolved_screen_does_not_find_the_path_of_an_action_it_does_not_own(
     monkeypatch, tmp_path: Path
 ) -> None:
-    scan = _scan(
-        tmp_path, views=["Views/Orders/Index.cshtml"], controllers=_ORDER_CONTROLLERS
+    """The Orders screen has the Index view only. Delete is an action of the
+    controller, but the screen does not own it."""
+    scan = _with_controller_source(
+        _scan(tmp_path, views=["Views/Orders/Index.cshtml"], controllers=_ORDER_CONTROLLERS)
     )
-    controller = "Controllers/OrdersController.cs"
-    invocations = [
-        _invocation_on(controller, "OrdersController", "Index"),
-        _invocation_on(controller, "OrdersController", "Delete"),
-    ]
+    index = _invocation_on("Controllers/OrdersController.cs", "OrdersController", "Index")
+    delete = _invocation_on("Controllers/OrdersController.cs", "OrdersController", "Delete")
+    _stub_path_evidence_sources(monkeypatch, tmp_path, scan)
 
-    methods = _path_evidence_methods(monkeypatch, tmp_path, scan, ["Orders"], invocations)
+    with pytest.raises(analyze_service.PathEvidenceError):
+        _path_evidence(_GivenEvidence([index, delete]), _path_id_of(delete), ["Orders"])
 
-    assert methods == ["Index"]
+
+def test_without_program_names_path_evidence_asks_for_the_whole_scope(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _with_controller_source(_scan(tmp_path, controllers=_ORDER_CONTROLLERS))
+    index = _invocation_on("Controllers/OrdersController.cs", "OrdersController", "Index")
+    _stub_path_evidence_sources(monkeypatch, tmp_path, scan)
+    source = _GivenEvidence([index])
+
+    _path_evidence(source, _path_id_of(index), [])
+
+    assert source.needed_files is None
 
 
 def test_a_scan_without_razor_files_keeps_the_base_name_match_on_both_endpoints(

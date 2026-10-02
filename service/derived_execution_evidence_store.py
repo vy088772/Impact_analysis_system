@@ -60,13 +60,16 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance only
 # than unpickled into an object this version does not expect. Bump it also when
 # the path builder gives another answer for the same graph: the validity stamp
 # reads the inputs, not the code, so only this version makes such a file a miss.
-_STORE_VERSION = 4  # v2: each Execution Path gains `read_full_keys` and `write_full_keys`.
+_STORE_VERSION = 5  # see the history below.
+# v2: each Execution Path gains `read_full_keys` and `write_full_keys`.
 # v3: each full key gains `schema_source`.
 # v4: a path that stops at a call with the schema source `unresolved` carries
 # `unproven_schema` in its `risk_flags` (unstated-schema-resolves-as-sql-server-does, ticket 10).
 # A v4 file written before derived-execution-evidence-one-module ticket 01 names
 # the stamp class at its old place, `analyze_service._RatedInvocationsValidityStamp`.
 # `load()` cannot unpickle it, so that file is a plain miss with no version bump.
+# v5: the Execution Paths are kept per invocation, `paths_by_invocation`, in
+# the order of `rated_invocations` (derived-execution-evidence-one-module, ticket 02).
 
 _DATA_SUFFIX = ".pkl"
 
@@ -75,17 +78,17 @@ _DATA_SUFFIX = ".pkl"
 class _StoredDerivedExecutionEvidence:
     """Exactly what one scope's disk file holds: version, stamp, and payload.
 
-    `execution_paths` mirrors `derived_execution_evidence.DerivedExecutionEvidence`:
-    `None` means "not built yet for this entry" -- a scope that has only ever
-    answered `find_by_sp()` questions never populates it, on disk any more
-    than in memory.
+    `paths_by_invocation` holds the Execution Paths of each rated invocation,
+    in the order of `rated_invocations`. `None` means "not built yet for every
+    invocation" -- a scope that has only ever answered `find_by_sp()`
+    questions never populates it, on disk any more than in memory.
     """
 
     store_version: int
     stamp: "ValidityStamp"
     rated_invocations: List["DbInvocation"]
     graph: Dict[str, object]
-    execution_paths: Optional[List[Dict[str, object]]]
+    paths_by_invocation: Optional[List[List[Dict[str, object]]]]
 
 
 def _store_root() -> Path:
@@ -147,13 +150,13 @@ def store(
     stamp: "ValidityStamp",
     rated_invocations: List["DbInvocation"],
     graph: Dict[str, object],
-    execution_paths: Optional[List[Dict[str, object]]],
+    paths_by_invocation: Optional[List[List[Dict[str, object]]]],
 ) -> None:
     """Atomically replace scope's stored evidence with what was just derived.
 
     Called on every cold derivation (a disk miss, a stamp mismatch, or an
-    explicit refresh) and again whenever Execution Paths are built for a
-    scope whose stored evidence did not carry them yet -- so a scope that
+    explicit refresh) and again whenever the Execution Paths of every
+    invocation are built for a scope whose stored evidence did not carry them yet -- so a scope that
     starts out answering only `find_by_sp()` questions still ends up with a
     complete file once a `find_by_table()` question is asked of it.
 
@@ -175,7 +178,7 @@ def store(
         stamp=stamp,
         rated_invocations=rated_invocations,
         graph=graph,
-        execution_paths=execution_paths,
+        paths_by_invocation=paths_by_invocation,
     )
     try:
         with tmp.open("wb") as f:
