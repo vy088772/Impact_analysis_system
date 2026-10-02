@@ -154,6 +154,7 @@ def build_forward_chain(
     owns_action: Callable[[str, str], bool] = lambda file_path, method_name: True,
     graph: Optional[Mapping[str, object]] = None,
     invocations: Iterable[DbInvocation] = (),
+    execution_paths: Optional[List[dict]] = None,
 ) -> Optional[dict]:
     """從指定的錨點方法出發，組出一條正向鏈。
 
@@ -183,11 +184,16 @@ def build_forward_chain(
     method_path, reachable_methods = _reachable_from(anchor_method, adj)
 
     # Gateway + graph paths are the formal source for database calls.
+    supplied_paths = execution_paths
     execution_paths = []
     if graph:
         execution_paths = [
             path
-            for path in build_execution_paths(invocations, graph)
+            for path in (
+                supplied_paths
+                if supplied_paths is not None
+                else build_execution_paths(invocations, graph)
+            )
             if (
                 not path.get("entry_method")
                 or path["entry_method"].rsplit(".", 1)[-1] in reachable_methods

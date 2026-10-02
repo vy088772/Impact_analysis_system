@@ -423,11 +423,14 @@ def _resolution_owns_invocation(
     files_by_relative: Mapping[str, str],
 ) -> bool:
     """Whether one Database Invocation sits on an action this unit reports."""
-    return resolution.owns_action(
-        files_by_relative.get(
-            str(invocation.source.relative_path).replace("\\", "/").casefold(),
-            "",
-        ),
+    file_path = files_by_relative.get(
+        str(invocation.source.relative_path).replace("\\", "/").casefold(),
+        "",
+    )
+    return any(
+        _same_path(file_path, result.file_path) for result in resolution.matched_files
+    ) and resolution.owns_action(
+        file_path,
         _invocation_entry_method(invocation),
     )
 
@@ -2730,6 +2733,7 @@ def flow_chain(
 
     rated_invocations: List[DbInvocation] = []
     execution_graph: Dict[str, object] = {}
+    forward_execution_paths: List[dict] = []
     if req.database:
         _require_sql_execution_graph(req.database, sql_cache_identity)
         evidence = evidence_source(
@@ -2738,6 +2742,7 @@ def flow_chain(
         owned = _invocation_owner(resolutions, scan, root)
         rated_invocations = [i for i in evidence.rated_invocations if owned(i)]
         execution_graph = evidence.graph
+        forward_execution_paths = evidence.paths_of(rated_invocations)
 
     forward = flow_chain_builder.build_forward_chain(
         scan,
@@ -2746,6 +2751,7 @@ def flow_chain(
         owns_action=owns_action,
         graph=execution_graph,
         invocations=rated_invocations,
+        execution_paths=forward_execution_paths,
     )
     return FlowChainResponse(
         direction="forward",

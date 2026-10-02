@@ -59,8 +59,16 @@ def _invocation(relative_path: str, class_name: str, method_name: str, procedure
 class _Source:
     """An evidence source that gives fixed evidence and records what each request asked for."""
 
-    def __init__(self, invocations: List[DbInvocation], procedures: Sequence[str]) -> None:
-        self._evidence = DerivedExecutionEvidence(invocations, _graph(procedures))
+    def __init__(
+        self,
+        invocations: List[DbInvocation],
+        procedures: Sequence[str],
+        *,
+        paths_by_invocation: Sequence[List[dict]] | None = None,
+    ) -> None:
+        self._evidence = DerivedExecutionEvidence(
+            invocations, _graph(procedures), paths_by_invocation=paths_by_invocation
+        )
         self.needed_files: List[List[str]] = []
         self.refreshes: List[bool] = []
 
@@ -132,6 +140,71 @@ def test_an_mvc_screen_gets_a_forward_chain_through_its_controller(monkeypatch, 
     assert response.forward_chain is not None
     assert response.forward_chain["method_path"] == ["JobDutyMtn"]
     assert _procedures(response) == ["dbo.usp_Save"]
+
+
+def test_forward_uses_the_paths_supplied_by_the_evidence_source(monkeypatch, tmp_path: Path) -> None:
+    source = _Source(
+        [_invocation("Controllers/JobDutyController.cs", "JobDutyController", "JobDutyMtn", "usp_Save")],
+        ["usp_Save"],
+        paths_by_invocation=[[
+            {
+                "path_id": "retained-path",
+                "entry_method": "JobDutyController.JobDutyMtn",
+                "evidence": "unresolved",
+                "unresolved_reason": "called_procedure_not_in_graph",
+                "sp_chain": [],
+                "reads": [],
+                "writes": [],
+            }
+        ]],
+    )
+
+    response = _forward(
+        monkeypatch, tmp_path, _job_duty_scan(tmp_path), source, "JobDutyMtn", "JobDutyMtn",
+        procedures=["usp_Save"],
+    )
+
+    assert response.forward_chain is not None
+    assert _procedures(response) == []
+    assert [path["path_id"] for path in response.forward_chain["unresolved_paths"]] == ["retained-path"]
+
+
+def test_forward_keeps_an_empty_path_answer_from_the_evidence_source(monkeypatch, tmp_path: Path) -> None:
+    source = _Source(
+        [_invocation("Controllers/JobDutyController.cs", "JobDutyController", "JobDutyMtn", "usp_Save")],
+        ["usp_Save"],
+        paths_by_invocation=[[]],
+    )
+
+    response = _forward(
+        monkeypatch, tmp_path, _job_duty_scan(tmp_path), source, "JobDutyMtn", "JobDutyMtn",
+        procedures=["usp_Save"],
+    )
+
+    assert _procedures(response) == []
+    assert response.forward_chain["unresolved_paths"] == []
+
+
+def test_a_webforms_forward_chain_excludes_other_programs_with_the_same_method(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _scan(
+        tmp_path,
+        controllers={"Legacy/Alpha.aspx.cs": ["Save"], "Legacy/Beta.aspx.cs": ["Save"]},
+        pages=["Legacy/Alpha.aspx", "Legacy/Beta.aspx"],
+    )
+    procedures = ["usp_Alpha", "usp_Beta"]
+    source = _Source(
+        [
+            _invocation("Legacy/Alpha.aspx.cs", "Alpha", "Save", "usp_Alpha"),
+            _invocation("Legacy/Beta.aspx.cs", "Beta", "Save", "usp_Beta"),
+        ],
+        procedures,
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "Alpha", "Save", procedures=procedures)
+
+    assert _procedures(response) == ["dbo.usp_Alpha"]
 
 
 def test_forward_gives_the_module_the_files_of_the_resolution_and_the_refresh_flag(

@@ -205,3 +205,34 @@ def test_a_scan_without_razor_files_keeps_the_base_name_match_on_both_endpoints(
 
     assert analyzed.not_found == []
     assert files == ["OrderHistoryController.cs", "OrdersController.cs"]
+
+
+def test_a_webforms_program_cannot_find_another_programs_path_in_scope_evidence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _with_controller_source(
+        _scan(
+            tmp_path,
+            views=["Views/Orders/Index.cshtml"],
+            controllers={**_ORDER_CONTROLLERS, "Legacy/Alpha.aspx.cs": ["Save"]},
+            pages=["Legacy/Alpha.aspx"],
+        )
+    )
+    content = "class Alpha { public void Save() { } }"
+    scan.source_snapshots["Legacy/Alpha.aspx.cs"] = SourceSnapshot(
+        relative_path="Legacy/Alpha.aspx.cs",
+        content_hash="snapshot-hash",
+        content=content,
+        method_spans=[MethodSourceSpan("Alpha", "Save", 14, len(content) - 2)],
+    )
+    foreign = _invocation_on("Controllers/OrdersController.cs", "OrdersController", "Index")
+    own = _invocation_on("Legacy/Alpha.aspx.cs", "Alpha", "Save")
+    _stub_path_evidence_sources(monkeypatch, tmp_path, scan)
+
+    found = _path_evidence(_GivenEvidence([own, foreign]), _path_id_of(own), ["Alpha"])
+    assert found.caller_class == "Alpha"
+
+    with pytest.raises(analyze_service.PathEvidenceError) as error:
+        _path_evidence(_GivenEvidence([own, foreign]), _path_id_of(foreign), ["Alpha"])
+
+    assert error.value.code == "path_not_found"
