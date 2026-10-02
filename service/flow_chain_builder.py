@@ -44,7 +44,7 @@ from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE
 from code_analyzer.models import FileAnalysisResult
 from code_analyzer.project_scanner import ProjectScanResult
 from . import inline_table_relations
-from .graph_queries import query_table_accesses
+from .graph_queries import filter_table_accesses, query_table_accesses
 from .sql_cache_store import CacheIdentity
 from .table_match import TableQuestion
 from .execution_path_builder import build_execution_paths
@@ -359,6 +359,7 @@ def build_backward_chains(
     database: str = "",
     *,
     sql_cache_identity: Optional[CacheIdentity],
+    execution_paths: Optional[Iterable[Mapping[str, object]]] = None,
 ) -> List[dict]:
     """從指定的資料表（可選：欄位）出發，組出反向鏈候選清單。
 
@@ -478,7 +479,11 @@ def build_backward_chains(
     # 1) SQL-module access comes from the same Gateway + Execution Graph join as
     # find_by_table(). This preserves nested SP order and explicit read/write type.
     graph_accesses = (
-        query_table_accesses(graph, invocations, table_name, access="all", database=database)
+        (
+            filter_table_accesses(execution_paths, graph, table_name, access="all", database=database)
+            if execution_paths is not None
+            else query_table_accesses(graph, invocations, table_name, access="all", database=database)
+        )
         if graph
         else []
     )

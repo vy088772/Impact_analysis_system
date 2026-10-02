@@ -12,13 +12,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import pytest
+
 from canonical_object_identity import parse
 from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, FrameworkType, MethodInfo
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
 from service import analyze_service, derived_execution_evidence
 from service.derived_execution_evidence import DerivedExecutionEvidence
-from service.schemas import FindByTableRequest
+from service.schemas import FindByTableRequest, FlowChainRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
 from tests.sql_cache_fixtures import (
     cache_payload,
@@ -182,6 +184,79 @@ def _request(table_name: str, *, write_only: bool = False, refresh: bool = False
 # --------------------------------------------------------------- endpoint seam
 
 
+@pytest.mark.parametrize("database", ["OrdersDb", ""])
+def test_backward_flow_uses_the_given_scope_paths_and_diagnostics(
+    monkeypatch, tmp_path: Path, database: str
+) -> None:
+    scan = _scan(tmp_path)
+    _wire(monkeypatch, scan, tmp_path, _graph())
+    proven = DbInvocation(
+        class_name="AlphaPage",
+        method_name="SaveAlpha",
+        database="OrdersDb",
+        procedure_name="usp_Alpha",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("AlphaPage.cs", 10, 90),
+    )
+    likely = DbInvocation(
+        class_name="BetaPage",
+        method_name="SaveBeta",
+        database="OrdersDb",
+        procedure_name="",
+        evidence=InvocationEvidence.LIKELY,
+        reason="fixed_unresolved_target",
+        source=InvocationSourceSpan("BetaPage.cs", 10, 90),
+    )
+    given = DerivedExecutionEvidence(
+        [proven, likely],
+        _graph(),
+        paths_by_invocation=[[
+            {
+                "path_id": "fixed-backward-path",
+                "entry_method": "AlphaPage.SaveAlpha",
+                "source_span": {"relative_path": "AlphaPage.cs"},
+                "database": "OrdersDb",
+                "evidence": "proven",
+                "terminal_operation": "UPDATE",
+                "sp_chain": ["dbo.usp_Alpha"],
+                "writes": ["TableA"],
+                "write_full_keys": [{"database": "OrdersDb", "schema": "dbo", "name": "TableA"}],
+                "written_columns": ["X"],
+            }
+        ], []],
+    )
+
+    requested_scopes = []
+
+    def source(scope, per_root_scans, merged_scan, root, *, needed_files=None, refresh=False):
+        assert needed_files is None
+        assert refresh is True
+        requested_scopes.append(scope.database)
+        return given
+
+    response = analyze_service.flow_chain(
+        FlowChainRequest(
+            source={"project": "orders", "repo": "orders"},
+            direction="backward",
+            table_name="dbo.TableA",
+            column_name="X",
+            database=database,
+            cache_only=False,
+            refresh=True,
+        ),
+        evidence_source=source,
+    )
+
+    assert requested_scopes == [database]
+    assert [(chain["file"], chain["method"], chain["path_id"], chain["access_type"])
+            for chain in response.backward_chains] == (
+        [("AlphaPage.cs", "SaveAlpha", "fixed-backward-path", "UPDATE")] if database else []
+    )
+    assert [diagnostic["reason"] for diagnostic in response.diagnostics] == (
+        ["fixed_unresolved_target"] if database else []
+    )
+
+
 def test_find_by_table_filters_the_evidence_it_is_given(monkeypatch, tmp_path: Path) -> None:
     """The lookup keeps the paths that reach the asked table and nothing else."""
     with RatedInvocationsRetention():
@@ -211,6 +286,44 @@ def test_find_by_table_filters_the_evidence_it_is_given(monkeypatch, tmp_path: P
         assert [(m.program, m.file, m.access_type) for m in response.matches] == [
             ("alphapage", "AlphaPage.cs", "INSERT")
         ]
+
+
+@pytest.mark.parametrize("first_endpoint", ["backward", "find_by_table"])
+def test_backward_flow_reuses_the_whole_evidence_of_an_earlier_request(
+    monkeypatch, tmp_path: Path, first_endpoint: str
+) -> None:
+    with RatedInvocationsRetention():
+        _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph())
+
+        def backward(table_name: str):
+            return analyze_service.flow_chain(
+                FlowChainRequest(
+                    source={"project": "orders", "repo": "orders"},
+                    direction="backward",
+                    table_name=table_name,
+                    database="OrdersDb",
+                    cache_only=False,
+                ),
+            )
+
+        if first_endpoint == "backward":
+            first = backward("TableA")
+            assert [chain["method"] for chain in first.backward_chains] == ["SaveAlpha"]
+        else:
+            lookup = analyze_service.find_by_table(_request("TableA"))
+            assert [match.caller_method for match in lookup.matches] == ["SaveAlpha"]
+
+        _wire(monkeypatch, _scan(tmp_path, alpha_calls="usp_Beta"), tmp_path, _graph())
+        retained = backward("TableA")
+        second = backward("TableB")
+
+        assert [(chain["method"], chain["access_type"]) for chain in retained.backward_chains] == [
+            ("SaveAlpha", "UPDATE")
+        ]
+        assert [(chain["method"], chain["access_type"]) for chain in second.backward_chains] == [
+            ("SaveBeta", "INSERT")
+        ]
+        assert second.diagnostics == []
 
 
 def test_two_different_table_names_in_one_scope_get_their_own_programs(monkeypatch, tmp_path: Path) -> None:

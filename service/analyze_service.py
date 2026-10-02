@@ -2953,7 +2953,9 @@ def _full_key_parts(key: str) -> ObjectName:
     return ObjectName("", database, schema, name)
 
 
-def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
+def flow_chain(
+    req: FlowChainRequest, evidence_source: EvidenceSource = evidence_for_scope
+) -> FlowChainResponse:
     """組出「關係鏈」候選清單（純靜態組裝，見 flow_chain_builder.py，無 AI 判斷）。
 
     cache_only 的 skip 判斷邏輯與 find_by_sp()/find_by_table() 完全對稱
@@ -2990,16 +2992,12 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
     scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
 
     if req.direction == "backward":
-        rated_invocations: List[DbInvocation] = []
-        execution_graph: Dict[str, object] = {}
         if req.database:
-            _cached, execution_graph = _require_sql_execution_graph(req.database, sql_cache_identity)
-            rated_invocations, execution_graph = _rated_execution_invocations(
-                scope,
-                scan,
-                list(scan.csharp_results),
-                root,
-            )
+            _require_sql_execution_graph(req.database, sql_cache_identity)
+        evidence = evidence_source(scope, scans, scan, root, refresh=req.refresh)
+        rated_invocations: List[DbInvocation] = evidence.rated_invocations if req.database else []
+        execution_graph: Dict[str, object] = evidence.graph if req.database else {}
+        execution_paths = evidence.paths_of(rated_invocations)
         diagnostics = [
             _invocation_diagnostic(invocation, requested_table=req.table_name)
             for invocation in rated_invocations
@@ -3014,6 +3012,7 @@ def flow_chain(req: FlowChainRequest) -> FlowChainResponse:
             invocations=rated_invocations,
             database=req.database or "",
             sql_cache_identity=sql_cache_identity,
+            execution_paths=execution_paths,
         )
         return FlowChainResponse(
             direction="backward",
