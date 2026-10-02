@@ -309,6 +309,8 @@ def build_compact_execution_path_summary(
     )[:limit]:
         summary = {
             "path_id": path.get("path_id", ""),
+            # The client sorts merged caches by this key and holds no rule of its own.
+            "relevance_key": list(_compact_sort_key(path, question_tokens)),
             "entry_method": path.get("entry_method", ""),
             "method_chain": list(path.get("method_chain", []) or []),
             "sp_chain": list(path.get("sp_chain", []) or []),
@@ -692,6 +694,12 @@ def _compact_sort_key(
     path: Mapping[str, Any],
     question_tokens: tuple[str, ...],
 ) -> tuple[int, int, int, str]:
+    """The relevance key of one path. Smaller sorts first.
+
+    The four parts: Write Impact (0 with, 1 without), minus the question-keyword
+    matches, minus the entry-method matches, the path id. `/analyze` sends it as
+    `relevance_key`; the client compares it across caches.
+    """
     path_text = " ".join(
         str(value)
         for field in (

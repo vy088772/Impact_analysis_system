@@ -467,6 +467,8 @@ class TableMatchProgram(WrapperEvidenceFields):
     # 呼叫會保留原始 operation_type，間接寫入標示為 "WRITE_INDIRECT"。evidence_status
     # 非 "proven" 的命中一律是 "UNRESOLVED"——這筆 Execution Path 確實碰到這張表，
     # 但服務無法證明它做了什麼，因此不聲稱是讀取或寫入（ADR-0015）。
+    is_write: bool = False                    # 這筆命中的 access_type 是否算寫入；由服務一次決定，
+    # `write_only` 篩選與這個欄位讀同一個值，用戶端不再自備寫入清單。大小寫不影響判斷。
     path_id: str = ""
     entry_method: str = ""
     sp_chain: List[str] = Field(default_factory=list)

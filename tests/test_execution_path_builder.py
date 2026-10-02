@@ -302,6 +302,7 @@ def test_compact_summary_is_bounded_and_excludes_source_material() -> None:
     assert len(summary) == 1
     assert set(summary[0]) == {
         "path_id",
+        "relevance_key",
         "entry_method",
         "method_chain",
         "sp_chain",

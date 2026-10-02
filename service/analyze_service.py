@@ -3123,10 +3123,15 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
         if not outranked:
             all_matches.append(inline_match)
 
+    # One decision per record: `is_write` is what the client reads and what
+    # `write_only` filters on, so the field and the filter cannot differ.
+    all_matches = [
+        match.model_copy(update={"is_write": is_write_access(match.access_type)}) for match in all_matches
+    ]
     excluded_count = 0
     if req.write_only:
         before = len(all_matches)
-        all_matches = [match for match in all_matches if is_write_access(match.access_type)]
+        all_matches = [match for match in all_matches if match.is_write]
         # `UNRESOLVED` and every read type are not write access types, so this
         # also counts a path the graph could not prove -- `write_only=True`
         # must keep meaning "proven writes and nothing else" (ADR-0015)

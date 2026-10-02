@@ -1914,6 +1914,11 @@
             "title": "Invocation Mode",
             "type": "string"
           },
+          "is_write": {
+            "default": false,
+            "title": "Is Write",
+            "type": "boolean"
+          },
           "method_semantics": {
             "default": "",
             "title": "Method Semantics",
