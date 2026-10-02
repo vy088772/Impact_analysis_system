@@ -74,7 +74,7 @@ def filter_table_accesses(
     the graph's own.
 
     Split out of `query_table_accesses` so a caller holding one scope's Execution
-    Paths (see `service.analyze_service._execution_paths_for_scope`) can query
+    Paths (see `service.derived_execution_evidence`) can query
     more than one table without rebuilding them -- the paths themselves do not
     depend on which table is being asked about.
     """

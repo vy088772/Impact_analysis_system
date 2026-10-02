@@ -13,7 +13,7 @@ from pathlib import Path
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
 from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, FrameworkType, MethodInfo
 from code_analyzer.project_scanner import ProjectScanResult
-from service import analyze_service
+from service import analyze_service, derived_execution_evidence
 from service.api import app
 from service.schemas import FindBySPRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
@@ -91,8 +91,8 @@ def _wire(monkeypatch, scan: ProjectScanResult, tmp_path: Path) -> None:
     sql_payload = cache_payload("OrdersDb", graph=_graph())
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
-    monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
+    monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: "scan-v1")
+    monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: "commit-v1")
     monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: sql_payload)
     monkeypatch.setattr(analyze_service.sql_cache_store, "cached_saved_at", lambda identity: "sql-cache-v1")

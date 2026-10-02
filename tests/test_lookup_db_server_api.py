@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from service import analyze_service
+from service import analyze_service, derived_execution_evidence
 from service.api import app
 from service.sql_cache_store import CacheIdentity, normalize_server
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
@@ -48,8 +48,8 @@ def _wire_scan(monkeypatch, tmp_path: Path) -> None:
     scan = _scan(tmp_path)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
-    monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
+    monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: "scan-v1")
+    monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: "commit-v1")
 
 
 def _sp_request(**extra) -> dict:

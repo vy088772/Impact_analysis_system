@@ -3,10 +3,11 @@
 The live registry `config/external_wrapper_contracts.json` holds the contracts
 that the refresh tool decompiled from real assemblies. Its overload lists change
 each time an operator accepts a contract. A test that reads it breaks when the
-registry changes. This file pins the registry that the gateway and the analysis
-service read by default to `fixtures/external_wrapper_contracts.json`: one entry
-for each `sqlobject` method with no signature, the fixed `sqldbcontext` entry of
-ticket 01, and the decompiled `sqlfunc` contract. A test that needs a signature for each method
+registry changes. This file pins the registry that the gateway, the analysis
+service, and the Derived Execution Evidence module read by default to
+`fixtures/external_wrapper_contracts.json`: one entry for each `sqlobject`
+method with no signature, the fixed `sqldbcontext` entry of ticket 01, and the
+decompiled `sqlfunc` contract. A test that needs a signature for each method
 (`external_wrapper_contracts_signed.json`) or that passes a registry or a path of
 its own is not affected.
 """
@@ -17,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from code_analyzer import csharp_analysis_gateway
-from service import analyze_service, contract_registry
+from service import analyze_service, contract_registry, derived_execution_evidence
 
 PINNED_REGISTRY = Path(__file__).parent / "fixtures" / "external_wrapper_contracts.json"
 
@@ -39,8 +40,9 @@ def _pinned_contract_registry(request, monkeypatch):
         lambda: csharp_analysis_gateway._normalize_external_wrapper_contract_registry(payload),
     )
     load_registry = contract_registry.load_contract_registry
-    monkeypatch.setattr(
-        analyze_service,
-        "load_contract_registry",
-        lambda path=PINNED_REGISTRY, **kwargs: load_registry(path, **kwargs),
-    )
+    for module in (analyze_service, derived_execution_evidence):
+        monkeypatch.setattr(
+            module,
+            "load_contract_registry",
+            lambda path=PINNED_REGISTRY, **kwargs: load_registry(path, **kwargs),
+        )

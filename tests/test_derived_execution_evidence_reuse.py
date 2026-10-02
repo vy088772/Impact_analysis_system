@@ -1,12 +1,12 @@
-"""Ticket 04: find_by_sp() rates the repository's C# facts once per scope, not
-once per request.
+"""find_by_sp() answers from the Derived Execution Evidence of its scope.
 
-Prior art for the seam and the counting style: tests/test_graph_reverse_lookup.py
-drives find_by_sp() directly with fixture scans/graphs; tests/test_locate_object.py
-proves work did *not* happen by making the expensive step fail if it runs again.
-Here the expensive step (`analyze_service._rated_execution_invocations`, the
-rating step named in ADR-0013) is wrapped with a counter instead of made to
-fail outright, because some of these tests need it to run exactly twice.
+The freshness and reuse tests that drove find_by_sp() here moved to the module
+seam: tests/test_derived_execution_evidence.py (derived-execution-evidence-one-
+module, ticket 01). This file keeps the answers of the lookup, plus one
+endpoint-seam test that gives fixed evidence through `evidence_source`.
+
+Prior art for the seam: tests/test_graph_reverse_lookup.py drives find_by_sp()
+directly with fixture scans/graphs.
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ from typing import Optional
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
 from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, FrameworkType, MethodInfo
 from code_analyzer.project_scanner import ProjectScanResult
-from service import analyze_service
+from service import analyze_service, derived_execution_evidence
+from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FindBySPRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
 from tests.sql_cache_fixtures import (
@@ -115,8 +116,8 @@ def _wire(
     sql_payload = cache_payload("OrdersDb", graph=graph)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_at)
-    monkeypatch.setattr(analyze_service, "cached_commit", lambda root: scan_commit)
+    monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: scan_saved_at)
+    monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: scan_commit)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "find_cache_identity",
@@ -144,78 +145,43 @@ def _request(sp_name: str, *, refresh: bool = False) -> FindBySPRequest:
     )
 
 
-def _count_real_derivations(monkeypatch) -> list:
-    """Wrap the real rating step with a counter, still calling through to it."""
-    calls: list = []
-    real = analyze_service._rated_execution_invocations
+def _proven(class_name: str, method_name: str, procedure_name: str) -> DbInvocation:
+    return DbInvocation(
+        class_name=class_name,
+        method_name=method_name,
+        database="OrdersDb",
+        procedure_name=procedure_name,
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan(relative_path=f"{class_name}.cs", start_offset=10, end_offset=90),
+        command_text_literal="",
+    )
 
-    def counting(*args, **kwargs):
-        calls.append(1)
-        return real(*args, **kwargs)
 
-    monkeypatch.setattr(analyze_service, "_rated_execution_invocations", counting)
-    return calls
+# --------------------------------------------------------------- endpoint seam
 
 
-def _install_config_dependent_fake_rating(monkeypatch, config_reader) -> list:
-    """Replace the rating step with one whose single PROVEN match's procedure
-    name is read live from `config_reader()` at call time.
-
-    This stands in for CSharpAnalysisGateway's own configuration-dependent
-    rating rules (covered by that module's own tests, not this one): what
-    this ticket's retention/freshness layer must get right is noticing that
-    one of the three configuration reads moved and re-deriving -- and having
-    the *response* actually change is how a reviewer can tell the freshness
-    check ran for real, rather than merely counting internal calls.
-    """
-    calls: list = []
-
-    def fake(scope, scan, matched_files, root):
-        calls.append(1)
-        invocation = DbInvocation(
-            class_name="AlphaPage",
-            method_name="SaveAlpha",
-            database="OrdersDb",
-            procedure_name=config_reader(),
-            evidence=InvocationEvidence.PROVEN,
-            source=InvocationSourceSpan(relative_path="AlphaPage.cs", start_offset=10, end_offset=90),
-            command_text_literal="",
+def test_find_by_sp_filters_the_evidence_it_is_given(monkeypatch, tmp_path: Path) -> None:
+    """The lookup keeps the invocations of the asked procedure and nothing else."""
+    with RatedInvocationsRetention():
+        _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph("usp_Alpha", "usp_Beta"))
+        # The scan has AlphaPage call usp_Alpha; this evidence says BetaPage does,
+        # so the answer shows which of the two the lookup read.
+        given = DerivedExecutionEvidence(
+            [_proven("AlphaPage", "SaveAlpha", "usp_Gamma"), _proven("BetaPage", "SaveBeta", "usp_Alpha")],
+            {},
         )
-        return [invocation], {}
+        asked_scopes: list = []
 
-    monkeypatch.setattr(analyze_service, "_rated_execution_invocations", fake)
-    return calls
+        def in_memory(scope, per_root_scans, merged_scan, root, *, refresh=False):
+            asked_scopes.append(scope)
+            return given
 
+        response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"), evidence_source=in_memory)
 
-# --------------------------------------------------------------- reuse itself
-
-
-def test_two_consecutive_lookups_in_one_scope_rate_the_facts_once(monkeypatch, tmp_path: Path) -> None:
-    with RatedInvocationsRetention():
-        scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
-        calls = _count_real_derivations(monkeypatch)
-
-        first = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        second = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-
-        assert len(calls) == 1
-        assert [(m.program, m.file) for m in first.matches] == [(m.program, m.file) for m in second.matches]
-
-
-def test_two_different_sp_names_in_one_scope_still_rate_the_facts_once(monkeypatch, tmp_path: Path) -> None:
-    """The rating step does not depend on which SP was asked about (ADR-0013)."""
-    with RatedInvocationsRetention():
-        scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
-        calls = _count_real_derivations(monkeypatch)
-
-        alpha_response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        beta_response = analyze_service.find_by_sp(_request("dbo.usp_Beta"))
-
-        assert len(calls) == 1
-        assert [m.program for m in alpha_response.matches] == ["alphapage"]
-        assert [m.program for m in beta_response.matches] == ["betapage"]
+        assert [(m.program, m.file, m.caller) for m in response.matches] == [
+            ("betapage", "BetaPage.cs", "BetaPage.SaveBeta")
+        ]
+        assert [scope.database for scope in asked_scopes] == ["OrdersDb"]
 
 
 # ------------------------------------------------------------------- equivalence
@@ -228,12 +194,10 @@ def test_answer_identical_with_reuse_active_and_defeated_for_a_match(monkeypatch
 
         analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
         reused = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-
-        analyze_service._rated_invocations_retention.clear()  # defeat reuse
-        analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        fresh = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+        fresh = analyze_service.find_by_sp(_request("dbo.usp_Alpha", refresh=True))  # defeat reuse
 
         assert [(m.program, m.file) for m in reused.matches] == [(m.program, m.file) for m in fresh.matches]
+        assert [m.program for m in reused.matches] == ["alphapage"]
 
 
 def test_answer_identical_with_reuse_active_and_defeated_for_no_match(monkeypatch, tmp_path: Path) -> None:
@@ -243,254 +207,21 @@ def test_answer_identical_with_reuse_active_and_defeated_for_no_match(monkeypatc
 
         analyze_service.find_by_sp(_request("dbo.usp_Missing"))
         reused = analyze_service.find_by_sp(_request("dbo.usp_Missing"))
-
-        analyze_service._rated_invocations_retention.clear()  # defeat reuse
-        analyze_service.find_by_sp(_request("dbo.usp_Missing"))
-        fresh = analyze_service.find_by_sp(_request("dbo.usp_Missing"))
+        fresh = analyze_service.find_by_sp(_request("dbo.usp_Missing", refresh=True))  # defeat reuse
 
         assert reused.matches == [] == fresh.matches
 
 
-# --------------------------------------------------------------- invalidation
-
-
-def test_a_changed_repository_scan_causes_a_fresh_derivation(monkeypatch, tmp_path: Path) -> None:
+def test_two_different_sp_names_in_one_scope_get_their_own_programs(monkeypatch, tmp_path: Path) -> None:
+    """The evidence does not depend on which SP was asked about (ADR-0013)."""
     with RatedInvocationsRetention():
-        first_scan = _scan(tmp_path)
-        second_scan = _scan(tmp_path, alpha_calls="usp_Gamma")
-        scans = [first_scan, second_scan]
-        # A real rescan updates the scan's recorded save time; this stub mirrors
-        # that instead of relying on `scans.pop(0)` handing back a new object,
-        # since ticket 05 no longer keys freshness off object identity.
-        scan_saved_ats = ["scan-v1", "scan-v2"]
-        sql_payload = cache_payload("OrdersDb", graph=_graph("usp_Alpha", "usp_Beta", "usp_Gamma"))
-        monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
-        monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_ats.pop(0))
-        monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
-        monkeypatch.setattr(
-            analyze_service.sql_cache_store,
-            "find_cache_identity",
-            one_server_holds_every_database,
-        )
-        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: sql_payload)
-        monkeypatch.setattr(
-            analyze_service.sql_cache_store, "cached_saved_at", lambda identity: "sql-cache-v1"
-        )
-        calls = _count_real_derivations(monkeypatch)
+        _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph("usp_Alpha", "usp_Beta"))
 
-        before = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        after = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+        alpha_response = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
+        beta_response = analyze_service.find_by_sp(_request("dbo.usp_Beta"))
 
-        assert len(calls) == 2
-        assert [m.program for m in before.matches] == ["alphapage"]
-        assert after.matches == []  # AlphaPage now calls usp_Gamma, not usp_Alpha
-
-
-def test_a_changed_sql_cache_causes_a_fresh_derivation(monkeypatch, tmp_path: Path) -> None:
-    with RatedInvocationsRetention():
-        scan = _scan(tmp_path)
-        payloads = [
-            cache_payload("OrdersDb", graph=_graph("usp_Alpha", "usp_Beta")),
-            cache_payload("OrdersDb", graph=_graph("usp_Beta")),  # usp_Alpha drops out
-        ]
-        # A real SQL cache refresh updates its recorded save time; this stub
-        # mirrors that instead of relying on a swapped-in dict's object
-        # identity, since ticket 05 no longer keys freshness off identity.
-        sql_cache_saved_ats = ["sql-cache-v1", "sql-cache-v2"]
-        monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-        monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
-        monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
-        monkeypatch.setattr(
-            analyze_service.sql_cache_store,
-            "find_cache_identity",
-            one_server_holds_every_database,
-        )
-        monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: payloads[0])
-        monkeypatch.setattr(
-            analyze_service.sql_cache_store,
-            "cached_saved_at",
-            lambda identity: sql_cache_saved_ats[0],
-        )
-        calls = _count_real_derivations(monkeypatch)
-
-        before = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        payloads.pop(0)
-        sql_cache_saved_ats.pop(0)
-        after = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-
-        assert len(calls) == 2
-        assert [m.program for m in before.matches] == ["alphapage"]
-        assert after.matches == []
-
-
-def test_dropping_and_rereading_an_unchanged_repository_scan_does_not_rederive(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """Ticket 05: a scan dropped from memory and read again -- a brand-new
-    `ProjectScanResult` instance, but with the same recorded save time and
-    source commit -- must reuse, not rederive. Identity-based freshness would
-    have failed this: two distinct objects, wrongly read as "changed"."""
-    with RatedInvocationsRetention():
-        scans = [_scan(tmp_path), _scan(tmp_path)]  # same content, two distinct instances
-        _wire(monkeypatch, scans[0], tmp_path, _graph("usp_Alpha", "usp_Beta"))
-        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
-        calls = _count_real_derivations(monkeypatch)
-
-        first = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        second = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-
-        assert len(calls) == 1
-        assert [(m.program, m.file) for m in first.matches] == [(m.program, m.file) for m in second.matches]
-
-
-def test_dropping_and_rereading_an_unchanged_sql_cache_does_not_rederive(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """Ticket 05: a SQL cache dropped from memory and read again -- a brand-new
-    dict with the same content, but the same recorded save time -- must
-    reuse, not rederive."""
-    with RatedInvocationsRetention():
-        scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
-        graph = _graph("usp_Alpha", "usp_Beta")
-        # A fresh dict every call (proving reuse does not depend on getting the
-        # same object back), same content and same recorded save time every time.
-        monkeypatch.setattr(
-            analyze_service.sql_cache_store,
-            "find_cache_identity",
-            one_server_holds_every_database,
-        )
-        monkeypatch.setattr(
-            analyze_service.sql_cache_store,
-            "load_cached",
-            lambda identity: cache_payload("OrdersDb", graph=graph),
-        )
-        calls = _count_real_derivations(monkeypatch)
-
-        first = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        second = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-
-        assert len(calls) == 1
-        assert [(m.program, m.file) for m in first.matches] == [(m.program, m.file) for m in second.matches]
-
-
-def test_a_changed_external_wrapper_contract_causes_a_fresh_derivation(monkeypatch, tmp_path: Path) -> None:
-    with RatedInvocationsRetention():
-        scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
-        monkeypatch.setattr(analyze_service, "load_external_wrapper_contract", lambda name: None)
-        calls = _install_config_dependent_fake_rating(
-            monkeypatch,
-            config_reader=lambda: (
-                "dbo.usp_Alpha"
-                if analyze_service.load_external_wrapper_contract("x") is None
-                else "dbo.usp_Beta"
-            ),
-        )
-
-        before = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        monkeypatch.setattr(analyze_service, "load_external_wrapper_contract", lambda name: {"name": "changed"})
-        after = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-
-        assert len(calls) == 2
-        assert [m.program for m in before.matches] == ["alphapage"]
-        assert after.matches == []  # the fake's rating now reports usp_Beta instead
-
-
-def test_a_changed_contract_registry_causes_a_fresh_derivation(monkeypatch, tmp_path: Path) -> None:
-    with RatedInvocationsRetention():
-        scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
-        monkeypatch.setattr(analyze_service, "load_contract_registry", lambda: {"contracts": {"a": {}}})
-        calls = _install_config_dependent_fake_rating(
-            monkeypatch,
-            config_reader=lambda: (
-                "dbo.usp_Alpha"
-                if "b" not in analyze_service.load_contract_registry().get("contracts", {})
-                else "dbo.usp_Beta"
-            ),
-        )
-
-        before = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        monkeypatch.setattr(analyze_service, "load_contract_registry", lambda: {"contracts": {"a": {}, "b": {}}})
-        after = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-
-        assert len(calls) == 2
-        assert [m.program for m in before.matches] == ["alphapage"]
-        assert after.matches == []
-
-
-def test_a_changed_wrapper_review_exclusions_causes_a_fresh_derivation(monkeypatch, tmp_path: Path) -> None:
-    with RatedInvocationsRetention():
-        scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
-        monkeypatch.setattr(analyze_service, "load_wrapper_review_exclusions", lambda system: ())
-        calls = _install_config_dependent_fake_rating(
-            monkeypatch,
-            config_reader=lambda: (
-                "dbo.usp_Alpha"
-                if not analyze_service.load_wrapper_review_exclusions("OrdersDb")
-                else "dbo.usp_Beta"
-            ),
-        )
-
-        before = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        monkeypatch.setattr(
-            analyze_service,
-            "load_wrapper_review_exclusions",
-            lambda system: ({"receiver_type": "x", "method_name": "y", "reason": "reviewed_non_wrapper_method"},),
-        )
-        after = analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-
-        assert len(calls) == 2
-        assert [m.program for m in before.matches] == ["alphapage"]
-        assert after.matches == []
-
-
-def test_an_explicit_refresh_always_derives_again(monkeypatch, tmp_path: Path) -> None:
-    with RatedInvocationsRetention():
-        scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph("usp_Alpha", "usp_Beta"))
-        calls = _count_real_derivations(monkeypatch)
-
-        analyze_service.find_by_sp(_request("dbo.usp_Alpha"))
-        analyze_service.find_by_sp(_request("dbo.usp_Alpha", refresh=True))
-        analyze_service.find_by_sp(_request("dbo.usp_Alpha", refresh=True))
-
-        assert len(calls) == 3
-
-
-# ------------------------------------------------------------ retained-state isolation
-
-
-def test_retention_fixture_snapshots_and_restores_around_a_test() -> None:
-    """Mirrors sql_cache_fixtures.CacheRoot: a test's retained entries must not
-    leak into the next test, and a pre-existing entry from outside the test
-    must not leak into it either."""
-    scope = analyze_service.DerivedExecutionEvidenceScope(
-        repo_roots=("preexisting",), database="Db", sql_cache_identity=None, db_name="", wrapper_contract=""
-    )
-    stamp = analyze_service._RatedInvocationsValidityStamp(
-        scan_freshness=(("saved-v1", "commit-v1"),),
-        sql_cache_freshness=None,
-        external_wrapper_contract=None,
-        contract_registry={},
-        wrapper_review_exclusions=(),
-    )
-    analyze_service._rated_invocations_retention[scope] = analyze_service._RetainedRatedInvocations(stamp, [], {})
-
-    with RatedInvocationsRetention() as retention:
-        assert scope not in retention  # cleared on entry, not visible inside the test
-        other_scope = analyze_service.DerivedExecutionEvidenceScope(
-            repo_roots=("during-test",), database="Db", sql_cache_identity=None, db_name="", wrapper_contract=""
-        )
-        retention[other_scope] = analyze_service._RetainedRatedInvocations(stamp, [], {})
-
-    # restored: the pre-existing entry is back, the test's own entry is gone
-    assert list(analyze_service._rated_invocations_retention.keys()) == [scope]
-    del analyze_service._rated_invocations_retention[scope]
+        assert [m.program for m in alpha_response.matches] == ["alphapage"]
+        assert [m.program for m in beta_response.matches] == ["betapage"]
 
 
 def _inline_scan(root: Path, command_text: str) -> ProjectScanResult:

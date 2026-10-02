@@ -1,6 +1,6 @@
 """Snapshot/restore helper for the retained Derived Execution Evidence (ticket 04/06).
 
-Mirrors tests/sql_cache_fixtures.py's CacheRoot: the rating step's retention is
+Mirrors tests/sql_cache_fixtures.py's CacheRoot: the evidence retention is
 process-global state, so a test that populates it must not leak into the next
 one, the same way the SQL cache's in-memory retention already does not. Since
 ticket 06, that retention has a disk-backed second tier
@@ -23,26 +23,31 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.settings import settings
-from service import analyze_service
+from service import derived_execution_evidence
 
 
 class RatedInvocationsRetention:
     """Clear the in-memory retention and point the disk store at a temp dir,
     on entry; restore both on exit."""
 
-    def __enter__(self) -> dict:
-        self._previous = dict(analyze_service._rated_invocations_retention)
-        analyze_service._rated_invocations_retention.clear()
+    def __enter__(self) -> "RatedInvocationsRetention":
+        self._previous = dict(derived_execution_evidence._retention)
+        derived_execution_evidence._retention.clear()
         self._previous_store_root = settings.DERIVED_EXECUTION_EVIDENCE_STORE_ROOT
         self._tmp = tempfile.TemporaryDirectory()
         settings.DERIVED_EXECUTION_EVIDENCE_STORE_ROOT = self._tmp.name
-        return analyze_service._rated_invocations_retention
+        return self
 
     def __exit__(self, *exc: object) -> None:
-        analyze_service._rated_invocations_retention.clear()
-        analyze_service._rated_invocations_retention.update(self._previous)
+        derived_execution_evidence._retention.clear()
+        derived_execution_evidence._retention.update(self._previous)
         settings.DERIVED_EXECUTION_EVIDENCE_STORE_ROOT = self._previous_store_root
         self._tmp.cleanup()
+
+    def simulate_restart(self) -> None:
+        """Drop the in-memory retention only. The disk store stays, as a real
+        process restart leaves it."""
+        derived_execution_evidence._retention.clear()
 
     @property
     def store_root(self) -> Path:

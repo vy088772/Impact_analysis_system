@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from service import derived_execution_evidence_store
-from service.analyze_service import DerivedExecutionEvidenceScope
+from service.derived_execution_evidence import DerivedExecutionEvidenceScope
 from service.schemas import AnalyzeRequest, AzureSource
 from service.sql_cache_store import CacheIdentity
 

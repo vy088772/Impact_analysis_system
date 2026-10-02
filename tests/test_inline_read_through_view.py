@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Dict, Mapping, Optional, Sequence
 
 import pytest
 
@@ -19,6 +19,7 @@ from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEviden
 from code_analyzer.models import MethodInfo
 from code_analyzer.project_scanner import INLINE_SQL_PARSED, INLINE_SQL_REGEX, ProjectScanResult
 from service import analyze_service, inline_table_relations
+from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import AnalyzeRequest, AzureSource, FindByTableRequest, FlowChainRequest
 from service.sql_cache_store import CacheIdentity, build_object_location_index
 from service.sql_execution_graph import build_sql_execution_graph
@@ -172,6 +173,10 @@ def test_a_relation_that_states_no_schema_reaches_through_the_listed_dbo_view(mo
     ]
 
 
+# The evidence that `_serve` gives `/find_by_table` through its evidence source.
+_served: Dict[str, DerivedExecutionEvidence] = {}
+
+
 def _serve(
     monkeypatch, root: Path, scan: ProjectScanResult, graph: dict, rated: Sequence[DbInvocation] = ()
 ) -> None:
@@ -182,9 +187,7 @@ def _serve(
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda given, refresh=False: scan)
     monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name, server="", **_: (None, graph))
-    monkeypatch.setattr(
-        analyze_service, "_execution_paths_for_scope", lambda *args, **kwargs: (list(rated), graph, [])
-    )
+    monkeypatch.setitem(_served, "evidence", DerivedExecutionEvidence(list(rated), graph, execution_paths=[]))
     monkeypatch.setattr(analyze_service, "_rated_execution_invocations", lambda *args, **kwargs: (list(rated), graph))
 
 
@@ -192,7 +195,8 @@ def _find_by_table(table_name: str, write_only: bool = False):
     return analyze_service.find_by_table(
         FindByTableRequest(
             source=_SOURCE, table_name=table_name, database="PUR", cache_only=False, write_only=write_only
-        )
+        ),
+        evidence_source=lambda scope, per_root_scans, merged_scan, root, *, refresh=False: _served["evidence"],
     )
 
 

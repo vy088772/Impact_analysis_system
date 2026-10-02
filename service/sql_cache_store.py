@@ -71,7 +71,7 @@ _INDEX_VERSION = 1
 # 用 OrderedDict 讓「淘汰最久未使用」跟「淘汰最早載入」同一份資料結構就能兩者
 # 兼得：每次命中或寫入都呼叫 move_to_end()，最久未使用的項目永遠留在最前面，
 # _evict_for_new_mem_cache_key() 就從最前面 popitem(last=False)。與
-# analyze_service._rated_invocations_retention 用的是同一套手法（ticket 07）。
+# derived_execution_evidence._retention 用的是同一套手法（ticket 07）。
 #
 # 型別標註不加引號：本檔已在最上方 `from __future__ import annotations`，
 # 所有標註本來就延遲求值，手動加引號只是多餘。
@@ -106,7 +106,7 @@ def _retain_in_mem_cache(identity: CacheIdentity, data: Dict) -> None:
 
     先淘汰、後寫入：淘汰時看到的是「加入 identity 之前」的快取內容，identity
     本身若已在快取裡，_evict_for_new_mem_cache_key() 會判斷成不需要淘汰。跟
-    analyze_service._evict_then_retain() 同一種先後順序。
+    derived_execution_evidence._retain() 同一種先後順序。
     """
     _evict_for_new_mem_cache_key(identity)
     _mem_cache[identity] = data

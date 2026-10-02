@@ -21,6 +21,7 @@ from code_analyzer.project_scanner import (
     UNRESOLVED_CONNECTION_DATABASE,
 )
 from service import analyze_service
+from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FindByTableRequest
 from tests.test_table_match import _inline_scan
 
@@ -69,15 +70,14 @@ def _ask(
 ):
     rated_for: list[str] = []
 
-    def rated(scope, scans, merged, files, root, refresh=False):
+    def rated(scope, scans, merged, root, *, refresh=False):
         rated_for.append(scope.database)
-        return list(invocations), {}, []
+        return DerivedExecutionEvidence(list(invocations), {}, execution_paths=[])
 
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
     monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", lambda name: None)
     monkeypatch.setattr(analyze_service, "_require_sql_execution_graph", lambda name, server="", **_: (None, {}))
-    monkeypatch.setattr(analyze_service, "_execution_paths_for_scope", rated)
     monkeypatch.setattr(analyze_service, "filter_table_accesses", lambda *args, **kwargs: [])
     response = analyze_service.find_by_table(
         FindByTableRequest(
@@ -86,7 +86,8 @@ def _ask(
             database=database,
             cache_only=False,
             write_only=write_only,
-        )
+        ),
+        evidence_source=rated,
     )
     return response, rated_for
 

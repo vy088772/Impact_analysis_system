@@ -2,10 +2,9 @@
 lookup records the table it was asked about and the Derived Execution
 Evidence Scope it ran in.
 
-Drives `find_by_table()` directly -- the seam this ticket names, and the same
-seam tests/test_derived_execution_evidence_retention_bound.py already drives
-for retention behaviour -- and asserts on the printed record via `capsys`,
-matching that file's style for observability output.
+Drives `find_by_table()` directly -- the seam this ticket names -- and asserts
+on the printed record via `capsys`, matching the eviction-message tests in
+tests/test_derived_execution_evidence.py for observability output.
 """
 
 from __future__ import annotations

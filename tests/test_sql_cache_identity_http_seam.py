@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from canonical_object_identity import ObjectName
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
 from code_analyzer.project_scanner import CSharpTableRelation
-from service import analyze_service, sql_cache_store
+from service import analyze_service, derived_execution_evidence, sql_cache_store
 from service.api import app
 from service.execution_path_builder import build_execution_paths
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
@@ -213,8 +213,8 @@ def two_hosts_and_an_inline_table(monkeypatch, tmp_path):
         ]
         monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
         monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-        monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: "scan-v1")
-        monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
+        monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: "scan-v1")
+        monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: "commit-v1")
         yield cache_root
 
 

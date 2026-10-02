@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import re
 import os
-from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -85,9 +84,14 @@ from .program_screen import (
 from .shared_component import VIEW_COMPONENT, resolve_shared_components
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots, peek_scan_roots
-from .scan_store import cache_status, cached_commit, cached_saved_at, get_or_scan, has_cache, save_scan
+from .scan_store import cache_status, cached_commit, get_or_scan, has_cache, save_scan
 from . import sql_cache_store
-from . import derived_execution_evidence_store
+from .derived_execution_evidence import (
+    DerivedExecutionEvidenceScope,
+    EvidenceSource,
+    evidence_for_scope,
+    rating_config_inputs,
+)
 from . import flow_chain_builder
 from . import inline_table_relations
 from .contract_preflight import (
@@ -1270,390 +1274,6 @@ def _overlay_method_class_chain(
     return result
 
 
-@dataclass(frozen=True)
-class DerivedExecutionEvidenceScope:
-    """The identity Derived Execution Evidence is derived for.
-
-    Named in the domain glossary (``CONTEXT.md``) and decided in ADR-0013:
-    the repository scan roots, the complete Database identity a request
-    routes to, and the wrapper contract selector in force -- exactly the
-    inputs `_rated_execution_invocations` reads, and nothing it does not.
-    Two requests that agree on these three produce the same derived
-    evidence; a request field outside them cannot change it. Frozen and
-    built only from hashable field types, so an instance is a valid
-    retention key by construction -- a later ticket does not have to
-    reshape it to key reuse on.
-    """
-
-    repo_roots: Tuple[str, ...]
-    database: str
-    sql_cache_identity: Optional[sql_cache_store.CacheIdentity]
-    db_name: str
-    wrapper_contract: str
-
-    @classmethod
-    def of(
-        cls,
-        req: object,
-        roots: Iterable[Path],
-        sql_cache_identity: Optional[sql_cache_store.CacheIdentity],
-    ) -> DerivedExecutionEvidenceScope:
-        """Build the scope from a request, its already-resolved scan roots,
-        and the SQL Cache Identity its handler built.
-
-        This is the one place a scope is assembled; every derivation call
-        site is handed the result rather than reaching into ``req`` itself.
-        ``database`` stays next to ``sql_cache_identity``: the wrapper review exclusions
-        and the connection aliases read the requested name only.
-        """
-        wrapper_contract = getattr(req, "wrapper_contract", "")
-        return cls(
-            repo_roots=tuple(str(Path(root)) for root in roots),
-            database=str(getattr(req, "database", "") or "").strip(),
-            sql_cache_identity=sql_cache_identity,
-            db_name=str(getattr(req, "db_name", "") or "").strip(),
-            wrapper_contract=(
-                wrapper_contract if isinstance(wrapper_contract, str) else ""
-            ),
-        )
-
-
-def _freshness_or_sentinel(recorded_value: Optional[str]) -> object:
-    """`recorded_value` if something was actually recorded, else a fresh sentinel.
-
-    A `None` here means the freshness read itself came back empty (the meta
-    file backing it is missing or unreadable), not that the tracked input has
-    some legitimate, stable "no value" state -- `scan_freshness` below already
-    handles the one legitimate case of that kind (no `.git` under a scan root)
-    by comparing the source commit only inside an otherwise-present reading.
-    A fresh `object()` never equals anything, including another sentinel from
-    a previous unreadable call, so an unreadable reading can never be mistaken
-    for "unchanged since last time" (ticket 05 -- missing is not a match).
-    """
-    return recorded_value if recorded_value is not None else object()
-
-
-def _scan_freshness(root: Path) -> object:
-    """The recorded save time and source commit for `root`'s disk-cached scan.
-
-    Read via `scan_store.cached_saved_at`/`cached_commit`, which reflect what
-    was last written to disk regardless of whether the in-memory scan object
-    handed to this call is the same instance that was scanned or a freshly
-    deserialized one -- exactly the identity dependency ticket 05 removes.
-    A missing save time (no meta recorded at all) is treated as unreadable
-    via `_freshness_or_sentinel`; a missing source commit alongside a present
-    save time (no `.git` under `root`) is a legitimate, stable value and
-    compares normally.
-    """
-    saved_at = cached_saved_at(root)
-    if saved_at is None:
-        return _freshness_or_sentinel(saved_at)
-    return (saved_at, cached_commit(root))
-
-
-@dataclass
-class _RatedInvocationsValidityStamp:
-    """Everything the rating step reads besides `scope` itself.
-
-    ADR-0013 names five inputs a retained rating result must track: the repository
-    scan, the SQL cache it is joined against, and the three configuration
-    reads that shape rating -- the external wrapper contract, the contract
-    registry, and the wrapper review exclusions. A mismatch on any one of
-    them means a retained result may no longer be correct, so it is never
-    served -- unlike the Object Location Index's tolerant staleness rule
-    (ADR-0012), a stale match here is a wrong answer, not a slow one.
-
-    `scan_freshness`/`sql_cache_freshness` (ticket 05) compare by each input's
-    own recorded save time (the scan additionally by its recorded source
-    commit) rather than by Python object identity: identity only meant "has
-    this input moved since the last derivation" because `scan_store`'s and
-    `sql_cache_store`'s process caches were unbounded and never evicted, so
-    the exact same in-memory object always came back until a `refresh`
-    replaced it. A bounded cache or a disk-backed retention breaks that --
-    a dropped-then-reread object is a new instance carrying unchanged
-    content, and object identity would wrongly call that a change. Comparing
-    the recorded save time (and, for the scan, the source commit -- the
-    better signal of the two, since two scans of unchanged code taken at
-    different times still share one commit) survives both: it names what
-    changed, not which object happens to represent it.
-
-    The scan's save time and source commit are compared together, not commit
-    alone: a partial refresh (`analyze_service`'s program-refresh flow, via
-    `scan_store.save_scan`) can change a scan's actual content -- and its
-    recorded save time -- without the repository's git commit moving at all
-    (a dirty working tree, or files refreshed ahead of a commit). Letting a
-    matching commit alone excuse a differing save time would let exactly that
-    change go undetected, which is the wrong-answer risk ADR-0013 forbids
-    trading for a latency win. Requiring both to match only ever costs an
-    extra derivation it did not strictly need; it never serves a stale one.
-
-    The three configuration reads have no identity guarantee either way --
-    they are parsed fresh from disk on every call -- so they are compared by
-    value.
-    """
-
-    scan_freshness: Tuple[object, ...]
-    sql_cache_freshness: object
-    external_wrapper_contract: Optional[Dict[str, Any]]
-    contract_registry: Dict[str, Any]
-    wrapper_review_exclusions: Tuple[Dict[str, Any], ...]
-
-
-def _rating_config_inputs(
-    scope: DerivedExecutionEvidenceScope,
-) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Tuple[Dict[str, Any], ...]]:
-    """The three configuration reads that shape rating, read fresh every time.
-
-    Backs both the rating step and its validity stamp below: ADR-0013
-    requires the freshness check to see a configuration edit exactly as soon
-    as the rating step itself would, so neither may cache these separately
-    from the other.
-    """
-    return (
-        load_external_wrapper_contract(scope.wrapper_contract),
-        load_contract_registry(),
-        load_wrapper_review_exclusions(scope.database),
-    )
-
-
-def _rated_invocations_validity_stamp(
-    scope: DerivedExecutionEvidenceScope,
-    scans: Iterable[ProjectScanResult],
-) -> _RatedInvocationsValidityStamp:
-    """Take a fresh reading of every input `_rated_execution_invocations` depends on."""
-    identity = scope.sql_cache_identity
-    # The repair tool rebuilds the graph and keeps the Scan Record's saved_at,
-    # so the graph version joins the save time: a rebuilt graph invalidates.
-    sql_cache_freshness = None
-    if identity is not None:
-        cached = sql_cache_store.load_cached(identity)
-        if cached is not None:
-            sql_cache_freshness = (
-                _freshness_or_sentinel(sql_cache_store.cached_saved_at(identity)),
-                (cached.get("sql_execution_graph") or {}).get("graph_version"),
-            )
-    external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
-        _rating_config_inputs(scope)
-    )
-    return _RatedInvocationsValidityStamp(
-        scan_freshness=tuple(_scan_freshness(Path(scan.project_root)) for scan in scans),
-        sql_cache_freshness=sql_cache_freshness,
-        external_wrapper_contract=external_wrapper_contract,
-        contract_registry=contract_registry,
-        wrapper_review_exclusions=wrapper_review_exclusions,
-    )
-
-
-@dataclass
-class _RetainedRatedInvocations:
-    """One scope's rated Database Invocations, kept until a stamp mismatch or an explicit refresh.
-
-    `execution_paths` (ticket 05) piggybacks on this same entry and the same
-    stamp instead of a second retention dict: Execution Paths are a pure
-    function of exactly the two fields above (`rated_invocations`, `graph`), so
-    whatever invalidates one already invalidates the other. `None` means "not
-    built yet for this entry" -- `find_by_sp` never needs path-building, so it
-    never populates this field, and a stamp mismatch or `refresh=True` always
-    replaces the whole entry (see `_rated_execution_invocations_for_scope`),
-    which resets this back to `None`.
-    """
-
-    stamp: _RatedInvocationsValidityStamp
-    rated_invocations: List[DbInvocation]
-    graph: Dict[str, object]
-    execution_paths: Optional[List[Dict[str, object]]] = None
-
-
-# Derived Execution Evidence's rating half, retained per scope (ADR-0013).
-# Bounded by `settings.DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT` (ticket 06),
-# with least-recently-used eviction (ticket 07): the scope evicted when the
-# bound is reached is the one that has gone longest without being served, not
-# merely the one that arrived longest ago. On a shared service, requests from
-# many analysts interleave; an analyst asking many questions about one system
-# must not lose that scope just because a hundred unrelated scopes arrived in
-# between.
-#
-# A single Cross-system Lookup sweep, which visits every system in the
-# catalog once before returning to the first, is unaffected by this rule:
-# when every scope is touched exactly once, "least recently used" and
-# "arrived longest ago" name the same scope, so the sweep evicts in the same
-# order least-recently-used or first-in-first-out would. The two rules only
-# diverge -- and only least-recently-used helps -- once a scope is served more
-# than once, exactly the reused-scope case this ticket protects.
-#
-# An `OrderedDict` gives both rules for the price of one: every place a scope
-# is served calls `move_to_end` on it, keeping the least-recently-used entry
-# at the front regardless of arrival order, and `_evict_for_new_scope` still
-# evicts from the front with `popitem(last=False)`. See `_evict_for_new_scope`
-# for the eviction itself.
-#
-# The pre-existing unbounded in-memory retention this reuse work builds on top
-# of -- `_scan_cache` above, and the process-level caches in `scan_store` and
-# `sql_cache_store` -- is deliberately left alone here. Those predate this
-# effort and carry their own risk; bounding them is not this ticket's scope.
-_rated_invocations_retention: OrderedDict[DerivedExecutionEvidenceScope, _RetainedRatedInvocations] = (
-    OrderedDict()
-)
-
-
-def _retain(scope: DerivedExecutionEvidenceScope, value: _RetainedRatedInvocations) -> None:
-    """Write `value` for `scope`, and move it to the newest position.
-
-    Called by `_evict_then_retain` for a fresh derivation or a disk hit; the
-    in-memory-hit path just below calls `move_to_end` directly instead, since
-    it has no new value to write. See the module comment above
-    `_rated_invocations_retention` for why every serve does this.
-    """
-    _rated_invocations_retention[scope] = value
-    _rated_invocations_retention.move_to_end(scope)
-
-
-def _evict_for_new_scope(scope: DerivedExecutionEvidenceScope) -> None:
-    """Evict the least-recently-used retained scope if adding `scope` would exceed the bound.
-
-    A no-op when `scope` is already retained -- replacing an existing entry's
-    value never grows the retention, so it never needs to evict. Eviction
-    never changes an answer: the evicted scope simply re-derives from scratch
-    on its next request, the same way any scope does the first time it is
-    ever seen. It is printed so a service whose reuse has stopped working --
-    because the catalog outgrew the configured bound -- reports that instead
-    of merely being slow again (ADR-0013).
-
-    Called only through `_evict_then_retain`. See the module comment above
-    `_rated_invocations_retention` for why `popitem(last=False)` pops the
-    least-recently-served scope, not merely the oldest arrival.
-    """
-    if scope in _rated_invocations_retention:
-        return
-    limit = max(1, int(settings.DERIVED_EXECUTION_EVIDENCE_RETENTION_LIMIT))
-    if len(_rated_invocations_retention) < limit:
-        return
-    evicted_scope, _ = _rated_invocations_retention.popitem(last=False)
-    print(
-        "⚠️  Derived Execution Evidence retention 已達上限"
-        f"（limit={limit}），淘汰最舊的 scope 以容納新的 scope："
-        f"evicted database={evicted_scope.database!r} sql_cache_identity={evicted_scope.sql_cache_identity!r} "
-        f"repo_roots={evicted_scope.repo_roots!r} / "
-        f"new database={scope.database!r} sql_cache_identity={scope.sql_cache_identity!r} "
-        f"repo_roots={scope.repo_roots!r}"
-    )
-
-
-def _evict_then_retain(scope: DerivedExecutionEvidenceScope, value: _RetainedRatedInvocations) -> None:
-    """Make room for `scope` if needed, then record it as just served.
-
-    The one call a fresh derivation or a disk hit makes to enter `scope`
-    into `_rated_invocations_retention` -- pairing eviction with retention so
-    every caller that writes a new value gets both steps, instead of each
-    call site repeating the pair itself.
-    """
-    _evict_for_new_scope(scope)
-    _retain(scope, value)
-
-
-def _rated_execution_invocations_for_scope(
-    scope: DerivedExecutionEvidenceScope,
-    per_root_scans: List[ProjectScanResult],
-    merged_scan: ProjectScanResult,
-    matched_files: List,
-    root: Path,
-    *,
-    refresh: bool = False,
-) -> Tuple[List[DbInvocation], Dict[str, object]]:
-    """One scope's rated Database Invocations, reused across requests (ADR-0013).
-
-    `refresh` always re-derives and replaces what is retained: the one
-    action a caller takes to force freshness may never be served from
-    retention. Otherwise a retained result is served only when its validity
-    stamp still matches every tracked input; any mismatch re-derives.
-
-    `per_root_scans` is the caller's list of per-root scans, taken *before*
-    any multi-root merge -- `_get_scan` hands back a stable object per root
-    until a refresh replaces it, whereas merging always builds a brand-new
-    `ProjectScanResult` even when nothing changed, so `merged_scan` can never
-    itself serve as the "has the scan moved" signal.
-
-    A memory miss falls through to `derived_execution_evidence_store` (ticket
-    06/ADR-0017) before paying for a real derivation: a scope derived in an
-    earlier process, or evicted from this one, is still sitting on disk with
-    the same stamp this call just computed, and reading it back costs a
-    deserialize instead of a re-rate. `refresh=True` skips this fallback
-    exactly as it skips the in-memory one -- an explicit refresh ignores the
-    stored file entirely, never treating it as fresh regardless of what its
-    stamp says.
-    """
-    stamp = _rated_invocations_validity_stamp(scope, per_root_scans)
-    if not refresh:
-        retained = _rated_invocations_retention.get(scope)
-        if retained is not None and retained.stamp == stamp:
-            _rated_invocations_retention.move_to_end(scope)
-            return retained.rated_invocations, retained.graph
-
-        stored = derived_execution_evidence_store.load(scope)
-        if stored is not None and stored.stamp == stamp:
-            _evict_then_retain(
-                scope,
-                _RetainedRatedInvocations(
-                    stamp, stored.rated_invocations, stored.graph, stored.execution_paths
-                ),
-            )
-            return stored.rated_invocations, stored.graph
-
-    rated_invocations, graph = _rated_execution_invocations(scope, merged_scan, matched_files, root)
-    _evict_then_retain(scope, _RetainedRatedInvocations(stamp, rated_invocations, graph))
-    derived_execution_evidence_store.store(scope, stamp, rated_invocations, graph, execution_paths=None)
-    return rated_invocations, graph
-
-
-def _execution_paths_for_scope(
-    scope: DerivedExecutionEvidenceScope,
-    per_root_scans: List[ProjectScanResult],
-    merged_scan: ProjectScanResult,
-    matched_files: List,
-    root: Path,
-    *,
-    refresh: bool = False,
-    max_call_depth: int = 5,
-) -> Tuple[List[DbInvocation], Dict[str, object], List[Dict[str, object]]]:
-    """One scope's Execution Paths, reused across requests and across tables (ticket 05).
-
-    Extends `_rated_execution_invocations_for_scope`'s retention rather than
-    adding a second, weaker set of freshness rules: Execution Paths are a pure
-    function of that call's own two outputs (`rated_invocations`, `graph`), so
-    this function carries no validity stamp of its own. It relies on the
-    invariant documented on `_RetainedRatedInvocations`: the call below always
-    leaves a matching entry behind in `_rated_invocations_retention` -- left
-    untouched on a stamp hit, so a previously-built `execution_paths` survives
-    and is reused across every table asked in the same scope; replaced with a
-    fresh `execution_paths=None` entry on a stamp mismatch or `refresh=True`, so
-    a lookup that follows one of those never reuses a stale path list. Building
-    therefore happens only when the entry we get back does not already carry
-    paths built from these exact inputs.
-    """
-    rated_invocations, graph = _rated_execution_invocations_for_scope(
-        scope, per_root_scans, merged_scan, matched_files, root, refresh=refresh,
-    )
-    retained = _rated_invocations_retention[scope]
-    if retained.execution_paths is None:
-        retained.execution_paths = build_execution_paths(
-            rated_invocations, graph, max_call_depth=max_call_depth
-        )
-        # Persist the now-complete evidence (ticket 06/ADR-0017): a disk hit
-        # above may have supplied `rated_invocations`/`graph` without paths
-        # yet built (a scope that had only ever answered find_by_sp()), so
-        # the file is written again here to carry the paths this call just
-        # built -- the same "write on every cold derivation" rule, applied to
-        # the half of the evidence that just went cold.
-        derived_execution_evidence_store.store(
-            scope,
-            retained.stamp,
-            retained.rated_invocations,
-            retained.graph,
-            execution_paths=retained.execution_paths,
-        )
-    return rated_invocations, graph, retained.execution_paths
-
-
 def _rated_execution_invocations(
     scope: DerivedExecutionEvidenceScope,
     scan: ProjectScanResult,
@@ -1668,7 +1288,7 @@ def _rated_execution_invocations(
     rated_invocations = []
     raw_by_file = getattr(scan, "db_invocations", {})
     external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
-        _rating_config_inputs(scope)
+        rating_config_inputs(scope)
     )
     # ADR-0029 / Observed Call Evidence (ticket 04): built once from the whole scan's raw
     # facts, not per file -- a Local Implementer's own method commonly lives in a file a
@@ -2746,7 +2366,9 @@ def _inline_match_rank(match: TableMatchProgram) -> tuple[bool, tuple[int, int, 
     return not match.read_through, _table_match_rank(match)
 
 
-def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
+def find_by_sp(
+    req: FindBySPRequest, evidence_source: EvidenceSource = evidence_for_scope
+) -> FindBySPResponse:
     """反查「哪些程式呼叫了這支 SP」，使用 Gateway invocation 與 SQL Execution Graph，無 AI。
 
     req.cache_only=True（預設）時，若這個系統實際會掃描到的路徑「還沒有掃描快取」
@@ -2764,6 +2386,9 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
     「明明 cache_only=True 卻還是重新掃描」的成因）。
     正確做法：比對「這個系統實際會用到的掃描快取」是否存在（scan_store.has_cache()，
     以解析後的實際路徑雜湊為鍵），而不是只看 repo 有沒有 clone 過。
+
+    evidence_source 提供這個 scope 的 Derived Execution Evidence；預設是
+    derived_execution_evidence 模組本身，測試可以給一份固定的 evidence。
     """
     sp_name = (req.sp_name or "").strip()
     if not sp_name:
@@ -2816,14 +2441,8 @@ def find_by_sp(req: FindBySPRequest) -> FindBySPResponse:
         )
     _cached, _graph = _require_sql_execution_graph(req.database, sql_cache_identity)
     scope = DerivedExecutionEvidenceScope.of(req, roots, sql_cache_identity)
-    rated_invocations, _ = _rated_execution_invocations_for_scope(
-        scope,
-        scans,
-        scan,
-        list(scan.csharp_results),
-        root,
-        refresh=req.refresh,
-    )
+    evidence = evidence_source(scope, scans, scan, root, refresh=req.refresh)
+    rated_invocations = evidence.rated_invocations
     for invocation in rated_invocations:
         # `executed_procedure_name`, not `procedure_name`: a call whose inline SQL
         # text runs a procedure -- with `EXEC`, or relying on T-SQL running a bare
@@ -2912,12 +2531,17 @@ def _record_table_reverse_lookup(table_name: str, scope: DerivedExecutionEvidenc
     )
 
 
-def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
+def find_by_table(
+    req: FindByTableRequest, evidence_source: EvidenceSource = evidence_for_scope
+) -> FindByTableResponse:
     """反查「哪些程式存取了這張資料表」，結合 inline SQL facts 與 SQL Execution Graph，無 AI。
 
     inline SQL facts 保留直接出現在 C# SQL 文字中的表存取；SP/View/Function
     lineage 則必須由 Gateway invocation join 到 SQL Execution Graph 取得。詳見
     find_by_sp() 的 docstring 說明 cache_only 為何不能只用 repo_manager.is_cloned() 判斷。
+
+    evidence_source 提供這個 scope 的 Derived Execution Evidence；預設是
+    derived_execution_evidence 模組本身，測試可以給一份固定的 evidence。
     """
     table_name = (req.table_name or "").strip()
     if not table_name:
@@ -2975,20 +2599,16 @@ def find_by_table(req: FindByTableRequest) -> FindByTableResponse:
     # reaches the tables behind it only when the request names a Database.
     inline_graph: Optional[Mapping[str, Any]] = None
     if req.database:
-        _sql_cache, graph = _require_sql_execution_graph(req.database, sql_cache_identity)
+        _require_sql_execution_graph(req.database, sql_cache_identity)
         # 重用同一 scope 的 rated invocations 與 Execution Paths（ticket 04/05）：
         # 同一 scope 內問第二個 table，不必重新 rate C# facts、也不必重建
-        # Execution Paths —— 兩者共用 find_by_sp() 已經在用的同一份 retention
+        # Execution Paths —— 兩者共用 find_by_sp() 已經在用的同一份 evidence
         # 與同一條 validity stamp／explicit-refresh 規則，見
-        # `_execution_paths_for_scope` docstring。
-        rated_invocations, graph, execution_paths = _execution_paths_for_scope(
-            scope,
-            scans,
-            scan,
-            list(scan.csharp_results),
-            root,
-            refresh=req.refresh,
-        )
+        # `derived_execution_evidence.evidence_for_scope` docstring。
+        evidence = evidence_source(scope, scans, scan, root, refresh=req.refresh)
+        rated_invocations = evidence.rated_invocations
+        graph = evidence.graph
+        execution_paths = evidence.execution_paths()
         inline_graph = graph
     for answer in inline_table_relations.by_table(
         scan, question, rated_invocations, root, inline_graph, sql_cache_identity

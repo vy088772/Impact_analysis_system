@@ -1,13 +1,9 @@
-"""Ticket 05: find_by_table() builds Execution Paths once per scope, not once
-per request and not once per table asked within that scope.
+"""find_by_table() answers from the Derived Execution Evidence of its scope.
 
-Prior art for the seam and the counting style: tests/test_derived_execution_evidence_reuse.py
-(ticket 04) proves the same thing for the rating step alone, using find_by_sp();
-this file drives the larger of the two reverse lookups, find_by_table(), and
-additionally counts calls to `build_execution_paths` (via
-`analyze_service.build_execution_paths`, the module-level name
-`_execution_paths_for_scope` calls), since that -- not the rating step -- is
-where ticket 05 says the measured wait actually goes away.
+The tests that counted rating and path building here moved to the module seam:
+tests/test_derived_execution_evidence.py (derived-execution-evidence-one-module,
+ticket 01). This file keeps the answers of the lookup, plus one endpoint-seam
+test that gives fixed evidence through `evidence_source`.
 """
 
 from __future__ import annotations
@@ -19,7 +15,9 @@ from typing import Optional
 from canonical_object_identity import parse
 from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, FrameworkType, MethodInfo
-from service import analyze_service
+from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
+from service import analyze_service, derived_execution_evidence
+from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FindByTableRequest
 from tests.derived_execution_evidence_fixtures import RatedInvocationsRetention
 from tests.sql_cache_fixtures import (
@@ -151,8 +149,8 @@ def _wire(
     sql_payload = cache_payload("OrdersDb", graph=graph)
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
     monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scan)
-    monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_at)
-    monkeypatch.setattr(analyze_service, "cached_commit", lambda root: scan_commit)
+    monkeypatch.setattr(derived_execution_evidence, "cached_saved_at", lambda root: scan_saved_at)
+    monkeypatch.setattr(derived_execution_evidence, "cached_commit", lambda root: scan_commit)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "find_cache_identity",
@@ -181,65 +179,48 @@ def _request(table_name: str, *, write_only: bool = False, refresh: bool = False
     )
 
 
-def _count_real_rating_derivations(monkeypatch) -> list:
-    """Wrap the real rating step with a counter, still calling through to it."""
-    calls: list = []
-    real = analyze_service._rated_execution_invocations
-
-    def counting(*args, **kwargs):
-        calls.append(1)
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(analyze_service, "_rated_execution_invocations", counting)
-    return calls
+# --------------------------------------------------------------- endpoint seam
 
 
-def _count_real_path_builds(monkeypatch) -> list:
-    """Wrap the real path builder with a counter, still calling through to it."""
-    calls: list = []
-    real = analyze_service.build_execution_paths
-
-    def counting(*args, **kwargs):
-        calls.append(1)
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(analyze_service, "build_execution_paths", counting)
-    return calls
-
-
-# --------------------------------------------------------------- reuse itself
-
-
-def test_two_consecutive_table_lookups_in_one_scope_build_execution_paths_once(monkeypatch, tmp_path: Path) -> None:
+def test_find_by_table_filters_the_evidence_it_is_given(monkeypatch, tmp_path: Path) -> None:
+    """The lookup keeps the paths that reach the asked table and nothing else."""
     with RatedInvocationsRetention():
         scan = _scan(tmp_path)
         _wire(monkeypatch, scan, tmp_path, _graph())
-        rating_calls = _count_real_rating_derivations(monkeypatch)
-        path_calls = _count_real_path_builds(monkeypatch)
+        rated = [
+            DbInvocation(
+                class_name=class_name,
+                method_name=method_name,
+                database="OrdersDb",
+                procedure_name=procedure_name,
+                evidence=InvocationEvidence.PROVEN,
+                source=InvocationSourceSpan(relative_path=f"{class_name}.cs", start_offset=10, end_offset=90),
+                command_text_literal="",
+            )
+            # The scan has AlphaPage call usp_Alpha; this evidence says usp_Beta,
+            # so the answer shows which of the two the lookup read.
+            for class_name, method_name, procedure_name in (("AlphaPage", "SaveAlpha", "usp_Beta"),)
+        ]
+        given = DerivedExecutionEvidence(rated, _graph())
 
-        first = analyze_service.find_by_table(_request("TableA"))
-        second = analyze_service.find_by_table(_request("TableA"))
+        response = analyze_service.find_by_table(
+            _request("TableB"),
+            evidence_source=lambda scope, per_root_scans, merged_scan, root, *, refresh=False: given,
+        )
 
-        assert len(rating_calls) == 1
-        assert len(path_calls) == 1
-        assert [(m.program, m.file) for m in first.matches] == [(m.program, m.file) for m in second.matches]
+        assert [(m.program, m.file, m.access_type) for m in response.matches] == [
+            ("alphapage", "AlphaPage.cs", "INSERT")
+        ]
 
 
-def test_two_different_table_names_in_one_scope_derive_once_between_them(monkeypatch, tmp_path: Path) -> None:
-    """The decisive test: two DIFFERENT tables asked in one scope must still
-    build Execution Paths only once between them, proving reuse does not
-    depend on which question was asked (ADR-0013)."""
+def test_two_different_table_names_in_one_scope_get_their_own_programs(monkeypatch, tmp_path: Path) -> None:
+    """The evidence does not depend on which table was asked about (ADR-0013)."""
     with RatedInvocationsRetention():
-        scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph())
-        rating_calls = _count_real_rating_derivations(monkeypatch)
-        path_calls = _count_real_path_builds(monkeypatch)
+        _wire(monkeypatch, _scan(tmp_path), tmp_path, _graph())
 
         table_a = analyze_service.find_by_table(_request("TableA"))
         table_b = analyze_service.find_by_table(_request("TableB"))
 
-        assert len(rating_calls) == 1
-        assert len(path_calls) == 1
         assert [m.program for m in table_a.matches] == ["alphapage"]
         assert [m.program for m in table_b.matches] == ["betapage"]
 
@@ -255,9 +236,7 @@ def test_answer_identical_with_reuse_active_and_defeated_for_a_match(monkeypatch
         analyze_service.find_by_table(_request("TableA"))
         reused = analyze_service.find_by_table(_request("TableA"))
 
-        analyze_service._rated_invocations_retention.clear()  # defeat reuse
-        analyze_service.find_by_table(_request("TableA"))
-        fresh = analyze_service.find_by_table(_request("TableA"))
+        fresh = analyze_service.find_by_table(_request("TableA", refresh=True))  # defeat reuse
 
         assert [(m.program, m.file, m.access_type) for m in reused.matches] == [
             (m.program, m.file, m.access_type) for m in fresh.matches
@@ -272,9 +251,7 @@ def test_answer_identical_with_reuse_active_and_defeated_for_no_match(monkeypatc
         analyze_service.find_by_table(_request("TableMissing"))
         reused = analyze_service.find_by_table(_request("TableMissing"))
 
-        analyze_service._rated_invocations_retention.clear()  # defeat reuse
-        analyze_service.find_by_table(_request("TableMissing"))
-        fresh = analyze_service.find_by_table(_request("TableMissing"))
+        fresh = analyze_service.find_by_table(_request("TableMissing", refresh=True))  # defeat reuse
 
         assert reused.matches == [] == fresh.matches
 
@@ -287,9 +264,7 @@ def test_answer_identical_with_reuse_active_and_defeated_for_write_only(monkeypa
         analyze_service.find_by_table(_request("TableA", write_only=True))
         reused = analyze_service.find_by_table(_request("TableA", write_only=True))
 
-        analyze_service._rated_invocations_retention.clear()  # defeat reuse
-        analyze_service.find_by_table(_request("TableA", write_only=True))
-        fresh = analyze_service.find_by_table(_request("TableA", write_only=True))
+        fresh = analyze_service.find_by_table(_request("TableA", write_only=True, refresh=True))  # defeat reuse
 
         assert [(m.program, m.access_type) for m in reused.matches] == [
             (m.program, m.access_type) for m in fresh.matches
@@ -361,60 +336,6 @@ def test_embedded_sql_and_graph_derived_preference_rule_is_unchanged(monkeypatch
         alpha_matches = [m for m in result.matches if m.program == "alphapage"]
         assert len(alpha_matches) == 1
         assert alpha_matches[0].access_type == "UPDATE"  # the graph-derived write wins over the inline read
-
-
-# --------------------------------------------------------------- invalidation
-
-
-def test_a_changed_repository_scan_causes_a_fresh_path_build(monkeypatch, tmp_path: Path) -> None:
-    with RatedInvocationsRetention():
-        first_scan = _scan(tmp_path)
-        second_scan = _scan(tmp_path, alpha_calls="usp_Beta")
-        scans = [first_scan, second_scan]
-        # A real rescan updates the scan's recorded save time; mirror that
-        # instead of relying on `scans.pop(0)` handing back a new object.
-        scan_saved_ats = ["scan-v1", "scan-v2"]
-        sql_payload = cache_payload("OrdersDb", graph=_graph())
-        monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [tmp_path])
-        monkeypatch.setattr(analyze_service, "_get_scan", lambda root, refresh=False: scans.pop(0))
-        monkeypatch.setattr(analyze_service, "cached_saved_at", lambda root: scan_saved_ats.pop(0))
-        monkeypatch.setattr(analyze_service, "cached_commit", lambda root: "commit-v1")
-        monkeypatch.setattr(
-            analyze_service.sql_cache_store,
-            "find_cache_identity",
-            one_server_holds_every_database,
-        )
-        monkeypatch.setattr(
-            analyze_service.sql_cache_store, "load_cached", lambda identity: sql_payload
-        )
-        monkeypatch.setattr(
-            analyze_service.sql_cache_store, "cached_saved_at", lambda identity: "sql-cache-v1"
-        )
-        rating_calls = _count_real_rating_derivations(monkeypatch)
-        path_calls = _count_real_path_builds(monkeypatch)
-
-        before = analyze_service.find_by_table(_request("TableA"))
-        after = analyze_service.find_by_table(_request("TableA"))
-
-        assert len(rating_calls) == 2
-        assert len(path_calls) == 2
-        assert [m.program for m in before.matches] == ["alphapage"]
-        assert after.matches == []  # AlphaPage now calls usp_Beta, which writes TableB, not TableA
-
-
-def test_an_explicit_refresh_always_rebuilds_execution_paths(monkeypatch, tmp_path: Path) -> None:
-    with RatedInvocationsRetention():
-        scan = _scan(tmp_path)
-        _wire(monkeypatch, scan, tmp_path, _graph())
-        rating_calls = _count_real_rating_derivations(monkeypatch)
-        path_calls = _count_real_path_builds(monkeypatch)
-
-        analyze_service.find_by_table(_request("TableA"))
-        analyze_service.find_by_table(_request("TableA", refresh=True))
-        analyze_service.find_by_table(_request("TableA", refresh=True))
-
-        assert len(rating_calls) == 3
-        assert len(path_calls) == 3
 
 
 # ------------------------------------------------------------------- response shape

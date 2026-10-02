@@ -1,7 +1,7 @@
 # service/derived_execution_evidence_store.py
 """Disk-backed retention for Derived Execution Evidence (ADR-0013, ADR-0017).
 
-Extends the in-memory retention `analyze_service._rated_invocations_retention`
+Extends the in-memory retention `derived_execution_evidence._retention`
 already builds (ticket 04/05) with a second tier on disk, so a scope derived
 once is read back after a process restart and after an in-memory eviction,
 instead of being derived again -- see ADR-0017. Same design as
@@ -9,12 +9,12 @@ instead of being derived again -- see ADR-0017. Same design as
 `DerivedExecutionEvidenceScope`), replaced in place on every cold derivation.
 
 The freshness rule is not reimplemented here. What is stored alongside the
-payload is the exact `_RatedInvocationsValidityStamp` analyze_service already
+payload is the exact `ValidityStamp` that `derived_execution_evidence`
 computes and compares in memory; this module's only job is to get that value
 and the payload it goes with onto disk and back, byte for byte. Pickling the
 stamp as-is -- rather than re-encoding it to JSON -- is what makes this work
 for free: a stamp field that was an "unreadable input" sentinel (a bare
-`object()`, see `analyze_service._freshness_or_sentinel`) unpickles into a new
+`object()`, see `derived_execution_evidence._freshness_or_sentinel`) unpickles into a new
 `object()` instance, and a fresh `object()` never equals anything, including
 another unpickled copy of the same original -- so "missing never matches",
 the rule ticket 05 established for the in-memory comparison, holds here too
@@ -48,9 +48,9 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 from config.settings import settings
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance only
-    from service.analyze_service import (
+    from service.derived_execution_evidence import (
         DerivedExecutionEvidenceScope,
-        _RatedInvocationsValidityStamp,
+        ValidityStamp,
     )
     from code_analyzer.csharp_analysis_gateway import DbInvocation
 
@@ -64,6 +64,9 @@ _STORE_VERSION = 4  # v2: each Execution Path gains `read_full_keys` and `write_
 # v3: each full key gains `schema_source`.
 # v4: a path that stops at a call with the schema source `unresolved` carries
 # `unproven_schema` in its `risk_flags` (unstated-schema-resolves-as-sql-server-does, ticket 10).
+# A v4 file written before derived-execution-evidence-one-module ticket 01 names
+# the stamp class at its old place, `analyze_service._RatedInvocationsValidityStamp`.
+# `load()` cannot unpickle it, so that file is a plain miss with no version bump.
 
 _DATA_SUFFIX = ".pkl"
 
@@ -72,14 +75,14 @@ _DATA_SUFFIX = ".pkl"
 class _StoredDerivedExecutionEvidence:
     """Exactly what one scope's disk file holds: version, stamp, and payload.
 
-    `execution_paths` mirrors `analyze_service._RetainedRatedInvocations`:
+    `execution_paths` mirrors `derived_execution_evidence.DerivedExecutionEvidence`:
     `None` means "not built yet for this entry" -- a scope that has only ever
     answered `find_by_sp()` questions never populates it, on disk any more
     than in memory.
     """
 
     store_version: int
-    stamp: "_RatedInvocationsValidityStamp"
+    stamp: "ValidityStamp"
     rated_invocations: List["DbInvocation"]
     graph: Dict[str, object]
     execution_paths: Optional[List[Dict[str, object]]]
@@ -141,7 +144,7 @@ def load(scope: "DerivedExecutionEvidenceScope") -> Optional[_StoredDerivedExecu
 
 def store(
     scope: "DerivedExecutionEvidenceScope",
-    stamp: "_RatedInvocationsValidityStamp",
+    stamp: "ValidityStamp",
     rated_invocations: List["DbInvocation"],
     graph: Dict[str, object],
     execution_paths: Optional[List[Dict[str, object]]],
