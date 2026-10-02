@@ -23,36 +23,21 @@ class RequestStores:
         )
 
     def install_analyze(self, monkeypatch) -> None:
-        handler = analyze_service.analyze
-        monkeypatch.setattr(
-            analyze_service, "analyze",
-            lambda request, *args, **kwargs: handler(
-                request, *args, scan_store=self.scan_store, cache_store=self.cache_store, **kwargs
-            ),
-        )
+        self._install_handler(monkeypatch, "analyze")
 
     def install_table(self, monkeypatch) -> None:
-        handler = analyze_service.find_by_table
-        monkeypatch.setattr(
-            analyze_service, "find_by_table",
-            lambda request, *args, **kwargs: handler(
-                request, *args, scan_store=self.scan_store, cache_store=self.cache_store, **kwargs
-            ),
-        )
+        self._install_handler(monkeypatch, "find_by_table")
 
     def install_flow(self, monkeypatch) -> None:
-        handler = analyze_service.flow_chain
-        monkeypatch.setattr(
-            analyze_service, "flow_chain",
-            lambda request, *args, **kwargs: handler(
-                request, *args, scan_store=self.scan_store, cache_store=self.cache_store, **kwargs
-            ),
-        )
+        self._install_handler(monkeypatch, "flow_chain")
 
     def install_path(self, monkeypatch) -> None:
-        handler = analyze_service.get_path_evidence
+        self._install_handler(monkeypatch, "get_path_evidence")
+
+    def _install_handler(self, monkeypatch, handler_name: str) -> None:
+        handler = getattr(analyze_service, handler_name)
         monkeypatch.setattr(
-            analyze_service, "get_path_evidence",
+            analyze_service, handler_name,
             lambda request, *args, **kwargs: handler(
                 request, *args, scan_store=self.scan_store, cache_store=self.cache_store, **kwargs
             ),

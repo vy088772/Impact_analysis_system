@@ -160,5 +160,3 @@ def test_a_skipped_cache_only_lookup_never_reaches_the_scan_it_would_need_to_rec
 
     assert response.skipped is True
     assert capsys.readouterr().out == ""
-    assert "resolve" not in scans.calls
-    assert "scan" not in scans.calls

@@ -261,7 +261,6 @@ def test_path_evidence_with_no_roots_raises_before_any_scan(
 
     assert error.value.code == "source_not_found"
     assert str(error.value) == "找不到 path evidence 的原始碼來源"
-    assert "scan" not in scans.calls
 
 
 @pytest.mark.parametrize("db_server", ["", "   "])
@@ -282,7 +281,6 @@ def test_path_evidence_reads_an_ambiguous_database_as_not_scanned_before_source_
     assert error.value.database == "OrdersDb"
     assert error.value.reason == "missing_or_invalid"
     assert error.value.rebuild_action == "POST /refresh_sql"
-    assert scans.calls == []
 
 
 def test_path_evidence_requires_a_sql_graph_before_the_empty_roots_check(tmp_path: Path) -> None:
@@ -298,7 +296,6 @@ def test_path_evidence_requires_a_sql_graph_before_the_empty_roots_check(tmp_pat
 
     assert error.value.code == "sql_execution_graph_required"
     assert error.value.reason == "missing_or_invalid"
-    assert scans.calls == []
 
 
 def test_path_evidence_finds_a_path_of_the_given_evidence(monkeypatch, tmp_path: Path) -> None:

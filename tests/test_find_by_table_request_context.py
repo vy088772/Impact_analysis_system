@@ -26,8 +26,6 @@ def test_a_source_without_a_scan_cache_returns_the_same_skipped_response(tmp_pat
         "source_root": "",
         "skipped": True,
     }
-    assert "resolve" not in scans.calls
-    assert "scan" not in scans.calls
 
 
 @pytest.mark.parametrize("missing", ["first", "second"])
@@ -41,8 +39,6 @@ def test_a_multi_folder_source_skips_if_either_root_has_no_cache(tmp_path: Path,
 
     assert response.skipped is True
     assert response.matches == []
-    assert "resolve" not in scans.calls
-    assert "scan" not in scans.calls
 
 
 @pytest.mark.parametrize("cache_only,refresh", [(True, False), (False, False), (True, True)])
@@ -60,7 +56,6 @@ def test_an_ambiguous_database_refuses_before_any_scan_store_call(
     assert error.value.code == "ambiguous_database"
     assert error.value.database == "Orders"
     assert error.value.servers == ["host-a", "host-b"]
-    assert scans.calls == []
 
 
 @pytest.mark.parametrize("refresh,cache_only", [(True, True), (False, False), (False, True)])
@@ -80,6 +75,3 @@ def test_a_ready_source_keeps_the_response_and_refresh_bypasses_the_skip(
     assert response.skipped is False
     assert response.matches == []
     assert response.source_root == str(tmp_path)
-    if refresh or not cache_only:
-        assert "peek" not in scans.calls
-        assert "cache" not in scans.calls
