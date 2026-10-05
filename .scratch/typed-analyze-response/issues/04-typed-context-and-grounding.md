@@ -81,3 +81,17 @@ Valid data produces the same supported analysis content and known-name checks wi
 - The Spec review found no missing requirement and no behaviour change.
 - The Spec review notes that the omitted-reason output depends on merge keeping `model_fields_set`.
 - `analyze_merge` keeps that set today, and `path_selection` depends on it the same way.
+
+### Review Follow-up
+
+- The follow-up commit is `903e88c` in llamaindex-spec-rag.
+- `analyze_models` declares one `ViewBlock` union, and `ViewLayer.fields` uses it.
+- `context_builder` imports `ViewBlock` instead of a private copy of the union.
+- `grounding` defines `_ViewNode` as `ViewBlock` plus the nested `FormItem` and `InputField` records.
+- The union keeps the same members, so the model contract does not change.
+- A comment above the compact-path merge in `analyze_merge` states why merge passes on `unresolved_reason` only when the service sent it.
+- The existing test for an omitted `unresolved_reason` already goes through the real merge, so it detects a merge that drops the field set.
+- The orchestrator dictionary annotations remain with ticket 05.
+- The parity script output stays byte-identical, and the focused files pass 123 tests.
+- The full offline suite still has 54 failures, and the mypy gate still has 11 errors. No touched module has a type error.
+- The follow-up Standards and Spec reviews found no open issue after the comment moved to the compact-path block.
