@@ -23,6 +23,7 @@ from tests.sql_cache_fixtures import (
     cache_payload,
     execution_graph,
     one_server_holds_every_database,
+    orders_db_sql_graph,
 )
 
 
@@ -45,54 +46,8 @@ def _build_paths_with_handler_scope(req: AnalyzeRequest, scan, matched_files, ro
     )
 
 
-def _cached_sql_graph() -> dict:
-    return cache_payload(
-        "OrdersDb",
-        procedures=["usp_SaveOrder"],
-        graph=execution_graph(
-            "OrdersDb",
-            nodes=[
-                {
-                    "id": "stored_procedure:dbo.usp_SaveOrder",
-                    "type": "stored_procedure",
-                    "schema": "dbo",
-                    "name": "usp_SaveOrder",
-                },
-                {
-                    "id": "dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
-                    "type": "dml_operation",
-                    "module_id": "stored_procedure:dbo.usp_SaveOrder",
-                    "sequence": 1,
-                    "operation_type": "UPDATE",
-                    "conditions": ["Id = @Id"],
-                    "written_columns": ["Status"],
-                },
-                {
-                    "id": "table:dbo.SOrder",
-                    "type": "table",
-                    "schema": "dbo",
-                    "name": "SOrder",
-                },
-            ],
-            relationships=[
-                {
-                    "type": "contains",
-                    "source": "stored_procedure:dbo.usp_SaveOrder",
-                    "target": "dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
-                },
-                {
-                    "type": "writes",
-                    "source": "dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
-                    "target": "table:dbo.SOrder",
-                    "columns": ["Status"],
-                },
-            ],
-        ),
-    )
-
-
 def _cached_schema_sql_graph() -> dict:
-    graph = _cached_sql_graph()["sql_execution_graph"]
+    graph = orders_db_sql_graph()["sql_execution_graph"]
     graph["nodes"] = [
         {
             "id": "stored_procedure:sales.usp_SaveOrder",
@@ -179,7 +134,7 @@ def test_analyze_returns_direct_sqlclient_execution_path(monkeypatch, tmp_path: 
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda identity: _cached_sql_graph(),
+        lambda identity: orders_db_sql_graph(),
     )
 
     response = analyze_service.analyze(
@@ -271,7 +226,7 @@ def test_analyze_keeps_source_wrapper_method_flow_in_execution_path(monkeypatch,
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
         "load_cached",
-        lambda identity: _cached_sql_graph(),
+        lambda identity: orders_db_sql_graph(),
     )
 
     response = analyze_service.analyze(
@@ -729,7 +684,7 @@ def test_analyze_keeps_multiple_connection_labels_database_scoped(monkeypatch, t
         },
     )
     monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
-    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: _cached_sql_graph())
+    monkeypatch.setattr(analyze_service.sql_cache_store, "load_cached", lambda identity: orders_db_sql_graph())
 
     paths, _ = _build_paths_with_handler_scope(
         AnalyzeRequest(database="OrdersDb", program_names=["OrderPage"], include_snippets=False),

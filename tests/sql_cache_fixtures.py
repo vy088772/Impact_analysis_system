@@ -382,3 +382,50 @@ def write_cache(
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         meta["cache_version"] = cache_version
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def orders_db_sql_graph() -> dict:
+    """The OrdersDb SQL cache: `dbo.usp_SaveOrder` updates `dbo.SOrder.Status`."""
+    return cache_payload(
+        "OrdersDb",
+        procedures=["usp_SaveOrder"],
+        graph=execution_graph(
+            "OrdersDb",
+            nodes=[
+                {
+                    "id": "stored_procedure:dbo.usp_SaveOrder",
+                    "type": "stored_procedure",
+                    "schema": "dbo",
+                    "name": "usp_SaveOrder",
+                },
+                {
+                    "id": "dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
+                    "type": "dml_operation",
+                    "module_id": "stored_procedure:dbo.usp_SaveOrder",
+                    "sequence": 1,
+                    "operation_type": "UPDATE",
+                    "conditions": ["Id = @Id"],
+                    "written_columns": ["Status"],
+                },
+                {
+                    "id": "table:dbo.SOrder",
+                    "type": "table",
+                    "schema": "dbo",
+                    "name": "SOrder",
+                },
+            ],
+            relationships=[
+                {
+                    "type": "contains",
+                    "source": "stored_procedure:dbo.usp_SaveOrder",
+                    "target": "dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
+                },
+                {
+                    "type": "writes",
+                    "source": "dml_operation:stored_procedure:dbo.usp_SaveOrder:1",
+                    "target": "table:dbo.SOrder",
+                    "columns": ["Status"],
+                },
+            ],
+        ),
+    )

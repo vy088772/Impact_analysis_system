@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from service.analyze_models import OmissibleRecord
 from service.schemas import AnalyzeResponse
 from tests.analyze_response_fixtures import actual_http_json
 
@@ -24,7 +25,7 @@ def agreement_samples() -> list[dict]:
         "database_invocations": [invocation, {**invocation, "shared_component": {"kind": "view_component", "name": "Menu"}}],
         "diagnostics": [{**invocation, "diagnostic": True}, {**invocation, "diagnostic": True, "shared_component": {"kind": "view_component", "name": "Menu"}}],
         "execution_paths": [path, {**path, "terminal_operation": None}],
-        "compact_execution_paths": [agreement["compact_path"]],
+        "compact_execution_paths": [agreement["compact_path"], agreement["resolved_compact_path"]],
     }
     samples = agreement["samples"] + [{"programs": [program], "not_found": [], "source_root": "fixture"}]
     for rating in agreement["invocation_ratings"]:
@@ -117,6 +118,29 @@ def test_every_declared_structured_field_is_represented_in_the_agreement() -> No
     for name, record in {"AnalyzeResponse": schema, **schema.get("$defs", {})}.items():
         if "properties" in record:
             assert set(record["properties"]) == represented.get(name, set()), name
+
+
+def test_every_omissible_field_is_both_sent_and_omitted_in_the_agreement() -> None:
+    """A field the service may omit needs a sample with it and a sample without it."""
+    sent: set[tuple[str, str]] = set()
+    omitted: set[tuple[str, str]] = set()
+
+    def visit(value) -> None:
+        if isinstance(value, BaseModel):
+            for name, field in type(value).model_fields.items():
+                if isinstance(value, OmissibleRecord) and not field.is_required():
+                    key = (type(value).__name__, name)
+                    (sent if name in value.model_fields_set else omitted).add(key)
+                visit(getattr(value, name))
+        elif isinstance(value, dict):
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit([AnalyzeResponse.model_validate_json(json.dumps(sample)) for sample in agreement_samples()])
+    assert sorted(sent ^ omitted) == []
 
 
 @pytest.mark.parametrize("field_path,value", [

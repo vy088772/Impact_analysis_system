@@ -111,3 +111,43 @@ The complete test and type-check results establish whether the pair is ready for
 
 - "Contract Error" is not in the client `CONTEXT.md` glossary. Ticket 05 recorded this item.
 - The spec defines the term. A domain-modeling pass can add it. This ticket does not change the glossary.
+
+### Overall Review Follow-up
+
+- An overall two-axis review ran on the service range `6cf2317...8a239ea` and the client range `f8b0e07...1075535`.
+- The checklist item "Do not ... commit changes" applies to the verification run only.
+- Commit `8a239ea` records these ticket notes after the verification. It changes no product code. The user authorizes local commits.
+- The glossary item above is closed. The client `CONTEXT.md` now defines Analyze Response, Typed Analyze Result, and Contract Error.
+
+Spec findings:
+
+- The agreement file now has `resolved_compact_path`. That compact path omits `unresolved_reason`.
+- A test in each repository requires that every omissible field is both sent and omitted in the samples.
+- `PathCandidate` now holds the checked path record. The selector JSON comes from that record only for the prompt and the evidence output.
+- An `extra_forbidden` error now names the added field. A dynamic map key stays `<unknown>`. This change follows spec Story 40 and replaces the ticket 02 decision to hide every unknown name.
+
+Standards findings:
+
+- The client handles a Contract Error in one module, `impact_orch/analyze_contract.py`. The five call sites give `analyze_or_contract_gap` a typed `rag_client.analyze` call.
+- `coverage.py` renders coverage only. `evidence_gap_entry` moved to `analyze_contract.py`. The orchestrator and the CLI preview use it.
+- `LookupRead` is one generic dataclass. `AnalyzeRead` is `LookupRead[AnalyzeResponse]`. The capacity notes go to the merge as a separate argument.
+- The merge copies every path and program record with one helper. Path record checks share one tuple. The verified ratings come from `evidence_status.is_verified`.
+- `CapacityNote` and `DatabaseSkipped` declare their own fields and keep the old field order.
+- `_post_required_lookup` replaces three `assert data is not None` lines.
+- The service drops `CodeSnippet` and the repeated `raw_command_text` field. The snippet extractor builds the Analyze `Snippet` model.
+- The OrdersDb cache fixture moved to `tests/sql_cache_fixtures.py` as `orders_db_sql_graph`.
+
+Findings kept without a change:
+
+- `TypedAnalyzeResult` keeps its name. The parent spec defines "Typed Analyze Result" (Q6).
+- `db_server` and `db_name` on merged paths keep their names. They existed before this feature, and the output uses them.
+- `InvocationRating` stays a `Literal` in the model. The `DbInvocationEvidenceRating` enum existed before this feature.
+
+- `PATH_ROWS` and the `PathRow` type alias name the same two classes. mypy needs the explicit tuple to narrow the type.
+- The merge reads `DbInvocationEvidenceRating(record.evidence)` directly. The model already restricts `evidence` to the known ratings.
+
+Verification:
+
+- Service full suite: 1,699 passed, with the same 2 collection errors.
+- Client full offline suite: 1,552 passed, with 73 subtests passed. The client mypy gate passes on 35 files.
+- The OpenAPI parity test passes without a change to the export.

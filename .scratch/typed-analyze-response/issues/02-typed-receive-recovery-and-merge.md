@@ -88,3 +88,5 @@ Valid multi-Database analysis keeps the same facts and routing identities.
 - Both reviews use the starting client commit `3eb4d1414105133beb866d0edcf4a162235cb39f` as the fixed baseline.
 - The reviews cover the current ticket changes, not the deferred consumer migrations.
 - No service endpoint contract, catalog, credential, or cache content changed.
+
+- Overall review follow-up: an `extra_forbidden` error now names the added field (spec Story 40). Only dynamic map keys stay hidden. See ticket 06.

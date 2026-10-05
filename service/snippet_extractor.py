@@ -14,7 +14,7 @@ from typing import List
 
 from code_analyzer.models import FileAnalysisResult
 
-from .schemas import CodeSnippet
+from .analyze_models import Snippet
 
 # 編碼嘗試順序（企業舊專案常見 cp950）
 _ENCODINGS = ("utf-8-sig", "utf-8", "cp950", "latin-1")
@@ -49,7 +49,7 @@ def extract_snippets(
     max_lines_per_snippet: int = 600,
     head_lines: int = 40,
     method_filter: set[str] | None = None,
-) -> List[CodeSnippet]:
+) -> List[Snippet]:
     """
     從單一檔案的解析結果擷取程式碼片段。
 
@@ -69,7 +69,7 @@ def extract_snippets(
 
     rel_path = _rel(result.file_path, root)
     total = len(lines)
-    snippets: List[CodeSnippet] = []
+    snippets: List[Snippet] = []
 
     # 1) 依方法位置擷取
     for cls in result.classes:
@@ -88,7 +88,7 @@ def extract_snippets(
             if not text.strip():
                 continue
             snippets.append(
-                CodeSnippet(
+                Snippet(
                     file=rel_path,
                     label=f"{cls.name}.{method.name}",
                     lines=f"{start}-{end}",
@@ -104,7 +104,7 @@ def extract_snippets(
         text = _join_non_blank_lines(lines[:end])
         if text.strip():
             snippets.append(
-                CodeSnippet(
+                Snippet(
                     file=rel_path,
                     label="file head",
                     lines=f"1-{end}",

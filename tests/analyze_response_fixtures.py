@@ -10,7 +10,7 @@ from service import analyze_service, sp_fetcher
 from service.api import app
 from tests.program_screen_fixtures import _scan
 from tests.request_context_fixtures import RequestStores
-from tests.test_execution_path_integration import _cached_sql_graph
+from tests.sql_cache_fixtures import orders_db_sql_graph
 
 
 def actual_http_json() -> str:
@@ -37,7 +37,7 @@ def actual_http_json() -> str:
         }
         stores = RequestStores.of(root, scan)
         stores.install_analyze(monkeypatch)
-        cache = _cached_sql_graph()
+        cache = orders_db_sql_graph()
         cache["procedures"][0].update(
             definition="UPDATE dbo.SOrder SET Status = 1", parameters=["@Id int"]
         )

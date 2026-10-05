@@ -72,6 +72,9 @@
     },
     "compact_path": {
       "path_id": "path-1", "relevance_key": [0, -1, "Orders.Index", "path-1"], "entry_method": "Orders.Index", "method_chain": ["Index", "Save"], "sp_chain": ["dbo.usp_Save"], "terminal_operation_id": "op:1", "terminal_operation": null, "target": "dbo.Orders", "written_columns": ["Active"], "conditions": ["active"], "reads": ["dbo.Orders"], "writes": ["dbo.Orders"], "risk_flags": ["dynamic_sql"], "evidence": "unresolved", "unresolved_reason": "unresolved_dynamic_sql", "unresolved_targets": ["dynamic"]
+    },
+    "resolved_compact_path": {
+      "path_id": "path-2", "relevance_key": [1, 0, "Orders.Index", "path-2"], "entry_method": "Orders.Index", "method_chain": ["Index", "Save"], "sp_chain": ["dbo.usp_Save"], "terminal_operation_id": "op:1", "terminal_operation": "UPDATE", "target": "dbo.Orders", "written_columns": ["Active"], "conditions": ["active"], "reads": ["dbo.Orders"], "writes": ["dbo.Orders"], "risk_flags": [], "evidence": "proven", "unresolved_targets": []
     }
   },
   "object_names": [

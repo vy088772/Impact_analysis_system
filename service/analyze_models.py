@@ -29,10 +29,8 @@ class Method(OmissibleRecord):
 
 
 class Snippet(AnalyzeRecord):
-    model_config = ConfigDict(from_attributes=True)
-
     file: str
-    label: str
+    label: str  # `Class.Method`, or `file head` when the file has no method location
     lines: str
     text: str
 
@@ -221,7 +219,6 @@ class DatabaseInvocation(FullWrapperEvidence, OmissibleRecord):
     database_attribution: str
     procedure_name: str | None
     procedure_schema: str | None
-    raw_command_text: str | None
     evidence: InvocationRating
     reason: str
     caller: str

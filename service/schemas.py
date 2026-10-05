@@ -144,13 +144,6 @@ class PathEvidenceResponse(WrapperEvidenceFields):
     functions: List[Dict] = Field(default_factory=list)
 
 
-class CodeSnippet(BaseModel):
-    file: str
-    label: str = ""          # 片段標籤（類別.方法名 或 "file head"）
-    lines: str = ""          # 例如 "120-156"
-    text: str = ""
-
-
 class ProgramAnalysis(AnalyzeRecord):
     """單一程式（檔案）的靜態分析結果。"""
     program: str                             # 對應請求的程式名
