@@ -152,7 +152,7 @@ internal sealed class SqlOperationExtractor
     {
         var tokens = owner.ScriptTokenStream;
         var start = predicate.StartOffset;
-        for (var index = owner.FirstTokenIndex + 1; index <= predicate.FirstTokenIndex; index++)
+        for (var index = owner.FirstTokenIndex + 1; tokens is not null && index <= predicate.FirstTokenIndex; index++)
         {
             var type = tokens[index].TokenType;
             if (type is TSqlTokenType.WhiteSpace or TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment)

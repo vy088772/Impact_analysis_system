@@ -291,7 +291,6 @@ def test_an_error_from_sql_text_analysis_stops_the_scan_and_names_the_file_and_t
     assert UPDATE_TEXT in str(raised.value)
 
 
-@requires_dotnet
 def _scan_with_real_host(tmp_path, text: str) -> ProjectScanResult:
     """Scan one C# file that runs `text` through a SqlCommand, with the real analyzer host."""
     root = tmp_path / "Orders"
@@ -325,6 +324,7 @@ def _scan_with_real_host(tmp_path, text: str) -> ProjectScanResult:
     return scan
 
 
+@requires_dotnet
 def test_the_scan_sends_the_text_of_a_database_invocation_to_the_real_host(tmp_path) -> None:
     scan = _scan_with_real_host(tmp_path, UPDATE_TEXT)
 
@@ -365,6 +365,7 @@ def test_a_relation_loads_through_an_unpickler_that_admits_only_the_two_classes_
     assert loaded == relation
 
 
+@requires_dotnet
 def test_an_inline_if_exists_predicate_gives_a_select_relation_with_the_real_host(tmp_path) -> None:
     scan = _scan_with_real_host(
         tmp_path, "IF EXISTS (SELECT 1 FROM dbo.Gate WHERE Id = @id) UPDATE dbo.Orders SET Flag = 1"

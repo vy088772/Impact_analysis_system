@@ -1232,8 +1232,9 @@ def test_an_else_body_keeps_its_branch_path_and_the_predicate_read_stays_outside
 
     assert [operation["operation_type"] for operation in operations] == ["SELECT", "UPDATE", "UPDATE"]
     assert operations[0]["branch_path"] == []
-    assert operations[1]["branch_path"][0].startswith("IF ")
-    assert operations[2]["branch_path"][0].startswith("ELSE (NOT (")
+    (then_entry,) = operations[1]["branch_path"]
+    assert then_entry.startswith("IF ")
+    assert operations[2]["branch_path"] == [f"ELSE (NOT ({then_entry[len('IF '):]}))"]
 
 
 def test_a_predicate_read_of_an_else_if_carries_the_else_entry_of_the_outer_if_only() -> None:
@@ -1246,29 +1247,23 @@ def test_a_predicate_read_of_an_else_if_carries_the_else_entry_of_the_outer_if_o
 
 
 @pytest.mark.parametrize(
-    ("predicate_text", "predicate_sql"),
+    ("statement", "predicate", "start_column", "end_line", "end_column"),
     [
-        ("NOT EXISTS (SELECT 1 FROM dbo.A)", "IF NOT EXISTS (SELECT 1 FROM dbo.A) PRINT 'x';"),
-        ("EXISTS (SELECT 1 FROM dbo.A)", "IF /* gate */ EXISTS (SELECT 1 FROM dbo.A) PRINT 'x';"),
-        (
-            "EXISTS (SELECT 1\n    FROM dbo.A)",
-            "IF EXISTS (SELECT 1\n    FROM dbo.A) PRINT 'x';",
-        ),
-        ("WHILE_PLACEHOLDER", "WHILE EXISTS (SELECT 1 FROM dbo.A) PRINT 'x';"),
+        ("IF NOT EXISTS (SELECT 1 FROM dbo.A) PRINT 'x';", "NOT EXISTS (SELECT 1 FROM dbo.A)", 4, 2, 36),
+        ("IF /* gate */ EXISTS (SELECT 1 FROM dbo.A) PRINT 'x';", "EXISTS (SELECT 1 FROM dbo.A)", 15, 2, 43),
+        ("IF EXISTS (SELECT 1\n    FROM dbo.A) PRINT 'x';", "EXISTS (SELECT 1\n    FROM dbo.A)", 4, 3, 16),
+        ("WHILE EXISTS (SELECT 1 FROM dbo.A) PRINT 'x';", "EXISTS (SELECT 1 FROM dbo.A)", 7, 2, 35),
     ],
+    ids=["not-exists", "comment-after-if", "multi-line", "while"],
 )
 def test_the_location_of_a_predicate_read_starts_at_the_first_token_after_the_keyword(
-    predicate_text: str, predicate_sql: str
+    statement: str, predicate: str, start_column: int, end_line: int, end_column: int
 ) -> None:
-    sql = f"CREATE PROCEDURE dbo.usp_Loc AS\n{predicate_sql}\n"
-    if predicate_text == "WHILE_PLACEHOLDER":
-        predicate_text = "EXISTS (SELECT 1 FROM dbo.A)"
+    sql = f"CREATE PROCEDURE dbo.usp_Loc AS\n{statement}\n"
     (operation,) = _analyze_sql_text(sql)["operations"]
 
     location = operation["source"]
     start = location["start_offset"]
-    assert sql[start:start + location["length"]] == predicate_text
-    keyword_line = sql.splitlines()[1]
-    assert location["start_line"] == 2
-    assert location["start_column"] == keyword_line.index(predicate_text.split("\n")[0]) + 1
-    assert location["end_line"] == 2 + predicate_text.count("\n")
+    assert sql[start:start + location["length"]] == predicate
+    assert (location["start_line"], location["start_column"]) == (2, start_column)
+    assert (location["end_line"], location["end_column"]) == (end_line, end_column)

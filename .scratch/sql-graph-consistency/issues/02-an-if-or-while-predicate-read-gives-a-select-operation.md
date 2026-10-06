@@ -23,8 +23,8 @@ This ticket applies the rule of ticket 01 to predicates (`../spec.md`, "The oper
 
 ## Notes
 
-- Rule lives in `Visit` of `tools/StaticAnalyzerHost/SqlAnalyzer.cs`: the `IfStatement` and `WhileStatement` branches call `AddPredicateCandidate` with the branch path outside the statement, then visit the bodies as before. It reuses `CreateNonDmlCandidate`, so the CTE rule, the table-variable rule, and the temp-table rule are the same as ticket 01.
-- ScriptDom starts an `ExistsPredicate` at its parenthesis and leaves the `EXISTS` keyword out. So the location starts at the first token after `IF` or `WHILE` (`PredicateStartOffset`), and `SqlOperationCandidate` carries an optional `sourceStartOffset`.
+- Rule lives in `Visit` of `tools/StaticAnalyzerHost/SqlAnalyzer.cs`: the `IfStatement` and `WhileStatement` branches call `AddPredicateRead` with the branch path outside the statement, then visit the bodies as before. It reuses `CreateNonDmlCandidate`, so the CTE rule, the table-variable rule, and the temp-table rule are the same as ticket 01.
+- ScriptDom starts an `ExistsPredicate` at its parenthesis and leaves the `EXISTS` keyword out. So the location starts at the first token after `IF` or `WHILE` (`PredicateSpan`), and `SqlOperationCandidate` carries an optional `SqlSourceSpan` that `CreateLocation` uses in place of the fragment range.
 - Not changed, as the ticket asks: the `IF ...` entry of the branch path of the THEN body still uses the same fragment text. For an EXISTS predicate that text also lacks the `EXISTS` keyword (`IF (SELECT ...)`). It is a separate, older defect.
 - The graph version stays at 12 in this ticket. The working tree also holds an uncommitted change from another effort (database-qualified-call-target) that raises it to 13. This ticket did not touch it.
 - Temp table and graph tests use the real host through `build_sql_execution_graph`. The inline SQL test uses the real host through `refresh_csharp_files`.
