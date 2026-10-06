@@ -111,8 +111,49 @@ internal sealed class SqlOperationExtractor
             return;
         }
 
+        // A statement that holds no other statement is a leaf. When it refers to an object,
+        // it reads that object as a SELECT statement does: SET, DECLARE, RETURN, PRINT, and
+        // each other non-DML statement. A statement that holds statements, such as a block,
+        // gives its operations through those statements.
+        if (fragment is TSqlStatement && !Descendants(fragment).Skip(1).Any(child => child is TSqlStatement))
+        {
+            var candidate = CreateNonDmlCandidate(fragment, branchPath);
+            if (candidate is not null)
+                candidates.Add(candidate);
+            return;
+        }
+
         foreach (var child in ChildFragments(fragment).OrderBy(child => child.StartOffset))
             Visit(child, module, branchPath, candidates);
+    }
+
+    // The operation reads the tables, columns, and functions of the whole statement with the
+    // collectors of a SELECT statement, so the CTE rule and the table-variable rule are the same.
+    // A statement that refers to no table, view, or function gives no operation.
+    private SqlOperationCandidate? CreateNonDmlCandidate(
+        TSqlFragment fragment,
+        IReadOnlyList<string> branchPath)
+    {
+        var readTables = new List<SqlObjectReference>();
+        var readColumns = new List<string>();
+        var functionReferences = new List<SqlObjectReference>();
+        var cteNames = ReadCteNames(fragment);
+        CollectReferences(fragment, readTables, cteNames);
+        CollectColumns(fragment, readColumns);
+        CollectFunctionReferences(fragment, functionReferences);
+        if (readTables.Count == 0 && functionReferences.Count == 0)
+            return null;
+
+        return new SqlOperationCandidate(
+            fragment,
+            "SELECT",
+            new List<string>(branchPath),
+            null,
+            readTables,
+            new List<SqlObjectReference>(),
+            readColumns,
+            new List<string>(),
+            functionReferences: functionReferences);
     }
 
     private SqlOperationCandidate CreateCandidate(

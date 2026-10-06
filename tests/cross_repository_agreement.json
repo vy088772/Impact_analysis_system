@@ -239,7 +239,7 @@
         }
       ],
       "sql_execution_graph": {
-        "graph_version": 11,
+        "graph_version": 12,
         "database": "SampleDb",
         "nodes": [
           {

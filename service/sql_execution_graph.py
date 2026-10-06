@@ -74,7 +74,12 @@ from .table_match import names_another_database
 # (unstated-schema-resolves-as-sql-server-does, ticket 13). A v10 graph has no
 # operation for a MERGE, so the procedure that merges into a table is absent from
 # the write answer for that table; it is rejected until rebuilt.
-GRAPH_VERSION = 11
+# v12: a non-DML statement that refers to a table, a view, or a function (SET,
+# DECLARE, RETURN, PRINT, and each other) gives one SELECT operation that reads
+# it (sql-graph-consistency, ticket 01, ADR-0041). A v11 graph has no operation
+# for such a statement, so a procedure that reads a table only inside one is
+# absent from the read answer for that table; it is rejected until rebuilt.
+GRAPH_VERSION = 12
 NodeKey = tuple[str, str, str, str]
 
 

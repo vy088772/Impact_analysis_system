@@ -1032,3 +1032,90 @@ def test_a_merge_source_that_reads_the_target_gives_no_read_of_the_target() -> N
 
     assert operation["write_tables"] == [_reference("", "", "dbo", "T")]
     assert operation["read_tables"] == []
+
+
+def _module_operations(body: str, header: str = "CREATE PROCEDURE dbo.usp_NonDml AS\n") -> list[dict]:
+    return _analyze_sql_text(f"{header}{body}\n")["operations"]
+
+
+def test_a_set_with_a_subquery_gives_one_select_operation_that_reads_its_table() -> None:
+    (operation,) = _module_operations(
+        "SET @n = (SELECT COUNT(*) FROM dbo.POrder WHERE id = @id);"
+    )
+
+    assert operation["operation_type"] == "SELECT"
+    assert operation["read_tables"] == [_reference("", "", "dbo", "POrder")]
+    assert operation["write_tables"] == []
+
+
+@pytest.mark.parametrize(
+    ("header", "body"),
+    [
+        ("CREATE PROCEDURE dbo.usp_A AS\n", "DECLARE @x int = (SELECT MAX(id) FROM dbo.T);"),
+        (
+            "CREATE FUNCTION dbo.fnA(@id int) RETURNS int AS BEGIN\n",
+            "RETURN (SELECT MAX(id) FROM dbo.T); END",
+        ),
+        ("CREATE PROCEDURE dbo.usp_A AS\n", "PRINT (SELECT MAX(id) FROM dbo.T);"),
+        ("CREATE PROCEDURE dbo.usp_A AS\n", "SET @x = (SELECT MAX(id) FROM dbo.T);"),
+    ],
+)
+def test_a_non_dml_statement_with_a_subquery_gives_one_select_operation(
+    header: str, body: str
+) -> None:
+    (operation,) = _module_operations(body, header)
+
+    assert operation["operation_type"] == "SELECT"
+    assert operation["read_tables"] == [_reference("", "", "dbo", "T")]
+
+
+def test_a_function_call_in_a_non_dml_statement_gives_the_references_of_a_select_statement() -> None:
+    (set_operation,) = _module_operations("SET @ok = dbo.fnCheck(@id);")
+    (select_operation,) = _module_operations("SELECT @ok = dbo.fnCheck(@id);")
+
+    assert set_operation["operation_type"] == "SELECT"
+    assert set_operation["function_references"] == [_reference("", "", "dbo", "fnCheck")]
+    assert set_operation["function_references"] == select_operation["function_references"]
+
+
+def test_one_statement_with_two_subqueries_gives_one_operation_that_reads_both_tables() -> None:
+    (operation,) = _module_operations(
+        "SET @n = (SELECT COUNT(*) FROM dbo.A) + (SELECT COUNT(*) FROM dbo.B);"
+    )
+
+    assert operation["read_tables"] == [
+        _reference("", "", "dbo", "A"),
+        _reference("", "", "dbo", "B"),
+    ]
+
+
+@pytest.mark.parametrize("statement", ["SET @x = GETDATE();", "SET @x = (SELECT 1);"])
+def test_a_non_dml_statement_that_refers_to_no_object_gives_no_operation(statement: str) -> None:
+    assert _module_operations(statement) == []
+
+
+def test_a_cte_name_and_a_table_variable_in_a_non_dml_statement_give_no_table_read() -> None:
+    (operation,) = _module_operations(
+        "DECLARE @t TABLE (id int);\n"
+        "SET @n = (SELECT COUNT(*) FROM dbo.Real r WHERE r.id IN (SELECT id FROM @t));"
+    )
+    assert operation["read_tables"] == [_reference("", "", "dbo", "Real")]
+
+
+def test_the_location_of_a_non_dml_statement_covers_the_full_statement_and_the_branch_stays_outside() -> None:
+    sql = "CREATE PROCEDURE dbo.usp_Loc AS\nIF @a = 1\n    SET @n = (SELECT COUNT(*) FROM dbo.T);\n"
+    (operation,) = _analyze_sql_text(sql)["operations"]
+
+    location = operation["source"]
+    start = location["start_offset"]
+    assert sql[start:start + location["length"]] == "SET @n = (SELECT COUNT(*) FROM dbo.T);"
+    assert operation["branch_path"] == ["IF @a = 1"]
+
+
+def test_dml_exec_and_branch_bodies_keep_their_operations_when_a_non_dml_statement_joins_them() -> None:
+    operations = _module_operations(
+        "SET @n = (SELECT COUNT(*) FROM dbo.A);\n"
+        "IF @n > 0 BEGIN SELECT * FROM dbo.B; EXEC dbo.usp_C; END"
+    )
+
+    assert [operation["operation_type"] for operation in operations] == ["SELECT", "SELECT", "CALL"]

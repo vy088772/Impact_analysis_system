@@ -167,12 +167,11 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
     """A cache built under any earlier graph version must be rejected.
 
     GRAPH_VERSION rises whenever the graph payload changes what a reader
-    concludes -- most recently to 8, when a reference that states no schema
-    began to resolve as SQL Server resolves it
-    (unstated-schema-resolves-as-sql-server-does), so a v7 graph, which leaves
-    that schema empty and marked, fails this check until it is rebuilt.
+    concludes -- most recently to 12, when a read inside a non-DML statement
+    began to give a SELECT operation (sql-graph-consistency, ticket 01), so a
+    v11 graph, which omits that read, fails this check until it is rebuilt.
     """
-    assert GRAPH_VERSION == 11
+    assert GRAPH_VERSION == 12
 
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(
@@ -453,6 +452,56 @@ END;
         if relationship["type"] == "writes" and relationship["source"] == merges[0]["id"]
     ]
     assert writes == ["ShippingOrderD"]
+
+
+def test_the_set_subqueries_of_sp_so_update_inv_flag_give_a_reads_relationship_to_porder() -> None:
+    """The real `dbo.sp_SO_UpdateInvFlag` (PUR) reads `POrder` only inside SET statements."""
+    data = cache_payload(
+        "PUR",
+        tables=["dbo.POrder", "dbo.SOrder"],
+        procedures={
+            "dbo.sp_SO_UpdateInvFlag": {
+                "definition": """
+/******
+更新SO之出貨狀態
+使用網頁：
+Invoice輸入、修改
+ ******/
+
+CREATE PROCEDURE [dbo].[sp_SO_UpdateInvFlag]
+@Syskey int
+as 
+
+--判斷所有相同Syskey之PO是否全數交貨，更新SO交貨狀態
+declare @POCount int
+declare @Inv0 int
+declare @Inv1 int
+declare @INVFlag int
+set @POCount=(select count(InvFlag) from POrder where OrderCancel=0 and SysKey=@SysKey)
+set @Inv0=(select count(InvFlag) from POrder where OrderCancel=0 and SysKey=@SysKey and InvFlag=0)
+set @Inv1=(select count(InvFlag) from POrder where OrderCancel=0 and SysKey=@SysKey and InvFlag=1)
+set @INVFlag=2
+if @POCount=@Inv0
+	set @INVFlag=0
+if @POCount=@Inv1
+	set @INVFlag=1
+
+update SOrder set InvFlag=@INVFlag where SysKey=@Syskey
+""",
+            },
+        },
+    )
+
+    graph = build_sql_execution_graph(data)
+
+    reads = {
+        relationship["target"]
+        for relationship in graph["relationships"]
+        if relationship["type"] == "reads"
+    }
+    assert "table:dbo.POrder" in reads
+    selects = [node for node in graph["nodes"] if node.get("operation_type") == "SELECT"]
+    assert len(selects) == 3
 
 
 def test_a_read_through_a_temp_table_keeps_the_database_its_base_read_stated() -> None:
