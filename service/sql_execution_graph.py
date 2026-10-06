@@ -85,7 +85,13 @@ from .table_match import names_another_database
 # ticket 01, ADR-0042). A v12 graph can give such a call the id of a listed
 # module of the cache, so the Execution Path follows the local definition as
 # evidence for a call to another Database; it is rejected until rebuilt.
-GRAPH_VERSION = 13
+# v14: the temp table expansion stops at a module with Temp Table Shadowing, a
+# module whose unconditional `SELECT ... INTO #name` creates its own table
+# (temp-table-scope-indirect-reads, ticket 01, ADR-0043). A v13 graph holds a
+# lineage read through the caller's table of that name, so `/find_by_table`
+# lists a procedure that never refers to the base table; it is rejected until
+# rebuilt.
+GRAPH_VERSION = 14
 NodeKey = tuple[str, str, str, str]
 
 
@@ -238,8 +244,10 @@ def _expand_temp_table_lineage(
 
     A temp table is visible along calls in one direction. A resolution that goes
     up to callers can only go up again. A resolution that goes down to callees
-    can only go down again. The expansion does not detect shadowing, so it takes
-    the union of the visible writers. A worklist fixed point computes the base
+    can only go down again. A module has Temp Table Shadowing for a name when an
+    unconditional `SELECT_INTO` writes it (ADR-0043). A resolution does not go
+    up out of that module and does not go down into it. `CREATE TABLE` is not
+    detected, so the expansion takes the union of the visible writers there. A worklist fixed point computes the base
     tables of each state once, so the cost grows with the graph, not with the
     number of paths through it.
     """
@@ -273,6 +281,18 @@ def _expand_temp_table_lineage(
     for node in nodes:
         if node.get("scope_module_id"):
             node_of_scope[(str(node["scope_module_id"]), name_key(node))] = str(node["id"])
+
+    # A module shadows a name when an unconditional SELECT_INTO writes its node.
+    shadowing: set[tuple[str, tuple[str, str]]] = set()
+    for table_id, writer_ids in writers_by_table.items():
+        table_node = node_by_id.get(table_id, {})
+        if not table_node.get("scope_module_id"):
+            continue
+        for writer_id in writer_ids:
+            writer = node_by_id.get(writer_id, {})
+            if writer.get("operation_type") == "SELECT_INTO" and not writer.get("branch_path"):
+                shadowing.add((str(table_node["scope_module_id"]), name_key(table_node)))
+                break
 
     def state_of(node_id: str, direction: str) -> _State:
         node = node_by_id[node_id]
@@ -329,10 +349,12 @@ def _expand_temp_table_lineage(
                         schema_resolution.strongest_source(kept_source, schema_source),
                     )
         if scope:
-            if direction != _DOWN:
+            if direction != _DOWN and (scope, key) not in shadowing:
                 edges.update((caller, key, _UP) for caller in callers_of.get(scope, ()))
             if direction != _UP:
-                edges.update((callee, key, _DOWN) for callee in callees_of.get(scope, ()))
+                edges.update(
+                    (callee, key, _DOWN) for callee in callees_of.get(scope, ()) if (callee, key) not in shadowing
+                )
         for successor in edges:
             predecessors.setdefault(successor, set()).add(state)
             pending.append(successor)

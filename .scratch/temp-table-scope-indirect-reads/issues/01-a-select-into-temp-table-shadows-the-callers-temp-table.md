@@ -12,10 +12,10 @@ Source: problem 2 of `../../sql-graph-consistency/problems.md`.
 
 **Category:** enhancement
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A decision: keep the current answer, or mark an expanded read as indirect. → Neither. Detect Temp Table Shadowing from an unconditional `SELECT_INTO` (ADR-0043).
-- [ ] The expansion applies ADR-0043 (see the agent brief below).
+- [x] The expansion applies ADR-0043 (see the agent brief below).
 
 ## Comments
 
@@ -70,3 +70,11 @@ The rule applies to each name separately. A `SELECT_INTO` with a non-empty `bran
 - A mark that shows a lineage read as indirect, or names the temp table it passes through (issue 03).
 - A rule that uses the statement order of the read and the `SELECT_INTO`.
 - The rebuild of the caches by the operator.
+
+### Implementation notes (2026-10-06)
+
+- `_expand_temp_table_lineage` now builds a `shadowing` set of (module, name) from each `SELECT_INTO` with an empty `branch_path` that writes a scoped temp node. It skips the up edge out of a shadowing module and the down edge into one.
+- `GRAPH_VERSION` 13 → 14. `tests/cross_repository_agreement.json` `sample_cache.graph_version` follows it, as in ADR-0042.
+- 6 new tests in `tests/test_sql_execution_graph.py` cover the first 6 acceptance criteria. 3 of them fail on the old code (the 3 others pin existing behavior). No existing lineage test needed a change, so no test asserted the over-report on purpose.
+- Not done here: the PUR cache rebuild and its two checks (no `MaterialType` read for `usp_CDCU_RMPriceCount_Delete`, op 2–5 keep `fun_GetStatusForRMCD`). The operator rebuilds the caches (out of scope). The v13 rejection test passes.
+- Full suite: 1742 passed. `tests/test_search_roles.py` and `tests/test_sp_tables.py` fail at collection with `KeyError: 'PUR'` before and after the change (no local config).
