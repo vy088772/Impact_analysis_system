@@ -1101,6 +1101,26 @@ def test_a_table_variable_in_a_non_dml_statement_gives_no_table_read() -> None:
     assert operation["read_tables"] == [_reference("", "", "dbo", "Real")]
 
 
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "IF EXISTS (SELECT 1 FROM @t) PRINT 'x';",
+        "WHILE EXISTS (SELECT 1 FROM @t) PRINT 'x';",
+    ],
+    ids=["if", "while"],
+)
+def test_a_table_variable_in_a_predicate_gives_no_operation(statement: str) -> None:
+    assert _module_operations("DECLARE @t TABLE (id int);\n" + statement) == []
+
+
+def test_a_table_variable_beside_a_table_in_a_predicate_leaves_only_the_table() -> None:
+    (operation,) = _module_operations(
+        "DECLARE @t TABLE (id int);\n"
+        "IF EXISTS (SELECT 1 FROM dbo.Real r WHERE r.id IN (SELECT id FROM @t)) PRINT 'x';"
+    )
+    assert operation["read_tables"] == [_reference("", "", "dbo", "Real")]
+
+
 def test_the_location_of_a_non_dml_statement_covers_the_full_statement_and_the_branch_stays_outside() -> None:
     sql = "CREATE PROCEDURE dbo.usp_Loc AS\nIF @a = 1\n    SET @n = (SELECT COUNT(*) FROM dbo.T);\n"
     (operation,) = _analyze_sql_text(sql)["operations"]

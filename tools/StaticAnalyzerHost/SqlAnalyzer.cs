@@ -183,17 +183,8 @@ internal sealed class SqlOperationExtractor
         if (readTables.Count == 0 && functionReferences.Count == 0)
             return null;
 
-        return new SqlOperationCandidate(
-            fragment,
-            "SELECT",
-            new List<string>(branchPath),
-            null,
-            readTables,
-            new List<SqlObjectReference>(),
-            readColumns,
-            new List<string>(),
-            functionReferences: functionReferences,
-            sourceSpan: sourceSpan);
+        return SqlOperationCandidate.Read(
+            fragment, branchPath, readTables, readColumns, functionReferences, sourceSpan);
     }
 
     private SqlOperationCandidate CreateCandidate(
@@ -773,6 +764,26 @@ internal sealed class SqlOperationCandidate
         FunctionReferences = functionReferences ?? new List<SqlObjectReference>();
         UnresolvedWriteTargets = unresolvedWriteTargets ?? new List<string>();
     }
+
+    // A SELECT operation that only reads: it writes no table and calls no procedure.
+    internal static SqlOperationCandidate Read(
+        TSqlFragment fragment,
+        IReadOnlyList<string> branchPath,
+        List<SqlObjectReference> readTables,
+        List<string> readColumns,
+        List<SqlObjectReference> functionReferences,
+        SqlSourceSpan? sourceSpan)
+        => new(
+            fragment,
+            "SELECT",
+            new List<string>(branchPath),
+            null,
+            readTables,
+            new List<SqlObjectReference>(),
+            readColumns,
+            new List<string>(),
+            functionReferences: functionReferences,
+            sourceSpan: sourceSpan);
 
     internal TSqlFragment Fragment { get; }
     private SqlSourceSpan? SourceSpan { get; }

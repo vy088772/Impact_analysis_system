@@ -240,12 +240,13 @@ def _temp_name_key(node: dict[str, Any]) -> tuple[str, str]:
     return str(node.get("schema") or "").casefold(), str(node.get("name") or "").casefold()
 
 
-def _shadowing_modules(
+def _shadowed_temp_names(
     node_by_id: dict[str, dict[str, Any]], writers_by_table: dict[str, set[str]]
 ) -> set[_ScopedName]:
     """The temp table names that a module shadows (ADR-0043).
 
-    A module shadows a name when a `SELECT_INTO` in no branch writes its node.
+    A module shadows a name when an unconditional `SELECT_INTO` writes its node.
+    An unconditional operation is one with an empty branch path.
     """
     shadowing: set[_ScopedName] = set()
     for table_id, writer_ids in writers_by_table.items():
@@ -304,7 +305,7 @@ def _expand_temp_table_lineage(
         if node.get("scope_module_id"):
             node_of_scope[(str(node["scope_module_id"]), _temp_name_key(node))] = str(node["id"])
 
-    shadowing = _shadowing_modules(node_by_id, writers_by_table)
+    shadowing = _shadowed_temp_names(node_by_id, writers_by_table)
 
     def state_of(node_id: str, direction: str) -> _State:
         node = node_by_id[node_id]
@@ -644,7 +645,9 @@ def _another_database_procedure_id(target: ObjectName) -> str:
 
     It keeps an empty part, so `master..xp_cmdshell` keeps its empty schema. A
     call through a linked server keeps four parts, so two servers that hold one
-    Database name give two ids.
+    Database name give two ids. `canonical_object_identity.parse` reads this
+    form back, and `test_another_database_procedure_id_reads_back_through_parse`
+    keeps the two in step.
     """
     database = f"{target.server}.{target.database}" if target.server else target.database
     return _node_id("stored_procedure", f"{database}.{target.schema}", target.name)

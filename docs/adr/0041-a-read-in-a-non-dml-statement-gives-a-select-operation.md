@@ -7,7 +7,7 @@
 
 An analyst asks which procedures read a table. A procedure can read the table only inside a non-DML statement. A non-DML statement is a T-SQL statement that is not SELECT, INSERT, UPDATE, DELETE, MERGE, or EXEC. Examples are `SET @x = (SELECT ... FROM T)`, `DECLARE @x int = (SELECT ... FROM T)`, and `RETURN (SELECT ... FROM T)`.
 
-The analyzer host made an operation only for a DML statement or an EXEC statement. A subquery in a SET statement is not a SELECT statement, so the host made no operation. The SQL Execution Graph then had no reads relationship for that table. A consistency check of 8 SQL caches found 201 real omissions, for example `dbo.sp_SO_UpdateInvFlag` in PUR.
+The analyzer host made an operation only for a DML statement or an EXEC statement. A subquery in a SET statement is not a SELECT statement, so the host made no operation. The SQL Execution Graph then had no reads relationship for that table. A consistency check of 8 SQL caches found 209 candidate omissions, and 200 of them are real, for example `dbo.sp_SO_UpdateInvFlag` in PUR.
 
 ## Decision
 
@@ -21,9 +21,9 @@ A non-DML statement that refers to at least one table, view, or user-defined fun
 - A statement that refers to no object, for example `SET @x = GETDATE()`, gives no operation.
 - The source location covers the full statement. The branch path is the branch path outside the statement.
 - A statement that holds other statements, such as a block, gives its operations through those statements.
-- `GRAPH_VERSION` rises from 11 to 12. The read path rejects a v11 graph.
+- `GRAPH_VERSION` rose from 11 to 12 for this rule. The read path rejects a v11 graph. Later efforts raised it again (ADR-0042 to 13, ADR-0043 to 14). The comment on `GRAPH_VERSION` holds the full history.
 
-IF predicates and WHILE predicates follow in a later ticket. They use the same operation type.
+An IF predicate and a WHILE predicate follow the same rule. They give one `SELECT` operation each. The source location of that operation covers the predicate only, and its branch path is the branch path outside the IF or WHILE statement.
 
 ## Consequences
 

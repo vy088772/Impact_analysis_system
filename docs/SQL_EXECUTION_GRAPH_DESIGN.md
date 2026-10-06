@@ -89,7 +89,7 @@ flowchart LR
 | `view` | schema + name | Read-only SQL module |
 | `function` | schema + name | UDF module |
 | `table` | schema + name | Persistent data target/source |
-| `dml_operation` | module + sequence | Ordered `SELECT`, `INSERT`, `UPDATE`, `DELETE`, or `SELECT_INTO`. A `SELECT` operation can come from a non-DML statement that refers to a table, a view, or a function. See ADR-0041. |
+| `dml_operation` | module + sequence | Ordered `SELECT`, `INSERT`, `UPDATE`, `DELETE`, or `SELECT_INTO`. The node type keeps the name `dml_operation` for compatibility, but a `SELECT` operation can come from a non-DML statement or an IF or WHILE predicate that refers to a table, a view, or a function (Read Operation in `CONTEXT.md`). See ADR-0041. |
 | `unresolved_dynamic_sql` | module + sequence | Dynamic execution whose target cannot be proven |
 
 ### Edge Types

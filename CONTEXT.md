@@ -69,6 +69,10 @@ _Avoid_: cached results, invocation cache, precomputed paths
 A typed static graph of stored procedures, views, functions, tables, calls, and DML operations produced from SQL AST analysis. It is the sole source of SQL relationship and flow evidence.
 _Avoid_: dependencies, depends_on, depended_by
 
+**Read Operation**:
+A `SELECT` operation that the analyzer host makes for a read that sits outside a SELECT statement: a subquery or a function call in a SET, DECLARE, RETURN, or PRINT statement, or in an IF or WHILE predicate. The graph stores it as a `dml_operation` node of type `SELECT`, even though its statement is not DML. A statement that refers to no table, view, or function gives none. See [ADR-0041](docs/adr/0041-a-read-in-a-non-dml-statement-gives-a-select-operation.md).
+_Avoid_: condition read, predicate operation, CONDITION_READ
+
 **SQL Text Analysis**:
 The one operation that gives the analyzer host's SQL answer for a sequence of SQL texts. The `code_analyzer/sql_text_analysis.py` module holds it. It returns one typed result for each text, in input order. A result holds the operations of the text and the parse errors of the text. A typed operation holds every field that the host reports, and each object reference has the four parts of the Canonical Object Identity.
 
@@ -94,7 +98,7 @@ The one stored procedure that owns a `#name` temp table. The SQL Execution Graph
 _Avoid_: session table, shared temp node
 
 **Temp Table Shadowing**:
-The state of a module that always creates its own `#name` temp table, because it has a `SELECT ... INTO #name` in no branch. Its table is a different table from the caller's `#name`. A `CREATE TABLE #name` does not give shadowing, because the analyzer does not report it. See [ADR-0043](docs/adr/0043-a-select-into-temp-table-shadows-the-callers-temp-table.md).
+The state of a module that always creates its own `#name` temp table, because it has an unconditional `SELECT ... INTO #name`, one with an empty branch path. Its table is a different table from the caller's `#name`. A `CREATE TABLE #name` does not give shadowing, because the analyzer does not detect it. See [ADR-0043](docs/adr/0043-a-select-into-temp-table-shadows-the-callers-temp-table.md).
 _Avoid_: hidden temp table, owning create
 
 ## C# Data Access Analysis

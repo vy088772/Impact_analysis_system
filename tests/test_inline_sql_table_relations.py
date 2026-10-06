@@ -366,6 +366,15 @@ def test_a_relation_loads_through_an_unpickler_that_admits_only_the_two_classes_
 
 
 @requires_dotnet
+def test_an_inline_text_with_only_a_predicate_read_gives_the_parsed_relation_and_no_regular_expression_one(
+    tmp_path,
+) -> None:
+    scan = _scan_with_real_host(tmp_path, "IF EXISTS (SELECT 1 FROM dbo.Gate WHERE Id = @id) PRINT 'x'")
+
+    assert _relations_of(scan.table_relations) == {("Gate", "SELECT", "inline_sql_parsed")}
+
+
+@requires_dotnet
 def test_an_inline_if_exists_predicate_gives_a_select_relation_with_the_real_host(tmp_path) -> None:
     scan = _scan_with_real_host(
         tmp_path, "IF EXISTS (SELECT 1 FROM dbo.Gate WHERE Id = @id) UPDATE dbo.Orders SET Flag = 1"

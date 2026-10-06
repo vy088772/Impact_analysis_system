@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from canonical_object_identity import ObjectName
+from canonical_object_identity import ObjectName, parse
 from code_analyzer import static_analyzer_host
 from code_analyzer.static_analyzer_host import (
     CONTRACT_VERSION,
@@ -33,7 +33,7 @@ from code_analyzer.sql_text_analysis import (
     SqlSourceLocation,
     SqlTextAnalysisError,
 )
-from service import sql_cache_store
+from service import sql_cache_store, sql_execution_graph
 from service.sql_execution_graph import GRAPH_VERSION, build_sql_execution_graph
 from tests.sql_cache_fixtures import (
     CacheRoot,
@@ -1823,3 +1823,22 @@ def test_a_module_that_never_names_the_temp_table_does_not_hide_a_shadowing_call
 
     assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_B:2") == {"table:dbo.TB"}
     assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:3") == {"table:dbo.TA"}
+
+
+@pytest.mark.parametrize(
+    ("target", "schema", "name"),
+    [
+        (ObjectName("", "master", "", "xp_cmdshell"), "", "xp_cmdshell"),
+        (ObjectName("", "Other", "dbo", "usp_Run"), "dbo", "usp_Run"),
+        (ObjectName("srv", "Other", "dbo", "usp_Run"), "dbo", "usp_Run"),
+    ],
+    ids=["empty-schema", "database", "linked-server"],
+)
+def test_another_database_procedure_id_reads_back_through_parse(target: ObjectName, schema: str, name: str) -> None:
+    """`tools/rebuild_report.py` reads this id with `parse`, so the two must agree."""
+    written = sql_execution_graph._another_database_procedure_id(target).partition(":")[2]
+
+    read = parse(written)
+
+    assert (read.schema, read.name) == (schema, name)
+    assert (read.server, read.database) == (target.server, target.database)
