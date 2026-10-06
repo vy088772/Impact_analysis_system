@@ -115,7 +115,7 @@ internal sealed class SqlOperationExtractor
         // it reads that object as a SELECT statement does: SET, DECLARE, RETURN, PRINT, and
         // each other non-DML statement. A statement that holds statements, such as a block,
         // gives its operations through those statements.
-        if (fragment is TSqlStatement && !Descendants(fragment).Skip(1).Any(child => child is TSqlStatement))
+        if (fragment is TSqlStatement && !HoldsStatement(fragment))
         {
             var candidate = CreateNonDmlCandidate(fragment, branchPath);
             if (candidate is not null)
@@ -126,6 +126,10 @@ internal sealed class SqlOperationExtractor
         foreach (var child in ChildFragments(fragment).OrderBy(child => child.StartOffset))
             Visit(child, module, branchPath, candidates);
     }
+
+    // Descendants yields the fragment itself first, so Skip(1) leaves it out.
+    private bool HoldsStatement(TSqlFragment fragment)
+        => Descendants(fragment).Skip(1).Any(child => child is TSqlStatement);
 
     // The operation reads the tables, columns, and functions of the whole statement with the
     // collectors of a SELECT statement, so the CTE rule and the table-variable rule are the same.

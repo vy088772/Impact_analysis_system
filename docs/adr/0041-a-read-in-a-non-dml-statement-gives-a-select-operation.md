@@ -17,6 +17,7 @@ A non-DML statement that refers to at least one table, view, or user-defined fun
 - The operation has the operation type `SELECT`. The graph stores it as a `dml_operation` node.
 - The operation collects the tables, columns, and function references of the whole statement with the collectors of a SELECT statement. So Schema Resolution, the CTE rule, and the table-variable rule apply without change.
 - One statement gives one operation, even when it holds two subqueries.
+- The rule also applies to a DDL statement that refers to an object, for example a CHECK constraint that calls a function.
 - A statement that refers to no object, for example `SET @x = GETDATE()`, gives no operation.
 - The source location covers the full statement. The branch path is the branch path outside the statement.
 - A statement that holds other statements, such as a block, gives its operations through those statements.

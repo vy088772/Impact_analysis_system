@@ -1057,7 +1057,6 @@ def test_a_set_with_a_subquery_gives_one_select_operation_that_reads_its_table()
             "RETURN (SELECT MAX(id) FROM dbo.T); END",
         ),
         ("CREATE PROCEDURE dbo.usp_A AS\n", "PRINT (SELECT MAX(id) FROM dbo.T);"),
-        ("CREATE PROCEDURE dbo.usp_A AS\n", "SET @x = (SELECT MAX(id) FROM dbo.T);"),
     ],
 )
 def test_a_non_dml_statement_with_a_subquery_gives_one_select_operation(
@@ -1094,7 +1093,7 @@ def test_a_non_dml_statement_that_refers_to_no_object_gives_no_operation(stateme
     assert _module_operations(statement) == []
 
 
-def test_a_cte_name_and_a_table_variable_in_a_non_dml_statement_give_no_table_read() -> None:
+def test_a_table_variable_in_a_non_dml_statement_gives_no_table_read() -> None:
     (operation,) = _module_operations(
         "DECLARE @t TABLE (id int);\n"
         "SET @n = (SELECT COUNT(*) FROM dbo.Real r WHERE r.id IN (SELECT id FROM @t));"
