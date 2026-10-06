@@ -77,3 +77,40 @@ def test_return_type_text_is_recorded_whole(tmp_path):
 def test_statement_is_not_a_method(tmp_path, statement):
     methods = _methods(tmp_path, "public void Run()", body=statement)
     assert set(methods) == {"Run"}
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["return Foo<T>(x);", "await Bar<T>(x);", "var r = Task.Run<int>(f);", "yield return Foo(x);"],
+)
+def test_generic_call_statement_is_not_a_method(tmp_path, statement):
+    methods = _methods(tmp_path, "public void Run()", body=statement)
+    assert set(methods) == {"Run"}
+
+
+@pytest.mark.parametrize(
+    "declaration, action",
+    [
+        ("public async Task<(bool Success, string Message)> Save()", "Save"),
+        ("public async Task<JobDuty?> Load()", "Load"),
+        ("public async Task <IActionResult> ImportData()", "ImportData"),
+    ],
+)
+def test_http_action_shape_reaches_the_endpoint_list(tmp_path, declaration, action):
+    source = (
+        "namespace Rt.Controllers\n"
+        "{\n"
+        "    public class SampleController : Controller\n"
+        "    {\n"
+        "        [HttpPost]\n"
+        f"        {declaration}\n"
+        "        {\n"
+        "            return null;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    path = tmp_path / "SampleController.cs"
+    path.write_text(source, encoding="utf-8")
+    result = CSharpParser().parse_file(str(path))
+    assert [e.action for e in result.api_endpoints] == [action]
