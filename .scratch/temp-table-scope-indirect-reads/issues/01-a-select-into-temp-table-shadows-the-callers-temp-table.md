@@ -55,15 +55,15 @@ The rule applies to each name separately. A `SELECT_INTO` with a non-empty `bran
 - The comments that state "the expansion does not detect shadowing" must state the new rule.
 
 **Acceptance criteria:**
-- [ ] Caller A writes `#x` from table `TA` and calls B. B has `SELECT ... INTO #x FROM TB` in no branch and reads `#x`. B's read of `#x` gives a lineage read of `TB` and no lineage read of `TA`.
-- [ ] In the same graph, A's read of `#x` gives a lineage read of `TA` and no lineage read of `TB`.
-- [ ] B has the `SELECT ... INTO #x` only inside an IF branch. B's read of `#x` gives lineage reads of both `TA` and `TB`, as today.
-- [ ] A calls B and B calls C. B shadows `#x`, and C reads `#x` without a writer of its own. C's read gives a lineage read of B's base table and no lineage read of A's base table.
-- [ ] B shadows `#x` but not `#y`. A read of `#y` in B still resolves through A's writers of `#y`.
-- [ ] A `##x` global temp table resolves as today.
-- [ ] Every existing temp table lineage test passes without a change to its expected result. A test that asserts a shadowing over-report on purpose changes to the new rule, and the commit names it.
-- [ ] After a rebuild of the PUR cache, the graph has no `reads` relationship from an operation of `dbo.usp_CDCU_RMPriceCount_Delete` to `table:dbo.MaterialType`. Its op 2–5 keep a lineage read of `function:dbo.fun_GetStatusForRMCD`.
-- [ ] The SQL cache load rejects a stored v13 graph as not valid.
+- [x] Caller A writes `#x` from table `TA` and calls B. B has `SELECT ... INTO #x FROM TB` in no branch and reads `#x`. B's read of `#x` gives a lineage read of `TB` and no lineage read of `TA`.
+- [x] In the same graph, A's read of `#x` gives a lineage read of `TA` and no lineage read of `TB`.
+- [x] B has the `SELECT ... INTO #x` only inside an IF branch. B's read of `#x` gives lineage reads of both `TA` and `TB`, as today.
+- [x] A calls B and B calls C. B shadows `#x`, and C reads `#x` without a writer of its own. C's read gives a lineage read of B's base table and no lineage read of A's base table.
+- [x] B shadows `#x` but not `#y`. A read of `#y` in B still resolves through A's writers of `#y`.
+- [x] A `##x` global temp table resolves as today.
+- [x] Every existing temp table lineage test passes without a change to its expected result. A test that asserts a shadowing over-report on purpose changes to the new rule, and the commit names it.
+- [x] After a rebuild of the PUR cache, the graph has no `reads` relationship from an operation of `dbo.usp_CDCU_RMPriceCount_Delete` to `table:dbo.MaterialType`. Its op 2–5 keep a lineage read of `function:dbo.fun_GetStatusForRMCD`.
+- [x] The SQL cache load rejects a stored v13 graph as not valid.
 
 **Out of scope:**
 - A report of `CREATE TABLE #name` by the analyzer (issue 02).
