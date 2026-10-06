@@ -1223,3 +1223,52 @@ def test_one_predicate_with_two_subqueries_gives_one_operation() -> None:
 
 def test_an_if_predicate_that_refers_to_no_object_gives_no_operation() -> None:
     assert _module_operations("IF @a = 1 PRINT 'x';") == []
+
+
+def test_an_else_body_keeps_its_branch_path_and_the_predicate_read_stays_outside_it() -> None:
+    operations = _module_operations(
+        "IF EXISTS (SELECT 1 FROM dbo.A) UPDATE dbo.T SET a = 1; ELSE UPDATE dbo.U SET a = 2;"
+    )
+
+    assert [operation["operation_type"] for operation in operations] == ["SELECT", "UPDATE", "UPDATE"]
+    assert operations[0]["branch_path"] == []
+    assert operations[1]["branch_path"][0].startswith("IF ")
+    assert operations[2]["branch_path"][0].startswith("ELSE (NOT (")
+
+
+def test_a_predicate_read_of_an_else_if_carries_the_else_entry_of_the_outer_if_only() -> None:
+    operations = _module_operations(
+        "IF @a = 1 PRINT 'x'; ELSE IF EXISTS (SELECT 1 FROM dbo.A) PRINT 'y';"
+    )
+
+    (operation,) = operations
+    assert operation["branch_path"] == ["ELSE (NOT (@a = 1))"]
+
+
+@pytest.mark.parametrize(
+    ("predicate_text", "predicate_sql"),
+    [
+        ("NOT EXISTS (SELECT 1 FROM dbo.A)", "IF NOT EXISTS (SELECT 1 FROM dbo.A) PRINT 'x';"),
+        ("EXISTS (SELECT 1 FROM dbo.A)", "IF /* gate */ EXISTS (SELECT 1 FROM dbo.A) PRINT 'x';"),
+        (
+            "EXISTS (SELECT 1\n    FROM dbo.A)",
+            "IF EXISTS (SELECT 1\n    FROM dbo.A) PRINT 'x';",
+        ),
+        ("WHILE_PLACEHOLDER", "WHILE EXISTS (SELECT 1 FROM dbo.A) PRINT 'x';"),
+    ],
+)
+def test_the_location_of_a_predicate_read_starts_at_the_first_token_after_the_keyword(
+    predicate_text: str, predicate_sql: str
+) -> None:
+    sql = f"CREATE PROCEDURE dbo.usp_Loc AS\n{predicate_sql}\n"
+    if predicate_text == "WHILE_PLACEHOLDER":
+        predicate_text = "EXISTS (SELECT 1 FROM dbo.A)"
+    (operation,) = _analyze_sql_text(sql)["operations"]
+
+    location = operation["source"]
+    start = location["start_offset"]
+    assert sql[start:start + location["length"]] == predicate_text
+    keyword_line = sql.splitlines()[1]
+    assert location["start_line"] == 2
+    assert location["start_column"] == keyword_line.index(predicate_text.split("\n")[0]) + 1
+    assert location["end_line"] == 2 + predicate_text.count("\n")
