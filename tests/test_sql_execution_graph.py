@@ -167,11 +167,12 @@ def test_sql_cache_rejects_stale_graph_version() -> None:
     """A cache built under any earlier graph version must be rejected.
 
     GRAPH_VERSION rises whenever the graph payload changes what a reader
-    concludes -- most recently to 12, when a read inside a non-DML statement
-    began to give a SELECT operation (sql-graph-consistency, ticket 01), so a
-    v11 graph, which omits that read, fails this check until it is rebuilt.
+    concludes -- most recently to 13, when a call to another Database began to
+    keep that Database in its target id (database-qualified-call-target,
+    ticket 01), so a v12 graph, which can follow such a call into a local
+    module, fails this check until it is rebuilt.
     """
-    assert GRAPH_VERSION == 12
+    assert GRAPH_VERSION == 13
 
     with CacheRoot() as cache_root:
         _write_sql_cache_fixture(
@@ -386,7 +387,13 @@ END;
 
     graph = build_sql_execution_graph(data)
 
-    assert_relationships_resolve_to_known_nodes(graph)
+    # The call to `PUR` keeps its Database in its target id, so no local node answers it.
+    local_relationships = [
+        relationship
+        for relationship in graph["relationships"]
+        if relationship["target"] != "stored_procedure:PUR.COMMON.usp_Child"
+    ]
+    assert_relationships_resolve_to_known_nodes({**graph, "relationships": local_relationships})
     stated = {
         (relationship["type"], relationship["target"], relationship.get("server"), relationship.get("database"))
         for relationship in graph["relationships"]
@@ -397,7 +404,7 @@ END;
         ("reads", "table:dbo.Users", "LNK", "PUR"),
         ("reads", "table:.Users", None, None),
         ("reads", "table:.Orders", None, "PUR"),
-        ("calls", "stored_procedure:COMMON.usp_Child", None, "PUR"),
+        ("calls", "stored_procedure:PUR.COMMON.usp_Child", None, "PUR"),
         ("reads", "table:dbo.Rates", None, None),
     }
     # Two references that name one node from two Databases stay two relationships.
@@ -1446,6 +1453,36 @@ def test_a_call_that_states_a_database_is_not_rewritten_to_sys() -> None:
     graph = _call_graph("COMMON.usp_Caller", "master..sp_who")
 
     assert {source for _, source in _targets(graph, "calls")} == {"unresolved"}
+
+
+def test_a_call_to_another_database_keeps_that_database_in_its_target_id() -> None:
+    """database-qualified-call-target ticket 01: `B.COMMON.P` is not the `COMMON.P` that the cache lists."""
+    graph = _call_graph("dbo.usp_Caller", "B.COMMON.P", listed={"COMMON.P": {}})
+
+    assert _targets(graph, "calls") == {("stored_procedure:B.COMMON.P", "written")}
+
+
+def test_a_db_dot_dot_call_keeps_its_database_and_its_empty_schema() -> None:
+    graph = _call_graph("dbo.usp_Caller", "master..xp_cmdshell")
+
+    assert _targets(graph, "calls") == {("stored_procedure:master..xp_cmdshell", "unresolved")}
+
+
+def test_a_call_that_states_the_cache_database_keeps_the_local_id() -> None:
+    """The Database comparison ignores case: `pur` is the `PUR` cache's own Database."""
+    graph = _call_graph("dbo.usp_Caller", "pur.dbo.P", listed={"dbo.P": {}})
+    graph_without_schema = _call_graph("dbo.usp_Caller", "PUR..P", listed={"dbo.P": {}})
+
+    assert _targets(graph, "calls") == {("stored_procedure:dbo.P", "written")}
+    assert _targets(graph_without_schema, "calls") == {("stored_procedure:.P", "unresolved")}
+
+
+def test_a_call_through_a_linked_server_keeps_the_server_and_the_database_in_its_target_id() -> None:
+    graph = _call_graph("dbo.usp_Caller", "LNK.B.dbo.P", listed={"dbo.P": {}})
+    same_database_name = _call_graph("dbo.usp_Caller", "LNK.PUR.dbo.P", listed={"dbo.P": {}})
+
+    assert _targets(graph, "calls") == {("stored_procedure:LNK.B.dbo.P", "written")}
+    assert _targets(same_database_name, "calls") == {("stored_procedure:LNK.PUR.dbo.P", "written")}
 
 
 def _resolution_graph(

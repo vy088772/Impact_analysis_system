@@ -79,7 +79,13 @@ from .table_match import names_another_database
 # it (sql-graph-consistency, ticket 01, ADR-0041). A v11 graph has no operation
 # for such a statement, so a procedure that reads a table only inside one is
 # absent from the read answer for that table; it is rejected until rebuilt.
-GRAPH_VERSION = 12
+# v13: a call to another Database or through a linked server gets a target id
+# that keeps the server and the Database it states, for example
+# `stored_procedure:master..xp_cmdshell` (database-qualified-call-target,
+# ticket 01, ADR-0042). A v12 graph can give such a call the id of a listed
+# module of the cache, so the Execution Path follows the local definition as
+# evidence for a call to another Database; it is rejected until rebuilt.
+GRAPH_VERSION = 13
 NodeKey = tuple[str, str, str, str]
 
 
@@ -567,6 +573,7 @@ class _CallTarget:
     target: ObjectName
     schema_source: str
     # The id of the module node, or the id of the resolved name when no module node answers.
+    # A call to another Database or through a linked server keeps its written parts in the id.
     node_id: str
     names_module_node: bool
 
@@ -578,22 +585,35 @@ def _call_target(
 
     This is the one site that holds the call target rule (ADR-0036, ADR-0037).
     A call through a linked server or to another Database is resolved by no
-    listing of this cache, so it keeps what it states and has no module node. A
-    call to a module that this cache does not list has no module node either. A
-    listed module with no definition is a node.
+    listing of this cache, so it keeps what it states and has no module node.
+    Its id keeps the server and the Database it states, so it never equals the
+    id of a listed module of this cache. A call to a module that this cache does
+    not list has no module node either. A listed module with no definition is a
+    node.
     """
-    module = None
     if target.server or names_another_database(target.database, cache_database):
         schema_source = schema_resolution.recorded_source("", target.schema)
-    else:
-        target, schema_source = _with_resolved_schema(
-            node_by_key, target, module_schema, schema_resolution.resolve_call
-        )
-        # An empty schema matches no listed node, because a listed node always carries a schema.
-        if target.schema:
-            module = node_by_key.get(_node_key("stored_procedure", target.schema, target.name))
+        return _CallTarget(target, str(schema_source), _another_database_procedure_id(target), False)
+    target, schema_source = _with_resolved_schema(
+        node_by_key, target, module_schema, schema_resolution.resolve_call
+    )
+    module = None
+    # An empty schema matches no listed node, because a listed node always carries a schema.
+    if target.schema:
+        module = node_by_key.get(_node_key("stored_procedure", target.schema, target.name))
     node_id = str(module["id"]) if module is not None else _node_id("stored_procedure", target.schema, target.name)
     return _CallTarget(target, str(schema_source), node_id, module is not None)
+
+
+def _another_database_procedure_id(target: ObjectName) -> str:
+    """The id of a procedure in another Database or on a linked server: its written parts, as SQL writes them.
+
+    It keeps an empty part, so `master..xp_cmdshell` keeps its empty schema. A
+    call through a linked server keeps four parts, so two servers that hold one
+    Database name give two ids.
+    """
+    database = f"{target.server}.{target.database}" if target.server else target.database
+    return _node_id("stored_procedure", f"{database}.{target.schema}", target.name)
 
 
 def _with_resolved_schema(

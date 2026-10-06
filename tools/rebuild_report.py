@@ -99,7 +99,8 @@ def _references(graph: Dict[str, Any], nodes: Dict[str, Dict[str, Any]]) -> Iter
         if node is not None:
             schema, name = str(node.get("schema") or ""), str(node.get("name") or "")
         else:
-            # 一個沒有節點的呼叫目標（未列出的程序）：id 形如 `stored_procedure:schema.name`。
+            # 一個沒有節點的呼叫目標（未列出的程序）：id 形如 `stored_procedure:schema.name`；
+            # 呼叫另一個 Database 時形如 `stored_procedure:[server.]database.schema.name`，parse 一樣讀得出 schema 和 name。
             written = parse(target_id.partition(":")[2])
             schema, name = written.schema, written.name
         yield _Reference(relationship, target_id, schema, name)

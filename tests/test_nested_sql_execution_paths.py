@@ -353,3 +353,48 @@ def test_the_exec_of_an_insert_exec_statement_gives_one_call_and_one_execution_p
     through_call = [path for path in paths if path["sp_chain"] == ["dbo.usp_Fill", "dbo.usp_X"]]
     assert len(through_call) == 1
     assert through_call[0]["terminal_operation"] == "SELECT"
+
+
+def test_a_call_to_another_database_never_follows_the_local_procedure_of_that_name() -> None:
+    """database-qualified-call-target ticket 01: the cache of `A` holds no definition of `B.COMMON.P`."""
+    graph = build_sql_execution_graph(
+        cache_payload(
+            "A",
+            procedures={
+                "dbo.usp_Caller": {
+                    "definition": """CREATE PROCEDURE dbo.usp_Caller
+AS
+BEGIN
+    EXEC B.COMMON.P;
+END;
+""",
+                },
+                "COMMON.P": {
+                    "definition": """CREATE PROCEDURE COMMON.P
+AS
+BEGIN
+    UPDATE dbo.OrderItem SET Status = 1;
+END;
+""",
+                },
+            },
+            tables=["dbo.OrderItem"],
+        )
+    )
+    invocation = DbInvocation(
+        class_name="OrderPage",
+        method_name="Save",
+        database="A",
+        procedure_name="usp_Caller",
+        evidence=InvocationEvidence.PROVEN,
+        source=InvocationSourceSpan("OrderPage.cs", 10, 20),
+        procedure_schema="dbo",
+        method_chain=("Save",),
+    )
+
+    paths = build_execution_paths([invocation], graph)
+
+    assert not [path for path in paths if path["terminal_operation"] == "UPDATE"]
+    assert [(path["unresolved_reason"], path["unresolved_targets"]) for path in paths] == [
+        ("called_procedure_not_in_graph", ["stored_procedure:B.COMMON.P"])
+    ]
