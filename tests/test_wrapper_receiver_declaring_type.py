@@ -298,6 +298,43 @@ public record LocalRecord(Foo _db)
     }
 }
 
+public class FieldWins(Foo _db)
+{
+    private readonly Baz _db;
+
+    public void Run()
+    {
+        _db.Execute("usp_E");
+    }
+}
+
+public class PropertyWins(Foo _db)
+{
+    public Qux _db { get; }
+
+    public void Run()
+    {
+        _db.Execute("usp_F");
+    }
+}
+
+public class LocalWins(Foo _db)
+{
+    public void Run()
+    {
+        Quux _db = new Quux();
+        _db.Execute("usp_G");
+    }
+}
+
+public class ThisAccess(Foo _db)
+{
+    public void Run()
+    {
+        this._db.Execute("usp_H");
+    }
+}
+
 public class Unrelated(Foo _db)
 {
     public void Run()
@@ -328,5 +365,50 @@ def test_primary_constructor_parameter_is_a_syntax_receiver_source() -> None:
     assert receiver_types["usp_A"] == "Foo"  # class primary constructor
     assert receiver_types["usp_B"] == "Bar"  # method parameter wins
     assert receiver_types["usp_C"] == "Foo"  # record primary constructor
+    assert receiver_types["usp_E"] == "Baz"  # field wins
+    assert receiver_types["usp_F"] == "Qux"  # property wins
+    assert receiver_types["usp_G"] == "Quux"  # local variable wins
+    assert not receiver_types["usp_H"]  # `this._db` is not a primary constructor parameter
     assert not receiver_types["a"]  # Path.Combine: no syntax source
     assert not receiver_types["usp_D"]  # `other` is declared nowhere
+
+
+EXTERNAL_BASE_PRIMARY_CONSTRUCTOR_SOURCE = """
+using System.Data;
+using System.Threading.Tasks;
+
+public class LocalContext : SQLDbContext
+{
+}
+
+public class LocalService(LocalContext _context)
+{
+    public Task<DataTable> Query()
+    {
+        return _context.usp_ExecCmdGetDataTableAsync("dbo.usp_Thing_GetList");
+    }
+}
+"""
+
+
+@requires_dotnet
+def test_primary_constructor_receiver_without_a_semantic_model_stays_unresolved_when_the_base_cannot_bind() -> None:
+    """No fixture checkout needed. With no semantic model the host knows `LocalContext` from the
+    primary constructor but cannot bind the inherited method, so it reports no receiver type
+    and the unresolved declaring-type reason, never a guessed base. The re-key to the external
+    base itself is covered by the RTTalentDB fixture test above."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "LocalService.cs"
+        source_path.write_text(EXTERNAL_BASE_PRIMARY_CONSTRUCTOR_SOURCE, encoding="utf-8")
+        result = host.analyze_csharp(source_path)
+
+    call = next(
+        invocation
+        for invocation in result["db_invocations"]
+        if invocation.get("wrapper_method_name") == "usp_ExecCmdGetDataTableAsync"
+    )
+    assert not call.get("wrapper_receiver_type")
+    assert call["wrapper_receiver_type_provenance"] == "declaring_type_unresolved"

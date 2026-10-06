@@ -2751,27 +2751,31 @@ internal static class WrapperAnalyzer
         if (parameter?.Type is not null)
             return parameter.Type.ToString();
 
-        var containingClass = caller.Ancestors()
+        var containingType = caller.Ancestors()
             .OfType<TypeDeclarationSyntax>()
             .FirstOrDefault(type => type is ClassDeclarationSyntax or RecordDeclarationSyntax);
-        if (containingClass is null)
+        if (containingType is null)
             return null;
 
-        var field = containingClass.DescendantNodes()
+        var field = containingType.DescendantNodes()
             .OfType<FieldDeclarationSyntax>()
             .FirstOrDefault(item => item.Declaration.Variables.Any(variable => variable.Identifier.Text == receiverName));
         if (field is not null)
             return field.Declaration.Type.ToString();
 
-        var property = containingClass.DescendantNodes()
+        var property = containingType.DescendantNodes()
             .OfType<PropertyDeclarationSyntax>()
             .FirstOrDefault(item => item.Identifier.Text == receiverName);
         if (property is not null)
             return property.Type.ToString();
 
         // A C# 12 primary constructor parameter is the same kind of declaration as a field.
-        // It comes last: a member with the same name wins, as in C# name lookup.
-        return containingClass.ParameterList?.Parameters
+        // It comes last: a member with the same name wins, as in C# name lookup. It is not a
+        // member, so `this.name` never names it.
+        if (member.Expression is not IdentifierNameSyntax)
+            return null;
+
+        return containingType.ParameterList?.Parameters
             .FirstOrDefault(item => item.Identifier.Text == receiverName)
             ?.Type?.ToString();
     }

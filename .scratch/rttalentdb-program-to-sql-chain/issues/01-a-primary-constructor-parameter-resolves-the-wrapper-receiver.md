@@ -19,7 +19,7 @@ receiver type keep their meaning.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** done (pending code review)
+**Status:** done
 
 - [x] A wrapper call whose receiver is a primary constructor parameter of the
       containing class reports `wrapper_receiver_type` equal to the declaring
@@ -103,3 +103,14 @@ while it lives in SysErrorRecord.
 - Other `SQLDbContext` systems, scan-level before/after (receiver-keyed calls equal total):
   IQCS 262/262, ETR 1/1, EnterpriseApi 118/118, EnterpriseApp 80/80. No change.
 - Scan caches of these five systems were rebuilt locally by the measurement.
+
+**Code review follow-up (2026-10-06):**
+
+- Renamed `containingClass` to `containingType` (it also holds a record).
+- `this.name` no longer resolves to a primary constructor parameter, which is not a member.
+- Added tests: field, property and local variable each win over the primary constructor
+  parameter; `this._db` gets no type; an unbindable external base stays
+  `declaring_type_unresolved` without the RTTalentDB checkout.
+- Not covered: a synthetic test of the re-key to an external base needs a compiled reference
+  assembly. Only the RTTalentDB fixture test covers it, and it skips without the checkout.
+- `find_by_sp` was checked on the rated invocations, not through the endpoint.
