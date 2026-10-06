@@ -1682,20 +1682,25 @@ def test_a_lineage_read_takes_the_schema_source_of_its_own_chain() -> None:
     ]
 
 
-def _select_into(base_table: str, temp_table: str = "#x", *, sequence: int = 1, branch_path: tuple = ()) -> dict:
+def _select_into(
+    base_table: str, temp_table: str = "#x", *, sequence: int = 1, branch_path: tuple[str, ...] = ()
+) -> dict:
+    """One `SELECT ... INTO` that creates a temp table from a base table."""
     return analyzer_operation(
         "SELECT_INTO", sequence=sequence, reads=[base_table], writes=[temp_table], branch_path=branch_path
     )
 
 
 def _shadow_graph(procedures: dict[str, list[dict]]) -> dict:
+    """Build the graph of the given procedures and check that every relationship resolves."""
     data, sql_text_analysis = stubbed_procedures("PUR", procedures)
     graph = build_sql_execution_graph(data, sql_text_analysis=sql_text_analysis)
     assert_relationships_resolve_to_known_nodes(graph)
     return graph
 
 
-def _caller_of_b(temp_table: str = "#x") -> list[dict]:
+def _procedure_a_that_calls_b(temp_table: str = "#x") -> list[dict]:
+    """Procedure A: fills a temp table from TA, calls B, then reads the temp table."""
     return [
         analyzer_operation("INSERT", sequence=1, reads=["dbo.TA"], writes=[temp_table]),
         analyzer_operation("CALL", sequence=2, calls=["dbo.usp_B"]),
@@ -1707,7 +1712,7 @@ def test_a_select_into_temp_table_stops_the_expansion_in_both_directions() -> No
     """A writes `#x` from TA and calls B. B creates its own `#x` with SELECT INTO from TB."""
     graph = _shadow_graph(
         {
-            "dbo.usp_A": _caller_of_b(),
+            "dbo.usp_A": _procedure_a_that_calls_b(),
             "dbo.usp_B": [_select_into("dbo.TB"), analyzer_operation("SELECT", sequence=2, reads=["#x"])],
         }
     )
@@ -1717,9 +1722,10 @@ def test_a_select_into_temp_table_stops_the_expansion_in_both_directions() -> No
 
 
 def test_a_select_into_inside_a_branch_does_not_shadow() -> None:
+    """B has the `SELECT INTO #x` only in an IF branch, so B still reads the caller's `#x`."""
     graph = _shadow_graph(
         {
-            "dbo.usp_A": _caller_of_b(),
+            "dbo.usp_A": _procedure_a_that_calls_b(),
             "dbo.usp_B": [
                 _select_into("dbo.TB", branch_path=("IF",)),
                 analyzer_operation("SELECT", sequence=2, reads=["#x"]),
@@ -1762,6 +1768,7 @@ def test_a_shadowed_name_does_not_change_another_temp_table_name() -> None:
 
 
 def test_a_global_temp_table_is_not_shadowed() -> None:
+    """`##x` is one table for the database, so a `SELECT INTO ##x` shadows nothing."""
     graph = _shadow_graph(
         {
             "dbo.usp_A": [analyzer_operation("INSERT", sequence=1, reads=["dbo.TA"], writes=["##x"])],
@@ -1770,3 +1777,49 @@ def test_a_global_temp_table_is_not_shadowed() -> None:
     )
 
     assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_B:2") == {"table:dbo.TA", "table:dbo.TB"}
+
+
+def test_a_callee_read_goes_up_into_a_shadowing_caller() -> None:
+    """A creates its own `#x` with SELECT INTO from TA and calls B. B reads `#x` with no writer of its own."""
+    graph = _shadow_graph(
+        {
+            "dbo.usp_A": [_select_into("dbo.TA"), analyzer_operation("CALL", sequence=2, calls=["dbo.usp_B"])],
+            "dbo.usp_B": [analyzer_operation("SELECT", sequence=1, reads=["#x"])],
+        }
+    )
+
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_B:1") == {"table:dbo.TA"}
+
+
+def test_a_shadowing_module_read_goes_down_into_its_callee() -> None:
+    """A creates its own `#x` from TA, calls B, and reads `#x`. B fills `#x` from TB."""
+    graph = _shadow_graph(
+        {
+            "dbo.usp_A": [
+                _select_into("dbo.TA"),
+                analyzer_operation("CALL", sequence=2, calls=["dbo.usp_B"]),
+                analyzer_operation("SELECT", sequence=3, reads=["#x"]),
+            ],
+            "dbo.usp_B": [analyzer_operation("INSERT", sequence=1, reads=["dbo.TB"], writes=["#x"])],
+        }
+    )
+
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:3") == {"table:dbo.TA", "table:dbo.TB"}
+
+
+def test_a_module_that_never_names_the_temp_table_does_not_hide_a_shadowing_callee() -> None:
+    """A calls M and M calls B. M has no node for `#x`. B shadows `#x`, so B reads its own table and not A's."""
+    graph = _shadow_graph(
+        {
+            "dbo.usp_A": [
+                analyzer_operation("INSERT", sequence=1, reads=["dbo.TA"], writes=["#x"]),
+                analyzer_operation("CALL", sequence=2, calls=["dbo.usp_M"]),
+                analyzer_operation("SELECT", sequence=3, reads=["#x"]),
+            ],
+            "dbo.usp_M": [analyzer_operation("CALL", sequence=1, calls=["dbo.usp_B"])],
+            "dbo.usp_B": [_select_into("dbo.TB"), analyzer_operation("SELECT", sequence=2, reads=["#x"])],
+        }
+    )
+
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_B:2") == {"table:dbo.TB"}
+    assert _lineage_targets(graph, "dml_operation:stored_procedure:dbo.usp_A:3") == {"table:dbo.TA"}

@@ -232,6 +232,31 @@ _NO_DIRECTION, _UP, _DOWN = "none", "up", "down"
 # key, and the direction of the calls that led to it.
 _State = tuple[str, tuple[str, str], str]
 _Chain = tuple[str, ...]
+# A temp table name in one module: the module id and the name key.
+_ScopedName = tuple[str, tuple[str, str]]
+
+
+def _temp_name_key(node: dict[str, Any]) -> tuple[str, str]:
+    return str(node.get("schema") or "").casefold(), str(node.get("name") or "").casefold()
+
+
+def _shadowing_modules(
+    node_by_id: dict[str, dict[str, Any]], writers_by_table: dict[str, set[str]]
+) -> set[_ScopedName]:
+    """The temp table names that a module shadows (ADR-0043).
+
+    A module shadows a name when a `SELECT_INTO` in no branch writes its node.
+    """
+    shadowing: set[_ScopedName] = set()
+    for table_id, writer_ids in writers_by_table.items():
+        table_node = node_by_id.get(table_id, {})
+        if table_node.get("scope_module_id") and any(
+            node_by_id.get(writer_id, {}).get("operation_type") == "SELECT_INTO"
+            and not node_by_id[writer_id].get("branch_path")
+            for writer_id in writer_ids
+        ):
+            shadowing.add((str(table_node["scope_module_id"]), _temp_name_key(table_node)))
+    return shadowing
 
 
 def _expand_temp_table_lineage(
@@ -247,9 +272,9 @@ def _expand_temp_table_lineage(
     can only go down again. A module has Temp Table Shadowing for a name when an
     unconditional `SELECT_INTO` writes it (ADR-0043). A resolution does not go
     up out of that module and does not go down into it. `CREATE TABLE` is not
-    detected, so the expansion takes the union of the visible writers there. A worklist fixed point computes the base
-    tables of each state once, so the cost grows with the graph, not with the
-    number of paths through it.
+    detected, so the expansion takes the union of the visible writers there. A
+    worklist fixed point computes the base tables of each state once, so the
+    cost grows with the graph, not with the number of paths through it.
     """
     node_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
     reads_by_operation: dict[str, list[dict[str, Any]]] = {}
@@ -272,32 +297,19 @@ def _expand_temp_table_lineage(
     def is_temp_table(node_id: str) -> bool:
         return str(node_by_id.get(node_id, {}).get("name") or "").startswith("#")
 
-    def name_key(node: dict[str, Any]) -> tuple[str, str]:
-        return str(node.get("schema") or "").casefold(), str(node.get("name") or "").casefold()
-
     # A module that never names a temp table has no node for it, but the
     # temp table stays visible through that module.
-    node_of_scope: dict[tuple[str, tuple[str, str]], str] = {}
+    node_of_scope: dict[_ScopedName, str] = {}
     for node in nodes:
         if node.get("scope_module_id"):
-            node_of_scope[(str(node["scope_module_id"]), name_key(node))] = str(node["id"])
+            node_of_scope[(str(node["scope_module_id"]), _temp_name_key(node))] = str(node["id"])
 
-    # A module shadows a name when an unconditional SELECT_INTO writes its node.
-    shadowing: set[tuple[str, tuple[str, str]]] = set()
-    for table_id, writer_ids in writers_by_table.items():
-        table_node = node_by_id.get(table_id, {})
-        if not table_node.get("scope_module_id"):
-            continue
-        for writer_id in writer_ids:
-            writer = node_by_id.get(writer_id, {})
-            if writer.get("operation_type") == "SELECT_INTO" and not writer.get("branch_path"):
-                shadowing.add((str(table_node["scope_module_id"]), name_key(table_node)))
-                break
+    shadowing = _shadowing_modules(node_by_id, writers_by_table)
 
     def state_of(node_id: str, direction: str) -> _State:
         node = node_by_id[node_id]
         if node.get("scope_module_id"):
-            return str(node["scope_module_id"]), name_key(node), direction
+            return str(node["scope_module_id"]), _temp_name_key(node), direction
         # A global temp table has no scope: its key holds the node id.
         return "", (node_id, ""), _NO_DIRECTION
 
