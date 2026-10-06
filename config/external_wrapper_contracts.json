@@ -758,6 +758,221 @@
       "signature_version": "contract-behavior-v1",
       "status": "accepted"
     },
+    "sqldbcontext-50a129cdf273": {
+      "behavior_signature": {
+        "operations": [
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 2
+            },
+            "branch_rules": [
+              {
+                "mode": "call_site",
+                "sink": "ExecuteReaderAsync"
+              }
+            ],
+            "connection_behavior_boundary": "context_connection",
+            "effective_command_semantics": "call_site",
+            "method_arity": 4,
+            "method_identity": "sqldbcontext.usp_execcmdgetdatasetasync(string,microsoft.data.sqlclient.sqlparameter[],bool,int)",
+            "method_name": "usp_execcmdgetdatasetasync",
+            "operation_identity": "sqldbcontext.usp_execcmdgetdatasetasync(string,microsoft.data.sqlclient.sqlparameter[],bool,int)",
+            "parameter_types": [
+              "string",
+              "microsoft.data.sqlclient.sqlparameter[]",
+              "bool",
+              "int"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteReaderAsync"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 2
+            },
+            "branch_rules": [
+              {
+                "mode": "call_site",
+                "sink": "ExecuteReaderAsync"
+              }
+            ],
+            "connection_behavior_boundary": "context_connection",
+            "effective_command_semantics": "call_site",
+            "method_arity": 4,
+            "method_identity": "sqldbcontext.usp_execcmdgetjsonobjectlistasync(string,microsoft.data.sqlclient.sqlparameter[],bool,int)",
+            "method_name": "usp_execcmdgetjsonobjectlistasync",
+            "operation_identity": "sqldbcontext.usp_execcmdgetjsonobjectlistasync(string,microsoft.data.sqlclient.sqlparameter[],bool,int)",
+            "parameter_types": [
+              "string",
+              "microsoft.data.sqlclient.sqlparameter[]",
+              "bool",
+              "int"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteReaderAsync"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 2
+            },
+            "branch_rules": [
+              {
+                "mode": "call_site",
+                "sink": "ExecuteReaderAsync"
+              }
+            ],
+            "connection_behavior_boundary": "context_connection",
+            "effective_command_semantics": "call_site",
+            "method_arity": 4,
+            "method_identity": "sqldbcontext.usp_execcmdgetjsontotabletlistasync(string,microsoft.data.sqlclient.sqlparameter[],bool,int)",
+            "method_name": "usp_execcmdgetjsontotabletlistasync",
+            "operation_identity": "sqldbcontext.usp_execcmdgetjsontotabletlistasync(string,microsoft.data.sqlclient.sqlparameter[],bool,int)",
+            "parameter_types": [
+              "string",
+              "microsoft.data.sqlclient.sqlparameter[]",
+              "bool",
+              "int"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteReaderAsync"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 2
+            },
+            "branch_rules": [
+              {
+                "mode": "call_site",
+                "sink": "ExecuteSqlInterpolatedAsync"
+              }
+            ],
+            "connection_behavior_boundary": "context_connection",
+            "effective_command_semantics": "call_site",
+            "method_arity": 3,
+            "method_identity": "sqldbcontext.usp_execcmdgetcountasync(string,microsoft.data.sqlclient.sqlparameter[],bool)",
+            "method_name": "usp_execcmdgetcountasync",
+            "operation_identity": "sqldbcontext.usp_execcmdgetcountasync(string,microsoft.data.sqlclient.sqlparameter[],bool)",
+            "parameter_types": [
+              "string",
+              "microsoft.data.sqlclient.sqlparameter[]",
+              "bool"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteSqlInterpolatedAsync"
+          }
+        ],
+        "signature_version": "contract-behavior-v1"
+      },
+      "comparison_report": "comparison-50a129cdf2733e3b41a2c5b91280e9f517273390174bcefb86c0b5061e54099d",
+      "comparison_reports": {
+        "history": [
+          "comparison-50a129cdf2733e3b41a2c5b91280e9f517273390174bcefb86c0b5061e54099d"
+        ],
+        "latest": "comparison-50a129cdf2733e3b41a2c5b91280e9f517273390174bcefb86c0b5061e54099d"
+      },
+      "contract_fingerprint": "50a129cdf2733e3b41a2c5b91280e9f517273390174bcefb86c0b5061e54099d",
+      "delegation_aliases": {
+        "usp_ExecCmdGetDataTableAsync": "usp_ExecCmdGetDataSetAsync",
+        "usp_ExecCmdGetFisrtValueAsync": "usp_ExecCmdGetDataSetAsync",
+        "usp_ExecCmdGetJsonObjectAsync": "usp_ExecCmdGetJsonObjectListAsync"
+      },
+      "evidence_kind": "decompiled_auto",
+      "implementation_snapshots": [
+        {
+          "artifact_identity": "/Users/topmost/yuhsienTseng/Impact_analysis_system/data/repos/System_Dept_1/RTTalentDB/RTTalentDB/bin/CommonLibrary.dll@sha256:6ccea74b84cb2df9b38b2d8d3508cecba520f96befaf50d346cfd3a75d5fb9a2",
+          "assembly_identity": "6ccea74b84cb2df9b38b2d8d3508cecba520f96befaf50d346cfd3a75d5fb9a2",
+          "assembly_revision": "6ccea74b84cb2df9b38b2d8d3508cecba520f96befaf50d346cfd3a75d5fb9a2",
+          "behavior_surface_unit": "SQLDbContext",
+          "snapshot_identity": "71770be96e657a27e24fe8df7189fff7f6c24774a0ede7e3a9f2bdedf340879a"
+        }
+      ],
+      "lifecycle": {
+        "revision": 1,
+        "status": "accepted"
+      },
+      "methods": {
+        "usp_ExecCmdGetCountAsync": {
+          "argument_roles": {
+            "command_text": 0,
+            "command_type": 2
+          },
+          "connection_behavior_boundary": "context_connection",
+          "method_arity": 3,
+          "method_identity": "sqldbcontext.usp_execcmdgetcountasync(string,microsoft.data.sqlclient.sqlparameter[],bool)",
+          "mode": "call_site",
+          "parameter_types": [
+            "string",
+            "microsoft.data.sqlclient.sqlparameter[]",
+            "bool"
+          ],
+          "required_parameter_count": 1,
+          "sink": "ExecuteSqlInterpolatedAsync"
+        },
+        "usp_ExecCmdGetDataSetAsync": {
+          "argument_roles": {
+            "command_text": 0,
+            "command_type": 2
+          },
+          "connection_behavior_boundary": "context_connection",
+          "method_arity": 4,
+          "method_identity": "sqldbcontext.usp_execcmdgetdatasetasync(string,microsoft.data.sqlclient.sqlparameter[],bool,int)",
+          "mode": "call_site",
+          "parameter_types": [
+            "string",
+            "microsoft.data.sqlclient.sqlparameter[]",
+            "bool",
+            "int"
+          ],
+          "required_parameter_count": 1,
+          "sink": "ExecuteReaderAsync"
+        },
+        "usp_ExecCmdGetJsonObjectListAsync": {
+          "argument_roles": {
+            "command_text": 0,
+            "command_type": 2
+          },
+          "connection_behavior_boundary": "context_connection",
+          "method_arity": 4,
+          "method_identity": "sqldbcontext.usp_execcmdgetjsonobjectlistasync(string,microsoft.data.sqlclient.sqlparameter[],bool,int)",
+          "mode": "call_site",
+          "parameter_types": [
+            "string",
+            "microsoft.data.sqlclient.sqlparameter[]",
+            "bool",
+            "int"
+          ],
+          "required_parameter_count": 1,
+          "sink": "ExecuteReaderAsync"
+        },
+        "usp_ExecCmdGetJsonToTabletListAsync": {
+          "argument_roles": {
+            "command_text": 0,
+            "command_type": 2
+          },
+          "connection_behavior_boundary": "context_connection",
+          "method_arity": 4,
+          "method_identity": "sqldbcontext.usp_execcmdgetjsontotabletlistasync(string,microsoft.data.sqlclient.sqlparameter[],bool,int)",
+          "mode": "call_site",
+          "parameter_types": [
+            "string",
+            "microsoft.data.sqlclient.sqlparameter[]",
+            "bool",
+            "int"
+          ],
+          "required_parameter_count": 1,
+          "sink": "ExecuteReaderAsync"
+        }
+      },
+      "receiver_types": [
+        "SQLDbContext"
+      ],
+      "signature_version": "contract-behavior-v1",
+      "status": "accepted"
+    },
     "sqlfunc": {
       "behavior_signature": {
         "operations": [
