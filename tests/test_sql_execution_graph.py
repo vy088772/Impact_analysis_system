@@ -501,6 +501,8 @@ update SOrder set InvFlag=@INVFlag where SysKey=@Syskey
     }
     assert "table:dbo.POrder" in reads
     selects = [node for node in graph["nodes"] if node.get("operation_type") == "SELECT"]
+    # Three SET statements read POrder. The IF predicates and the SET statements
+    # without an object give no operation here (IF predicates follow in ticket 02).
     assert len(selects) == 3
 
 

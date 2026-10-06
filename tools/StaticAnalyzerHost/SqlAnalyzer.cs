@@ -142,9 +142,7 @@ internal sealed class SqlOperationExtractor
         var readColumns = new List<string>();
         var functionReferences = new List<SqlObjectReference>();
         var cteNames = ReadCteNames(fragment);
-        CollectReferences(fragment, readTables, cteNames);
-        CollectColumns(fragment, readColumns);
-        CollectFunctionReferences(fragment, functionReferences);
+        CollectReads(fragment, readTables, readColumns, functionReferences, cteNames);
         if (readTables.Count == 0 && functionReferences.Count == 0)
             return null;
 
@@ -190,13 +188,9 @@ internal sealed class SqlOperationExtractor
             case "SELECT":
             {
                 var queryExpression = GetFragmentProperty(fragment, "QueryExpression");
-                CollectReferences(queryExpression, readTables, cteNames);
-                CollectColumns(queryExpression, readColumns);
-                CollectFunctionReferences(queryExpression, functionReferences);
+                CollectReads(queryExpression, readTables, readColumns, functionReferences, cteNames);
                 var selectCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
-                CollectReferences(selectCtes, readTables, cteNames);
-                CollectColumns(selectCtes, readColumns);
-                CollectFunctionReferences(selectCtes, functionReferences);
+                CollectReads(selectCtes, readTables, readColumns, functionReferences, cteNames);
                 var into = GetFragmentProperty(fragment, "Into");
                 if (into is not null)
                 {
@@ -212,12 +206,8 @@ internal sealed class SqlOperationExtractor
                 AddWriteTarget(GetFragmentProperty(specification, "Target"), null, cteNames, writeTables, unresolvedWriteTargets);
                 CollectColumns(GetPropertyValue(specification, "Columns"), writtenColumns);
                 var source = GetFragmentProperty(specification, "InsertSource");
-                CollectReferences(source, readTables, cteNames);
-                CollectColumns(source, readColumns);
-                CollectFunctionReferences(source, functionReferences);
-                CollectReferences(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), readTables, cteNames);
-                CollectColumns(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), readColumns);
-                CollectFunctionReferences(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), functionReferences);
+                CollectReads(source, readTables, readColumns, functionReferences, cteNames);
+                CollectReads(GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces"), readTables, readColumns, functionReferences, cteNames);
                 break;
             }
             case "UPDATE":
@@ -225,21 +215,13 @@ internal sealed class SqlOperationExtractor
                 var specification = GetFragmentProperty(fragment, "UpdateSpecification");
                 var fromClause = GetFragmentProperty(specification, "FromClause");
                 AddWriteTarget(GetFragmentProperty(specification, "Target"), fromClause, cteNames, writeTables, unresolvedWriteTargets);
-                CollectReferences(fromClause, readTables, cteNames);
-                CollectColumns(fromClause, readColumns);
-                CollectFunctionReferences(fromClause, functionReferences);
+                CollectReads(fromClause, readTables, readColumns, functionReferences, cteNames);
                 var whereClause = GetFragmentProperty(specification, "WhereClause");
                 where = ExtractWhereClause(whereClause);
-                CollectReferences(whereClause, readTables, cteNames);
-                CollectColumns(whereClause, readColumns);
-                CollectFunctionReferences(whereClause, functionReferences);
-                CollectReferences(GetPropertyValue(specification, "SetClauses"), readTables, cteNames);
-                CollectColumns(GetPropertyValue(specification, "SetClauses"), readColumns);
-                CollectFunctionReferences(GetPropertyValue(specification, "SetClauses"), functionReferences);
+                CollectReads(whereClause, readTables, readColumns, functionReferences, cteNames);
+                CollectReads(GetPropertyValue(specification, "SetClauses"), readTables, readColumns, functionReferences, cteNames);
                 var updateCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
-                CollectReferences(updateCtes, readTables, cteNames);
-                CollectColumns(updateCtes, readColumns);
-                CollectFunctionReferences(updateCtes, functionReferences);
+                CollectReads(updateCtes, readTables, readColumns, functionReferences, cteNames);
                 CollectWrittenUpdateColumns(GetPropertyValue(specification, "SetClauses"), writtenColumns);
                 RemoveWrittenTables(readTables, writeTables);
                 break;
@@ -249,18 +231,12 @@ internal sealed class SqlOperationExtractor
                 var specification = GetFragmentProperty(fragment, "DeleteSpecification");
                 var fromClause = GetFragmentProperty(specification, "FromClause");
                 AddWriteTarget(GetFragmentProperty(specification, "Target"), fromClause, cteNames, writeTables, unresolvedWriteTargets);
-                CollectReferences(fromClause, readTables, cteNames);
-                CollectColumns(fromClause, readColumns);
-                CollectFunctionReferences(fromClause, functionReferences);
+                CollectReads(fromClause, readTables, readColumns, functionReferences, cteNames);
                 var whereClause = GetFragmentProperty(specification, "WhereClause");
                 where = ExtractWhereClause(whereClause);
-                CollectReferences(whereClause, readTables, cteNames);
-                CollectColumns(whereClause, readColumns);
-                CollectFunctionReferences(whereClause, functionReferences);
+                CollectReads(whereClause, readTables, readColumns, functionReferences, cteNames);
                 var deleteCtes = GetFragmentProperty(fragment, "WithCtesAndXmlNamespaces");
-                CollectReferences(deleteCtes, readTables, cteNames);
-                CollectColumns(deleteCtes, readColumns);
-                CollectFunctionReferences(deleteCtes, functionReferences);
+                CollectReads(deleteCtes, readTables, readColumns, functionReferences, cteNames);
                 RemoveWrittenTables(readTables, writeTables);
                 break;
             }
@@ -279,9 +255,7 @@ internal sealed class SqlOperationExtractor
                 };
                 foreach (var part in mergeParts)
                 {
-                    CollectReferences(part, readTables, cteNames);
-                    CollectColumns(part, readColumns);
-                    CollectFunctionReferences(part, functionReferences);
+                    CollectReads(part, readTables, readColumns, functionReferences, cteNames);
                 }
                 foreach (var clause in Fragments(GetPropertyValue(specification, "ActionClauses")))
                 {
@@ -462,6 +436,19 @@ internal sealed class SqlOperationExtractor
             .Select(child => ReadIdentifierText(GetPropertyValue(child, "ExpressionName")))
             .Where(name => name.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    // The reads of one part of a statement: its tables, its columns, and its function calls.
+    private void CollectReads(
+        object? part,
+        ICollection<SqlObjectReference> readTables,
+        ICollection<string> readColumns,
+        ICollection<SqlObjectReference> functionReferences,
+        ISet<string> cteNames)
+    {
+        CollectReferences(part, readTables, cteNames);
+        CollectColumns(part, readColumns);
+        CollectFunctionReferences(part, functionReferences);
+    }
 
     private void CollectReferences(
         object? value,

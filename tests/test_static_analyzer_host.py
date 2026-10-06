@@ -1118,3 +1118,34 @@ def test_dml_exec_and_branch_bodies_keep_their_operations_when_a_non_dml_stateme
     )
 
     assert [operation["operation_type"] for operation in operations] == ["SELECT", "SELECT", "CALL"]
+
+
+@pytest.mark.parametrize(
+    ("body", "branch_path"),
+    [
+        ("IF @a = 1 SELECT 1 ELSE SET @n = (SELECT COUNT(*) FROM dbo.T);", ["ELSE (NOT (@a = 1))"]),
+        ("BEGIN TRY SET @n = (SELECT COUNT(*) FROM dbo.T); END TRY BEGIN CATCH SELECT 1; END CATCH", ["TRY"]),
+        ("WHILE @a < 3 BEGIN SET @n = (SELECT COUNT(*) FROM dbo.T); END", ["WHILE @a < 3"]),
+    ],
+)
+def test_a_non_dml_statement_in_a_branch_body_carries_the_branch_path_outside_it(
+    body: str, branch_path: list[str]
+) -> None:
+    (operation,) = [
+        operation
+        for operation in _module_operations(body)
+        if operation["read_tables"] == [_reference("", "", "dbo", "T")]
+    ]
+
+    assert operation["branch_path"] == branch_path
+
+
+def test_a_ddl_statement_that_calls_a_function_gives_a_select_operation_with_its_function() -> None:
+    (operation,) = _module_operations("CREATE TABLE dbo.X (a int CHECK (dbo.fnOk(a) = 1));")
+
+    assert operation["operation_type"] == "SELECT"
+    assert operation["function_references"] == [_reference("", "", "dbo", "fnOk")]
+
+
+def test_a_statement_that_names_an_object_without_a_table_reference_gives_no_operation() -> None:
+    assert _module_operations("TRUNCATE TABLE dbo.T;\nCREATE INDEX ix ON dbo.T (a);") == []
