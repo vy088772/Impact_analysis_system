@@ -2751,7 +2751,9 @@ internal static class WrapperAnalyzer
         if (parameter?.Type is not null)
             return parameter.Type.ToString();
 
-        var containingClass = caller.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+        var containingClass = caller.Ancestors()
+            .OfType<TypeDeclarationSyntax>()
+            .FirstOrDefault(type => type is ClassDeclarationSyntax or RecordDeclarationSyntax);
         if (containingClass is null)
             return null;
 
@@ -2761,10 +2763,17 @@ internal static class WrapperAnalyzer
         if (field is not null)
             return field.Declaration.Type.ToString();
 
-        return containingClass.DescendantNodes()
+        var property = containingClass.DescendantNodes()
             .OfType<PropertyDeclarationSyntax>()
+            .FirstOrDefault(item => item.Identifier.Text == receiverName);
+        if (property is not null)
+            return property.Type.ToString();
+
+        // A C# 12 primary constructor parameter is the same kind of declaration as a field.
+        // It comes last: a member with the same name wins, as in C# name lookup.
+        return containingClass.ParameterList?.Parameters
             .FirstOrDefault(item => item.Identifier.Text == receiverName)
-            ?.Type.ToString();
+            ?.Type?.ToString();
     }
 
     private static string ResolveExternalSqlObjectMode(

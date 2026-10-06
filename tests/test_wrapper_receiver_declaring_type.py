@@ -246,3 +246,87 @@ def test_two_revisions_of_one_shared_base_stay_two_snapshots() -> None:
     for entry in entries.values():
         assert entry["receiver_types"] == ["SQLDbContext"]
         assert len(entry["implementation_snapshots"]) == 1
+
+
+RTTALENT_ROOT = PROJECT_ROOT / "data" / "repos" / "System_Dept_1" / "RTTalentDB" / "RTTalentDB"
+RTTALENT_SERVICE = RTTALENT_ROOT / "Services" / "MS" / "JobTypeService.cs"
+requires_rttalent_fixture = pytest.mark.skipif(
+    not RTTALENT_SERVICE.exists(),
+    reason="local data/repos/System_Dept_1/RTTalentDB fixture checkout is not present",
+)
+
+
+@requires_dotnet
+@requires_rttalent_fixture
+def test_primary_constructor_receiver_reports_the_declaring_type() -> None:
+    """`class JobTypeService(RTTalentDBContext _context)` has no field and no method parameter
+    named `_context`. The primary constructor parameter is the same kind of declaration, so the
+    receiver type is `RTTalentDBContext` and the call re-keys to the external base."""
+    calls = [
+        invocation
+        for invocation in _analyze(RTTALENT_SERVICE, RTTALENT_ROOT)
+        if invocation.get("wrapper_method_name") == "usp_ExecCmdGetDataTableAsync"
+    ]
+
+    assert calls, "expected the RTTalentDBContext wrapper calls in the fixture"
+    for call in calls:
+        assert call["wrapper_receiver_type"] == "SQLDbContext"
+        assert call["wrapper_receiver_type_provenance"] == "declaring_type"
+
+
+PRIMARY_CONSTRUCTOR_SOURCE = """
+using System.Data;
+
+public class LocalService(Foo _db)
+{
+    public void Run()
+    {
+        _db.Execute("usp_A");
+    }
+
+    public void Shadowed(Bar _db)
+    {
+        _db.Execute("usp_B");
+    }
+}
+
+public record LocalRecord(Foo _db)
+{
+    public void Run()
+    {
+        _db.Execute("usp_C");
+    }
+}
+
+public class Unrelated(Foo _db)
+{
+    public void Run()
+    {
+        Path.Combine("a", "b");
+        other.Execute("usp_D");
+    }
+}
+"""
+
+
+@requires_dotnet
+def test_primary_constructor_parameter_is_a_syntax_receiver_source() -> None:
+    """The host reads the primary constructor of a class and of a record. A method parameter
+    still wins over it, and a receiver the syntax does not resolve stays without a type."""
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "LocalService.cs"
+        source_path.write_text(PRIMARY_CONSTRUCTOR_SOURCE, encoding="utf-8")
+        result = host.analyze_csharp(source_path)
+
+    receiver_types = {
+        invocation["command_text"]: invocation.get("wrapper_receiver_type")
+        for invocation in result["db_invocations"]
+    }
+    assert receiver_types["usp_A"] == "Foo"  # class primary constructor
+    assert receiver_types["usp_B"] == "Bar"  # method parameter wins
+    assert receiver_types["usp_C"] == "Foo"  # record primary constructor
+    assert not receiver_types["a"]  # Path.Combine: no syntax source
+    assert not receiver_types["usp_D"]  # `other` is declared nowhere
