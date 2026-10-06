@@ -289,9 +289,10 @@ regex 比對很粗，每一項都是「待確認」的線索，不是定論。�
 - `usp_FreightImport_Sure` 的邊目標是 `stored_procedure:.xp_cmdshell`，schema 為空。原文寫的是 `master..xp_cmdshell`（`db..name` 寫法），`master` 這個 database 沒有進目標 id。依 CONTEXT.md，`db..name` 本來就標為 Unproven Schema，這可能是預期行為。
 - 該 module 的原文含明文帳號密碼（`dtsrun ... /p ...`）。這是來源 SQL 的資安問題，與圖無關，建議通知資料庫負責人。
 
-## 問題 4（已知限制）：動態 SQL 無法解析（15 個）
+## 問題 4 ✅ 已決定：動態 SQL 無法解析（15 個）→ 接受目前的標示
 
 - PUR 9 個、Response 6 個 `unresolved_dynamic_sql`。圖有明確標示。需要決定這是否可接受，或是否要解析常見的字串拼接模式。
+- 決定：接受，不解析。理由與四種拼接模式見 `.out-of-scope/parse-concatenated-dynamic-sql.md`。
 
 ## 未涵蓋
 
