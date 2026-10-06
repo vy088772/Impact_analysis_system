@@ -1,0 +1,781 @@
+{
+ "EmpJobDuty.EmpJobDutyMtn": [
+  "usp_ms_empjobdutyqry",
+  "usp_sys_databring"
+ ],
+ "EmpJobDuty.EditRow": [
+  "usp_ms_empjobdutyqry",
+  "usp_sys_databring"
+ ],
+ "EmpJobDuty.CancelRow": [
+  "usp_ms_empjobdutyqry"
+ ],
+ "EmpJobDuty.SaveData": [
+  "usp_ms_empjobdutymtn"
+ ],
+ "EmpJobDuty.GetEmpData": [
+  "usp_sys_databring"
+ ],
+ "EmpJobDuty.GetJobDuty": [
+  "usp_sys_databring"
+ ],
+ "Reference.Manual": [],
+ "Reference.ResumeEntryTutorial": [],
+ "Reference.TraditionEntryTutorial": [],
+ "Reference.Play": [],
+ "UserMaintain.UserMaintainMtn": [
+  "usp_sys_databring",
+  "usp_sys_usermaintainqry"
+ ],
+ "UserMaintain.SaveData": [
+  "usp_sys_usermaintainmtn"
+ ],
+ "UserMaintain.EditRow": [
+  "usp_sys_databring",
+  "usp_sys_usermaintainqry"
+ ],
+ "UserMaintain.CancelRow": [
+  "usp_sys_databring",
+  "usp_sys_usermaintainqry"
+ ],
+ "UserMaintain.MtnData": [
+  "usp_sys_usermaintainmtn"
+ ],
+ "ManagementSkillUpload.ManagementSkillUploadController": [],
+ "ManagementSkillUpload.ManagementSkillUploadMtn": [],
+ "ManagementSkillUpload.UploadExcelData": [
+  "usp_ta_managementskilluploadchk"
+ ],
+ "ManagementSkillUpload.ImportData": [
+  "usp_ta_managementskilluploadadd"
+ ],
+ "TrialEvaluationMCTPUpload.TrialEvaluationMCTPUploadMtn": [
+  "usp_sys_databring",
+  "usp_ta_trialevaluationmctpuploadqry"
+ ],
+ "TrialEvaluationMCTPUpload.GetData": [],
+ "TrialEvaluationMCTPUpload.ExportToExcel": [
+  "usp_ta_trialevaluationmctpuploadqry"
+ ],
+ "TrialEvaluationMCTPUpload.UploadExcelData": [
+  "usp_ta_trialevaluationmctpuploadchk"
+ ],
+ "TrialEvaluationMCTPUpload.ImportData": [
+  "usp_ta_trialevaluationmctpuploadadd"
+ ],
+ "TrialEvaluationMCTPUpload.GetJobDuty": [
+  "usp_sys_databring"
+ ],
+ "ResumeExperienceNotRecorded.ResumeExperienceNotRecordedQry": [
+  "usp_sys_databring"
+ ],
+ "ResumeExperienceNotRecorded.NotRecordedQueryPartial": [
+  "usp_ta_resumeexperiencenotrecordedqry"
+ ],
+ "TrialBossApprove.TrialBossApproveMtn": [
+  "usp_ta_trialbossapproveqry"
+ ],
+ "TrialBossApprove.GetSkillLevelList": [
+  "usp_ta_trialbossapprovelist"
+ ],
+ "TrialBossApprove.TrialBossAssess": [
+  "usp_ta_trialbossapproveassess"
+ ],
+ "PersonalData.PersonalDataMtn": [
+  "usp_ta_personalcertqry",
+  "usp_ta_personalcourseqry",
+  "usp_ta_personaldataojtbring",
+  "usp_ta_personaldataqry",
+  "usp_ta_personaldataviewstatus"
+ ],
+ "PersonalData.ResumeRevoke": [
+  "usp_ta_personaldataresumerevoke"
+ ],
+ "PersonalData.GetPeronsalCourse": [
+  "usp_ta_personalcourseqry"
+ ],
+ "File.File": [],
+ "File.CheckExcel": [],
+ "File.DeleteUploadSession": [],
+ "UserGroupPermission.UserGroupPermissionMtnAsync": [
+  "usp_sys_databring",
+  "usp_sys_usergrouppermissionqry"
+ ],
+ "UserGroupPermission.GetFunctions": [
+  "usp_sys_usergrouppermissionqry"
+ ],
+ "UserGroupPermission.SavePanel": [
+  "usp_sys_usergrouppermissionmtn"
+ ],
+ "TechnicianSkill.TechnicianSkillQry": [
+  "usp_sys_databring"
+ ],
+ "TechnicianSkill.TechnicianSkillQryPost": [
+  "usp_rpt_technicianskillqry"
+ ],
+ "TechnicianSkill.TechnicianSkillDDL": [
+  "usp_rpt_technicianskillqry"
+ ],
+ "SkillClassificationPersonnelDetail.SkillClassificationPersonnelDetailMtn": [],
+ "SkillClassificationPersonnelDetail.GetData": [
+  "usp_rpt_skillclassificationpersonneldetailqry"
+ ],
+ "TrialTalentSkillUpload.TrialTalentSkillUploadMtn": [
+  "usp_sys_databring",
+  "usp_ta_trialtalentskilluploadqry"
+ ],
+ "TrialTalentSkillUpload.UploadExcelData": [
+  "usp_ta_trialtalentskilluploadchk"
+ ],
+ "TrialTalentSkillUpload.ImportData": [
+  "usp_sys_databring",
+  "usp_ta_trialtalentskilluploadadd",
+  "usp_ta_trialtalentskilluploadqry"
+ ],
+ "ResumeExperienceContent.ResumeExperienceContentMtn": [
+  "usp_ms_resumeexperiencecontentqry",
+  "usp_sys_databring"
+ ],
+ "ResumeExperienceContent.GetData": [],
+ "ResumeExperienceContent.EditRow": [
+  "usp_ms_resumeexperiencecontentqry",
+  "usp_sys_databring"
+ ],
+ "ResumeExperienceContent.CancelRow": [
+  "usp_ms_resumeexperiencecontentqry",
+  "usp_sys_databring"
+ ],
+ "ResumeExperienceContent.SaveData": [
+  "usp_ms_resumeexperiencecontentmtn"
+ ],
+ "ResumeExperienceContent.MtnData": [
+  "usp_ms_resumeexperiencecontentmtn"
+ ],
+ "UserGroupMaintain.UserGroupMaintainMtn": [
+  "usp_sys_usergroupmaintainqry"
+ ],
+ "UserGroupMaintain.SaveData": [
+  "usp_sys_usergroupmaintainmtn"
+ ],
+ "UserGroupMaintain.EditRow": [
+  "usp_sys_usergroupmaintainqry"
+ ],
+ "UserGroupMaintain.CancelRow": [
+  "usp_sys_usergroupmaintainqry"
+ ],
+ "UserGroupMaintain.MtnData": [
+  "usp_sys_usergroupmaintainmtn"
+ ],
+ "JobPosition.JobPositionMtn": [
+  "usp_ms_getjobposition"
+ ],
+ "JobPosition.JobPositionCreate": [
+  "usp_ms_jobpositionadd"
+ ],
+ "JobPosition.JobPositionUpdate": [
+  "usp_ms_jobpositionupd"
+ ],
+ "JobPosition.JobPositionValid": [
+  "usp_ms_jobpositionvalid"
+ ],
+ "JobPosition.JobPositionInValid": [
+  "usp_ms_jobpositioninvalid"
+ ],
+ "JobPosition.GetValidJobPosition": [
+  "usp_ms_getjobposition"
+ ],
+ "JobPosition.GetInvalidJobPosition": [
+  "usp_ms_getinvalidjobposition"
+ ],
+ "ProjectSection.ProjectSectionMtn": [
+  "usp_ms_projectsectionqry"
+ ],
+ "ProjectSection.ProjectSectionInValidQry": [
+  "usp_ms_projectsectioninvalidqry"
+ ],
+ "ProjectSection.ProjectSectionAdd": [
+  "usp_ms_projectsectionadd"
+ ],
+ "ProjectSection.ProjectSectionUpd": [
+  "usp_ms_projectsectionupd"
+ ],
+ "ProjectSection.ProjectSectionPartial": [
+  "usp_ms_projectsectionqry"
+ ],
+ "ProjectSection.ProjectSectionValid": [
+  "usp_ms_projectsectionvalid"
+ ],
+ "ProjectSection.ProjectSectionInValid": [
+  "usp_ms_projectsectioninvalid"
+ ],
+ "ProjectSection.ReturnResult": [],
+ "ResumeQuery.ResumeQry": [],
+ "ResumeQuery.GetResumePartial": [
+  "usp_rpt_getcurrentevaluationjudgeid"
+ ],
+ "ResumeExperience.ResumeExperienceMtn": [
+  "usp_sys_databring",
+  "usp_sys_getparameter",
+  "usp_ta_approveflowcommentqry",
+  "usp_ta_resumeexperienceqry",
+  "usp_ta_resumeexperienceviewstatus",
+  "usp_ta_resumeojtqry"
+ ],
+ "ResumeExperience.ProjectExperienceAdd": [
+  "usp_ta_resumeexperienceadd"
+ ],
+ "ResumeExperience.ResumeExperienceUpdate": [
+  "usp_ta_resumeexperienceupd"
+ ],
+ "ResumeExperience.ResumeExperienceDelete": [
+  "usp_ta_resumeexperiencedel"
+ ],
+ "ResumeExperience.OJTInsert": [
+  "usp_ta_resumeojtadd"
+ ],
+ "ResumeExperience.ResumeOJTUpdate": [
+  "usp_ta_resumeojtupd"
+ ],
+ "ResumeExperience.ResumeOJTDelete": [
+  "usp_ta_resumeojtdel"
+ ],
+ "ResumeExperience.ResumeConfirm": [
+  "usp_ta_resumeexperienceconfirm"
+ ],
+ "ResumeExperience.GetProjectExperienceTbPartial": [
+  "usp_sys_databring",
+  "usp_sys_getparameter",
+  "usp_ta_resumeexperienceqry"
+ ],
+ "ResumeExperience.GetResumeOJTbPartial": [
+  "usp_sys_databring",
+  "usp_ta_resumeojtqry"
+ ],
+ "ResumeExperience.GetProjectSection": [
+  "usp_sys_databring"
+ ],
+ "ResumeExperience.GetResumeExpContentByDutyId": [
+  "usp_sys_databring"
+ ],
+ "ResumeExperience.GetExpContentByPoint": [
+  "usp_sys_databring"
+ ],
+ "ResumeExperience.GetProjectExperienceData": [
+  "usp_ta_resumeexperiencehistqry"
+ ],
+ "TraditionalAssessment.TraditionalAssessmentMtn": [
+  "usp_ta_traditionalassessmentqry"
+ ],
+ "TraditionalAssessment.FetchTraditionalAssessmentPersonalData": [
+  "usp_ta_traditionassessmentpersonaldataqry"
+ ],
+ "TraditionalAssessment.TraditionalAssessmentAdd": [
+  "usp_ta_traditionalassessmentjudgebossapprove"
+ ],
+ "TraditionalAssessment.TraditionalAssessmentJudgeBossRevoke": [
+  "usp_ta_traditionalassessmentjudgebossrevoke"
+ ],
+ "TraditionalAssessment.GetApproveComment": [
+  "usp_ta_approveflowcommentqry"
+ ],
+ "TrialTalentGoalUpload.TrialTalentGoalUploadMtn": [
+  "usp_sys_databring",
+  "usp_ta_trialtalentgoaluploadqry"
+ ],
+ "TrialTalentGoalUpload.GetData": [],
+ "TrialTalentGoalUpload.ExportToExcel": [
+  "usp_ta_trialtalentgoaluploadqry"
+ ],
+ "TrialTalentGoalUpload.UploadExcelData": [
+  "usp_ta_trialtalentgoaluploadchk"
+ ],
+ "TrialTalentGoalUpload.ImportData": [
+  "usp_ta_trialtalentgoaluploadadd"
+ ],
+ "TrialTalentGoalUpload.GetJobDuty": [
+  "usp_sys_databring"
+ ],
+ "JobDutySkillStatistics.JobDutySkillStatisticsQry": [
+  "usp_rpt_jobdutyskillstatisticsqry"
+ ],
+ "JobDutySkillStatistics.JobDutySkillStatisticsDetailQry": [
+  "usp_rpt_jobdutyskillstatisticsdetailqry"
+ ],
+ "JobDutySkillStatistics.ExportJobDutySkillExcel": [
+  "usp_rpt_jobdutyskillstatisticsqry"
+ ],
+ "EvaluationSchedule.EvaluationScheduleMtn": [
+  "usp_sys_databring",
+  "usp_sys_evaluationscheduleqry"
+ ],
+ "EvaluationSchedule.SaveData": [
+  "usp_sys_evaluationschedulemtn"
+ ],
+ "EvaluationSchedule.EditRow": [
+  "usp_sys_evaluationscheduleqry"
+ ],
+ "EvaluationSchedule.CancelRow": [
+  "usp_sys_evaluationscheduleqry"
+ ],
+ "EvaluationSchedule.MtnData": [
+  "usp_sys_evaluationschedulemtn"
+ ],
+ "Resume.Resume": [
+  "usp_rpt_getcurrentevaluationjudgeid"
+ ],
+ "ModelRank.ModelRankMtn": [
+  "usp_ms_modelrankqry"
+ ],
+ "ModelRank.ModelRankQry": [
+  "usp_ms_modelrankqry"
+ ],
+ "ModelRank.ModelRankInValidQry": [
+  "usp_ms_modelrankinvalidqry"
+ ],
+ "ModelRank.ModelRankAdd": [
+  "usp_ms_modelrankadd"
+ ],
+ "ModelRank.ModelRankUpd": [
+  "usp_ms_modelrankupd"
+ ],
+ "ModelRank.ModelRankPartial": [
+  "usp_ms_modelrankqry"
+ ],
+ "ModelRank.ModelRankValid": [
+  "usp_ms_modelrankvalid"
+ ],
+ "ModelRank.ModelRankInValid": [
+  "usp_ms_modelrankinvalid"
+ ],
+ "ModelRank.ReturnResult": [],
+ "Error.HttpStatusCodeHandler": [],
+ "Error.ExceptionHandler": [],
+ "MultiDimensional.MultiDimensionalQry": [],
+ "MultiDimensional.JobTypeJobDutyDimension": [
+  "usp_rpt_jobtypejobdutydimensionqry"
+ ],
+ "MultiDimensional.JobDutyYearDimension": [
+  "usp_rpt_jobdutyyeardimensionqry"
+ ],
+ "MultiDimensional.JobTypeJobDutyDimensionDDL": [],
+ "MultiDimensional.JobDutyYearDimensionDDL": [],
+ "MultiDimensional.ExportExcelAsync": [],
+ "ResumeBossApprove.ResumeBossApproveMtn": [
+  "usp_ta_personalcertqry",
+  "usp_ta_personalcourseqry",
+  "usp_ta_personaldataojtbring",
+  "usp_ta_personaldataqry",
+  "usp_ta_personaldataviewstatus",
+  "usp_ta_resumebossapproveviewstatus",
+  "usp_ta_resumedepthbreadthtrainingqry",
+  "usp_ta_resumeexperienceqry",
+  "usp_ta_resumeotherabilityqry"
+ ],
+ "ResumeBossApprove.OtherAbilityAdd": [
+  "usp_ta_resumeotherabilityadd"
+ ],
+ "ResumeBossApprove.OtherAbilityUpd": [
+  "usp_ta_resumeotherabilityupd"
+ ],
+ "ResumeBossApprove.OtherAbilityDelete": [
+  "usp_ta_resumeotherabilitydelete"
+ ],
+ "ResumeBossApprove.FetchOtherAbilityPartial": [
+  "usp_ta_resumeotherabilityqry"
+ ],
+ "ResumeBossApprove.ResumeOJTRevokeScoreCal": [
+  "usp_ta_resumeojtrevokescorecal"
+ ],
+ "ResumeBossApprove.ResumeOJTHistQry": [
+  "usp_ta_resumeojthistqry"
+ ],
+ "ResumeBossApprove.ResumeBossConfirm": [
+  "usp_ta_resumetechbossconfirm"
+ ],
+ "ResumeBossApprove.ResumeBossRevoke": [
+  "usp_ta_resumetechbossrevoke"
+ ],
+ "TrialTalentSkillDownload.TrialTalentSkillDownloadMtn": [
+  "usp_sys_databring"
+ ],
+ "TrialTalentSkillDownload.ExportToExcel": [
+  "usp_ta_trialtalentskilldownloadqry"
+ ],
+ "TrialTalentSkillDownload.GetJobDuty": [
+  "usp_sys_databring"
+ ],
+ "DomesticForeignEV.DomesticForeignEVMtn": [
+  "usp_ms_domesticforeignevqry"
+ ],
+ "DomesticForeignEV.DomesticForeignEVQry": [
+  "usp_ms_domesticforeignevqry"
+ ],
+ "DomesticForeignEV.DomesticForeignEVInValidQry": [
+  "usp_ms_domesticforeignevinvalidqry"
+ ],
+ "DomesticForeignEV.DomesticForeignEVAdd": [
+  "usp_ms_domesticforeignevadd"
+ ],
+ "DomesticForeignEV.DomesticForeignEVUpd": [
+  "usp_ms_domesticforeignevupd"
+ ],
+ "DomesticForeignEV.DomesticForeignEVPartial": [
+  "usp_ms_domesticforeignevqry"
+ ],
+ "DomesticForeignEV.DomesticForeignEVValid": [
+  "usp_ms_domesticforeignevvalid"
+ ],
+ "DomesticForeignEV.DomesticForeignEVInValid": [
+  "usp_ms_domesticforeignevinvalid"
+ ],
+ "DomesticForeignEV.ReturnResult": [],
+ "TrialTalentMCTPSummary.TrialTalentMCTPSummaryMtn": [
+  "usp_rpt_trialtalentmctpsummaryqry"
+ ],
+ "TrialTalentMCTPSummary.ExportToExcel": [
+  "usp_rpt_trialtalentmctpsummaryqry"
+ ],
+ "TrialTalentMCTPSummary.GetDetailData": [
+  "usp_rpt_trialtalentmctpsummarylist"
+ ],
+ "Home.HomePage": [
+  "usp_rpt_getcurrentevaluationjudgeid",
+  "usp_sys_todoitembring"
+ ],
+ "ResumePLApprove.ResumePLApproveMtn": [
+  "usp_ta_personalcertqry",
+  "usp_ta_personalcourseqry",
+  "usp_ta_personaldataojtbring",
+  "usp_ta_personaldataqry",
+  "usp_ta_personaldataviewstatus",
+  "usp_ta_resumeexperienceqry",
+  "usp_ta_resumeexperiencescorecalculate"
+ ],
+ "ResumePLApprove.GetProjectExperienceData": [
+  "usp_ta_resumeexperiencehistqry"
+ ],
+ "ResumePLApprove.ResumePLConfirm": [
+  "usp_ta_resumeexperienceplconfirm"
+ ],
+ "ResumePLApprove.ResumePLRevoke": [
+  "usp_ta_resumeexperienceplrevoke"
+ ],
+ "NeedApprove.NeedApproveQry": [
+  "usp_ta_needapprovelistqry"
+ ],
+ "TrialTalentSkillQuery.TrialTalentSkillQueryMtn": [],
+ "TrialTalentSkillQuery.ExportToExcel": [
+  "usp_rpt_trialtalentskillqueryqry"
+ ],
+ "ResumeExperienceItem.ResumeExperienceItemMtn": [
+  "usp_ms_resumeexperienceitemqry",
+  "usp_sys_databring"
+ ],
+ "ResumeExperienceItem.GetData": [],
+ "ResumeExperienceItem.EditRow": [
+  "usp_ms_resumeexperienceitemqry",
+  "usp_sys_databring"
+ ],
+ "ResumeExperienceItem.CancelRow": [
+  "usp_ms_resumeexperienceitemqry",
+  "usp_sys_databring"
+ ],
+ "ResumeExperienceItem.SaveData": [
+  "usp_ms_resumeexperienceitemmtn"
+ ],
+ "ResumeExperienceItem.MtnData": [
+  "usp_ms_resumeexperienceitemmtn"
+ ],
+ "ResumeExperienceItem.GetJobDuty": [
+  "usp_sys_databring"
+ ],
+ "Menu.GetMenu": [
+  "usp_sys_getuserauthorizedmenuitems"
+ ],
+ "SkillDefineTradition.SkillDefineTraditionMtn": [
+  "usp_sys_databring"
+ ],
+ "SkillDefineTradition.SkillDefineTraditionQry": [
+  "usp_ms_skilldefinetraditionqry"
+ ],
+ "SkillDefineTradition.UpdateSkillDefineTradition": [
+  "usp_ms_skilldefinetraditionupd"
+ ],
+ "SkillDefineTradition.SkillDefineTraditionAdd": [
+  "usp_ms_skilldefinetraditionadd"
+ ],
+ "SkillDefineTradition.GetJobDutiesByJobType": [
+  "usp_sys_databring"
+ ],
+ "JobDuty.JobDutyMtn": [
+  "usp_ms_getjobduty",
+  "usp_ms_getjobtype",
+  "usp_sys_databring"
+ ],
+ "JobDuty.JobDutyCreate": [
+  "usp_ms_jobdutyadd"
+ ],
+ "JobDuty.GetValidJobDuty": [
+  "usp_ms_getjobduty"
+ ],
+ "JobDuty.GetInvalidJobDuty": [
+  "usp_ms_getinvalidjobduty"
+ ],
+ "JobDuty.JobDutyUpdate": [
+  "usp_ms_jobdutyupd"
+ ],
+ "JobDuty.JobDutyValid": [
+  "usp_ms_jobdutyvalid"
+ ],
+ "JobDuty.JobDutyInValid": [
+  "usp_ms_jobdutyinvalid"
+ ],
+ "JobDuty.GetNextJobDutyId": [
+  "usp_sys_databring"
+ ],
+ "SkillAssessProgressStatus.SkillAssessProgressStatusQry": [
+  "usp_rpt_skillprogressstatusqry",
+  "usp_sys_databring"
+ ],
+ "UserGroupMember.UserGroupMemberMtn": [
+  "usp_sys_databring",
+  "usp_sys_usergroupmemberqry"
+ ],
+ "UserGroupMember.SaveData": [
+  "usp_sys_usergroupmembermtn"
+ ],
+ "UserGroupMember.GetData": [],
+ "UserGroupMember.MtnData": [
+  "usp_sys_usergroupmembermtn"
+ ],
+ "PersonnelSkill.PersonnelSkillQry": [],
+ "PersonnelSkill.GetPersonnelSkillPartial": [
+  "usp_rpt_personnelskillqry"
+ ],
+ "PersonnelSkill.ExportJobDutySkillExcel": [
+  "usp_rpt_personnelskillqry"
+ ],
+ "JobDutyPersonnelSkillDetail.JobDutyPersonnelSkillDetail": [
+  "usp_sys_databring"
+ ],
+ "JobDutyPersonnelSkillDetail.JobDutyPersonnelSkillDetailQry": [
+  "usp_rpt_jobdutypersonnelskilldetailqry"
+ ],
+ "JobDutyPersonnelSkillDetail.JobDutyPersonnelSkillDetailDDL": [
+  "usp_rpt_jobdutypersonnelskilldetailqry"
+ ],
+ "UserPermission.UserPermissionMtn": [
+  "usp_sys_userpermissionqry"
+ ],
+ "UserPermission.GetFunctions": [
+  "usp_sys_userpermissionqry"
+ ],
+ "UserPermission.SavePanel": [
+  "usp_sys_userpermissionmtn"
+ ],
+ "Auth.UnAuthorize": [],
+ "ResumeCourse.ResumeCourseMtn": [
+  "usp_ms_courseuploadtempqry",
+  "usp_sys_databring"
+ ],
+ "ResumeCourse.CourseTablePartial": [
+  "usp_ms_resumecourseqry"
+ ],
+ "ResumeCourse.CourseAdd": [
+  "usp_ms_courseadd"
+ ],
+ "ResumeCourse.CourseUpdate": [
+  "usp_ms_courseupd"
+ ],
+ "ResumeCourse.CourseDelete": [
+  "usp_ms_coursedel"
+ ],
+ "ResumeCourse.SaveFileToken": [],
+ "ResumeCourse.CourseUpload": [
+  "usp_ms_courseupload",
+  "usp_ms_courseuploadtempqry"
+ ],
+ "ResumeCourse.CourseImport": [
+  "usp_ms_courseimport"
+ ],
+ "ResumeCourse.ResumeCourseExcelTemplateDownload": [],
+ "ResumeCourse.GetCourseCategory": [
+  "usp_sys_databring"
+ ],
+ "JobType.JobTypeMtn": [
+  "usp_ms_getjobtype",
+  "usp_sys_databring"
+ ],
+ "JobType.GetNewJobTypeID": [
+  "usp_sys_databring"
+ ],
+ "JobType.GetValidJobType": [
+  "usp_ms_getvalidjobtype"
+ ],
+ "JobType.GetInvalidJobType": [
+  "usp_ms_getinvalidjobtype"
+ ],
+ "JobType.GetValidJobTypePartial": [
+  "usp_ms_getvalidjobtype"
+ ],
+ "JobType.GetInvalidJobTypePartial": [
+  "usp_ms_getinvalidjobtype"
+ ],
+ "JobType.JobTypeValid": [
+  "usp_ms_jobtypevalid"
+ ],
+ "JobType.JobTypeInvalid": [
+  "usp_ms_jobtypeinvalid"
+ ],
+ "JobType.JobTypeCreate": [
+  "usp_ms_jobtypeadd"
+ ],
+ "JobType.JobTypeUpd": [
+  "usp_ms_jobtypeupd"
+ ],
+ "TrialJobDutySkillQuery.TrialJobDutySkillQueryMtn": [],
+ "TrialJobDutySkillQuery.PoolSel": [
+  "usp_rpt_trialjobdutyskillquerypool"
+ ],
+ "TrialJobDutySkillQuery.GetData": [
+  "usp_rpt_trialjobdutyskillqueryqry"
+ ],
+ "TrialJobDutySkillQuery.ExportToExcel": [
+  "usp_rpt_trialjobdutyskillqueryqry"
+ ],
+ "TrialJobDutySkillQuery.GetDetailData": [
+  "usp_rpt_trialjobdutyskillquerylist"
+ ],
+ "TrialJobDutySkillQuery.ExportDetailToExcel": [
+  "usp_rpt_trialjobdutyskillquerylist"
+ ],
+ "TalentDBDepShoulder.TalentDBDepShoulderMtn": [
+  "usp_sys_databring",
+  "usp_sys_talentdbdepshoulderqry"
+ ],
+ "TalentDBDepShoulder.SaveData": [
+  "usp_sys_talentdbdepshouldermtn"
+ ],
+ "TalentDBDepShoulder.MtnData": [
+  "usp_sys_talentdbdepshouldermtn"
+ ],
+ "TalentDBDepShoulder.GetData": [],
+ "Public.EmpAutoCompleteByAuth": [
+  "usp_sys_empautocomplete"
+ ],
+ "Public.EmpOnchangeByAuth": [
+  "usp_sys_authempblur"
+ ],
+ "Public.GetJobTypeListByAuth": [
+  "usp_sys_authjobtypebind"
+ ],
+ "Public.GetTrialJobTypeListByAuth": [
+  "usp_sys_authtrialjobtypebind"
+ ],
+ "Public.GetJobDutyListByAuth": [
+  "usp_sys_authjobdutybindbyjobtype"
+ ],
+ "Public.GetAuthDepList": [
+  "usp_sys_authdepbind"
+ ],
+ "Public.GetAuthEmpListByDep": [
+  "usp_sys_authempbindbydep"
+ ],
+ "Public.GetEmpListByJobDutyID": [
+  "usp_sys_authgetempbyjobduty"
+ ],
+ "UsersPicker.EmpIdAutocomplete": [
+  "usp_sys_databring"
+ ],
+ "UsersPicker.GetUsersDep": [
+  "usp_sys_databring"
+ ],
+ "UsersPicker.GetUsersByDept": [
+  "usp_sys_databring"
+ ],
+ "UsersPicker.GetUserName": [
+  "usp_sys_databring"
+ ],
+ "ResumeSkillDefine.ResumeSkillDefineMtn": [
+  "usp_ms_resumeskilldefineqry",
+  "usp_sys_databring"
+ ],
+ "ResumeSkillDefine.GetData": [
+  "usp_ms_resumeskilldefineadd"
+ ],
+ "ResumeSkillDefine.EditRow": [
+  "usp_ms_resumeskilldefineqry",
+  "usp_sys_databring"
+ ],
+ "ResumeSkillDefine.CancelRow": [
+  "usp_ms_resumeskilldefineqry",
+  "usp_sys_databring"
+ ],
+ "ResumeSkillDefine.SaveData": [
+  "usp_ms_resumeskilldefinemtn"
+ ],
+ "ResumeSkillDefine.GetJobDuty": [
+  "usp_sys_databring"
+ ],
+ "DepthBreadthTraining.DepthBreadthTrainingMtn": [
+  "usp_ms_depthbreadthtrainingqry",
+  "usp_sys_databring"
+ ],
+ "DepthBreadthTraining.DepthBreadthTrainingQry": [
+  "usp_ms_depthbreadthtrainingqry"
+ ],
+ "DepthBreadthTraining.DepthBreadthTrainingInValidQry": [
+  "usp_ms_depthbreadthtraininginvalidqry"
+ ],
+ "DepthBreadthTraining.DepthBreadthTrainingAdd": [
+  "usp_ms_depthbreadthtrainingadd"
+ ],
+ "DepthBreadthTraining.DepthBreadthTrainingUpd": [
+  "usp_ms_depthbreadthtrainingupd"
+ ],
+ "DepthBreadthTraining.DepthBreadthTrainingPartial": [
+  "usp_ms_depthbreadthtrainingqry"
+ ],
+ "DepthBreadthTraining.DepthBreadthTrainingValid": [
+  "usp_ms_depthbreadthtrainingvalid"
+ ],
+ "DepthBreadthTraining.DepthBreadthTrainingInValid": [
+  "usp_ms_depthbreadthtraininginvalid"
+ ],
+ "DepthBreadthTraining.ReturnResult": [],
+ "DepthBreadthTraining.GetJobDutyForEdit": [
+  "usp_sys_databring"
+ ],
+ "SkillPieChart.SkillPieChartMtn": [],
+ "SkillPieChart.GetData": [
+  "usp_rpt_skillpiechartqry"
+ ],
+ "AssessmentResult.AssessmentResultQry": [
+  "usp_rpt_evaluationresultqry",
+  "usp_sys_databring"
+ ],
+ "AssessmentResult.ResumeAssessmentResult": [
+  "usp_ta_personalcertqry",
+  "usp_ta_personalcourseqry",
+  "usp_ta_personaldataojtbring",
+  "usp_ta_personaldataqry",
+  "usp_ta_resumedepthbreadthtrainingqry",
+  "usp_ta_resumeexperienceqry",
+  "usp_ta_resumeotherabilityqry"
+ ],
+ "AssessmentResult.TraditionAssessmentResult": [
+  "usp_rpt_traditionassessmentresultqry"
+ ],
+ "AssessmentResult.TrialAssessmentResult": [
+  "usp_rpt_trialassessmentresultqry"
+ ],
+ "TraditionalTechBossAssessment.TraditionalTechBossAssessmentMtn": [
+  "usp_ta_traditionaltechbossassessmentqry"
+ ],
+ "TraditionalTechBossAssessment.TraditionalAssessmentTechBossConfirm": [
+  "usp_ta_traditionalassessmenttechbossapprove"
+ ],
+ "TraditionalTechBossAssessment.TraditionalAssessmentTechBossRevoke": [
+  "usp_ta_traditionalassessmenttechbossrevoke"
+ ]
+}

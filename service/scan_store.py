@@ -188,7 +188,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # ticket 09）。被註解掉的程式碼不再產生 SQL 查詢、資料表關聯或預存程序呼叫。
 # 舊快取還留著註解裡的關聯（例如 ATV 的 `ManifestNew`）與預存程序呼叫，必須
 # 重新掃描。
-_CACHE_VERSION = 44
+# v45：C# 解析器的方法宣告辨識變寬（見 `.scratch/rttalentdb-program-to-sql-chain/
+# issues/02-...md`）：傳回型別可以是元組 `Task<(bool A, string B)>`、nullable
+# `Task<T?>`、含逗號的泛型 `Task<Dictionary<string, X>>`、`Task <T>`（`<` 前有
+# 空白），方法名後可接泛型參數 `Name<T>(`。舊快取漏掉這些方法，它們的 `calls`
+# 與方法鄰接表節點都是空的，必須重新掃描。
+_CACHE_VERSION = 45
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

@@ -277,7 +277,9 @@ class CSharpParser:
     # 例如 WebForms code-behind 常見的 `void CheckQryData() { ... }`。
     # 錨定在行首（可有前導空白）以避免誤配到 `new Foo(...)`、`await Foo(...)`
     # 這類「兩個以空白分隔的識別字後接左括號」的陳述式。
-    METHOD_PATTERN = r'^[ \t]*(public|private|protected|internal)?\s*(static\s+)?(virtual\s+)?(override\s+)?(abstract\s+)?(async\s+)?([\w\<\>\[\]]+)\s+(\w+)\s*\('
+    # 傳回型別（group 7）接受：元組 `(bool A, string B)`、泛型 `Task<Dictionary<string, X>>`
+    # （`<` 前可有空白）、nullable `?`、陣列 `[]`；方法名後可有泛型參數 `Name<T>(`。
+    METHOD_PATTERN = r'^[ \t]*(public|private|protected|internal)?\s*(static\s+)?(virtual\s+)?(override\s+)?(abstract\s+)?(async\s+)?((?:\([\w\s<>\[\],?.]+\)|[\w.]+(?:\s*<[\w\s<>\[\],?.()]+>)?)\??(?:\[[,\s]*\])*\??)\s+(\w+)\s*(?:<[\w\s,]+>)?\s*\('
 
     # METHOD_PATTERN 錨定行首後，仍可能誤配到「關鍵字 識別字(」的陳述式
     # （例如 `new SqlParameter(...)`、`await FooAsync()`），故以傳回型別
