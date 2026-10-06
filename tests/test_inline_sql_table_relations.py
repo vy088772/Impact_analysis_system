@@ -357,3 +357,40 @@ def test_a_relation_loads_through_an_unpickler_that_admits_only_the_two_classes_
     loaded = RestrictedUnpickler(io.BytesIO(pickle.dumps(relation, protocol=4))).load()
 
     assert loaded == relation
+
+
+def test_an_inline_if_exists_predicate_gives_a_select_relation_with_the_real_host(tmp_path) -> None:
+    text = "IF EXISTS (SELECT 1 FROM dbo.Gate WHERE Id = @id) UPDATE dbo.Orders SET Flag = 1"
+    root = tmp_path / "Orders"
+    root.mkdir()
+    source = root / "OrderPage.cs"
+    source.write_text(
+        "using System.Data.SqlClient;\n"
+        "namespace Orders.Pages\n"
+        "{\n"
+        "    public class OrderPage\n"
+        "    {\n"
+        "        public void Save(SqlConnection conn)\n"
+        "        {\n"
+        f'            var cmd = new SqlCommand("{text}", conn);\n'
+        "            cmd.ExecuteNonQuery();\n"
+        "        }\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    scan = ProjectScanResult(project_root=str(root), project_name="Orders", scan_time=datetime.now())
+
+    scanner = object.__new__(ProjectScanner)
+    scanner.project_root = str(root)
+    scanner.scan_result = None
+    scanner.csharp_parser = CSharpParser()
+    scanner.static_analyzer_host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    scanner.connection_lookup = ConnectionLookup(root)
+
+    scanner.refresh_csharp_files(scan, [str(source)])
+
+    assert _relations_of(scan.table_relations) == {
+        ("Gate", "SELECT", "inline_sql_parsed"),
+        ("Orders", "UPDATE", "inline_sql_parsed"),
+    }

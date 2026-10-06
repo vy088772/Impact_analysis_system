@@ -78,6 +78,7 @@ internal sealed class SqlOperationExtractor
             var thenStatement = GetFragmentProperty(fragment, "ThenStatement");
             var elseStatement = GetFragmentProperty(fragment, "ElseStatement");
 
+            AddPredicateCandidate(fragment, predicate, branchPath, candidates);
             if (thenStatement is not null)
                 Visit(thenStatement, module, Append(branchPath, $"IF {predicateText}".Trim()), candidates);
             if (elseStatement is not null)
@@ -106,6 +107,7 @@ internal sealed class SqlOperationExtractor
             var predicate = GetFragmentProperty(fragment, "Predicate");
             var statement = GetFragmentProperty(fragment, "Statement");
             var predicateText = predicate is null ? "" : Text(predicate);
+            AddPredicateCandidate(fragment, predicate, branchPath, candidates);
             if (statement is not null)
                 Visit(statement, module, Append(branchPath, $"WHILE {predicateText}".Trim()), candidates);
             return;
@@ -127,6 +129,41 @@ internal sealed class SqlOperationExtractor
             Visit(child, module, branchPath, candidates);
     }
 
+    // The predicate runs before its branch, so its read carries the branch path outside the IF
+    // or WHILE, and its source location covers the predicate only.
+    private void AddPredicateCandidate(
+        TSqlFragment owner,
+        TSqlFragment? predicate,
+        IReadOnlyList<string> branchPath,
+        ICollection<SqlOperationCandidate> candidates)
+    {
+        if (predicate is null)
+            return;
+
+        var candidate = CreateNonDmlCandidate(predicate, branchPath, PredicateStartOffset(owner, predicate));
+        if (candidate is not null)
+            candidates.Add(candidate);
+    }
+
+    // ScriptDom starts an EXISTS predicate at its parenthesis and leaves the EXISTS keyword out.
+    // The predicate starts at the first token after the IF or WHILE keyword, so the location
+    // covers the whole predicate.
+    private static int PredicateStartOffset(TSqlFragment owner, TSqlFragment predicate)
+    {
+        var tokens = owner.ScriptTokenStream;
+        if (tokens is null)
+            return predicate.StartOffset;
+
+        for (var index = owner.FirstTokenIndex + 1; index <= predicate.FirstTokenIndex && index < tokens.Count; index++)
+        {
+            var type = tokens[index].TokenType;
+            if (type is TSqlTokenType.WhiteSpace or TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment)
+                continue;
+            return Math.Min(tokens[index].Offset, predicate.StartOffset);
+        }
+        return predicate.StartOffset;
+    }
+
     // Descendants yields the fragment itself first, so Skip(1) leaves it out.
     private bool HoldsStatement(TSqlFragment fragment)
         => Descendants(fragment).Skip(1).Any(child => child is TSqlStatement);
@@ -136,7 +173,8 @@ internal sealed class SqlOperationExtractor
     // A statement that refers to no table, view, or function gives no operation.
     private SqlOperationCandidate? CreateNonDmlCandidate(
         TSqlFragment fragment,
-        IReadOnlyList<string> branchPath)
+        IReadOnlyList<string> branchPath,
+        int? sourceStartOffset = null)
     {
         var readTables = new List<SqlObjectReference>();
         var readColumns = new List<string>();
@@ -155,7 +193,8 @@ internal sealed class SqlOperationExtractor
             new List<SqlObjectReference>(),
             readColumns,
             new List<string>(),
-            functionReferences: functionReferences);
+            functionReferences: functionReferences,
+            sourceStartOffset: sourceStartOffset);
     }
 
     private SqlOperationCandidate CreateCandidate(
@@ -579,15 +618,19 @@ internal sealed class SqlOperationExtractor
         return _source.Substring(start, length).Trim();
     }
 
-    private SqlSourceLocation CreateLocation(TSqlFragment fragment)
+    private SqlSourceLocation CreateLocation(TSqlFragment fragment, int? startOverride = null)
     {
-        var start = Math.Clamp(fragment.StartOffset, 0, _source.Length);
-        var length = Math.Clamp(fragment.FragmentLength, 0, _source.Length - start);
+        var fragmentEnd = Math.Clamp(fragment.StartOffset + fragment.FragmentLength, 0, _source.Length);
+        var start = Math.Clamp(startOverride ?? fragment.StartOffset, 0, _source.Length);
+        var length = Math.Clamp(fragmentEnd - start, 0, _source.Length - start);
         var (endLine, endColumn) = PositionAt(start + length);
+        var (startLine, startColumn) = startOverride is null
+            ? (fragment.StartLine, fragment.StartColumn)
+            : PositionAt(start);
         return new SqlSourceLocation(
             _sourcePath,
-            fragment.StartLine,
-            fragment.StartColumn,
+            startLine,
+            startColumn,
             start,
             length,
             endLine,
@@ -714,9 +757,11 @@ internal sealed class SqlOperationCandidate
         List<SqlObjectReference>? callTargets = null,
         bool dynamicSql = false,
         List<SqlObjectReference>? functionReferences = null,
-        List<string>? unresolvedWriteTargets = null)
+        List<string>? unresolvedWriteTargets = null,
+        int? sourceStartOffset = null)
     {
         Fragment = fragment;
+        SourceStartOffset = sourceStartOffset;
         OperationType = operationType;
         BranchPath = branchPath;
         Where = where;
@@ -731,6 +776,7 @@ internal sealed class SqlOperationCandidate
     }
 
     internal TSqlFragment Fragment { get; }
+    private int? SourceStartOffset { get; }
     private string OperationType { get; }
     private List<string> BranchPath { get; }
     private string? Where { get; }
@@ -746,7 +792,7 @@ internal sealed class SqlOperationCandidate
     internal SqlOperation ToOperation(
         int sequence,
         SqlModuleIdentity module,
-        Func<TSqlFragment, SqlSourceLocation> locationFactory)
+        Func<TSqlFragment, int?, SqlSourceLocation> locationFactory)
         => new(
             OperationType,
             module,
@@ -762,7 +808,7 @@ internal sealed class SqlOperationCandidate
             FunctionReferences,
             CallTargets,
             DynamicSql,
-            locationFactory(Fragment));
+            locationFactory(Fragment, SourceStartOffset));
 
     private List<string> Conditions()
     {

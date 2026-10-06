@@ -506,6 +506,128 @@ update SOrder set InvFlag=@INVFlag where SysKey=@Syskey
     assert len(selects) == 3
 
 
+def test_the_exists_predicate_of_check_program_auth_gives_a_reads_relationship_to_user_program() -> None:
+    """The real `COMMON.CheckProgramAuth` (eFinance) reads `COMMON.UserProgram` only in an IF EXISTS predicate."""
+    data = cache_payload(
+        "eFinance",
+        tables=["COMMON.Module", "COMMON.Users", "COMMON.UserLog", "COMMON.UserProgram"],
+        procedures={
+            "COMMON.CheckProgramAuth": {
+                "definition": r"""-- =============================================
+-- Author:		<BettyChou>
+-- Create date: <2014/9/22>
+-- Description:	<確認使用者是否有此程式授權，傳入程式代碼與使用者識代>
+--	有權限傳回功能名稱，無權限傳回空字串
+-- =============================================
+CREATE PROCEDURE [COMMON].[CheckProgramAuth]
+	@program varchar(250),@jobid varchar(10) as 
+BEGIN
+
+ declare @Name as nvarchar(250),@progid as int,@prog as varchar(250),@hasAuth as tinyint
+ declare @CheckAuth as varchar(10)
+ set @prog=UPPER(@program)
+ set @hasAuth=0;
+
+ declare prog_cursor cursor for 
+ select [description],[type],ItemID from COMMON.Module where LinkDesc=@prog and [status]='Y' order by ItemID;
+
+ OPEN prog_cursor 
+ 
+	FETCH NEXT FROM prog_cursor INTO @Name,@CheckAuth,@progid
+	while @@Fetch_status=0 and @hasAuth=0
+	begin
+		 if @Name is not null		
+		 begin
+			if @CheckAuth<>'Home'
+			begin
+				declare @userrole as char(1)
+		
+				select @userrole=[Role] from COMMON.Users where JobID=@jobid and status='Y'
+				if @userrole is not null
+				begin
+					if @userrole='S'
+					begin
+						insert into COMMON.UserLog(JobID,usetime,Prog,Auth) values(@jobid,GETDATE(),@program,'OK');
+						select @Name as ProgramName,'OK' as Result;				
+						set @hasAuth=1;
+					end
+					else
+					begin				
+						if @CheckAuth='SubFile'
+						begin
+							select @progid=ItemID from COMMON.Module where [type]='File' and
+							 url=(select top 1 url from COMMON.Module where ItemID=@progid)
+						end
+				
+						if exists(select top 1 * from COMMON.UserProgram where ItemID=@progid and JobID=@jobid)
+						begin
+							insert into COMMON.UserLog(JobID,usetime,Prog,Auth) values(@jobid,GETDATE(),@program,'OK');
+							select @Name as ProgramName,'OK' as Result;			
+							set @hasAuth=1;		
+						end
+					
+				
+					end
+				end
+			end
+			else
+			begin		
+			--	insert into COMMON.UserLog(JobID,usetime,Prog,Auth) values(@jobid,GETDATE(),@program,'OK');
+				select @Name as ProgramName,'OK' as Result;
+				set @hasAuth=1;		
+			end
+		 end 
+		 FETCH NEXT FROM prog_cursor INTO @Name,@CheckAuth,@progid
+	 end
+	 close prog_cursor
+	 deallocate prog_cursor
+
+	 if @hasAuth=0
+	 begin
+		insert into COMMON.UserLog(JobID,usetime,Prog,Auth) values(@jobid,GETDATE(),@program,'NG');
+		select @Name as ProgramName,'NG' as Result;
+	 end
+END
+
+""",
+            },
+        },
+    )
+
+    graph = build_sql_execution_graph(data)
+
+    reads = {
+        relationship["target"]
+        for relationship in graph["relationships"]
+        if relationship["type"] == "reads"
+    }
+    assert "table:COMMON.UserProgram" in reads
+
+
+def test_a_predicate_read_of_a_temp_table_expands_to_the_base_table_behind_its_writer() -> None:
+    """A `#temp` read inside an IF predicate follows the Temp Table Scope as any other read."""
+    data = cache_payload(
+        "TestDb",
+        tables=["dbo.Users"],
+        procedures={
+            "dbo.usp_Stage": {
+                "definition": """CREATE PROCEDURE dbo.usp_Stage
+AS
+BEGIN
+    SELECT Id INTO #stage FROM dbo.Users;
+    IF EXISTS (SELECT 1 FROM #stage) PRINT 'found';
+END;
+"""
+            },
+        },
+    )
+
+    graph = build_sql_execution_graph(data)
+
+    assert_relationships_resolve_to_known_nodes(graph)
+    assert "table:dbo.Users" in [target for _, target in _lineage_reads(graph)]
+
+
 def test_a_read_through_a_temp_table_keeps_the_database_its_base_read_stated() -> None:
     """The lineage read to the base table records the database the base read stated."""
     data = cache_payload(

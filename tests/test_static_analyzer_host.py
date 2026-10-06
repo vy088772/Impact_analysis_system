@@ -1149,3 +1149,77 @@ def test_a_ddl_statement_that_calls_a_function_gives_a_select_operation_with_its
 
 def test_a_statement_that_names_an_object_without_a_table_reference_gives_no_operation() -> None:
     assert _module_operations("TRUNCATE TABLE dbo.T;\nCREATE INDEX ix ON dbo.T (a);") == []
+
+
+def test_an_if_exists_predicate_gives_a_select_operation_before_the_branch_operation() -> None:
+    operations = _module_operations(
+        "IF EXISTS (SELECT 1 FROM dbo.UserProgram WHERE id = @id) UPDATE dbo.T SET a = 1;"
+    )
+
+    assert [operation["operation_type"] for operation in operations] == ["SELECT", "UPDATE"]
+    assert operations[0]["read_tables"] == [_reference("", "", "dbo", "UserProgram")]
+    assert operations[0]["branch_path"] == []
+    (branch_entry,) = operations[1]["branch_path"]
+    assert branch_entry.startswith("IF ")
+
+
+def test_a_scalar_subquery_predicate_gives_one_select_operation() -> None:
+    (operation,) = _module_operations("IF (SELECT MAX(id) FROM dbo.T) <> '' PRINT 'x';")
+
+    assert operation["operation_type"] == "SELECT"
+    assert operation["read_tables"] == [_reference("", "", "dbo", "T")]
+
+
+def test_a_while_predicate_gives_one_select_operation_and_its_body_keeps_the_branch_path() -> None:
+    operations = _module_operations(
+        "WHILE EXISTS (SELECT 1 FROM dbo.Q) BEGIN DELETE FROM dbo.Q; END"
+    )
+
+    assert [operation["operation_type"] for operation in operations] == ["SELECT", "DELETE"]
+    assert operations[0]["read_tables"] == [_reference("", "", "dbo", "Q")]
+    assert operations[0]["branch_path"] == []
+    (branch_entry,) = operations[1]["branch_path"]
+    assert branch_entry.startswith("WHILE ")
+
+
+def test_a_direct_function_call_in_an_if_predicate_gives_a_function_reference() -> None:
+    (operation,) = _module_operations("IF dbo.fnCheck(@id) = 1 PRINT 'x';")
+
+    assert operation["operation_type"] == "SELECT"
+    assert operation["function_references"] == [_reference("", "", "dbo", "fnCheck")]
+
+
+def test_the_location_of_a_predicate_read_covers_the_predicate_only() -> None:
+    sql = (
+        "CREATE PROCEDURE dbo.usp_Loc AS\n"
+        "IF EXISTS (SELECT 1 FROM dbo.A) UPDATE dbo.T SET a = 1; ELSE UPDATE dbo.U SET a = 2;\n"
+    )
+    operations = _analyze_sql_text(sql)["operations"]
+
+    location = operations[0]["source"]
+    start = location["start_offset"]
+    assert sql[start:start + location["length"]] == "EXISTS (SELECT 1 FROM dbo.A)"
+
+
+def test_a_predicate_read_of_an_inner_if_carries_the_branch_path_of_the_outer_if_only() -> None:
+    operations = _module_operations(
+        "IF @a = 1 IF EXISTS (SELECT 1 FROM dbo.A) PRINT 'x';"
+    )
+
+    (operation,) = operations
+    assert operation["branch_path"] == ["IF @a = 1"]
+
+
+def test_one_predicate_with_two_subqueries_gives_one_operation() -> None:
+    (operation,) = _module_operations(
+        "IF EXISTS (SELECT 1 FROM dbo.A) OR EXISTS (SELECT 1 FROM dbo.B) PRINT 'x';"
+    )
+
+    assert operation["read_tables"] == [
+        _reference("", "", "dbo", "A"),
+        _reference("", "", "dbo", "B"),
+    ]
+
+
+def test_an_if_predicate_that_refers_to_no_object_gives_no_operation() -> None:
+    assert _module_operations("IF @a = 1 PRINT 'x';") == []
