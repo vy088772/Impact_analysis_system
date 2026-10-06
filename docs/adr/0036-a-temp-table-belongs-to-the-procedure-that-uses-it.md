@@ -39,6 +39,8 @@ A temp read inside a visible writer keeps the direction of the state that reache
 
 ### No shadowing detection
 
+[ADR-0043](0043-a-select-into-temp-table-shadows-the-callers-temp-table.md) changes this section for a `SELECT ... INTO #name` that is in no branch. This section still applies to `CREATE TABLE #name`.
+
 The expansion does not detect shadowing. The analyzer does not report `CREATE TABLE #name`, so the graph cannot tell whether a callee created its own `#tmp` and hid the caller's. The expansion takes the union of the visible writers. This over-reports on purpose. [ADR-0012](0012-object-location-index-authoritative-pruning.md) already prefers an over-report to a lost read.
 
 Do not remove this over-report as a defect. A callee that creates its own `#tmp` adds the base tables of the caller's `#tmp` to the callee's read. That extra table is a known cost of this decision.
@@ -50,6 +52,8 @@ The expansion builds states. A state is a pair of a scoped temp node and a direc
 Each derived reads relationship keeps `confidence: "proven"`. Its `lineage` field holds the chain of scoped temp node ids from the read to the base read. Each base table keeps the server and the database that its base read stated.
 
 ## Rejected alternative
+
+[ADR-0043](0043-a-select-into-temp-table-shadows-the-callers-temp-table.md) detects shadowing from the `SELECT_INTO` operation that the graph already holds. It needs no analyzer change. The rejection below still applies to `CREATE TABLE #name`.
 
 **Report `CREATE TABLE #name` in the analyzer.** With this fact, the graph could detect that a callee created its own `#tmp`, and the expansion could stop at that callee. This change needs an analyzer change, a new cache refresh for every Database, and a new graph field. It also does not cover `SELECT ... INTO #name` in every form. The over-report costs one extra base table in a rare pattern. The analyzer change stays a separate issue.
 

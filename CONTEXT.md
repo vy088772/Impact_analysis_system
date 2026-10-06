@@ -90,8 +90,12 @@ A graph operation known to execute dynamically constructed SQL but whose target 
 _Avoid_: inferred table, guessed dependency
 
 **Temp Table Scope**:
-The one stored procedure that owns a `#name` temp table. The SQL Execution Graph holds one node for each temp table for each module that uses it, so two procedures that both use `#tmp` never share a node. A read of a temp table resolves to base tables through the writers in its own module and in the modules that share its session by a call: up to callers, or down to callees, never up then down. The expansion does not detect shadowing and takes the union of the visible writers, so it over-reports on purpose. A `##name` global temp table has no scope and stays one node for the Database. See [ADR-0036](docs/adr/0036-a-temp-table-belongs-to-the-procedure-that-uses-it.md).
+The one stored procedure that owns a `#name` temp table. The SQL Execution Graph holds one node for each temp table for each module that uses it, so two procedures that both use `#tmp` never share a node. A read of a temp table resolves to base tables through the writers in its own module and in the modules that share its session by a call: up to callers, or down to callees, never up then down. A resolution does not cross a call into or out of a module with Temp Table Shadowing. In other cases the expansion takes the union of the visible writers, so it over-reports on purpose. A `##name` global temp table has no scope and stays one node for the Database. See [ADR-0036](docs/adr/0036-a-temp-table-belongs-to-the-procedure-that-uses-it.md).
 _Avoid_: session table, shared temp node
+
+**Temp Table Shadowing**:
+The state of a module that always creates its own `#name` temp table, because it has a `SELECT ... INTO #name` in no branch. Its table is a different table from the caller's `#name`. A `CREATE TABLE #name` does not give shadowing, because the analyzer does not report it. See [ADR-0043](docs/adr/0043-a-select-into-temp-table-shadows-the-callers-temp-table.md).
+_Avoid_: hidden temp table, owning create
 
 ## C# Data Access Analysis
 

@@ -275,6 +275,8 @@ regex 比對很粗，每一項都是「待確認」的線索，不是定論。�
 
 後續可討論（不是缺陷）：Temp Table Scope 會把間接表格掛在每個讀 `#temp` 的語句上，查詢 `/find_by_table MaterialType` 時會得到 `usp_CDCU_RMPriceCount_Delete`，儘管它沒有直接碰該表。這是否可接受，屬設計取捨（ADR-0036）。
 
+→ 2026-10-06 triage 更正：`MaterialType` 其實來自 caller `usp_CDCU_RMPriceCount` 的 `#List`，不是 `fun_GetStatusForRMCD`。callee 用無條件 `SELECT INTO #List` 自建同名表，屬 Temp Table Shadowing；決定見 ADR-0043，實作見 `.scratch/temp-table-scope-indirect-reads/issues/01-a-select-into-temp-table-shadows-the-callers-temp-table.md`。
+
 ## 問題 3 ✅ 已確認：圖有 calls 邊、原文沒有 EXEC（3 個 module）→ 全部不是圖的缺陷
 
 | Module | 呼叫 | 結論 |
