@@ -114,3 +114,20 @@ def test_http_action_shape_reaches_the_endpoint_list(tmp_path, declaration, acti
     path.write_text(source, encoding="utf-8")
     result = CSharpParser().parse_file(str(path))
     assert [e.action for e in result.api_endpoints] == [action]
+
+
+def test_http_attribute_before_a_statement_gives_no_endpoint(tmp_path):
+    source = (
+        "namespace Rt.Controllers\n"
+        "{\n"
+        "    public class SampleController : Controller\n"
+        "    {\n"
+        "        [HttpPost]\n"
+        "        new Qux(1);\n"
+        "    }\n"
+        "}\n"
+    )
+    path = tmp_path / "SampleController.cs"
+    path.write_text(source, encoding="utf-8")
+    result = CSharpParser().parse_file(str(path))
+    assert result.api_endpoints == []

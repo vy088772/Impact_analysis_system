@@ -277,9 +277,16 @@ class CSharpParser:
     # 例如 WebForms code-behind 常見的 `void CheckQryData() { ... }`。
     # 錨定在行首（可有前導空白）以避免誤配到 `new Foo(...)`、`await Foo(...)`
     # 這類「兩個以空白分隔的識別字後接左括號」的陳述式。
-    # 傳回型別（group 7）接受：元組 `(bool A, string B)`、泛型 `Task<Dictionary<string, X>>`
-    # （`<` 前可有空白）、nullable `?`、陣列 `[]`；方法名後可有泛型參數 `Name<T>(`。
-    METHOD_PATTERN = r'^[ \t]*(public|private|protected|internal)?\s*(static\s+)?(virtual\s+)?(override\s+)?(abstract\s+)?(async\s+)?((?:\([\w\s<>\[\],?.]+\)|[\w.]+(?:\s*<[\w\s<>\[\],?.()]+>)?)\??(?:\[[,\s]*\])*\??)\s+(\w+)\s*(?:<[\w\s,]+>)?\s*\('
+    # 傳回型別（group `ret`）接受：元組 `(bool A, string B)`、泛型 `Task<Dictionary<string, X>>`
+    # （`<` 前可有空白）、nullable `?`、陣列 `[]`；方法名（group `name`）後可有泛型參數 `Name<T>(`。
+    # 一律以群組名稱讀取；比對結果要先經 `_is_method_declaration` 過濾。
+    METHOD_PATTERN = (
+        r'^[ \t]*(?P<access>public|private|protected|internal)?\s*'
+        r'(?P<static>static\s+)?(?P<virtual>virtual\s+)?(?P<override>override\s+)?'
+        r'(?P<abstract>abstract\s+)?(?P<async>async\s+)?'
+        r'(?P<ret>(?:\([\w\s<>\[\],?.]+\)|[\w.]+(?:\s*<[\w\s<>\[\],?.()]+>)?)\??(?:\[[,\s]*\])*\??)'
+        r'\s+(?P<name>\w+)\s*(?:<[\w\s,]+>)?\s*\('
+    )
 
     # METHOD_PATTERN 錨定行首後，仍可能誤配到「關鍵字 識別字(」的陳述式
     # （例如 `new SqlParameter(...)`、`await FooAsync()`），故以傳回型別
@@ -289,6 +296,11 @@ class CSharpParser:
         "using", "lock", "checked", "unchecked", "typeof", "sizeof",
         "nameof", "case", "goto", "break", "continue",
     }
+
+    @classmethod
+    def _is_method_declaration(cls, match: re.Match) -> bool:
+        """METHOD_PATTERN 的比對是方法宣告，而非「關鍵字 識別字(」的陳述式。"""
+        return match.group('ret') not in cls._METHOD_RETURN_TYPE_DENYLIST
     
     # 屬性定義
     PROPERTY_PATTERN = r'(public|private|protected|internal)\s+(static\s+)?([\w\<\>\[\]]+)\s+(\w+)\s*\{\s*(get|set)'
@@ -564,22 +576,19 @@ class CSharpParser:
         method_matches = list(re.finditer(self.METHOD_PATTERN, class_content, re.MULTILINE))
         
         for match in method_matches:
-            return_type = match.group(7)
-            method_name = match.group(8)
-
-            # METHOD_PATTERN 的存取修飾詞已改為 optional，錨定行首後仍可能誤配到
-            # 「關鍵字 識別字(」的陳述式（如 new/await/return...），以傳回型別是否
-            # 為關鍵字過濾掉這類誤判。
-            if return_type in self._METHOD_RETURN_TYPE_DENYLIST:
+            if not self._is_method_declaration(match):
                 continue
 
+            return_type = match.group('ret')
+            method_name = match.group('name')
+
             # C# 允許類別成員省略存取修飾詞，此時預設為 private。
-            access_modifier = match.group(1) or "private"
-            is_static = bool(match.group(2))
-            is_virtual = bool(match.group(3))
-            is_override = bool(match.group(4))
-            is_abstract = bool(match.group(5))
-            is_async = bool(match.group(6))
+            access_modifier = match.group('access') or "private"
+            is_static = bool(match.group('static'))
+            is_virtual = bool(match.group('virtual'))
+            is_override = bool(match.group('override'))
+            is_abstract = bool(match.group('abstract'))
+            is_async = bool(match.group('async'))
             
             # 計算實際行號
             line_num = full_content[:class_start + match.start()].count('\n') + 1
@@ -1797,11 +1806,11 @@ class CSharpParser:
             
             if not method_match:
                 continue
-            if method_match.group(7) in self._METHOD_RETURN_TYPE_DENYLIST:
+            if not self._is_method_declaration(method_match):
                 continue
-            
-            action_name = method_match.group(8)
-            return_type = method_match.group(7)
+
+            action_name = method_match.group('name')
+            return_type = method_match.group('ret')
             
             # 找出 Controller 名稱
             controller_name = self._find_controller_name(content, match.start())
