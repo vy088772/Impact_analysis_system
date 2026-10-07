@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** needs-triage
+**Status:** done (2026-10-07)
 
 **Question:** How does the forward chain (and the backward chain) cross from a
 controller action into the service class that the action calls, without
@@ -97,4 +97,26 @@ surprising mismatch against the source before you trust either side.
 
 ## Answer
 
-(Fill in after the grilling session.)
+Decided in the grilling session of 2026-10-07. The record is
+[ADR-0044](../../../docs/adr/0044-the-call-graph-follows-the-bound-target-of-each-call.md).
+
+1. **Scope.** ADR-0019 limits the entry actions only. A new ADR (0044)
+   records the callee rule. ADR-0019 does not change.
+2. **Noise.** The chain follows only the methods that a call reaches. It does
+   not add the other methods of the callee class.
+3. **Interface to implementation.** Reuse the Local Implementer rule. Zero or
+   two or more implementers stop the branch.
+4. **Receiver type.** The analyzer host records the Bound Call Target of each
+   call with the semantic model. Python does not resolve the receiver type.
+5. **Depth and cycles.** The reachable set has no depth limit. A visited set
+   stops each cycle.
+6. **Existing precedent.** `expand_related_programs` uses the same Bound Call
+   Target edges. It keeps its `depth` and `max_programs` limits.
+7. **Backward direction.** The backward chain walks back to each controller
+   action, then gives every Program Screen that holds the action, with the
+   strength of that link (determined or `likely`).
+8. **Acceptance.** Forward: 227 of 227 actions fully matched by
+   `compare_flow.py`, except a named list of misses with a reason for each.
+   Backward: a new probe checks against `truth.json` with the same list.
+9. **Unresolved callee.** A call with no Bound Call Target appears in the
+   chain `diagnostics` with its reason.

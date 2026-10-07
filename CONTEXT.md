@@ -233,8 +233,12 @@ The `obj/project.assets.json` one NuGet restore writes for one SDK-style Project
 _Avoid_: nuget cache, packages folder, project.json
 
 **Local Implementer**:
-The one concrete class in the current scan that implements an interface-typed wrapper receiver and itself declares the invoked method. When exactly one exists, the call is rated as source-backed, the same as a directly-typed local wrapper; zero leaves the interface as an unresolved external wrapper receiver, unchanged; two or more is reported as `ambiguous_implementation`, a Wrapper Resolution Status, and neither declaration order nor name similarity ever breaks the tie.
+The one concrete class in the current scan that implements an interface-typed receiver — a wrapper receiver, or the receiver of a Bound Call Target — and itself declares the invoked method. When exactly one exists, the call is rated as source-backed, the same as a directly-typed local wrapper; zero leaves the interface as an unresolved external wrapper receiver, unchanged; two or more is reported as `ambiguous_implementation`, a Wrapper Resolution Status, and neither declaration order nor name similarity ever breaks the tie.
 _Avoid_: DI resolution, interface binding, local implementation
+
+**Bound Call Target**:
+The one method that a call in C# source invokes, as the semantic model binds it, with an interface method resolved to its Local Implementer. It is the only edge of the call graph; the call text is never matched by name. A call with no Local Implementer, or with two or more, has no Bound Call Target, and the chain reports that call instead of guessing. See [ADR-0044](docs/adr/0044-the-call-graph-follows-the-bound-target-of-each-call.md).
+_Avoid_: callee, call edge, resolved call, method call
 
 **Declaring Receiver Type**:
 The type one wrapper Contract is keyed on: the type that *declares* the invoked method, which for a local database context deriving from an external base class is that base, not the local subclass. It is reported beside a provenance saying how it was reached — `declaring_type` from the bound method symbol's containing type, `receiver_declaration` when the receiver's own declared type declares the method, `declaring_type_unresolved` when a receiver type resolved but inherits the method from a base this analysis cannot see, and blank when no receiver type resolved at all. The rule only ever walks *from* a receiver type the syntax already resolved; it never invents one where none was reported before.
@@ -263,7 +267,7 @@ _Avoid_: shared exclusions, default exclusions, wildcard system
 ## Web Application Analysis
 
 **Program Screen**:
-One View file together with the set of actions that serve it — the actions whose name equals the view name, plus the actions its View Anchors name. It is what a specification's program code resolves to inside a repository. The controller is a path used to reach those actions, never the unit of scope: one controller can hold several Program Screens, and a screen that anchors a shared controller reaches only the actions it anchors there, never that controller's other actions. In WebForms the same concept is one `.aspx` page and its code-behind; in Razor Pages it is one view carrying a Page Directive and its Page Model. See [ADR-0019](docs/adr/0019-a-program-is-one-view-plus-the-actions-that-serve-it.md).
+One View file together with the set of actions that serve it — the actions whose name equals the view name, plus the actions its View Anchors name. It is what a specification's program code resolves to inside a repository. The controller is a path used to reach those actions, never the unit of scope: one controller can hold several Program Screens, and a screen that anchors a shared controller reaches only the actions it anchors there, never that controller's other actions. The scope limits the actions only; the call graph follows each action's Bound Call Targets into any file of the scan root (ADR-0044). In WebForms the same concept is one `.aspx` page and its code-behind; in Razor Pages it is one view carrying a Page Directive and its Page Model. See [ADR-0019](docs/adr/0019-a-program-is-one-view-plus-the-actions-that-serve-it.md).
 _Avoid_: page, controller, program name, screen
 
 **Page Directive**:
