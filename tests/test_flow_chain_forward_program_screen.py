@@ -497,3 +497,115 @@ def test_a_webforms_chain_does_not_match_the_call_text(monkeypatch, tmp_path: Pa
     response = _forward(monkeypatch, tmp_path, scan, source, "Alpha", "btnSave_Click", procedures=procedures)
 
     assert _procedures(response) == ["dbo.usp_Bind"]
+
+
+# Ticket 06: a call with no Bound Call Target stops its branch and appears in `diagnostics`
+# with the caller, the call and the reason, so "no database access" and "the analysis could
+# not follow this call" read differently.
+
+
+def _unresolved_calls(response) -> List[dict]:
+    return [d for d in response.diagnostics if d.get("kind") == "unresolved_call"]
+
+
+def test_a_call_through_an_interface_with_no_local_implementer_appears_in_diagnostics(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _service_scan(
+        tmp_path,
+        {
+            "JobTypeController.JobTypeMtn": ["JobTypeService.GetJobType"],
+            "JobTypeService.GetJobType": ["!no_local_implementer"],
+        },
+        {"Services/JobTypeService.cs": ["GetJobType"]},
+    )
+    source = _Source([], [])
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=[])
+
+    assert _unresolved_calls(response) == [
+        {
+            "kind": "unresolved_call",
+            "caller": "JobTypeService.GetJobType",
+            "call": "x.no_local_implementer",
+            "reason": "no_local_implementer",
+            "unresolved_reason": "no_local_implementer",
+            "candidate_classes": [],
+            "source_span": {"relative_path": "bound_calls.cs", "start_offset": 0, "end_offset": 1},
+        }
+    ]
+    assert response.forward_chain["diagnostics"] == response.diagnostics
+
+
+def test_an_ambiguous_implementation_names_every_candidate_and_follows_neither(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _service_scan(
+        tmp_path,
+        {"JobTypeController.JobTypeMtn": ["!ambiguous_implementation:SharedA,SharedB"]},
+        {"Services/SharedA.cs": ["Run"], "Services/SharedB.cs": ["Run"]},
+    )
+    procedures = ["usp_A", "usp_B"]
+    source = _Source(
+        [
+            _invocation("Services/SharedA.cs", "SharedA", "Run", "usp_A"),
+            _invocation("Services/SharedB.cs", "SharedB", "Run", "usp_B"),
+        ],
+        procedures,
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=procedures)
+
+    [diagnostic] = _unresolved_calls(response)
+    assert diagnostic["caller"] == "JobTypeController.JobTypeMtn"
+    assert diagnostic["reason"] == "ambiguous_implementation"
+    assert diagnostic["candidate_classes"] == ["SharedA", "SharedB"]
+    assert _procedures(response) == []
+    assert response.forward_chain["reachable_methods"] == ["JobTypeMtn"]
+
+
+def test_an_unresolved_call_in_a_method_the_action_does_not_reach_stays_out(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _service_scan(
+        tmp_path,
+        {
+            "JobTypeController.JobTypeMtn": ["JobTypeService.GetJobType"],
+            "JobTypeService.Other": ["!ambiguous_implementation:SharedA,SharedB"],
+        },
+        {"Services/JobTypeService.cs": ["GetJobType", "Other"]},
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, _Source([], []), "JobTypeMtn", "JobTypeMtn", procedures=[])
+
+    assert _unresolved_calls(response) == []
+
+
+def test_an_unproven_path_still_appears_in_diagnostics_beside_an_unresolved_call(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _service_scan(
+        tmp_path,
+        {"JobTypeController.JobTypeMtn": ["JobTypeService.GetJobType", "!no_local_implementer"]},
+        {"Services/JobTypeService.cs": ["GetJobType"]},
+    )
+    path = {
+        "path_id": "service-path",
+        "caller_class": "JobTypeService",
+        "caller_method": "GetJobType",
+        "evidence": "unresolved",
+        "unresolved_reason": "command_text_method_parameter",
+        "sp_chain": [],
+        "reads": [],
+        "writes": [],
+    }
+    source = _Source(
+        [_invocation("Services/JobTypeService.cs", "JobTypeService", "GetJobType", "usp_A")],
+        ["usp_A"],
+        paths_by_invocation=[[path]],
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=["usp_A"])
+
+    assert [d.get("path_id") for d in response.diagnostics if "path_id" in d] == ["service-path"]
+    assert [d["reason"] for d in _unresolved_calls(response)] == ["no_local_implementer"]

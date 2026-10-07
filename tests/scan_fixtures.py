@@ -50,7 +50,8 @@ def with_bound_calls(
     """Add the Bound Call Targets of one source file, as the analyzer host records them.
 
     `calls` maps a caller node (`Class.Method`) to the nodes its calls reach. A target
-    written as `!reason` is a call with no Bound Call Target and that reason.
+    written as `!reason` or `!reason:ClassA,ClassB` is a call with no Bound Call Target,
+    that reason and those candidate classes. Its call text is `x.<reason>`.
     """
     spans = []
     for caller, targets in calls.items():
@@ -58,7 +59,16 @@ def with_bound_calls(
         sites = []
         for target in targets:
             if target.startswith("!"):
-                sites.append(CallSite(call_text=target, start_offset=0, end_offset=0, unresolved_reason=target[1:]))
+                reason, _, candidates = target[1:].partition(":")
+                sites.append(
+                    CallSite(
+                        call_text=f"x.{reason}",
+                        start_offset=len(sites),
+                        end_offset=len(sites) + 1,
+                        unresolved_reason=reason,
+                        candidate_classes=[name for name in candidates.split(",") if name],
+                    )
+                )
                 continue
             target_class, target_method = target.rsplit(".", 1)
             sites.append(

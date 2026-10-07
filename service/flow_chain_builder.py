@@ -42,7 +42,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional
 
 from canonical_object_identity import bare_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
-from code_analyzer.models import FileAnalysisResult, call_graph_node
+from code_analyzer.models import CallSite, FileAnalysisResult, call_graph_node
 from code_analyzer.project_scanner import ProjectScanResult
 from . import inline_table_relations
 from .graph_queries import filter_table_accesses, query_table_accesses
@@ -75,7 +75,7 @@ def _method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List[str]]:
     """method_name -> 內部被呼叫的 method_name 清單（鄰接表）。
 
     只剩反向鏈用它（以呼叫文字比對方法名稱）；正向鏈改用 Bound Call Target，見
-    _bound_call_adjacency。
+    _bound_call_graph。
     與 call_chain_builder._known_methods() 邏輯相同，這裡獨立一份小函式，避免
     為了共用一個私有函式而讓兩個模組互相耦合。
     """
@@ -96,24 +96,62 @@ def _method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List[str]]:
     return adj
 
 
-def _bound_call_adjacency(scan: ProjectScanResult) -> Dict[str, List[str]]:
-    """node -> the nodes that its calls reach, from the Bound Call Targets of the scan (ADR-0044).
+class _CallGraph(NamedTuple):
+    """The call graph of a scan, from the Bound Call Targets of its calls (ADR-0044)."""
+
+    # node -> the nodes that its calls reach.
+    edges: Dict[str, List[str]]
+    # node -> one diagnostic for each of its calls that has no Bound Call Target.
+    unresolved_calls: Dict[str, List[dict]]
+
+
+def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
+    """The call graph of the whole scan root.
 
     A node is one class-qualified method (`Class.Method`), so two methods with the same
     name in two classes stay two nodes. The edges come from every source file of the scan
     root, not from the program files only: an action reaches the service methods that it
     calls. A call with no Bound Call Target gives no edge, and the call text is never
-    matched by name.
+    matched by name. Such a call stays in `unresolved_calls`, so the chain can say why its
+    branch stops (ticket 06).
     """
-    adj: Dict[str, List[str]] = {}
-    for snapshot in getattr(scan, "source_snapshots", {}).values():
+    edges: Dict[str, List[str]] = {}
+    unresolved: Dict[str, List[dict]] = {}
+    for key, snapshot in getattr(scan, "source_snapshots", {}).items():
+        relative_path = str(snapshot.relative_path or key).replace("\\", "/")
         for span in snapshot.method_spans:
-            targets = adj.setdefault(span.node, [])
+            targets = edges.setdefault(span.node, [])
             for call in span.calls:
                 target = call.bound_target
-                if target and target != span.node and target not in targets:
-                    targets.append(target)
-    return adj
+                if target:
+                    if target != span.node and target not in targets:
+                        targets.append(target)
+                elif call.unresolved_reason:
+                    unresolved.setdefault(span.node, []).append(
+                        _unresolved_call_diagnostic(span.node, call, relative_path)
+                    )
+    return _CallGraph(edges, unresolved)
+
+
+def _unresolved_call_diagnostic(caller: str, call: CallSite, relative_path: str) -> dict:
+    """The `diagnostics` entry of a call with no Bound Call Target: the caller, the call, the reason.
+
+    `reason` and `unresolved_reason` both hold the reason, the two names an unproven
+    execution path in the same list carries.
+    """
+    return {
+        "kind": "unresolved_call",
+        "caller": caller,
+        "call": call.call_text,
+        "reason": call.unresolved_reason,
+        "unresolved_reason": call.unresolved_reason,
+        "candidate_classes": list(call.candidate_classes),
+        "source_span": {
+            "relative_path": relative_path,
+            "start_offset": call.start_offset,
+            "end_offset": call.end_offset,
+        },
+    }
 
 
 def _inline_sql_tables(scan: ProjectScanResult, reachable_nodes: Set[str]) -> Set[str]:
@@ -141,6 +179,8 @@ class ForwardReach(NamedTuple):
     node_path: List[str]
     # 所有可達的節點（`Class.Method`）；SP 與資料表關聯以它為依據。
     nodes: Set[str]
+    # 可達節點裡沒有 Bound Call Target 的呼叫（diagnostics 條目）；那些分支停在這裡。
+    unresolved_calls: List[dict]
 
     @property
     def method_path(self) -> List[str]:
@@ -212,7 +252,12 @@ def forward_reach(
     )
     if not starts:
         return None
-    return ForwardReach(*_reachable_from(starts, _bound_call_adjacency(scan)))
+    graph = _bound_call_graph(scan)
+    node_path, nodes = _reachable_from(starts, graph.edges)
+    unresolved_calls = [
+        diagnostic for node in sorted(nodes) for diagnostic in graph.unresolved_calls.get(node, [])
+    ]
+    return ForwardReach(node_path, nodes, unresolved_calls)
 
 
 def _caller_node(path: Mapping[str, object]) -> str:
@@ -341,7 +386,8 @@ def build_forward_chain(
         "stored_procedures": sp_chain,
         "execution_paths": execution_paths,
         "diagnostics": [
-            path for path in execution_paths if path.get("evidence") != "proven"
+            *(path for path in execution_paths if path.get("evidence") != "proven"),
+            *reach.unresolved_calls,
         ],
         "unresolved_paths": unresolved_paths,
         "tables": sorted(all_tables),
