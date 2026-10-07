@@ -214,7 +214,11 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # View 的候選 View Anchor（見 `.scratch/rttalentdb-program-to-sql-chain/issues/15-...md`）。
 # 只改 `.js` 檔不會讓已掃描的 View 更新，必須在本機重掃。舊快取的 razor_results 少了這些
 # anchor，必須重新掃描。
-_CACHE_VERSION = 49
+# v50：`CSharpParser.CLASS_PATTERN` 的比對從修飾詞或 `class` 關鍵字開始（見
+# `.scratch/rttalentdb-program-to-sql-chain/issues/16-...md`）。沒有存取修飾詞的類別
+# （`class Foo`、`static class Baz`）的行號改成宣告所在的行，舊快取指向前面空白的開頭，
+# 必須重新掃描。
+_CACHE_VERSION = 50
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

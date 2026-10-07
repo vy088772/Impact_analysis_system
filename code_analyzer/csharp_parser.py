@@ -270,9 +270,13 @@ class CSharpParser:
     USING_PATTERN = r'using\s+([\w\.]+)\s*;'
     
     # 類別定義
+    # 比對從修飾詞或 `class` 關鍵字開始，不從前面的空白開始。兩個 optional 群組
+    # 各自帶 `\s+`，一段空白只有一種切法：舊寫法 `(...)?\s*(...)?\s*class` 在
+    # 長段空白（`strip_csharp_comments` 把整塊註解換成空白）上是 O(n³)，
+    # 一個 21 KB 的檔案要 2656 秒（見 `.scratch/rttalentdb-program-to-sql-chain/issues/16-...md`）。
     CLASS_PATTERN = (
-        r'(?P<access>public|internal|private|protected)?\s*'
-        r'(?P<modifier>abstract|sealed|static|partial)?\s*'
+        r'\b(?:(?P<access>public|internal|private|protected)\s+)?'
+        r'(?:(?P<modifier>abstract|sealed|static|partial)\s+)?'
         r'class\s+(?P<name>\w+)(?:\s*:\s*(?P<bases>[\w\s,<>\.]+))?'
     )
     
