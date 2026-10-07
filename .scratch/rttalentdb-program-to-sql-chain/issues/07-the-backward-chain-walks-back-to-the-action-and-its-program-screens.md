@@ -19,7 +19,7 @@ See ADR-0044 and ADR-0019.
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** in-progress (2026-10-07)
 
 - [ ] A table that `JobTypeService.InvalidateJobType` reaches gives the JobType
       action and its view in the backward chain
