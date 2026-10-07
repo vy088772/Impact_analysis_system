@@ -813,7 +813,7 @@ class CSharpParser:
                 if len(sql) > 15 and any(kw in sql.upper() for kw in ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'EXEC']):
                     sql_queries.append(sql)
         
-        return list(set(sql_queries))  # 去重
+        return list(dict.fromkeys(sql_queries))  # 去重，保留第一次比對的順序
     
     def _extract_method_calls(self, method_body: str) -> List[str]:
         """提取方法呼叫。

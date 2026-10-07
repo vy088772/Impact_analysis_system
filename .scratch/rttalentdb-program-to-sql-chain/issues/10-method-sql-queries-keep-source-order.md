@@ -12,13 +12,13 @@ change.
 
 **Blocked by:** None.
 
-**Status:** ready-for-agent (triaged 2026-10-07; the Agent Brief below is the
-contract and replaces the checklist)
+**Status:** done (2026-10-07; the Agent Brief below is the contract and
+replaces the checklist)
 
-- [ ] Two scans of the same source give the same `sql_queries` list for each
+- [x] Two scans of the same source give the same `sql_queries` list for each
       method, with no sort
-- [ ] Each query in the list is the same as before; only the order changes
-- [ ] A decision on the cache version is in the notes: the cached order is
+- [x] Each query in the list is the same as before; only the order changes
+- [x] A decision on the cache version is in the notes: the cached order is
       random, so a rescan is not necessary for correct data
 
 **Notes:**
@@ -57,6 +57,29 @@ rescan replaces the order.
 **Prior rejection:** None. The 3 files in `.out-of-scope/` are about temp
 tables and dynamic SQL.
 
+### Implementation (2026-10-07)
+
+- `code_analyzer/csharp_parser.py`: `_extract_sql_in_text` removes the
+  duplicates with `list(dict.fromkeys(sql_queries))`. This is a change of one
+  line. The set of queries does not change.
+- `tests/test_csharp_parser_method_sql_order.py` (new): one input with 5
+  different queries and one duplicate. Test 1 asserts the exact list in
+  first-match order. Test 2 runs `parse_file` in 4 subprocesses with
+  `PYTHONHASHSEED` 1 to 4 and asserts the same exact list.
+- The input has a verbatim string (`@"..."`) at the end of the method. It
+  comes first in the list, because the first item of `SQL_PATTERNS` is the
+  verbatim pattern. The duplicate query keeps the position of its first match.
+- Red before the change: the two tests failed with a random order. The failed
+  list had the same 5 queries, so the set did not change.
+- Cache version: no change, as the triage decided. The old cached order is a
+  valid order of the same queries.
+- Verification: the C# parser and gateway tests gave 230 passed. The full
+  suite in the main directory gave 1820 passed. I did not run
+  `tests/test_search_roles.py` and `tests/test_sp_tables.py`. They stop at
+  collection with `KeyError: 'PUR'`, because they need the PUR database.
+- mypy: no new errors. The 20 errors are old errors in `csharp_parser.py`
+  and `config/sp_detector_config.py`.
+
 ## Agent Brief
 
 **Category:** bug
@@ -83,17 +106,17 @@ same list.
 - `MethodInfo.sql_queries: List[str]`: no type change.
 
 **Acceptance criteria:**
-- [ ] A test runs the method in two subprocesses with different
+- [x] A test runs the method in two subprocesses with different
       `PYTHONHASHSEED` values on one input with 3 or more queries. The two
       lists are equal.
-- [ ] The test asserts the exact expected list in first-match order, with no
+- [x] The test asserts the exact expected list in first-match order, with no
       sort.
-- [ ] A duplicate query in the input occurs one time in the output, at the
+- [x] A duplicate query in the input occurs one time in the output, at the
       position of its first match.
-- [ ] The set of returned queries for each input is the same as before the
+- [x] The set of returned queries for each input is the same as before the
       change.
-- [ ] The scan cache version does not change.
-- [ ] The existing C# parser tests and the impact suite baseline do not
+- [x] The scan cache version does not change.
+- [x] The existing C# parser tests and the impact suite baseline do not
       regress (3 path-dependent tests differ in a worktree; they are not a
       regression).
 
