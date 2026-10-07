@@ -47,8 +47,13 @@ See ticket 07 (Implementation notes) and ADR-0019.
 - Done 2026-10-07 in the spec-rag repo only. New helper
   `_render_backward_anchor` in `impact_orch/agent_tools.py`; it renders by
   `kind`. `program_screen` line: `對應 Program Screen：{view}（action, controller, strength=…）`.
-- A `likely` anchor adds a "候選" warning: a script URL only looks like a call.
+- Only `strength == determined` reads as fact. `likely` and any unknown strength
+  start the line with a "［候選，未證實］" warning (ADR-0019).
+- An unknown `kind` prints `對應畫面項目（未知 kind=…）`, not an empty line.
 - A WebForms anchor and the "no UI" line are unchanged.
-- Tests: `tests/test_backward_chain_program_screen_render.py` (5 tests).
-- Full suite: 1628 pass. `test_sql_cache_fixtures.py::test_the_format_versions_are_the_sample_versions`
+- Tests: `tests/test_backward_chain_program_screen_render.py` (7 tests).
+- Full suite: 1630 pass. `test_sql_cache_fixtures.py::test_the_format_versions_are_the_sample_versions`
   fails before and after this change (not caused by it).
+- Code review (Standards and Spec): no standard violated. Review found two
+  fail-open defaults (unknown kind, unknown strength); both fixed in a follow-up commit.
+- Open: `CONTEXT.md` has no entry for Program Screen or strength (needs domain-modeling).
