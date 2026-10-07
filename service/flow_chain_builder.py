@@ -107,6 +107,8 @@ class _CallGraph(NamedTuple):
     unresolved_calls: Dict[str, List[dict]]
     # node -> the bare method name, for the outputs that name a method.
     method_names: Dict[str, str]
+    # node -> the simple class name of the method, to match `candidate_classes`.
+    class_names: Dict[str, str]
 
 
 def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
@@ -123,12 +125,14 @@ def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
     edges: Dict[str, List[str]] = {}
     unresolved: Dict[str, List[dict]] = {}
     method_names: Dict[str, str] = {}
+    class_names: Dict[str, str] = {}
     for key, snapshot in getattr(scan, "source_snapshots", {}).items():
         relative_path = str(snapshot.relative_path or key).replace("\\", "/")
         for span in snapshot.method_spans:
             if not span.node:
                 continue
             method_names[span.node] = span.method_name
+            class_names[span.node] = span.class_name
             targets = edges.setdefault(span.node, [])
             for call in span.calls:
                 target = call.bound_target
@@ -142,7 +146,7 @@ def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
                             f"{span.class_name}.{span.method_name}", call, relative_path
                         )
                     )
-    return _CallGraph(edges, unresolved, method_names)
+    return _CallGraph(edges, unresolved, method_names, class_names)
 
 
 def bound_call_edges(scan: ProjectScanResult) -> Dict[str, List[str]]:
@@ -565,6 +569,33 @@ def _reverse_method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List
     return _reverse_edges(_method_adjacency(files))
 
 
+_POSSIBLE_CALLER_REASONS = ("ambiguous_implementation", "ambiguous_overload")
+
+
+def _possible_caller_diagnostics(graph: _CallGraph, reached: Iterable[str]) -> List[dict]:
+    """The `diagnostics` entries of the calls that may reach a reached method (ticket 14).
+
+    The backward walk follows Bound Call Targets only. A call with no Bound Call Target
+    that is `ambiguous_implementation` or `ambiguous_overload` may still reach a method
+    whose class is one of its `candidate_classes`, so each such call gives one entry for
+    each reached method, with the forward `unresolved_call` shape plus `reached_method`.
+    A `no_local_implementer` call gives none: the class of a reached method would be a
+    Local Implementer, so the call would have a target. The calls add no edge.
+
+    A candidate is matched by the simple class name, the name that the analyzer host records.
+    """
+    entries: List[dict] = []
+    for node in sorted(set(reached)):
+        class_name = graph.class_names.get(node)
+        if not class_name:
+            continue
+        for calls in graph.unresolved_calls.values():
+            for call in calls:
+                if call["reason"] in _POSSIBLE_CALLER_REASONS and class_name in call["candidate_classes"]:
+                    entries.append({**call, "reached_method": node})
+    return entries
+
+
 def _ancestors_of(method_name: str, rev_adj: Dict[str, List[str]], max_depth: int = 8) -> Set[str]:
     """回傳所有（直接或間接）會呼叫到 method_name 的方法名稱（不含自己）。"""
     visited: Set[str] = {method_name}
@@ -595,10 +626,13 @@ def build_backward_chains(
     sql_cache_identity: Optional[CacheIdentity],
     execution_paths: Optional[Iterable[Mapping[str, object]]] = None,
     program_screens: Sequence[ProgramScreen] = (),
+    diagnostics: Optional[List[dict]] = None,
 ) -> List[dict]:
     """從指定的資料表（可選：欄位）出發，組出反向鏈候選清單。
 
     database：請求的 Database；資料表名稱沒寫 database 時取這個值，比對規則見 table_match。
+    diagnostics：呼叫端給的空清單；函式把「沒有 Bound Call Target 但可能呼叫到被走到的方法」
+    的呼叫（unresolved_call 項目，另有 reached_method）加進去（ticket 14）。
     sql_cache_identity：handler 建好的 SQL 快取身分（沒有時為 None）；inline SQL 補 schema 時用它。
 
     scan：ProjectScanResult（已合併好的整包掃描結果，含 csharp_results、
@@ -636,13 +670,16 @@ def build_backward_chains(
     method_nodes = MethodNodes(scan)
     rev_adj_cache: Dict[str, Dict[str, List[str]]] = {}
     screen_anchors = _screen_anchors_by_node(scan, root, program_screens)
-    callers = _reverse_edges(_bound_call_graph(scan).edges) if screen_anchors else {}
+    call_graph = _bound_call_graph(scan)
+    callers = _reverse_edges(call_graph.edges)
+    reached_nodes: Set[str] = set()
 
-    def _program_screen_anchors(node: str) -> List[dict]:
-        """The Program Screens of each action that reaches `node` through Bound Call Targets."""
-        if not screen_anchors:
-            return []
-        _, reached = _reachable_from([node], callers)
+    def _callers_reaching(node: str) -> Set[str]:
+        """`node` and each method that reaches it through Bound Call Targets."""
+        return _reachable_from([node], callers)[1] if node else set()
+
+    def _program_screen_anchors(reached: Set[str]) -> List[dict]:
+        """The Program Screens of each action in `reached`."""
         return [anchor for caller in sorted(reached) for anchor in screen_anchors.get(caller, [])]
 
     def _rev_adj_for_file(csharp_file: str) -> Dict[str, List[str]]:
@@ -672,7 +709,9 @@ def build_backward_chains(
         for name in {method_name, entry_method_name} - {""}:
             candidate_methods |= {name} | _ancestors_of(name, rev_adj)
         ui_anchors = _find_ui_anchors_for_method(scan.aspx_results, candidate_methods, csharp_file)
-        ui_anchors += _program_screen_anchors(node) if node else []
+        reached = _callers_reaching(node)
+        reached_nodes.update(reached)
+        ui_anchors += _program_screen_anchors(reached)
         entry = {
             "table": table_name,
             "via": via,
@@ -797,6 +836,8 @@ def build_backward_chains(
             via="direct_sql",
         )
 
+    if diagnostics is not None:
+        diagnostics.extend(_possible_caller_diagnostics(call_graph, reached_nodes))
     return chains
 
 

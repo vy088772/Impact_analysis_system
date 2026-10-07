@@ -37,6 +37,8 @@ The reachable set has no depth limit. A visited set stops each cycle. A node is 
 
 The backward chain uses the same edges in reverse. From a service method, it walks back to each controller action that reaches it. It then gives every Program Screen that holds that action, with the strength of the screen-to-action link: determined for a same-name action or a markup-layer View Anchor, and `likely` for a script URL View Anchor.
 
+The backward walk follows Bound Call Targets only. A call with no Bound Call Target may still reach a reached method. An `ambiguous_implementation` or `ambiguous_overload` call whose `candidate_classes` hold the class of a reached method appears in the backward `diagnostics`, in the forward `unresolved_call` shape plus `reached_method`. A reached method is the method that holds the access, and each method that reaches it. The walk does not follow the call. A `no_local_implementer` call gives no entry: the class of a reached method would be a Local Implementer, so the call would have a target. The match uses the simple class name that the analyzer host records, so two classes with one simple name in two namespaces can give a false entry.
+
 ### One edge source
 
 `expand_related_programs` uses the same Bound Call Target edges. It keeps its own `depth` and `max_programs` limits.

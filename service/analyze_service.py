@@ -2602,6 +2602,7 @@ def flow_chain(
             sql_cache_identity=sql_cache_identity,
             execution_paths=execution_paths,
             program_screens=_every_program_screen(scan),
+            diagnostics=diagnostics,
         )
         return FlowChainResponse(
             direction="backward",

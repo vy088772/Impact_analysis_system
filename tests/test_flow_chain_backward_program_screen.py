@@ -85,7 +85,7 @@ def _source(invocations: List[DbInvocation]):
     return source
 
 
-def _backward(monkeypatch, root: Path, scan, *invocations: DbInvocation) -> List[dict]:
+def _backward_response(monkeypatch, root: Path, scan, *invocations: DbInvocation):
     stores = RequestStores.of(root, scan)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,
@@ -105,7 +105,11 @@ def _backward(monkeypatch, root: Path, scan, *invocations: DbInvocation) -> List
         scan_store=stores.scan_store,
         cache_store=stores.cache_store,
     )
-    return response.backward_chains
+    return response
+
+
+def _backward(monkeypatch, root: Path, scan, *invocations: DbInvocation) -> List[dict]:
+    return _backward_response(monkeypatch, root, scan, *invocations).backward_chains
 
 
 def _job_type_scan(
@@ -360,3 +364,118 @@ def test_the_backward_chain_from_one_overload_does_not_reach_an_action_that_call
     chain = _service_chain(_backward(monkeypatch, tmp_path, scan, invocation))
 
     assert _screens(chain) == [("JobTypeMtn", "JobTypeInvalid", "determined")]
+
+
+# Ticket 14: the backward walk does not follow a call with no Bound Call Target. Such a call
+# may still reach a reached method, so the answer reports it in `diagnostics`.
+
+
+def _unresolved_calls(response) -> List[dict]:
+    return [d for d in response.diagnostics if d.get("kind") == "unresolved_call"]
+
+
+def _scan_with_calls(root: Path, calls: Mapping[str, Sequence[str]]):
+    return _job_type_scan(
+        root,
+        determined_anchors={"Views/JobType/JobTypeMtn.cshtml": [{"controller": "JobType", "action": "JobTypeInvalid"}]},
+        calls=calls,
+    )
+
+
+def test_an_ambiguous_call_whose_candidates_hold_a_reached_class_appears_in_the_backward_diagnostics(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _scan_with_calls(
+        tmp_path,
+        {
+            "JobTypeController.JobTypeInvalid": ["JobTypeService.InvalidateJobType"],
+            "JobTypeController.JobTypeMtn": ["!ambiguous_implementation:JobTypeService,OtherService"],
+        },
+    )
+
+    response = _backward_response(monkeypatch, tmp_path, scan, _service_invocation())
+
+    assert _unresolved_calls(response) == [
+        {
+            "kind": "unresolved_call",
+            "caller": "JobTypeController.JobTypeMtn",
+            "call": "x.ambiguous_implementation",
+            "reason": "ambiguous_implementation",
+            "unresolved_reason": "ambiguous_implementation",
+            "candidate_classes": ["JobTypeService", "OtherService"],
+            "source_span": {"relative_path": _CONTROLLER, "start_offset": 0, "end_offset": 1},
+            "reached_method": "JobTypeService.InvalidateJobType()",
+        }
+    ]
+
+
+def test_an_ambiguous_overload_call_appears_in_the_backward_diagnostics(monkeypatch, tmp_path: Path) -> None:
+    scan = _scan_with_calls(
+        tmp_path,
+        {
+            "JobTypeController.JobTypeInvalid": ["JobTypeService.InvalidateJobType"],
+            "JobTypeController.JobTypeMtn": ["!ambiguous_overload:JobTypeService"],
+        },
+    )
+
+    response = _backward_response(monkeypatch, tmp_path, scan, _service_invocation())
+
+    assert [d["reason"] for d in _unresolved_calls(response)] == ["ambiguous_overload"]
+
+
+def test_a_no_local_implementer_call_gives_no_backward_entry(monkeypatch, tmp_path: Path) -> None:
+    scan = _scan_with_calls(
+        tmp_path,
+        {
+            "JobTypeController.JobTypeInvalid": ["JobTypeService.InvalidateJobType"],
+            "JobTypeController.JobTypeMtn": ["!no_local_implementer"],
+        },
+    )
+
+    response = _backward_response(monkeypatch, tmp_path, scan, _service_invocation())
+
+    assert _unresolved_calls(response) == []
+
+
+def test_a_call_whose_candidates_hold_no_reached_class_gives_no_backward_entry(monkeypatch, tmp_path: Path) -> None:
+    scan = _scan_with_calls(
+        tmp_path,
+        {
+            "JobTypeController.JobTypeInvalid": ["JobTypeService.InvalidateJobType"],
+            "JobTypeController.JobTypeMtn": ["!ambiguous_implementation:OtherService,ThirdService"],
+        },
+    )
+
+    response = _backward_response(monkeypatch, tmp_path, scan, _service_invocation())
+
+    assert _unresolved_calls(response) == []
+
+
+def test_the_backward_walk_does_not_follow_an_ambiguous_call(monkeypatch, tmp_path: Path) -> None:
+    """The only caller of the service is an ambiguous call: the action stays out of the chain."""
+    scan = _scan_with_calls(
+        tmp_path,
+        {"JobTypeController.JobTypeInvalid": ["!ambiguous_implementation:JobTypeService,OtherService"]},
+    )
+
+    response = _backward_response(monkeypatch, tmp_path, scan, _service_invocation())
+
+    assert _screens(_service_chain(response.backward_chains)) == []
+    assert [d["caller"] for d in _unresolved_calls(response)] == ["JobTypeController.JobTypeInvalid"]
+
+
+def test_an_ambiguous_call_into_a_caller_of_the_service_gives_an_entry_for_that_caller(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The reached methods hold the callers of the chain node, not only the node itself."""
+    scan = _scan_with_calls(
+        tmp_path,
+        {
+            "JobTypeController.JobTypeInvalid": ["JobTypeService.InvalidateJobType"],
+            "JobTypeController.JobTypeMtn": ["!ambiguous_implementation:JobTypeController,OtherService"],
+        },
+    )
+
+    response = _backward_response(monkeypatch, tmp_path, scan, _service_invocation())
+
+    assert [d["reached_method"] for d in _unresolved_calls(response)] == ["JobTypeController.JobTypeInvalid()"]
