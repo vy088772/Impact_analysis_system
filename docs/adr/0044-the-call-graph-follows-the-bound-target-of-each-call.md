@@ -27,6 +27,8 @@ The analyzer host records the Bound Call Target of each call. The host uses the 
 
 When no Local Implementer exists, or when two or more exist, the branch stops at that call. The chain reports the call and the reason in its `diagnostics`. It does not guess an implementation.
 
+A call whose arguments do not bind gives candidate symbols, not one bound symbol. When all the candidates are overloads of one method in one class, the call reaches each candidate overload. This is not a guess between implementations: the class is known, and only the overload is open. Candidates in two or more classes stay `ambiguous_overload`, and the branch stops.
+
 ### Depth
 
 The reachable set has no depth limit. A visited set stops each cycle. A node is one bound method, so two methods with the same name in different classes stay two nodes. The node identity is the bound method symbol: the namespace and containing types of its class, its name, its type parameter count, and its parameter types. Two overloads of one method are two nodes, and two classes with one simple name in two namespaces are two nodes.

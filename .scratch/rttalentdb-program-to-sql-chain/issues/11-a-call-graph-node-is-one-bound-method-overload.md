@@ -281,9 +281,10 @@ stays as the name the graph code reads; the node stays a `str`, the type that
 the other keys of the scan use; the shortest span wins when two methods share
 one line (an edge case).
 
-**Open (ADR-0044 tension, flagged by the review):** a call whose arguments do
-not bind gives one Bound Call Target for each candidate overload of one method.
-ADR-0044 says the graph does not guess. Before this ticket these overloads
-shared one node, so the reach is the same as before. The user decides: keep the
-fan-out (A), or give the call `ambiguous_overload` and no edge (B).
+**Decision (user, 2026-10-07, option A):** a call whose arguments do not bind
+gives one Bound Call Target for each candidate overload of one method in one
+class (the fan-out). The review flagged a tension with "does not guess" in
+ADR-0044. Option B was `ambiguous_overload` and no edge. ADR-0044 now states
+the rule: the class is known, and only the overload is open, so it is not a
+guess between implementations.
 
