@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from typing import Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple
 
 from canonical_object_identity import bare_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
@@ -46,6 +46,7 @@ from code_analyzer.models import CallSite, FileAnalysisResult, call_graph_node
 from code_analyzer.project_scanner import ProjectScanResult
 from . import inline_table_relations
 from .graph_queries import filter_table_accesses, query_table_accesses
+from .program_screen import ProgramScreen
 from .sql_cache_store import CacheIdentity
 from .table_match import TableQuestion
 from .execution_path_builder import build_execution_paths
@@ -464,6 +465,51 @@ def _find_ui_anchors_for_method(
     return anchors
 
 
+def _reverse_edges(edges: Mapping[str, List[str]]) -> Dict[str, List[str]]:
+    """node -> the nodes that call it: the Bound Call Target edges in reverse (ADR-0044)."""
+    callers: Dict[str, List[str]] = {}
+    for caller, callees in edges.items():
+        for callee in callees:
+            callers.setdefault(callee, []).append(caller)
+    return callers
+
+
+def _screen_anchors_by_node(
+    scan: ProjectScanResult, root: Path, screens: Sequence[ProgramScreen]
+) -> Dict[str, List[dict]]:
+    """node of an action -> one `ui_anchors` entry for each Program Screen that holds it.
+
+    The strength is the strength of the screen-to-action link (ADR-0019): `determined`
+    for a same-name action or a markup-layer View Anchor, `likely` for a script URL.
+    """
+    files = {fr.file_path: fr for fr in scan.csharp_results}
+    anchors: Dict[str, List[dict]] = {}
+    for screen in screens:
+        for action in screen.actions:
+            controller = files.get(action.controller_path)
+            if controller is None:
+                continue
+            for node in sorted(
+                {
+                    call_graph_node(cls.name, m.name)
+                    for cls in controller.classes
+                    for m in cls.methods
+                    if m.name == action.name
+                }
+            ):
+                anchors.setdefault(node, []).append(
+                    {
+                        "kind": "program_screen",
+                        "file": _rel(screen.view_path, root),
+                        "view": screen.view_name,
+                        "controller_file": _rel(action.controller_path, root),
+                        "action": action.name,
+                        "strength": action.strength,
+                    }
+                )
+    return anchors
+
+
 def _reverse_method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List[str]]:
     """method_name -> 呼叫它的 method_name 清單（跟 _method_adjacency 方向相反）。"""
     forward = _method_adjacency(files)
@@ -503,6 +549,7 @@ def build_backward_chains(
     *,
     sql_cache_identity: Optional[CacheIdentity],
     execution_paths: Optional[Iterable[Mapping[str, object]]] = None,
+    program_screens: Sequence[ProgramScreen] = (),
 ) -> List[dict]:
     """從指定的資料表（可選：欄位）出發，組出反向鏈候選清單。
 
@@ -540,8 +587,17 @@ def build_backward_chains(
     """
     invocations = list(invocations)
     chains: List[dict] = []
-    seen: Set[Tuple[str, str]] = set()
+    seen: Set[Tuple[str, str, str]] = set()
     rev_adj_cache: Dict[str, Dict[str, List[str]]] = {}
+    screen_anchors = _screen_anchors_by_node(scan, root, program_screens)
+    callers = _reverse_edges(_bound_call_graph(scan).edges) if screen_anchors else {}
+
+    def _program_screen_anchors(node: str) -> List[dict]:
+        """The Program Screens of each action that reaches `node` through Bound Call Targets."""
+        if not screen_anchors:
+            return []
+        _, reached = _reachable_from([node], callers)
+        return [anchor for caller in sorted(reached) for anchor in screen_anchors.get(caller, [])]
 
     def _rev_adj_for_file(csharp_file: str) -> Dict[str, List[str]]:
         if csharp_file not in rev_adj_cache:
@@ -557,14 +613,18 @@ def build_backward_chains(
         via: str,
         sp_name: str = "",
         access_record: Optional[Mapping[str, object]] = None,
+        entry_method_name: str = "",
     ) -> None:
-        key = (csharp_file, method_name)
+        key = (csharp_file, class_name, method_name)
         if key in seen:
             return
         seen.add(key)
         rev_adj = _rev_adj_for_file(csharp_file)
-        candidate_methods = {method_name} | _ancestors_of(method_name, rev_adj)
+        candidate_methods: Set[str] = set()
+        for name in {method_name, entry_method_name} - {""}:
+            candidate_methods |= {name} | _ancestors_of(name, rev_adj)
         ui_anchors = _find_ui_anchors_for_method(scan.aspx_results, candidate_methods, csharp_file)
+        ui_anchors += _program_screen_anchors(call_graph_node(class_name, method_name))
         entry = {
             "table": table_name,
             "via": via,
@@ -650,9 +710,14 @@ def build_backward_chains(
         if len(matching_files) != 1:
             continue
         entry_method = str(access_record.get("entry_method") or "")
-        class_name, separator, method_name = entry_method.rpartition(".")
+        entry_class, separator, entry_method_name = entry_method.rpartition(".")
         if not separator:
-            class_name, method_name = "", entry_method
+            entry_class, entry_method_name = "", entry_method
+        # The chain names the method that holds the invocation, the same join that the
+        # forward chain uses (see _caller_node). The entry method still finds the
+        # WebForms control events of the page.
+        class_name = str(access_record.get("caller_class") or "") if access_record.get("caller_method") else entry_class
+        method_name = str(access_record.get("caller_method") or "") or entry_method_name
         sp_chain = list(access_record.get("sp_chain") or [])
         add_chain(
             matching_files[0],
@@ -661,6 +726,7 @@ def build_backward_chains(
             via="stored_procedure",
             sp_name=sp_chain[-1] if sp_chain else "",
             access_record=access_record,
+            entry_method_name=entry_method_name,
         )
 
     # 2) Inline C# SQL remains a separate direct source fact. It does not infer

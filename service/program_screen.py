@@ -155,6 +155,41 @@ def resolve_program_screens(
     )
 
 
+def resolve_every_program_screen(
+    *,
+    view_paths: Iterable[str],
+    controller_actions: Mapping[str, Sequence[str]],
+    determined_anchors: Optional[Mapping[str, Sequence[Mapping[str, str]]]] = None,
+    candidate_anchors: Optional[Mapping[str, Sequence[Mapping[str, str]]]] = None,
+) -> List[ProgramScreen]:
+    """Every Program Screen of a scan: one per view, named by the view.
+
+    The backward chain asks which screens hold one action, so it needs every screen,
+    not the screens of one program code. Each view takes its controller and its
+    actions by the same rules as `resolve_program_screens`.
+    """
+    views = [parsed for parsed in map(_view_file, view_paths) if parsed is not None]
+    controllers = [
+        parsed
+        for parsed in (
+            _controller_file(path, actions)
+            for path, actions in controller_actions.items()
+        )
+        if parsed is not None
+    ]
+    anchors = _anchors_by_view(determined_anchors, candidate_anchors)
+    return [
+        _screen(
+            view.name,
+            view,
+            _controller_of(view, controllers),
+            controllers,
+            anchors.get(view.path, _Anchors()),
+        )
+        for view in views
+    ]
+
+
 def resolve_razor_page_screens(
     program_code: str,
     *,

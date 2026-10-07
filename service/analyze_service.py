@@ -75,6 +75,7 @@ from .table_match import (
 )
 from .program_screen import (
     ProgramScreen,
+    resolve_every_program_screen,
     resolve_program_screens,
     resolve_razor_page_screens,
     razor_page_model_path,
@@ -371,39 +372,11 @@ def _program_resolutions(raw_name: str, scan: ProjectScanResult) -> List[_Progra
             for screen in screens
         ]
 
-    page_screens = resolve_razor_page_screens(
-        raw_name,
-        view_paths=[r.file_path for r in scan.razor_results],
-        page_directives={
-            r.file_path: r.has_page_directive for r in scan.razor_results
-        },
-        page_model_handlers={
-            r.file_path: [
-                m.name
-                for cls in csharp_by_path[razor_page_model_path(r.file_path)].classes
-                for m in cls.methods
-            ]
-            for r in scan.razor_results
-            if razor_page_model_path(r.file_path) in csharp_by_path
-        },
-    )
+    page_screens = resolve_razor_page_screens(raw_name, **_razor_page_inputs(scan))
     if page_screens:
         return _resolutions(page_screens)
 
-    screens = resolve_program_screens(
-        raw_name,
-        view_paths=[r.file_path for r in scan.razor_results],
-        controller_actions={
-            path: [m.name for cls in result.classes for m in cls.methods]
-            for path, result in csharp_by_path.items()
-        },
-        determined_anchors={
-            r.file_path: r.view_anchors_determined for r in scan.razor_results
-        },
-        candidate_anchors={
-            r.file_path: r.view_anchors_candidate for r in scan.razor_results
-        },
-    )
+    screens = resolve_program_screens(raw_name, **_mvc_screen_inputs(scan))
     if screens:
         return _resolutions(screens)
 
@@ -412,6 +385,72 @@ def _program_resolutions(raw_name: str, scan: ProjectScanResult) -> List[_Progra
     if any(_names_file_outright(r.file_path, program_base) for r in scan.csharp_results):
         return [legacy]
     return []
+
+
+def _razor_page_inputs(scan: ProjectScanResult) -> Dict[str, Any]:
+    """The views, page directives and page model handlers that Razor Pages resolution reads."""
+    csharp_by_path = {r.file_path: r for r in scan.csharp_results}
+    return {
+        "view_paths": [r.file_path for r in scan.razor_results],
+        "page_directives": {
+            r.file_path: r.has_page_directive for r in scan.razor_results
+        },
+        "page_model_handlers": {
+            r.file_path: [
+                m.name
+                for cls in csharp_by_path[razor_page_model_path(r.file_path)].classes
+                for m in cls.methods
+            ]
+            for r in scan.razor_results
+            if razor_page_model_path(r.file_path) in csharp_by_path
+        },
+    }
+
+
+def _mvc_screen_inputs(scan: ProjectScanResult) -> Dict[str, Any]:
+    """The views, controller actions and View Anchors that MVC screen resolution reads."""
+    return {
+        "view_paths": [r.file_path for r in scan.razor_results],
+        "controller_actions": {
+            result.file_path: [m.name for cls in result.classes for m in cls.methods]
+            for result in scan.csharp_results
+        },
+        "determined_anchors": {
+            r.file_path: r.view_anchors_determined for r in scan.razor_results
+        },
+        "candidate_anchors": {
+            r.file_path: r.view_anchors_candidate for r in scan.razor_results
+        },
+    }
+
+
+def _every_program_screen(scan: ProjectScanResult) -> List[ProgramScreen]:
+    """Every Program Screen of the scan, for the backward chain (ADR-0044).
+
+    A view with a page directive is a Razor Pages screen; every other view is an MVC
+    screen. A scan with no Razor view has no Program Screen, and WebForms keeps its
+    control event anchors.
+    """
+    if not scan.razor_results:
+        return []
+    page_inputs = _razor_page_inputs(scan)
+    page_views = {r.file_path for r in scan.razor_results if r.has_page_directive}
+    page_names = {
+        Path(path).name[: -len(".cshtml")].casefold(): Path(path).name[: -len(".cshtml")]
+        for path in page_views
+        if path.casefold().endswith(".cshtml")
+    }
+    pages = [
+        screen
+        for name in sorted(page_names.values())
+        for screen in resolve_razor_page_screens(name, **page_inputs)
+    ]
+    mvc = [
+        screen
+        for screen in resolve_every_program_screen(**_mvc_screen_inputs(scan))
+        if screen.view_path not in page_views
+    ]
+    return pages + mvc
 
 
 def _names_file_outright(file_path: str, program_base: str) -> bool:
@@ -2568,6 +2607,7 @@ def flow_chain(
             database=req.database or "",
             sql_cache_identity=sql_cache_identity,
             execution_paths=execution_paths,
+            program_screens=_every_program_screen(scan),
         )
         return FlowChainResponse(
             direction="backward",
