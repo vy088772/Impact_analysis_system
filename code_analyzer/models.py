@@ -101,6 +101,33 @@ class CodeLocation:
 
 
 @dataclass
+class CallSite:
+    """One call inside a method, with its Bound Call Target (ADR-0044).
+
+    The analyzer host binds the call with the semantic model, and resolves an
+    interface method through the Local Implementer rule. `target_class` and
+    `target_method` name the method that the call reaches. Both are empty when
+    the call has no Bound Call Target; `unresolved_reason` then says why, and
+    `candidate_classes` names each tied class of `ambiguous_implementation`.
+    """
+
+    call_text: str
+    start_offset: int
+    end_offset: int
+    target_class: str = ""
+    target_method: str = ""
+    unresolved_reason: str = ""
+    candidate_classes: List[str] = field(default_factory=list)
+
+    @property
+    def bound_target(self) -> str:
+        """The call graph node that the call reaches (`Class.Method`), or "" when it has none."""
+        if not self.target_method:
+            return ""
+        return f"{self.target_class}.{self.target_method}"
+
+
+@dataclass
 class MethodSourceSpan:
     """A method identity and its exclusive source offsets within one snapshot."""
 
@@ -108,6 +135,12 @@ class MethodSourceSpan:
     method_name: str
     start_offset: int
     end_offset: int
+    calls: List[CallSite] = field(default_factory=list)
+
+    @property
+    def node(self) -> str:
+        """The call graph node of this method: one class-qualified method (ADR-0044)."""
+        return f"{self.class_name}.{self.method_name}"
 
 
 @dataclass

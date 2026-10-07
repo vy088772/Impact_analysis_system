@@ -10,7 +10,8 @@
 兩種方向：
   - forward（build_forward_chain）：從指定的錨點方法（通常是 spec-rag 端依
     UI 動作用語意檢索，從 ui_fields 的 events 挑出的候選 handler 方法名稱）出發，
-    走方法呼叫鏈，再依 SQL Execution Graph 的 sp_chain 列出 SP（含巢狀呼叫），
+    沿每個呼叫的 Bound Call Target（ADR-0044）走進掃描根目錄裡的任何檔案（例如
+    controller action 呼叫的 service 方法），再依 SQL Execution Graph 的 sp_chain 列出 SP（含巢狀呼叫），
     最後彙整這些 SP 引用的資料表；同時也會補上可達方法的 inline SQL table
     relation（C# Scan Result 的 table_relations，經 inline table relations
     module 的 by-method query 取得）所列的資料表（`inline_sql_tables`），涵蓋
@@ -37,7 +38,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from typing import Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple
 
 from canonical_object_identity import bare_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
@@ -73,6 +74,8 @@ def _wrapper_projection_fields(source: Mapping[str, object]) -> dict[str, object
 def _method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List[str]]:
     """method_name -> 內部被呼叫的 method_name 清單（鄰接表）。
 
+    只剩反向鏈用它（以呼叫文字比對方法名稱）；正向鏈改用 Bound Call Target，見
+    _bound_call_adjacency。
     與 call_chain_builder._known_methods() 邏輯相同，這裡獨立一份小函式，避免
     為了共用一個私有函式而讓兩個模組互相耦合。
     """
@@ -93,45 +96,74 @@ def _method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List[str]]:
     return adj
 
 
-def _inline_sql_tables(
-    scan: ProjectScanResult, owns_file: Callable[[str], bool], reachable_methods: Set[str]
-) -> Set[str]:
+def _bound_call_adjacency(scan: ProjectScanResult) -> Dict[str, List[str]]:
+    """node -> the nodes that its calls reach, from the Bound Call Targets of the scan (ADR-0044).
+
+    A node is one class-qualified method (`Class.Method`), so two methods with the same
+    name in two classes stay two nodes. The edges come from every source file of the scan
+    root, not from the program files only: an action reaches the service methods that it
+    calls. A call with no Bound Call Target gives no edge, and the call text is never
+    matched by name.
+    """
+    adj: Dict[str, List[str]] = {}
+    for snapshot in getattr(scan, "source_snapshots", {}).values():
+        for span in snapshot.method_spans:
+            targets = adj.setdefault(span.node, [])
+            for call in span.calls:
+                target = call.bound_target
+                if target and target != span.node and target not in targets:
+                    targets.append(target)
+    return adj
+
+
+def _inline_sql_tables(scan: ProjectScanResult, reachable_nodes: Set[str]) -> Set[str]:
     """列出可達方法的 inline SQL table relation 所指的資料表名稱，補足 SP 鏈以外的來源。
 
     有些方法（例如只組 DropDownList 選項的 BindXxx）直接用
     `obj.CreateReader("select ... from Table")` 這種內嵌 SQL 字串查資料，完全
     沒有 database invocation，這種情況下只看 SQL Execution Graph path 也不會涵蓋它。
-    掃描時已經把這些 SQL 轉成 table relation；這裡只挑出「屬於這支程式的檔案
-    裡可達方法」的那些 relation。方法名稱用完全相同的比對：relation 的方法名稱
-    與 reachable_methods 都來自 C# 方法宣告，而 C# 的名稱分大小寫。
+    掃描時已經把這些 SQL 轉成 table relation；這裡只挑出「可達節點」的那些
+    relation。節點是類別加方法名稱，用完全相同的比對：relation 與節點都來自 C#
+    宣告，而 C# 的名稱分大小寫。
     """
     return set(
         inline_table_relations.table_names_by_method(
             scan,
-            lambda site: owns_file(site.file_path) and site.method_name in reachable_methods,
+            lambda site: f"{site.class_name}.{site.method_name}" in reachable_nodes,
         )
     )
 
 
-def _reachable_from(start: str, adj: Dict[str, List[str]], max_depth: int = 8) -> Tuple[List[str], Set[str]]:
-    """從 start 出發，回傳 (一條代表性路徑, 所有可達的方法名稱集合)。
+class ForwardReach(NamedTuple):
+    """The methods that an anchor action reaches through its Bound Call Targets."""
+
+    # 一條代表性路徑（僅供顯示用），每一段是方法名稱。
+    method_path: List[str]
+    # 所有可達的節點（`Class.Method`）；SP 與資料表關聯以它為依據。
+    nodes: Set[str]
+
+    @property
+    def method_names(self) -> Set[str]:
+        return {node.rsplit(".", 1)[-1] for node in self.nodes}
+
+
+def _reachable_from(starts: List[str], adj: Dict[str, List[str]]) -> Tuple[List[str], Set[str]]:
+    """從 starts 出發，回傳 (一條代表性路徑, 所有可達的節點集合)。
 
     代表性路徑只取第一個分支（僅供顯示用）；可達集合才是後續比對 SP/資料表
-    關聯的實際依據，不會因為只取一條路徑而漏掉其他分支呼叫到的 SP。
+    關聯的實際依據，不會因為只取一條路徑而漏掉其他分支呼叫到的 SP。兩者都沒有
+    深度上限，visited 集合擋下每一個循環（ADR-0044）。
     """
-    visited: Set[str] = {start}
-    path: List[str] = [start]
+    visited: Set[str] = set(starts)
+    path: List[str] = starts[:1]
 
-    node = start
-    depth = 0
-    while depth < max_depth:
+    node = path[0] if path else ""
+    while node:
         children = [c for c in adj.get(node, []) if c not in visited]
-        if not children:
-            break
-        node = children[0]
-        path.append(node)
-        visited.add(node)
-        depth += 1
+        node = children[0] if children else ""
+        if node:
+            path.append(node)
+            visited.add(node)
 
     frontier = list(visited)
     while frontier:
@@ -144,6 +176,56 @@ def _reachable_from(start: str, adj: Dict[str, List[str]], max_depth: int = 8) -
         frontier = nxt
 
     return path, visited
+
+
+def forward_reach(
+    scan: ProjectScanResult,
+    anchor_method: str,
+    *,
+    owns_file: Callable[[str], bool],
+    owns_action: Callable[[str, str], bool] = lambda file_path, method_name: True,
+) -> Optional[ForwardReach]:
+    """The nodes that `anchor_method` reaches, or None when the program owns no such action.
+
+    The program scope (ADR-0019) selects the anchor action only. From the anchor, the
+    reach follows each Bound Call Target into any file of the scan root.
+    """
+    starts = sorted(
+        {
+            f"{cls.name}.{m.name}"
+            for fr in scan.csharp_results
+            if owns_file(fr.file_path)
+            for cls in fr.classes
+            for m in cls.methods
+            if m.name == anchor_method and owns_action(fr.file_path, m.name)
+        }
+    )
+    if not starts:
+        return None
+    path, nodes = _reachable_from(starts, _bound_call_adjacency(scan))
+    return ForwardReach([node.rsplit(".", 1)[-1] for node in path], nodes)
+
+
+def _caller_node(path: Mapping[str, object]) -> str:
+    """The node of the method that holds a path's Database Invocation, or "" when unknown.
+
+    The chain joins a path by this node, not by `entry_method`: the entry method is the
+    outermost caller of a same-file chain that the call text gives, and the call graph
+    already reaches every caller through its Bound Call Targets (ADR-0044).
+    """
+    caller_method = str(path.get("caller_method") or "")
+    if not caller_method:
+        return ""
+    return f"{path.get('caller_class') or ''}.{caller_method}"
+
+
+def files_of_nodes(scan: ProjectScanResult, nodes: Set[str]) -> List[FileAnalysisResult]:
+    """The C# file results that declare at least one of `nodes`, in scan order."""
+    return [
+        fr
+        for fr in scan.csharp_results
+        if any(f"{cls.name}.{m.name}" in nodes for cls in fr.classes for m in cls.methods)
+    ]
 
 
 def build_forward_chain(
@@ -162,26 +244,20 @@ def build_forward_chain(
     ui_fields 的 events 挑出的候選 handler 方法名稱（見這個模組頂部說明）；這裡
     只管照著這個名稱組鏈，不判斷這個名稱選得準不準。
 
-    scan：ProjectScanResult，inline SQL 資料表取自它的 table_relations。
-    owns_file：一個檔案路徑是否屬於這支程式；這支程式的檔案就是
-    scan.csharp_results 裡通過它的那些。
+    scan：ProjectScanResult，inline SQL 資料表取自它的 table_relations，呼叫圖取自
+    它的 source_snapshots 裡每個方法的 Bound Call Target。
+    owns_file：一個檔案路徑是否屬於這支程式；錨點只在通過它的檔案裡找。
     owns_action：這支程式是否擁有某檔案裡的某個 action；錨點必須是這支程式擁有的
-    action（WebForms 程式擁有檔案內所有方法）。
+    action（WebForms 程式擁有檔案內所有方法）。錨點之後的呼叫不受這兩個條件限制。
+    execution path 以它所在的方法（`caller_class.caller_method`）比對可達節點。
 
     回傳 None 代表在這支程式的檔案裡完全找不到這個方法名稱，或它不是這支程式
     擁有的 action（呼叫端應視為此錨點無效，換下一個候選）。
     """
-    matched_files = [fr for fr in scan.csharp_results if owns_file(fr.file_path)]
-    adj = _method_adjacency(matched_files)
-    if not any(
-        anchor_method == m.name and owns_action(fr.file_path, m.name)
-        for fr in matched_files
-        for cls in fr.classes
-        for m in cls.methods
-    ):
+    reach = forward_reach(scan, anchor_method, owns_file=owns_file, owns_action=owns_action)
+    if reach is None:
         return None
-
-    method_path, reachable_methods = _reachable_from(anchor_method, adj)
+    method_path, reachable_nodes = reach.method_path, reach.nodes
 
     # Gateway + graph paths are the formal source for database calls.
     supplied_paths = execution_paths
@@ -194,10 +270,7 @@ def build_forward_chain(
                 if supplied_paths is not None
                 else build_execution_paths(invocations, graph)
             )
-            if (
-                not path.get("entry_method")
-                or path["entry_method"].rsplit(".", 1)[-1] in reachable_methods
-            )
+            if not _caller_node(path) or _caller_node(path) in reachable_nodes
         ]
 
     formal_sp_chain: List[dict] = []
@@ -246,13 +319,13 @@ def build_forward_chain(
     # 有些方法完全沒呼叫 SP，只靠內嵌 SQL 字串查表，單看 sp_chain 會漏掉這些表。
     # 獨立回傳一份（inline_sql_tables）方便呼叫端知道「這些表不是從哪支 SP 來的」，
     # 同時也併入 all_tables，讓 tables/FK 展開跟 SP 來源的表一視同仁。
-    inline_tables = _inline_sql_tables(scan, owns_file, reachable_methods)
+    inline_tables = _inline_sql_tables(scan, reachable_nodes)
     all_tables.update(inline_tables)
 
     return {
         "anchor_method": anchor_method,
         "method_path": method_path,
-        "reachable_methods": sorted(reachable_methods),
+        "reachable_methods": sorted(reach.method_names),
         "stored_procedures": sp_chain,
         "execution_paths": execution_paths,
         "diagnostics": [

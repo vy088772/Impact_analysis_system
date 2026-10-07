@@ -65,7 +65,8 @@ def _controller_result(
     root: Path, relative: str, actions: Sequence[str]
 ) -> FileAnalysisResult:
     path = _write(root, relative, "// controller")
-    class_name = Path(relative).stem
+    # A code-behind `Alpha.aspx.cs` declares the class `Alpha`, as a real page does.
+    class_name = Path(relative).name.split(".")[0]
     return FileAnalysisResult(
         file_path=str(path),
         file_type=FileType.CSHARP,

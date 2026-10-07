@@ -363,7 +363,7 @@ def test_analyze_keeps_the_scope_scan_facts_and_chosen_root(
     assert [program.file for program in response.programs] == relative_files
     assert [program.stored_procedures for program in response.programs] == [["usp_Save"]] * len(relative_files)
     assert [[method.model_dump(by_alias=True) for method in program.methods] for program in response.programs] == [
-        [{"name": "Page_Load", "class": "OrderEntry.aspx"}],
-        *([[{"name": "Page_Load", "class": "Invoice.aspx"}]] if multiple_roots else []),
+        [{"name": "Page_Load", "class": "OrderEntry"}],
+        *([[{"name": "Page_Load", "class": "Invoice"}]] if multiple_roots else []),
     ]
     assert response.not_found == ([] if multiple_roots else ["Invoice"])

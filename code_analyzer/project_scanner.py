@@ -23,7 +23,7 @@ from .vue_parser import VueParser
 from .project_type_detector import ProjectTypeDetector
 from .sql_analyzer import SQLAnalyzer, SimplifiedSPInfo
 from .db_connection_tracker import DBConnectionTracker
-from .models import FileAnalysisResult, StoredProcedureCall, SQLQuery, FrameworkType, MethodSourceSpan, SourceSnapshot
+from .models import CallSite, FileAnalysisResult, StoredProcedureCall, SQLQuery, FrameworkType, MethodSourceSpan, SourceSnapshot
 from .static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 from .sql_text_analysis import HostSqlTextAnalysis, SqlTextAnalysis, SqlTextAnalysisError
 from .smart_file_finder import SmartFileFinder, FileSearchResult
@@ -356,6 +356,18 @@ class ProjectScanResult:
                 method_name=item["method_name"],
                 start_offset=item["start_offset"],
                 end_offset=item["end_offset"],
+                calls=[
+                    CallSite(
+                        call_text=str(call.get("call_text") or ""),
+                        start_offset=int(call.get("start_offset") or 0),
+                        end_offset=int(call.get("end_offset") or 0),
+                        target_class=str(call.get("target_class") or ""),
+                        target_method=str(call.get("target_method") or ""),
+                        unresolved_reason=str(call.get("unresolved_reason") or ""),
+                        candidate_classes=[str(name) for name in call.get("candidate_classes") or []],
+                    )
+                    for call in item.get("calls") or []
+                ],
             )
             for item in host_result.get("methods", [])
         ]
