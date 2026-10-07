@@ -270,7 +270,11 @@ class CSharpParser:
     USING_PATTERN = r'using\s+([\w\.]+)\s*;'
     
     # 類別定義
-    CLASS_PATTERN = r'(public|internal|private|protected)?\s*(abstract|sealed|static|partial)?\s*class\s+(\w+)(?:\s*:\s*([\w\s,<>\.]+))?'
+    CLASS_PATTERN = (
+        r'(?P<access>public|internal|private|protected)?\s*'
+        r'(?P<modifier>abstract|sealed|static|partial)?\s*'
+        r'class\s+(?P<name>\w+)(?:\s*:\s*(?P<bases>[\w\s,<>\.]+))?'
+    )
     
     # 方法定義
     # 存取修飾詞為 optional：C# 允許類別成員省略修飾詞（預設為 private），
@@ -297,13 +301,11 @@ class CSharpParser:
         "nameof", "case", "goto", "break", "continue",
     }
 
-    @classmethod
-    def _is_method_declaration(cls, match: re.Match) -> bool:
-        """METHOD_PATTERN 的比對是方法宣告，而非「關鍵字 識別字(」的陳述式。"""
-        return match.group('ret') not in cls._METHOD_RETURN_TYPE_DENYLIST
-    
     # 屬性定義
-    PROPERTY_PATTERN = r'(public|private|protected|internal)\s+(static\s+)?([\w\<\>\[\]]+)\s+(\w+)\s*\{\s*(get|set)'
+    PROPERTY_PATTERN = (
+        r'(?P<access>public|private|protected|internal)\s+(?P<static>static\s+)?'
+        r'(?P<type>[\w\<\>\[\]]+)\s+(?P<name>\w+)\s*\{\s*(?P<accessor>get|set)'
+    )
     
     # SQL 查詢（多種格式）
     SQL_PATTERNS = [
@@ -474,10 +476,10 @@ class CSharpParser:
         class_matches = list(re.finditer(self.CLASS_PATTERN, content, re.MULTILINE))
         
         for match in class_matches:
-            access_modifier = match.group(1) or 'internal'
-            class_modifiers = (match.group(2) or '').strip()
-            class_name = match.group(3)
-            inheritance = match.group(4) or ''
+            access_modifier = match.group('access') or 'internal'
+            class_modifiers = (match.group('modifier') or '').strip()
+            class_name = match.group('name')
+            inheritance = match.group('bases') or ''
             
             # 計算行號
             line_num = content[:match.start()].count('\n') + 1
@@ -562,7 +564,12 @@ class CSharpParser:
             pos += 1
         
         return pos
-    
+
+    @classmethod
+    def _is_method_declaration(cls, match: re.Match) -> bool:
+        """METHOD_PATTERN 的比對是否為方法宣告（過濾理由見 `_METHOD_RETURN_TYPE_DENYLIST`）。"""
+        return match.group('ret') not in cls._METHOD_RETURN_TYPE_DENYLIST
+
     def _extract_methods(
         self, 
         class_content: str, 
@@ -763,11 +770,11 @@ class CSharpParser:
         property_matches = list(re.finditer(self.PROPERTY_PATTERN, class_content, re.MULTILINE))
         
         for match in property_matches:
-            access_modifier = match.group(1)
-            is_static = bool(match.group(2))
-            prop_type = match.group(3)
-            prop_name = match.group(4)
-            accessor = match.group(5)
+            access_modifier = match.group('access')
+            is_static = bool(match.group('static'))
+            prop_type = match.group('type')
+            prop_name = match.group('name')
+            accessor = match.group('accessor')
             
             line_num = full_content[:class_start + match.start()].count('\n') + 1
             
@@ -1854,10 +1861,10 @@ class CSharpParser:
     def _find_controller_name(self, content: str, position: int) -> Optional[str]:
         """找出 Controller 名稱"""
         content_before = content[:position]
-        class_matches = re.findall(self.CLASS_PATTERN, content_before)
-        
+        class_matches = list(re.finditer(self.CLASS_PATTERN, content_before))
+
         for match in reversed(class_matches):
-            class_name = match[2]
+            class_name = match.group('name')
             if 'Controller' in class_name:
                 return class_name.replace('Controller', '')
         

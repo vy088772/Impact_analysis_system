@@ -88,6 +88,22 @@ def test_generic_call_statement_is_not_a_method(tmp_path, statement):
     assert set(methods) == {"Run"}
 
 
+def _endpoints(tmp_path: Path, member: str):
+    source = (
+        "namespace Rt.Controllers\n"
+        "{\n"
+        "    public class SampleController : Controller\n"
+        "    {\n"
+        "        [HttpPost]\n"
+        f"{member}"
+        "    }\n"
+        "}\n"
+    )
+    path = tmp_path / "SampleController.cs"
+    path.write_text(source, encoding="utf-8")
+    return CSharpParser().parse_file(str(path)).api_endpoints
+
+
 @pytest.mark.parametrize(
     "declaration, action",
     [
@@ -97,37 +113,14 @@ def test_generic_call_statement_is_not_a_method(tmp_path, statement):
     ],
 )
 def test_http_action_shape_reaches_the_endpoint_list(tmp_path, declaration, action):
-    source = (
-        "namespace Rt.Controllers\n"
-        "{\n"
-        "    public class SampleController : Controller\n"
-        "    {\n"
-        "        [HttpPost]\n"
+    member = (
         f"        {declaration}\n"
         "        {\n"
         "            return null;\n"
         "        }\n"
-        "    }\n"
-        "}\n"
     )
-    path = tmp_path / "SampleController.cs"
-    path.write_text(source, encoding="utf-8")
-    result = CSharpParser().parse_file(str(path))
-    assert [e.action for e in result.api_endpoints] == [action]
+    assert [e.action for e in _endpoints(tmp_path, member)] == [action]
 
 
 def test_http_attribute_before_a_statement_gives_no_endpoint(tmp_path):
-    source = (
-        "namespace Rt.Controllers\n"
-        "{\n"
-        "    public class SampleController : Controller\n"
-        "    {\n"
-        "        [HttpPost]\n"
-        "        new Qux(1);\n"
-        "    }\n"
-        "}\n"
-    )
-    path = tmp_path / "SampleController.cs"
-    path.write_text(source, encoding="utf-8")
-    result = CSharpParser().parse_file(str(path))
-    assert result.api_endpoints == []
+    assert _endpoints(tmp_path, "        new Qux(1);\n") == []

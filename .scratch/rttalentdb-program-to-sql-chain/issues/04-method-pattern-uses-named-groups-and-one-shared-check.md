@@ -53,3 +53,12 @@ callers use. The behaviour does not change.
   `_extract_sql_in_text`: the set order changes per process (string hash
   seed). This is not from this ticket. It makes a byte compare of two scans
   fail, so a scan compare must sort this list.
+  Ticket 10 records this problem.
+- Follow-up after the code review (2026-10-07): `_is_method_declaration`
+  moved to just before `_extract_methods`, and its docstring now points to
+  the `_METHOD_RETURN_TYPE_DENYLIST` comment. `CLASS_PATTERN` and
+  `PROPERTY_PATTERN` also have named groups, and their callers read by name.
+  `_find_controller_name` uses `finditer` instead of `findall`. The two HTTP
+  endpoint tests share a `_endpoints` helper; their source text and asserts
+  did not change. On all cached systems, the old and new `CLASS_PATTERN` give
+  the same class names in 2650 files.
