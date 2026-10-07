@@ -159,7 +159,7 @@
    "usp_ms_getinvalidjobtype"
   ],
   "source": [
-   "Controllers/JobTypeController.cs:38"
+   "Controllers/JobTypeController.cs:36"
   ]
  },
  "JobType.GetValidJobType": {
@@ -168,7 +168,7 @@
    "usp_ms_getvalidjobtype"
   ],
   "source": [
-   "Controllers/JobTypeController.cs:32"
+   "Controllers/JobTypeController.cs:30"
   ]
  },
  "ManagementSkillUpload.ImportData": {

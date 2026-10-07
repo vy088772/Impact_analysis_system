@@ -1,13 +1,15 @@
 """Check the forward and backward probe output against the named list of misses (ticket 09).
 
-Run from the probes directory after compare_flow.py and backward_flow.py:
+Run after compare_flow.py and backward_flow.py. The file names are relative to
+the probes directory:
     python3 check_misses.py flow_after.json backward_after.json
 
 misses.json gives each truth action that is not fully matched: a reason, the stored
 procedures that the forward chain does not reach, and the source lines that show the
 reason. The check fails when a miss is not on the list, when a listed action is now
 fully matched (remove it from the list), or when the forward chain misses other
-stored procedures than the list says.
+stored procedures than the list says. The backward probe accepts a Program Screen
+of any view, so a `held_by_another_screen` action must be reached backward.
 """
 import collections
 import json
@@ -19,14 +21,15 @@ listed = json.load(open(S + 'misses.json'))
 forward = json.load(open(S + sys.argv[1]))
 backward = json.load(open(S + sys.argv[2]))
 
+truth_rows = [r for r in forward if r['want']]
 forward_missing = {
     r['action']: sorted(set(r['want']) - set(r['got']))
-    for r in forward if r['want'] and not set(r['want']) <= set(r['got'])
+    for r in truth_rows if not set(r['want']) <= set(r['got'])
 }
-pairs = collections.defaultdict(list)
+reached_by_action = collections.defaultdict(list)
 for r in backward:
-    pairs[r['action']].append(r['reached'])
-backward_missed = {action for action, reached in pairs.items() if not all(reached)}
+    reached_by_action[r['action']].append(r['reached'])
+backward_missed = {action for action, reached in reached_by_action.items() if not all(reached)}
 
 problems = []
 for action, missing in sorted(forward_missing.items()):
@@ -38,11 +41,14 @@ for action in sorted(set(listed) - set(forward_missing)):
     problems.append(f'listed but now fully matched forward: {action}')
 for action in sorted(backward_missed - set(listed)):
     problems.append(f'backward miss not on the list: {action}')
+for action in sorted(backward_missed & set(listed)):
+    if listed[action]['reason'] == 'held_by_another_screen':
+        problems.append(f'backward miss with the forward-only reason held_by_another_screen: {action}')
 
 reasons = collections.Counter(entry['reason'] for entry in listed.values())
-print('truth actions', sum(1 for r in forward if r['want']),
-      '| forward fully matched', sum(1 for r in forward if r['want']) - len(forward_missing),
-      '| backward fully reached', len(pairs) - len(backward_missed))
+print('truth actions', len(truth_rows),
+      '| forward fully matched', len(truth_rows) - len(forward_missing),
+      '| backward fully reached', len(reached_by_action) - len(backward_missed))
 print('listed misses', len(listed), dict(sorted(reasons.items(), key=lambda kv: -kv[1])))
 print('backward misses', len(backward_missed),
       '| listed forward misses that the backward probe reaches', len(set(listed) - backward_missed))

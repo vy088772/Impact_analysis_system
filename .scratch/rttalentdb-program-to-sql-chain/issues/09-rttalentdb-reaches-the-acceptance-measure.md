@@ -51,7 +51,7 @@ matched, or when the missed procedures change.
 | Reason | Forward | Backward | Example source | Next step |
 |---|---|---|---|---|
 | `view_anchor_url_action`: the view calls `@Url.Action(...)` | 60 | 60 | `Views/EmpJobDuty/EmpJobDutyMtn.cshtml:109` | ticket 13 |
-| `helper_parameter`: the procedure name goes to a helper parameter (ADR-0020) | 26 | 26 | `Services/TA/ResumeExperienceService.cs:96` | known |
+| `helper_parameter`: the procedure name goes to a helper parameter (ADR-0020) | 26 | 26 | `Services/TA/ResumeExperienceService.cs:96` | none (known reason) |
 | `held_by_another_screen`: a Shared partial or another controller's view holds the action | 6 | 0 | `Views/Shared/_EmpPicker.cshtml:45` | probe limit |
 | `view_anchor_relative_url`: a relative URL, template literal, `data-url` or `.js` file | 6 | 6 | `Views/ResumeExperience/ResumeExperienceMtn.cshtml:644` | ticket 13 |
 | `view_anchor_begin_form`: the view calls `Html.BeginForm(...)` | 5 | 5 | `Views/EvaluationSchedule/EvaluationScheduleMtn.cshtml:4` | ticket 13 |
@@ -69,22 +69,24 @@ The three known reasons of this ticket:
 - Ambiguous implementation (ticket 06): 0 actions in the measure.
   `Home.HomePage` and `ResumeQuery.GetResumePartial` report the call
   `strategy.BuildViewModelAsync` in `diagnostics`, and both are fully
-  matched. The source shows that the three strategy classes reach
-  `usp_RPT_ResumeInfoQry` and `usp_RPT_TraditionExperienceInfoQry`
-  (`Services/RPT/ResumeService.cs:50`, `:70`). `truth.py` does not follow a
+  matched. The source shows that each strategy class reaches stored
+  procedures through `ResumeService`. For example, `EmptyResumeStrategy`
+  reaches `usp_RPT_ResumeInfoQry` (`Services/RPT/ResumeService.cs:50`), and
+  `ResumeTraditionStrategy` reaches `usp_RPT_TraditionExperienceInfoQry`
+  (`:70`). `truth.py` does not follow a
   call through a local variable (`ResumeService.cs:26`), so `truth.json`
   does not list them. The forward chain stops there by the Local Implementer
   rule, so the two sides agree, and the probe does not measure this case.
 - Unresolved Dynamic SQL: 0 actions now.
   `SkillClassificationPersonnelDetail.GetData` is at reach 0 for the
-  `view_anchor_url_action` reason, so the Dynamic SQL is not met yet. Ticket
-  13 notes it.
+  `view_anchor_url_action` reason. So the forward chain does not get to its
+  Unresolved Dynamic SQL yet. Ticket 13 notes it.
 
 **Notes:**
 
 - The ticket text expected the known reasons to cover most misses. They do
-  not. 87 forward misses have reach 0, and the notes of ticket 05 gave "the
-  Program Screen does not own the action (ADR-0019 scope)" as their reason.
+  not. 87 forward misses have reach 0. The notes of ticket 05 gave one reason
+  for them: no Program Screen holds the action (ADR-0019 scope).
   The source shows that a view calls 73 of the 87 actions. The Razor parser
   does not read the form of the call as a View Anchor. This is a gap, not a
   scope limit, so it goes to ticket 13 and not to the known list.
@@ -92,10 +94,11 @@ The three known reasons of this ticket:
   (2), a run-time view name (1), and an action that only another Program
   Screen holds (6).
 - `no_caller` includes `JobType.GetValidJobType` and
-  `JobType.GetInvalidJobType`. They are public controller methods that
-  `JobTypeMtn` calls inside the controller, and the forward chain of
-  `JobTypeMtn` reaches them. `truth.py` reads each public method of a
-  controller as an action.
+  `JobType.GetInvalidJobType`. No view and no method calls them. The view
+  calls `GetValidJobTypePartial` and `GetInvalidJobTypePartial`
+  (`Views/JobType/JobTypeMtn.cshtml:164`, `:168`), and these actions call the
+  service methods of the same name directly. `truth.py` reads each public
+  method of a controller as an action.
 - `held_by_another_screen` is a probe limit. The forward probe asks for the
   program by the controller name (`Public`), and no Program Screen has that
   name. The backward probe accepts a Program Screen of any view, so it
@@ -106,7 +109,38 @@ The three known reasons of this ticket:
 - Not in the measure: 62 procedures that the forward chain reaches and
   `truth.json` does not list. `truth.py` is a probe, and this ticket did not
   check them.
-- The list was built from the source with a scratch script, not by hand. A
+- A scratch script built the list from the source. A
   `helper_parameter` entry gives, for each missed procedure, the first line in
   the source that passes its name to a helper and does not call
   `usp_ExecCmd*` directly.
+
+## Code review (2026-10-07, `/code-review` on 0f8b40d)
+
+Fixed:
+
+- Spec: the note on `JobType.GetValidJobType` said that `JobTypeMtn` calls
+  it. The source shows no caller. The note now names the two `Partial`
+  actions that the view calls, and `misses.json` points at the declarations.
+- Spec: the ambiguous implementation paragraph said that all three strategy
+  classes reach both procedures. It now gives one example for each procedure.
+- Spec: ticket 13 said that a relative URL with no leading `/` is a cause.
+  The parser reads `'Public/EmpAutoCompleteByAuth'`. Ticket 13 now names the
+  real causes: a template literal and a third segment.
+- Spec: `check_misses.py` did not check the reason of a backward miss. A
+  `held_by_another_screen` action that the backward probe misses now fails
+  the check.
+- Standards: two sentences in passive voice, one sentence over 25 words,
+  "screen" alone (CONTEXT.md: avoid), the short form "the Dynamic SQL", and
+  the "Next step" value `known`.
+- Standards: in `check_misses.py`, the name `pairs` held no pairs, the truth
+  rows were counted twice, and the docstring said to run the script from the
+  probes directory.
+
+Not changed:
+
+- Standards: `check_misses.py` repeats the full match test of
+  `compare_flow.py`. Each probe is a script that runs alone, as the other
+  probes are.
+- Standards: "reach" and "miss" as a noun and a verb. "Reach 0" is the
+  probe's measure (`reachable_methods`) since ticket 03, and "fully matched"
+  and "fully reached" are the probe output.

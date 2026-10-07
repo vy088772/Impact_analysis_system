@@ -12,10 +12,14 @@ Ticket 09 found these forms in the RTTalentDB source:
 |---|---|---|
 | `@Url.Action("Action", "Controller")` or `@Url.Action("Action")` in a `<script>` block | 60 | `Views/EmpJobDuty/EmpJobDutyMtn.cshtml:109` |
 | `Html.BeginForm("Action", "Controller", ...)` | 5 | `Views/EvaluationSchedule/EvaluationScheduleMtn.cshtml:4` |
-| A relative URL with no leading `/`, in a template literal, with a query or a route value | 4 | `Views/ResumeExperience/ResumeExperienceMtn.cshtml:644` |
+| A URL in a template literal (backticks), or with a route value as a third segment | 4 | `Views/ResumeExperience/ResumeExperienceMtn.cshtml:644` |
 | A URL in a `data-url` attribute | 1 | `Views/ResumePLApprove/ResumePLApproveMtn.cshtml:65` |
 | A URL in a `.js` file that the view loads with `<script src>` | 1 | `wwwroot/js/traditional-assessment-common.js:602` |
 | An action name that is not the method name: `[ActionName("X")]`, or the `Async` suffix that ASP.NET Core removes | 2 | `Controllers/TechnicianSkillController.cs:29` |
+
+A relative URL with no leading `/` is not the cause: the parser reads
+`'Public/EmpAutoCompleteByAuth'` (`Views/Shared/_EmpPicker.cshtml:45`). It
+reads only a string in `'` or `"` with exactly two segments.
 
 `probes/misses.json` gives each action with its reason and source line. The
 reasons are `view_anchor_url_action`, `view_anchor_begin_form`,
@@ -49,16 +53,17 @@ See ADR-0019, ADR-0044 and ticket 09.
 
 **Notes:**
 
-- The forward probe asks for the program by the controller name. Some actions
-  of this ticket are held by the screen of another controller, so the probe
-  still misses them after the fix: `UsersPicker` (4 actions, called from
+- The forward probe asks for the program by the controller name. For some
+  actions of this ticket, only the Program Screen of another controller's view
+  holds the action. So the probe still misses them after the fix: `UsersPicker` (4 actions, called from
   `TalentDBDepShoulderMtn` and others), `Public.GetJobTypeListByAuth` and
   `Public.GetTrialJobTypeListByAuth` (Shared partials), and
   `ResumeExperience.GetProjectExperienceData` (called from
   `AssessmentResult/ResumeAssessmentResult.cshtml`). Move them to the reason
   `held_by_another_screen`, and check that the backward probe reaches them.
-- After the fix, `SkillClassificationPersonnelDetail.GetData` can meet the
-  Dynamic SQL of `usp_RPT_SkillClassificationPersonnelDetailQry`, a known
-  reason of ticket 09.
+- After the fix, the forward chain of
+  `SkillClassificationPersonnelDetail.GetData` can get to the Unresolved
+  Dynamic SQL of `usp_RPT_SkillClassificationPersonnelDetailQry`. Ticket 09
+  lists this as a known reason.
 - A scan cache version rise makes each system skip until a local rescan. See
   ticket 05.
