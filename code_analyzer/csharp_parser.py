@@ -820,9 +820,8 @@ class CSharpParser:
 
         無限定子呼叫（如 `Foo()`）回傳 `"Foo"`；
         有限定子呼叫（如 `Bar.Foo()` 或 `bar.Foo()`）回傳 `"Bar.Foo"`（保留限定子）。
-        保留限定子讓 reference_expander 能判斷該限定子是否恰為一個已知類別名，
-        藉此精準解析 `ClassName.Method(...)` 這類靜態工具呼叫（如
-        `CommonFunction.AlertMsg`），避免同名方法在多個不相干類別間誤配。
+        這是呼叫文字，不是呼叫圖的邊：呼叫圖用 analyzer host 記錄的 Bound Call
+        Target（ADR-0044，見 MethodSourceSpan.calls）。
         呼叫端若需要純方法名（如 call_chain_builder 比對同檔案內部呼叫），
         可自行取 `.split('.')[-1]`，或直接用完整字串比對本類別自己的方法名
         （不含限定子的本地呼叫不受影響）。

@@ -133,6 +133,16 @@ def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
     return _CallGraph(edges, unresolved)
 
 
+def bound_call_edges(scan: ProjectScanResult) -> Dict[str, List[str]]:
+    """node -> the nodes that its calls reach, from the Bound Call Targets of the scan.
+
+    This is the one rule for which method a call reaches (ADR-0044). The flow chain and
+    the related program expansion of `/analyze` both use it. The expansion lists files,
+    not reasons, so it leaves out `unresolved_calls`: a call with no target lists nothing.
+    """
+    return _bound_call_graph(scan).edges
+
+
 def _unresolved_call_diagnostic(caller: str, call: CallSite, relative_path: str) -> dict:
     """The `diagnostics` entry of a call with no Bound Call Target: the caller, the call, the reason.
 

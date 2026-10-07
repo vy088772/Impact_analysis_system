@@ -4,166 +4,145 @@
 
 類似 VS Code Copilot「跟隨參照」（go-to-definition）自動把相關檔案拉進上下文：
 使用者只點名了 A 程式，但 A 呼叫了定義在 B 程式（另一支 .cs/.aspx.cs）的方法，
-這裡就沿著既有解析結果的 MethodInfo.calls，把「B 也被呼叫到」這件事找出來，
-最多展開 depth 層，並回傳足以識別 + 擷取片段的定位資訊。
+這裡就沿著每個呼叫的 Bound Call Target（ADR-0044），把「B 也被呼叫到」這件事
+找出來，最多展開 depth 層，並回傳足以識別 + 擷取片段的定位資訊。
 
-僅用整個掃描結果（ProjectScanResult.csharp_results）既有的靜態解析資料做名稱比對，
-不重新掃描、不連 AI，可獨立驗證正確性。
+呼叫邊與正向 flow chain 是同一份（flow_chain_builder.bound_call_edges）：
+analyzer host 以 semantic model 綁定每個呼叫，介面方法依 Local Implementer
+規則解析到實作類別。這裡不再比對呼叫文字裡的方法名稱，所以介面與實作同名、
+或兩個類別各有同名方法時，一個呼叫只會列出它真正呼叫到的那一個方法。
+沒有 Bound Call Target 的呼叫不產生任何項目。
+
+只用整個掃描結果（ProjectScanResult）既有的靜態解析資料，不重新掃描、
+不連 AI，可獨立驗證正確性。
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Callable, Dict, List, NamedTuple, Set, Tuple
 
-from code_analyzer.models import FileAnalysisResult
+from code_analyzer.models import FileAnalysisResult, call_graph_node
+from code_analyzer.project_scanner import ProjectScanResult
+
+from .flow_chain_builder import bound_call_edges
 
 
-def _method_index(csharp_results: List[FileAnalysisResult]) -> Dict[str, List[Tuple[str, str]]]:
-    """建立 method_name → [(file_path, class_name), ...] 的全域索引（跨整個掃描結果）。
+class _Declaration(NamedTuple):
+    """One declaration of a call graph node: the file, the class and the method."""
 
-    排除「方法名與所屬類別名相同」的項目：C# 建構子（如 `public Foo()`）在原始碼
-    中沒有獨立的傳回型別，csharp_parser 的方法規則比對建構子時，偶爾會誤把類別名
-    本身當成傳回型別、方法名仍取到類別名（例如 `public GetColumnIndex()` 被誤判成
-    一個叫 `GetColumnIndex` 的方法）。這種「同名假方法」不是可展開的外部呼叫目標，
-    若不濾除，`new GetColumnIndex()` 這類建構呼叫會被誤配到這個假方法，把該檔案
-    標記為已展開（visited），導致同一支程式裡真正的呼叫（如
-    `GetColumnIndexByFieldName`）反而被擠掉、展開不到。
+    file_path: str
+    class_name: str
+    method_name: str
+
+
+class _Caller(NamedTuple):
+    """One node to walk, and the file and the method that `called_by` names for its calls."""
+
+    node: str
+    file_path: str
+    method_name: str
+
+
+def _declarations(
+    csharp_results: List[FileAnalysisResult],
+) -> Dict[str, List[_Declaration]]:
+    """node（`Class.Method`）-> [(宣告它的檔案, 類別名, 方法名), ...]。
+
+    同一個節點通常只有一個宣告；partial class 的 overload 分散在兩個檔案、或兩個
+    namespace 各有同名類別時，才會有兩個以上（它們在呼叫圖裡本來就是同一個節點）。
     """
-    index: Dict[str, List[Tuple[str, str]]] = {}
+    declared: Dict[str, List[_Declaration]] = {}
     for fr in csharp_results:
         for cls in fr.classes:
             for m in cls.methods:
-                if m.name == cls.name:
-                    continue
-                index.setdefault(m.name, []).append((fr.file_path, cls.name))
-    return index
-
-
-def _calls_in_file(fr: FileAnalysisResult) -> List[Tuple[str, str, str]]:
-    """攤平出這個檔案內所有方法呼叫的 (被呼叫方法名, 呼叫者方法名, 呼叫者類別名)。"""
-    out: List[Tuple[str, str, str]] = []
-    for cls in fr.classes:
-        for m in cls.methods:
-            for call in m.calls:
-                out.append((call, m.name, cls.name))
-    return out
-
-
-def _own_method_names(fr: FileAnalysisResult) -> Dict[str, Set[str]]:
-    """回傳 {類別名: {該類別自己的方法名, ...}}。
-
-    用於判斷一個呼叫是否為「同類別內部呼叫」（例如 WebForms 常見的
-    `BindSelCustomer()` 這種無限定子呼叫，其實就是呼叫 this 所屬類別自己
-    的方法）。這類呼叫的定義本來就已經在起點程式的 code_snippets 裡，
-    不該被當成「未解析、需跨檔展開」而拿全域同名方法比對——否則像
-    `BindSelCustomer` 這種在多支程式間常見的複製貼上 helper 名稱，
-    會被誤配到完全不相干的其他程式，把 max_programs 名額擠光，
-    導致真正該展開的呼叫（如 CommonFunction.AlertMsg）反而展開不到。
-    """
-    return {cls.name: {m.name for m in cls.methods} for cls in fr.classes}
-
-
-def _known_class_names(csharp_results: List[FileAnalysisResult]) -> Set[str]:
-    """回傳整個掃描結果中所有已知類別名稱（用於判斷呼叫限定子是否為類別名）。"""
-    return {cls.name for fr in csharp_results for cls in fr.classes}
-
-
-def _split_call(call: str) -> Tuple[str, str]:
-    """把 MethodInfo.calls 內的呼叫字串拆成 (限定子, 方法名)。無限定子時限定子為空字串。"""
-    if "." in call:
-        qualifier, name = call.rsplit(".", 1)
-        return qualifier, name
-    return "", call
+                entries = declared.setdefault(call_graph_node(cls.name, m.name), [])
+                declaration = _Declaration(fr.file_path, cls.name, m.name)
+                if declaration not in entries:
+                    entries.append(declaration)
+    return declared
 
 
 def expand_related_programs(
-    csharp_results: List[FileAnalysisResult],
+    scan: ProjectScanResult,
     matched_files: List[FileAnalysisResult],
+    *,
+    owns_action: Callable[[str, str], bool] = lambda file_path, method_name: True,
     depth: int = 1,
     max_programs: int = 10,
 ) -> List[dict]:
-    """從 matched_files 出發，沿呼叫關係找出定義在「其他檔案」的方法，展開最多 depth 層。
+    """從 matched_files 出發，沿 Bound Call Target 找出定義在「其他檔案」的方法，展開最多 depth 層。
 
     參數：
-      csharp_results：整個 repo 的 C# 解析結果（全域索引來源）。
-      matched_files ：使用者點名程式對應到的檔案（展開起點）。
-      depth         ：展開層數（1 = 只找直接呼叫到的其他檔案）。
-      max_programs  ：最多回傳幾個相關程式（避免無限展開撐爆 prompt）。
+      scan         ：整個掃描根目錄的掃描結果（呼叫邊與方法宣告的來源）。
+      matched_files：使用者點名程式對應到的檔案（展開起點）。
+      owns_action  ：這支程式是否擁有某檔案裡的某個方法；只有它擁有的方法是起點
+                     （MVC Program Screen 只擁有自己的 action，見 ADR-0019；
+                     WebForms 程式擁有檔案內所有方法）。
+      depth        ：展開層數（1 = 只找起點方法直接呼叫到的其他檔案）。
+      max_programs ：最多回傳幾個相關程式（避免無限展開撐爆 prompt）。
+
+    每一層只沿「被呼叫到的方法」繼續展開，不展開被呼叫檔案裡的其他方法
+    （ADR-0044）。呼叫到同一檔案（或起點檔案）裡的方法屬於程式內部呼叫：不列出、
+    不佔層數，但會在同一層繼續沿它的呼叫走下去。
 
     回傳：[{"file", "class", "method", "called_by", "depth"}, ...]，依發現順序、去重
-    （同一個 (檔案, 方法) 只列一次；不同方法即使來自同一個檔案，仍各自列出，
-    因為它們是不同的程式碼片段/不同的上下文依據，如 CommonFunction.AlertMsg
-    與 CommonFunction.OpenWindow 應分別列出，而不是同檔案只挑第一個發現的方法）。
+    （同一個 (檔案, 節點) 只列一次；同一個檔案的不同方法仍各自列出，因為它們是
+    不同的程式碼片段，如 CommonFunction.AlertMsg 與 CommonFunction.OpenWindow）。
+    `called_by` 是呼叫者所在檔案的檔名（不含最後一個副檔名）加方法名。
     """
     if depth <= 0 or not matched_files:
         return []
 
-    index = _method_index(csharp_results)
-    known_classes = _known_class_names(csharp_results)
-    by_path = {fr.file_path: fr for fr in csharp_results}
+    edges = bound_call_edges(scan)
+    declared = _declarations(scan.csharp_results)
     start_files: Set[str] = {fr.file_path for fr in matched_files}
-    visited_calls: Set[Tuple[str, str]] = set()
-    seen_frontier_files: Set[str] = set(start_files)
-    frontier: List[FileAnalysisResult] = list(matched_files)
+
+    frontier: List[_Caller] = []
+    # 已排進 frontier 或 queue 的節點；每個節點只走一次。
+    queued_nodes: Set[str] = set()
+    for fr in matched_files:
+        for cls in fr.classes:
+            for m in cls.methods:
+                node = call_graph_node(cls.name, m.name)
+                if node not in queued_nodes and owns_action(fr.file_path, m.name):
+                    queued_nodes.add(node)
+                    frontier.append(_Caller(node, fr.file_path, m.name))
+
+    # 已列進結果的 (檔案, 節點)。
+    reported: Set[Tuple[str, str]] = set()
     related: List[dict] = []
-
     for d in range(1, depth + 1):
-        if len(related) >= max_programs:
-            break
-        next_frontier: List[FileAnalysisResult] = []
-        for fr in frontier:
-            own_by_class = _own_method_names(fr)
-            for call, caller_method, caller_class in _calls_in_file(fr):
-                if len(related) >= max_programs:
-                    break
-                qualifier, call_name = _split_call(call)
-
-                # 無限定子呼叫若已是呼叫者自己類別的方法 → 本地呼叫，
-                # 定義已在起點程式本身，不當作跨程式參照展開。
-                if not qualifier and call_name in own_by_class.get(caller_class, set()):
-                    continue
-
-                candidates = index.get(call_name, [])
-                if qualifier and qualifier in known_classes:
-                    # 限定子恰為一個已知類別名（如 CommonFunction.AlertMsg 這種
-                    # 靜態工具呼叫）→ 只取該類別的定義，避免同名方法在其他
-                    # 不相干類別間誤配（如許多頁面各自複製貼上的同名 helper）。
-                    candidates = [c for c in candidates if c[1] == qualifier]
-                elif len(candidates) > 1:
-                    # 限定子不是已知類別名（無限定子，或 obj.Xxx 這種實例變數呼叫，
-                    # 例如 DB helper 的 obj.CreateTable(...)），只能靠「方法名」比對，
-                    # 無法確定歸屬哪個類別。若此名稱在整個 repo 有多個同名定義
-                    # （最典型如每支頁面各自的 private CreateTable() 建 DataTable），
-                    # 這是巧合同名、而非同一個真正的呼叫目標；把它們全部展開只會
-                    # 塞進大量不相干、又佔行數的片段。無法確定 → 直接跳過。
-                    continue
-
-                for target_file, target_class in candidates:
-                    if target_file in start_files:
+        next_frontier: List[_Caller] = []
+        # 程式內部呼叫會在同一層加進 queue 繼續走。
+        queue = list(frontier)
+        while queue:
+            node, caller_file, caller_method = queue.pop(0)
+            for target in edges.get(node, []):
+                for target_file, target_class, target_method in declared.get(target, []):
+                    if target_file == caller_file or target_file in start_files:
+                        if target not in queued_nodes:
+                            queued_nodes.add(target)
+                            queue.append(_Caller(target, target_file, target_method))
                         continue
-                    key = (target_file, call_name)
-                    if key in visited_calls:
+                    if (target_file, target) in reported:
                         continue
-                    visited_calls.add(key)
+                    reported.add((target_file, target))
                     related.append(
                         {
                             "file": target_file,
                             "class": target_class,
-                            "method": call_name,
-                            "called_by": f"{Path(fr.file_path).stem}.{caller_method}",
+                            "method": target_method,
+                            "called_by": f"{Path(caller_file).stem}.{caller_method}",
                             "depth": d,
                         }
                     )
-                    target_fr = by_path.get(target_file)
-                    if target_fr and target_file not in seen_frontier_files:
-                        seen_frontier_files.add(target_file)
-                        next_frontier.append(target_fr)
                     if len(related) >= max_programs:
-                        break
-            if len(related) >= max_programs:
-                break
+                        return related
+                    if target not in queued_nodes:
+                        queued_nodes.add(target)
+                        next_frontier.append(_Caller(target, target_file, target_method))
         frontier = next_frontier
         if not frontier:
             break
 
-    return related[:max_programs]
+    return related
