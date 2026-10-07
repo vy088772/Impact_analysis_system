@@ -80,8 +80,11 @@ are the same, byte for byte, as `probes/backward_ticket14.json`
 (191 / 6 / 30). The three `IResumeStrategy` entries appear on the three
 reached `BuildViewModelAsync(string)` nodes.
 
-Open for the user: a spec-rag ticket to render `diagnostics` and the
-`program_screen` entry in `_render_backward_chains` (out of scope here).
+spec-rag ticket opened (2026-10-07):
+`llamaindex-spec-rag/.scratch/forward-chain-diagnostics-reach-the-answer/issues/03-the-backward-chain-text-shows-an-unresolved-call.md`.
+The brief said spec-rag prints no `program_screen` entry. That is out of date
+(Impact ticket 12 did it). The open gap is the diagnostics entry: spec-rag
+merges the entries of one call site and prints wrong text for them.
 The glossary term for "a call with no Bound Call Target" is still open.
 
 ## Comments
