@@ -2,8 +2,9 @@
 
 **What to build:** `_extract_sql_in_text` in `code_analyzer/csharp_parser.py`
 removes duplicates with `list(set(sql_queries))`. The order of a Python set
-of strings changes per process, because the string hash seed changes. Thus
-two scans of the same source give a different `MethodInfo.sql_queries` order.
+of strings changes per process, because the string hash seed changes.
+Because of this, two scans of the same source give a different
+`MethodInfo.sql_queries` order.
 
 Remove the duplicates and keep the order of the first match in the source
 (for example `list(dict.fromkeys(sql_queries))`). The set of queries does not
