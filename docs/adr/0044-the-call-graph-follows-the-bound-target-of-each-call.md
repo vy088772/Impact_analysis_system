@@ -29,7 +29,7 @@ When no Local Implementer exists, or when two or more exist, the branch stops at
 
 ### Depth
 
-The reachable set has no depth limit. A visited set stops each cycle. A node is one bound method, so two methods with the same name in different classes stay two nodes.
+The reachable set has no depth limit. A visited set stops each cycle. A node is one bound method, so two methods with the same name in different classes stay two nodes. The node identity is the bound method symbol: the namespace and containing types of its class, its name, its type parameter count, and its parameter types. Two overloads of one method are two nodes, and two classes with one simple name in two namespaces are two nodes.
 
 ### Backward direction
 

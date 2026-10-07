@@ -237,7 +237,7 @@ The one concrete class in the current scan that implements an interface-typed re
 _Avoid_: DI resolution, interface binding, local implementation
 
 **Bound Call Target**:
-The one method that a call in C# source invokes, as the semantic model binds it, with an interface method resolved to its Local Implementer. It is the only edge of the call graph; the call text is never matched by name. A call with no Local Implementer, or with two or more, has no Bound Call Target, and the chain reports that call instead of guessing. See [ADR-0044](docs/adr/0044-the-call-graph-follows-the-bound-target-of-each-call.md).
+The one method that a call in C# source invokes, as the semantic model binds it, with an interface method resolved to its Local Implementer. It is the only edge of the call graph; the call text is never matched by name. A call graph node is one bound method symbol, with its namespace-qualified class, its type parameter count and its parameter types, so two overloads of one method are two nodes. A call with no Local Implementer, or with two or more, has no Bound Call Target, and the chain reports that call instead of guessing. See [ADR-0044](docs/adr/0044-the-call-graph-follows-the-bound-target-of-each-call.md).
 _Avoid_: callee, call edge, resolved call, method call
 
 **Declaring Receiver Type**:
