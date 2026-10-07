@@ -21,8 +21,8 @@ See ADR-0044 and the overload note of ticket 05.
 
 **Blocked by:** None. Ticket 05 is done.
 
-**Status:** ready-for-agent (triaged 2026-10-07; the Agent Brief below is the
-contract and replaces the checklist)
+**Status:** in-progress (2026-10-07; the Agent Brief below is the contract
+and replaces the checklist)
 
 - [ ] A call to one overload reaches only the stored procedures of that
       overload
