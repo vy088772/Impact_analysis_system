@@ -34,6 +34,7 @@ from code_analyzer.csharp_analysis_gateway import (
     load_wrapper_review_exclusions,
     wrapper_observation_identity,
 )
+from code_analyzer.models import call_graph_node
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 
@@ -2587,16 +2588,31 @@ def flow_chain(
     def owns_action(file_path: str, method_name: str) -> bool:
         return any(resolution.owns_action(file_path, method_name) for resolution in resolutions)
 
+    # The program owns the anchor action only. The chain then follows each Bound Call
+    # Target into any file of the scan root (ADR-0044), so the evidence covers the files
+    # that declare a reached method, and an invocation joins by the method that holds it.
+    reach = flow_chain_builder.forward_reach(
+        scan, req.anchor_method, owns_file=owns_file, owns_action=owns_action
+    )
     rated_invocations: List[DbInvocation] = []
     execution_graph: Dict[str, object] = {}
     forward_execution_paths: List[dict] = []
     if req.database:
         _require_sql_execution_graph(req.database, sql_cache_identity)
+    if req.database and reach is not None:
         evidence = evidence_source(
-            scope, scans, scan, root, needed_files=matched_files, refresh=req.refresh
+            scope,
+            scans,
+            scan,
+            root,
+            needed_files=flow_chain_builder.files_of_nodes(scan, reach.nodes),
+            refresh=req.refresh,
         )
-        owned = _invocation_owner(resolutions, scan, root)
-        rated_invocations = [i for i in evidence.rated_invocations if owned(i)]
+        rated_invocations = [
+            invocation
+            for invocation in evidence.rated_invocations
+            if call_graph_node(invocation.class_name, invocation.method_name) in reach.nodes
+        ]
         execution_graph = evidence.graph
         forward_execution_paths = evidence.paths_of(rated_invocations)
 
@@ -2608,6 +2624,7 @@ def flow_chain(
         graph=execution_graph,
         invocations=rated_invocations,
         execution_paths=forward_execution_paths,
+        reach=reach,
     )
     return FlowChainResponse(
         direction="forward",

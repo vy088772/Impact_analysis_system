@@ -10,7 +10,8 @@ for key, want in sorted(truth.items()):
         fc = rag_client.flow_chain('RTTalentDB', 'forward', program_name=prog, anchor_method=action)['forward_chain'] or {}
     except rag_client.ImpactServiceError as e:
         errs[str(e)[:80]] += 1; continue
-    got = sorted({s.split('.')[-1].strip('[]').lower() for s in (fc.get('stored_procedures') or [])})
+    names = [s['name'] if isinstance(s, dict) else s for s in (fc.get('stored_procedures') or [])]
+    got = sorted({s.split('.')[-1].strip('[]').lower() for s in names})
     rows.append({'action': key, 'want': want, 'got': got, 'reach': len(fc.get('reachable_methods') or []),
                  'paths': len(fc.get('execution_paths') or []), 'tables': len(fc.get('tables') or [])})
 json.dump(rows, open(S + sys.argv[1], 'w'), ensure_ascii=False, indent=1)

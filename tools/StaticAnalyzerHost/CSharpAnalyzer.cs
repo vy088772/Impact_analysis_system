@@ -38,10 +38,15 @@ internal static class CSharpAnalyzer
     internal static CSharpAnalysis Analyze(string inputPath)
         => Analyze(inputPath, new[] { ReadSource(inputPath) });
 
+    /// <param name="callGraphCompilation">The compilation that binds each call to its Bound Call
+    /// Target: the project compilation when it is available, else a source-only compilation of
+    /// the same trees. A caller that analyzes many inputs makes it once. When it is null, this
+    /// method makes a source-only compilation for its own input.</param>
     internal static CSharpAnalysis Analyze(
         string inputPath,
         IReadOnlyList<CSharpSource> sourceFiles,
-        CSharpCompilation? compilation = null)
+        CSharpCompilation? compilation = null,
+        CSharpCompilation? callGraphCompilation = null)
     {
         var bytes = File.ReadAllBytes(inputPath);
         var source = File.ReadAllText(inputPath);
@@ -50,11 +55,17 @@ internal static class CSharpAnalyzer
             ?? CSharpSyntaxTree.ParseText(source, path: inputPath).GetCompilationUnitRoot();
         var sourceRoots = sourceFiles.Select(sourceFile => sourceFile.Root).ToList();
         var usedWrapperMethodIdentities = WrapperAnalyzer.FindUsedWrapperMethodIdentities(sourceRoots);
+        callGraphCompilation ??= compilation
+            ?? BoundCallAnalyzer.SourceOnlyCompilation(sourceRoots.Select(sourceRoot => sourceRoot.SyntaxTree));
+        var semanticModel = callGraphCompilation.ContainsSyntaxTree(root.SyntaxTree)
+            ? callGraphCompilation.GetSemanticModel(root.SyntaxTree)
+            : null;
         var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Select(method => new MethodSourceSpan(
             method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault()?.Identifier.Text ?? "",
             method.Identifier.Text,
             method.SpanStart,
-            method.Span.End)).ToList();
+            method.Span.End,
+            BoundCallAnalyzer.Analyze(method, semanticModel, sourceRoots))).ToList();
 
         var dbInvocations = root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>()
             .Where(creation => IsSqlCommandType(creation.Type))
@@ -1300,7 +1311,8 @@ internal static class AdapterAnalyzer
 }
 
 internal sealed record CSharpAnalysis(string SourceId, List<MethodSourceSpan> Methods, List<DirectSqlInvocation> DbInvocations);
-internal sealed record MethodSourceSpan(string ClassName, string MethodName, int StartOffset, int EndOffset);
+internal sealed record MethodSourceSpan(
+    string ClassName, string MethodName, int StartOffset, int EndOffset, IReadOnlyList<BoundCall> Calls);
 internal sealed record CSharpSource(string InputPath, CompilationUnitSyntax Root);
 
 /// <summary>Raw facts for one direct `SqlCommand` setup; evidence rating happens in the Python gateway.</summary>
@@ -2404,8 +2416,12 @@ internal static class WrapperAnalyzer
     /// wrapper receiver -- its bare simple name (what a directly-typed receiver would already
     /// report) alongside the full type identity <see cref="WrapperDefinition.TypeIdentity"/> is
     /// keyed on, so the caller can look up whether this exact class's method already has a
-    /// scanned <see cref="WrapperDefinition"/> to redirect to.</summary>
-    private sealed record LocalImplementerCandidate(string ClassName, string TypeIdentity);
+    /// scanned <see cref="WrapperDefinition"/> to redirect to. <paramref
+    /// name="MethodDeclaringClassName"/> names the class that declares the invoked method: the
+    /// implementer itself, or the corpus base class it inherits the method from. A Bound Call
+    /// Target (ADR-0044) is keyed on that class, because that is where the method's body is.</summary>
+    internal sealed record LocalImplementerCandidate(
+        string ClassName, string TypeIdentity, string MethodDeclaringClassName);
 
     /// <summary>
     /// Ticket 01 (wrapper-receiver-resolves-through-interface): when <paramref name="receiverType"/>
@@ -2440,7 +2456,20 @@ internal static class WrapperAnalyzer
         if (string.IsNullOrWhiteSpace(receiverType.ReceiverType) || string.IsNullOrEmpty(methodName))
             return Array.Empty<LocalImplementerCandidate>();
 
-        var interfaceName = receiverType.ReceiverType.Trim();
+        return ResolveLocalImplementers(receiverType.ReceiverType.Trim(), methodName, sourceRoots);
+    }
+
+    /// <summary>The Local Implementer rule for an interface named by its simple name. The wrapper
+    /// path above and the Bound Call Target path (<see cref="BoundCallAnalyzer"/>) share it, so
+    /// the project has one rule for which class an interface call reaches.</summary>
+    internal static IReadOnlyList<LocalImplementerCandidate> ResolveLocalImplementers(
+        string interfaceName,
+        string methodName,
+        IReadOnlyList<CompilationUnitSyntax> sourceRoots)
+    {
+        if (string.IsNullOrWhiteSpace(interfaceName) || string.IsNullOrEmpty(methodName))
+            return Array.Empty<LocalImplementerCandidate>();
+
         var isCorpusInterface = GetTypeDeclarationsByName(sourceRoots, interfaceName)
             .OfType<InterfaceDeclarationSyntax>()
             .Any();
@@ -2465,7 +2494,7 @@ internal static class WrapperAnalyzer
         {
             // An abstract class can never be the thing a DI container hands back for an interface
             // field, so it is never itself a Local Implementer -- only a rung a concrete subclass
-            // climbs through (still walked by ImplementsInterfaceTransitively/DeclaresMethodTransitively
+            // climbs through (still walked by ImplementsInterfaceTransitively/FindMethodDeclaringClass
             // below). Without this guard, the "abstract base implements most of the interface,
             // concrete subclass fills in the rest" pattern the ticket calls out would surface both
             // the base and the subclass as tied candidates, reporting a tie that was never really one.
@@ -2476,17 +2505,20 @@ internal static class WrapperAnalyzer
             if (!ShouldVisit(typeIdentity, evaluatedIdentities))
                 continue;
 
-            if (ImplementsInterfaceTransitively(
+            if (!ImplementsInterfaceTransitively(
                     classDeclaration,
                     interfaceName,
                     sourceRoots,
-                    new HashSet<string>(StringComparer.Ordinal))
-                && DeclaresMethodTransitively(
-                    classDeclaration,
-                    methodName,
-                    sourceRoots,
                     new HashSet<string>(StringComparer.Ordinal)))
-                matches.Add(new LocalImplementerCandidate(classDeclaration.Identifier.Text, typeIdentity));
+                continue;
+            var declaringClass = FindMethodDeclaringClass(
+                classDeclaration,
+                methodName,
+                sourceRoots,
+                new HashSet<string>(StringComparer.Ordinal));
+            if (declaringClass is not null)
+                matches.Add(new LocalImplementerCandidate(
+                    classDeclaration.Identifier.Text, typeIdentity, declaringClass.Identifier.Text));
         }
         return matches;
     }
@@ -2516,10 +2548,10 @@ internal static class WrapperAnalyzer
                 baseClass, interfaceName, sourceRoots, visitedTypeIdentities));
     }
 
-    /// <summary>True when <paramref name="classDeclaration"/> (across every `partial` declaration
-    /// sharing its identity) declares <paramref name="methodName"/> itself, or a further base class
-    /// in the same corpus does.</summary>
-    private static bool DeclaresMethodTransitively(
+    /// <summary>The class that declares <paramref name="methodName"/>: <paramref
+    /// name="classDeclaration"/> itself (across every `partial` declaration sharing its identity),
+    /// or the first further base class in the same corpus that does. Null when none does.</summary>
+    private static ClassDeclarationSyntax? FindMethodDeclaringClass(
         ClassDeclarationSyntax classDeclaration,
         string methodName,
         IReadOnlyList<CompilationUnitSyntax> sourceRoots,
@@ -2527,19 +2559,20 @@ internal static class WrapperAnalyzer
     {
         var typeIdentity = CSharpAnalyzer.GetTypeIdentity(classDeclaration);
         if (!ShouldVisit(typeIdentity, visitedTypeIdentities))
-            return false;
+            return null;
 
         var partials = PartialDeclarationsIncludingSelf(classDeclaration, typeIdentity, sourceRoots);
         if (partials.Any(declaration => declaration.Members
             .OfType<MethodDeclarationSyntax>()
             .Any(method => method.Identifier.Text == methodName)))
-            return true;
+            return classDeclaration;
 
         return BaseListNames(classDeclaration, typeIdentity, sourceRoots)
             .SelectMany(baseName => GetTypeDeclarationsByName(sourceRoots, baseName))
             .OfType<ClassDeclarationSyntax>()
-            .Any(baseClass => DeclaresMethodTransitively(
-                baseClass, methodName, sourceRoots, visitedTypeIdentities));
+            .Select(baseClass => FindMethodDeclaringClass(
+                baseClass, methodName, sourceRoots, visitedTypeIdentities))
+            .FirstOrDefault(declaringClass => declaringClass is not null);
     }
 
     /// <summary>The bare base-list type names (as written at each declaration site) across every

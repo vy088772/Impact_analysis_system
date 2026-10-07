@@ -15,6 +15,7 @@ from service import analyze_service
 from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FlowChainRequest
 from tests.program_screen_fixtures import _scan
+from tests.scan_fixtures import with_bound_calls
 from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     cache_payload,
@@ -311,3 +312,188 @@ def test_a_webforms_program_keeps_its_forward_chain_in_a_repository_with_views(
     )
 
     assert _procedures(response) == ["dbo.usp_Save"]
+
+
+# ADR-0044: from the anchor action, the chain follows each Bound Call Target into any file of
+# the scan root. The program scope selects the anchor action only.
+
+
+def _service_scan(root: Path, calls: Dict[str, Sequence[str]], services: Dict[str, Sequence[str]]):
+    """The JobType screen and its controller, the named service files, and the Bound Call Targets."""
+    scan = _scan(
+        root,
+        views=["Views/JobType/JobTypeMtn.cshtml"],
+        controllers={"Controllers/JobTypeController.cs": ["JobTypeMtn", "JobTypeInvalid"], **services},
+        determined_anchors={
+            "Views/JobType/JobTypeMtn.cshtml": [{"controller": "JobType", "action": "JobTypeInvalid"}]
+        },
+    )
+    return with_bound_calls(scan, "bound_calls.cs", calls)
+
+
+def test_an_action_reaches_the_stored_procedure_of_the_service_method_it_calls(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _service_scan(
+        tmp_path,
+        {"JobTypeController.JobTypeInvalid": ["JobTypeService.InvalidateJobType"]},
+        {"Services/JobTypeService.cs": ["InvalidateJobType", "GetJobType"]},
+    )
+    procedures = ["usp_MS_JobTypeInValid", "usp_MS_GetJobType"]
+    source = _Source(
+        [
+            _invocation("Services/JobTypeService.cs", "JobTypeService", "InvalidateJobType", "usp_MS_JobTypeInValid"),
+            _invocation("Services/JobTypeService.cs", "JobTypeService", "GetJobType", "usp_MS_GetJobType"),
+        ],
+        procedures,
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeInvalid", procedures=procedures)
+
+    assert _procedures(response) == ["dbo.usp_MS_JobTypeInValid"]
+    assert response.forward_chain["method_path"] == ["JobTypeInvalid", "InvalidateJobType"]
+    assert sorted(source.needed_files[0]) == [
+        str(tmp_path / "Controllers/JobTypeController.cs"),
+        str(tmp_path / "Services/JobTypeService.cs"),
+    ]
+
+
+def test_a_path_joins_by_the_method_that_holds_its_invocation_not_by_its_entry_method(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The same-file caller chain can start at a method the action never reaches (RTTalentDB:
+    the regex parser reads the primary constructor `JobTypeService(` as a method)."""
+    scan = _service_scan(
+        tmp_path,
+        {"JobTypeController.JobTypeMtn": ["JobTypeService.GetJobType"]},
+        {"Services/JobTypeService.cs": ["JobTypeService", "GetJobType", "GetOther"]},
+    )
+    path = {
+        "path_id": "service-path",
+        "entry_method": "JobTypeService.JobTypeService",
+        "caller_class": "JobTypeService",
+        "caller_method": "GetJobType",
+        "evidence": "unresolved",
+        "unresolved_reason": "command_text_method_parameter",
+        "sp_chain": [],
+        "reads": [],
+        "writes": [],
+    }
+    other = dict(path, path_id="other-path", caller_method="GetOther")
+    source = _Source(
+        [
+            _invocation("Services/JobTypeService.cs", "JobTypeService", "GetJobType", "usp_A"),
+            _invocation("Services/JobTypeService.cs", "JobTypeService", "GetOther", "usp_B"),
+        ],
+        ["usp_A", "usp_B"],
+        paths_by_invocation=[[path], [other]],
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=["usp_A", "usp_B"])
+
+    assert [p["path_id"] for p in response.forward_chain["unresolved_paths"]] == ["service-path"]
+
+
+def test_a_service_that_calls_another_service_contributes_its_stored_procedures(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _service_scan(
+        tmp_path,
+        {
+            "JobTypeController.JobTypeMtn": ["JobTypeService.GetJobType"],
+            "JobTypeService.GetJobType": ["UtilityService.DataBring"],
+        },
+        {"Services/JobTypeService.cs": ["GetJobType"], "Services/UtilityService.cs": ["DataBring"]},
+    )
+    procedures = ["usp_MS_GetJobType", "usp_SYS_DataBring"]
+    source = _Source(
+        [
+            _invocation("Services/JobTypeService.cs", "JobTypeService", "GetJobType", "usp_MS_GetJobType"),
+            _invocation("Services/UtilityService.cs", "UtilityService", "DataBring", "usp_SYS_DataBring"),
+        ],
+        procedures,
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=procedures)
+
+    assert sorted(_procedures(response)) == ["dbo.usp_MS_GetJobType", "dbo.usp_SYS_DataBring"]
+
+
+def test_two_methods_with_one_name_in_two_classes_stay_two_nodes(monkeypatch, tmp_path: Path) -> None:
+    scan = _service_scan(
+        tmp_path,
+        {"JobTypeController.JobTypeMtn": ["JobTypeService.Save"], "OtherService.Save": ["OtherService.Audit"]},
+        {"Services/JobTypeService.cs": ["Save"], "Services/OtherService.cs": ["Save", "Audit"]},
+    )
+    procedures = ["usp_JobType_Save", "usp_Other_Save", "usp_Other_Audit"]
+    source = _Source(
+        [
+            _invocation("Services/JobTypeService.cs", "JobTypeService", "Save", "usp_JobType_Save"),
+            _invocation("Services/OtherService.cs", "OtherService", "Save", "usp_Other_Save"),
+            _invocation("Services/OtherService.cs", "OtherService", "Audit", "usp_Other_Audit"),
+        ],
+        procedures,
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=procedures)
+
+    assert _procedures(response) == ["dbo.usp_JobType_Save"]
+
+
+def test_the_reach_has_no_depth_limit_and_stops_each_cycle(monkeypatch, tmp_path: Path) -> None:
+    depth = 12
+    calls: Dict[str, Sequence[str]] = {"JobTypeController.JobTypeMtn": ["Step0.Run"]}
+    calls.update({f"Step{i}.Run": [f"Step{i + 1}.Run"] for i in range(depth)})
+    calls[f"Step{depth}.Run"] = ["Step0.Run", "JobTypeController.JobTypeMtn"]
+    scan = _service_scan(tmp_path, calls, {f"Services/Step{i}.cs": ["Run"] for i in range(depth + 1)})
+    procedures = ["usp_Deepest"]
+    source = _Source([_invocation(f"Services/Step{depth}.cs", f"Step{depth}", "Run", "usp_Deepest")], procedures)
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=procedures)
+
+    assert _procedures(response) == ["dbo.usp_Deepest"]
+    assert len(response.forward_chain["method_path"]) == depth + 2
+
+
+def test_a_call_with_no_bound_call_target_stops_its_branch(monkeypatch, tmp_path: Path) -> None:
+    scan = _service_scan(
+        tmp_path,
+        {"JobTypeController.JobTypeMtn": ["!ambiguous_implementation"]},
+        {"Services/SharedA.cs": ["Run"], "Services/SharedB.cs": ["Run"]},
+    )
+    procedures = ["usp_A", "usp_B"]
+    source = _Source(
+        [
+            _invocation("Services/SharedA.cs", "SharedA", "Run", "usp_A"),
+            _invocation("Services/SharedB.cs", "SharedB", "Run", "usp_B"),
+        ],
+        procedures,
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=procedures)
+
+    assert _procedures(response) == []
+    assert response.forward_chain["reachable_methods"] == ["JobTypeMtn"]
+
+
+def test_a_webforms_chain_does_not_match_the_call_text(monkeypatch, tmp_path: Path) -> None:
+    """The regex parser still records call text, but only a Bound Call Target is an edge."""
+    scan = _scan(
+        tmp_path,
+        controllers={"Legacy/Alpha.aspx.cs": ["btnSave_Click", "BindData"], "Legacy/Beta.aspx.cs": ["Helper"]},
+        pages=["Legacy/Alpha.aspx", "Legacy/Beta.aspx"],
+    )
+    scan.csharp_results[0].classes[0].methods[0].calls = ["BindData", "Helper"]
+    with_bound_calls(scan, "Legacy/Alpha.aspx.cs", {"Alpha.btnSave_Click": ["Alpha.BindData"]})
+    procedures = ["usp_Bind", "usp_Helper"]
+    source = _Source(
+        [
+            _invocation("Legacy/Alpha.aspx.cs", "Alpha", "BindData", "usp_Bind"),
+            _invocation("Legacy/Beta.aspx.cs", "Beta", "Helper", "usp_Helper"),
+        ],
+        procedures,
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "Alpha", "btnSave_Click", procedures=procedures)
+
+    assert _procedures(response) == ["dbo.usp_Bind"]

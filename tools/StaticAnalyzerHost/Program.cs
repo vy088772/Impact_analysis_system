@@ -68,8 +68,12 @@ internal static class Program
         var compilation = ProjectCompilationResolver.ResolveCompilationForAnalysis(
             sourceRoots,
             sourceFiles.Select(sourceFile => sourceFile.Root.SyntaxTree).ToList());
+        // The call graph needs a semantic model in every scan root (ADR-0044). A scan root with no
+        // available project compilation binds its calls in a compilation of its own source.
+        var callGraphCompilation = compilation
+            ?? BoundCallAnalyzer.SourceOnlyCompilation(sourceFiles.Select(sourceFile => sourceFile.Root.SyntaxTree));
         var analyses = inputPaths
-            .Select(inputPath => CSharpAnalyzer.Analyze(inputPath, sourceFiles, compilation))
+            .Select(inputPath => CSharpAnalyzer.Analyze(inputPath, sourceFiles, compilation, callGraphCompilation))
             .ToList();
         if (analyses.Count == 1)
         {

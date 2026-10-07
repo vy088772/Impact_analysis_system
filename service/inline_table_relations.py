@@ -42,10 +42,11 @@ from .table_match import TableMatch, TableQuestion, names_another_database
 
 @dataclass(frozen=True)
 class MethodSite:
-    """The source file and the method that a table relation belongs to."""
+    """The source file, the method and its class that a table relation belongs to."""
 
     file_path: str
     method_name: str
+    class_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -163,7 +164,7 @@ def by_method(
     return [
         relation
         for relation in scan.table_relations
-        if passes(MethodSite(relation.csharp_file, relation.method_name))
+        if passes(MethodSite(relation.csharp_file, relation.method_name, relation.class_name))
     ]
 
 

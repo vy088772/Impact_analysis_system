@@ -193,7 +193,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # `Task<T?>`、含逗號的泛型 `Task<Dictionary<string, X>>`、`Task <T>`（`<` 前有
 # 空白），方法名後可接泛型參數 `Name<T>(`。舊快取漏掉這些方法，它們的 `calls`
 # 與方法鄰接表節點都是空的，必須重新掃描。
-_CACHE_VERSION = 45
+# v46：analyzer host 為每個方法記錄每個呼叫的 Bound Call Target（見 ADR-0044 與
+# `.scratch/rttalentdb-program-to-sql-chain/issues/05-...md`）：`MethodSourceSpan.calls`
+# 是 `CallSite` 清單，介面方法經 Local Implementer 規則解析到實作類別。正向鏈只用
+# 這些邊，不再比對呼叫文字。舊快取的方法 span 沒有 `calls`，正向鏈會停在 action
+# 本身，必須重新掃描。
+_CACHE_VERSION = 46
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

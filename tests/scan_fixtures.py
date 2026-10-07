@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping, Sequence
 
-from code_analyzer.models import ClassInfo, FileAnalysisResult, FileType, FrameworkType, MethodInfo
+from code_analyzer.models import (
+    CallSite,
+    ClassInfo,
+    FileAnalysisResult,
+    FileType,
+    FrameworkType,
+    MethodInfo,
+    MethodSourceSpan,
+    SourceSnapshot,
+)
 from code_analyzer.project_scanner import CSharpTableRelation, ProjectScanResult
 
 
@@ -33,3 +42,36 @@ def scan_of(
         aspx_results=[],
         table_relations=list(table_relations),
     )
+
+
+def with_bound_calls(
+    scan: ProjectScanResult, relative_path: str, calls: Mapping[str, Sequence[str]]
+) -> ProjectScanResult:
+    """Add the Bound Call Targets of one source file, as the analyzer host records them.
+
+    `calls` maps a caller node (`Class.Method`) to the nodes its calls reach. A target
+    written as `!reason` is a call with no Bound Call Target and that reason.
+    """
+    spans = []
+    for caller, targets in calls.items():
+        class_name, method_name = caller.rsplit(".", 1)
+        sites = []
+        for target in targets:
+            if target.startswith("!"):
+                sites.append(CallSite(call_text=target, start_offset=0, end_offset=0, unresolved_reason=target[1:]))
+                continue
+            target_class, target_method = target.rsplit(".", 1)
+            sites.append(
+                CallSite(
+                    call_text=f"x.{target_method}",
+                    start_offset=0,
+                    end_offset=0,
+                    target_class=target_class,
+                    target_method=target_method,
+                )
+            )
+        spans.append(MethodSourceSpan(class_name, method_name, 0, 0, sites))
+    scan.source_snapshots[relative_path] = SourceSnapshot(
+        relative_path=relative_path, content_hash="", content="", method_spans=spans
+    )
+    return scan

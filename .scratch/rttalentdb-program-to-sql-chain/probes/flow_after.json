@@ -1,0 +1,2938 @@
+[
+ {
+  "action": "AssessmentResult.AssessmentResultQry",
+  "want": [
+   "usp_rpt_evaluationresultqry",
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_rpt_evaluationresultqry",
+   "usp_sys_databring"
+  ],
+  "reach": 4,
+  "paths": 104,
+  "tables": 26
+ },
+ {
+  "action": "AssessmentResult.ResumeAssessmentResult",
+  "want": [
+   "usp_ta_personalcertqry",
+   "usp_ta_personalcourseqry",
+   "usp_ta_personaldataojtbring",
+   "usp_ta_personaldataqry",
+   "usp_ta_resumedepthbreadthtrainingqry",
+   "usp_ta_resumeexperienceqry",
+   "usp_ta_resumeotherabilityqry"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_personalcertqry",
+   "usp_ta_personalcourseqry",
+   "usp_ta_personaldataojtbring",
+   "usp_ta_personaldataqry",
+   "usp_ta_resumedepthbreadthtrainingqry",
+   "usp_ta_resumeexperienceqry",
+   "usp_ta_resumeotherabilityqry"
+  ],
+  "reach": 5,
+  "paths": 33,
+  "tables": 24
+ },
+ {
+  "action": "AssessmentResult.TraditionAssessmentResult",
+  "want": [
+   "usp_rpt_traditionassessmentresultqry"
+  ],
+  "got": [
+   "usp_rpt_traditionassessmentresultqry"
+  ],
+  "reach": 3,
+  "paths": 4,
+  "tables": 5
+ },
+ {
+  "action": "AssessmentResult.TrialAssessmentResult",
+  "want": [
+   "usp_rpt_trialassessmentresultqry"
+  ],
+  "got": [
+   "usp_rpt_trialassessmentresultqry"
+  ],
+  "reach": 3,
+  "paths": 3,
+  "tables": 6
+ },
+ {
+  "action": "Auth.UnAuthorize",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "DepthBreadthTraining.DepthBreadthTrainingAdd",
+  "want": [
+   "usp_ms_depthbreadthtrainingadd"
+  ],
+  "got": [
+   "usp_ms_depthbreadthtrainingadd"
+  ],
+  "reach": 4,
+  "paths": 5,
+  "tables": 1
+ },
+ {
+  "action": "DepthBreadthTraining.DepthBreadthTrainingInValid",
+  "want": [
+   "usp_ms_depthbreadthtraininginvalid"
+  ],
+  "got": [
+   "usp_ms_depthbreadthtrainingbackup",
+   "usp_ms_depthbreadthtraininginvalid"
+  ],
+  "reach": 3,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "DepthBreadthTraining.DepthBreadthTrainingInValidQry",
+  "want": [
+   "usp_ms_depthbreadthtraininginvalidqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "DepthBreadthTraining.DepthBreadthTrainingMtn",
+  "want": [
+   "usp_ms_depthbreadthtrainingqry",
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 2,
+  "paths": 50,
+  "tables": 23
+ },
+ {
+  "action": "DepthBreadthTraining.DepthBreadthTrainingPartial",
+  "want": [
+   "usp_ms_depthbreadthtrainingqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "DepthBreadthTraining.DepthBreadthTrainingQry",
+  "want": [
+   "usp_ms_depthbreadthtrainingqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "DepthBreadthTraining.DepthBreadthTrainingUpd",
+  "want": [
+   "usp_ms_depthbreadthtrainingupd"
+  ],
+  "got": [
+   "usp_ms_depthbreadthtrainingbackup",
+   "usp_ms_depthbreadthtrainingupd"
+  ],
+  "reach": 4,
+  "paths": 6,
+  "tables": 2
+ },
+ {
+  "action": "DepthBreadthTraining.DepthBreadthTrainingValid",
+  "want": [
+   "usp_ms_depthbreadthtrainingvalid"
+  ],
+  "got": [
+   "usp_ms_depthbreadthtrainingbackup",
+   "usp_ms_depthbreadthtrainingvalid"
+  ],
+  "reach": 3,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "DepthBreadthTraining.GetJobDutyForEdit",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 1,
+  "paths": 49,
+  "tables": 23
+ },
+ {
+  "action": "DepthBreadthTraining.ReturnResult",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "DomesticForeignEV.DomesticForeignEVAdd",
+  "want": [
+   "usp_ms_domesticforeignevadd"
+  ],
+  "got": [
+   "usp_ms_domesticforeignevadd"
+  ],
+  "reach": 4,
+  "paths": 5,
+  "tables": 1
+ },
+ {
+  "action": "DomesticForeignEV.DomesticForeignEVInValid",
+  "want": [
+   "usp_ms_domesticforeignevinvalid"
+  ],
+  "got": [
+   "usp_ms_domesticforeignevbackup",
+   "usp_ms_domesticforeignevinvalid"
+  ],
+  "reach": 3,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "DomesticForeignEV.DomesticForeignEVInValidQry",
+  "want": [
+   "usp_ms_domesticforeignevinvalidqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "DomesticForeignEV.DomesticForeignEVMtn",
+  "want": [
+   "usp_ms_domesticforeignevqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "DomesticForeignEV.DomesticForeignEVPartial",
+  "want": [
+   "usp_ms_domesticforeignevqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "DomesticForeignEV.DomesticForeignEVQry",
+  "want": [
+   "usp_ms_domesticforeignevqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "DomesticForeignEV.DomesticForeignEVUpd",
+  "want": [
+   "usp_ms_domesticforeignevupd"
+  ],
+  "got": [
+   "usp_ms_domesticforeignevbackup",
+   "usp_ms_domesticforeignevupd"
+  ],
+  "reach": 4,
+  "paths": 6,
+  "tables": 2
+ },
+ {
+  "action": "DomesticForeignEV.DomesticForeignEVValid",
+  "want": [
+   "usp_ms_domesticforeignevvalid"
+  ],
+  "got": [
+   "usp_ms_domesticforeignevbackup",
+   "usp_ms_domesticforeignevvalid"
+  ],
+  "reach": 3,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "DomesticForeignEV.ReturnResult",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "EmpJobDuty.CancelRow",
+  "want": [
+   "usp_ms_empjobdutyqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "EmpJobDuty.EditRow",
+  "want": [
+   "usp_ms_empjobdutyqry",
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "EmpJobDuty.EmpJobDutyMtn",
+  "want": [
+   "usp_ms_empjobdutyqry",
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_ms_empjobdutyqry",
+   "usp_sys_databring"
+  ],
+  "reach": 4,
+  "paths": 104,
+  "tables": 24
+ },
+ {
+  "action": "EmpJobDuty.GetEmpData",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "EmpJobDuty.GetJobDuty",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "EmpJobDuty.SaveData",
+  "want": [
+   "usp_ms_empjobdutymtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Error.ExceptionHandler",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Error.HttpStatusCodeHandler",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "EvaluationSchedule.CancelRow",
+  "want": [
+   "usp_sys_evaluationscheduleqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "EvaluationSchedule.EditRow",
+  "want": [
+   "usp_sys_evaluationscheduleqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "EvaluationSchedule.EvaluationScheduleMtn",
+  "want": [
+   "usp_sys_databring",
+   "usp_sys_evaluationscheduleqry"
+  ],
+  "got": [
+   "usp_sys_databring",
+   "usp_sys_evaluationscheduleqry"
+  ],
+  "reach": 3,
+  "paths": 51,
+  "tables": 23
+ },
+ {
+  "action": "EvaluationSchedule.MtnData",
+  "want": [
+   "usp_sys_evaluationschedulemtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "EvaluationSchedule.SaveData",
+  "want": [
+   "usp_sys_evaluationschedulemtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "File.CheckExcel",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "File.DeleteUploadSession",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "File.File",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Home.HomePage",
+  "want": [
+   "usp_rpt_getcurrentevaluationjudgeid",
+   "usp_sys_todoitembring"
+  ],
+  "got": [
+   "usp_rpt_getcurrentevaluationjudgeid",
+   "usp_sys_getassessyearterm",
+   "usp_sys_todoitembring"
+  ],
+  "reach": 3,
+  "paths": 11,
+  "tables": 9
+ },
+ {
+  "action": "JobDuty.GetInvalidJobDuty",
+  "want": [
+   "usp_ms_getinvalidjobduty"
+  ],
+  "got": [
+   "usp_ms_getinvalidjobduty"
+  ],
+  "reach": 1,
+  "paths": 2,
+  "tables": 3
+ },
+ {
+  "action": "JobDuty.GetNextJobDutyId",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 1,
+  "paths": 49,
+  "tables": 23
+ },
+ {
+  "action": "JobDuty.GetValidJobDuty",
+  "want": [
+   "usp_ms_getjobduty"
+  ],
+  "got": [
+   "usp_ms_getjobduty"
+  ],
+  "reach": 1,
+  "paths": 2,
+  "tables": 3
+ },
+ {
+  "action": "JobDuty.JobDutyCreate",
+  "want": [
+   "usp_ms_jobdutyadd"
+  ],
+  "got": [
+   "usp_ms_jobdutyadd"
+  ],
+  "reach": 3,
+  "paths": 5,
+  "tables": 1
+ },
+ {
+  "action": "JobDuty.JobDutyInValid",
+  "want": [
+   "usp_ms_jobdutyinvalid"
+  ],
+  "got": [
+   "usp_ms_jobdutybackup",
+   "usp_ms_jobdutyinvalid"
+  ],
+  "reach": 2,
+  "paths": 6,
+  "tables": 4
+ },
+ {
+  "action": "JobDuty.JobDutyMtn",
+  "want": [
+   "usp_ms_getjobduty",
+   "usp_ms_getjobtype",
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_ms_getjobduty",
+   "usp_ms_getjobtype",
+   "usp_sys_databring"
+  ],
+  "reach": 3,
+  "paths": 53,
+  "tables": 23
+ },
+ {
+  "action": "JobDuty.JobDutyUpdate",
+  "want": [
+   "usp_ms_jobdutyupd"
+  ],
+  "got": [
+   "usp_ms_jobdutybackup",
+   "usp_ms_jobdutyupd"
+  ],
+  "reach": 3,
+  "paths": 8,
+  "tables": 4
+ },
+ {
+  "action": "JobDuty.JobDutyValid",
+  "want": [
+   "usp_ms_jobdutyvalid"
+  ],
+  "got": [
+   "usp_ms_jobdutybackup",
+   "usp_ms_jobdutyvalid"
+  ],
+  "reach": 2,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "JobDutyPersonnelSkillDetail.JobDutyPersonnelSkillDetail",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 2,
+  "paths": 49,
+  "tables": 23
+ },
+ {
+  "action": "JobDutyPersonnelSkillDetail.JobDutyPersonnelSkillDetailDDL",
+  "want": [
+   "usp_rpt_jobdutypersonnelskilldetailqry"
+  ],
+  "got": [
+   "usp_rpt_jobdutypersonnelskilldetailqry"
+  ],
+  "reach": 5,
+  "paths": 4,
+  "tables": 6
+ },
+ {
+  "action": "JobDutyPersonnelSkillDetail.JobDutyPersonnelSkillDetailQry",
+  "want": [
+   "usp_rpt_jobdutypersonnelskilldetailqry"
+  ],
+  "got": [
+   "usp_rpt_jobdutypersonnelskilldetailqry"
+  ],
+  "reach": 3,
+  "paths": 4,
+  "tables": 6
+ },
+ {
+  "action": "JobDutySkillStatistics.ExportJobDutySkillExcel",
+  "want": [
+   "usp_rpt_jobdutyskillstatisticsqry"
+  ],
+  "got": [
+   "usp_rpt_jobdutyskillstatisticsqry"
+  ],
+  "reach": 5,
+  "paths": 3,
+  "tables": 4
+ },
+ {
+  "action": "JobDutySkillStatistics.JobDutySkillStatisticsDetailQry",
+  "want": [
+   "usp_rpt_jobdutyskillstatisticsdetailqry"
+  ],
+  "got": [
+   "usp_rpt_jobdutyskillstatisticsdetailqry"
+  ],
+  "reach": 2,
+  "paths": 3,
+  "tables": 5
+ },
+ {
+  "action": "JobDutySkillStatistics.JobDutySkillStatisticsQry",
+  "want": [
+   "usp_rpt_jobdutyskillstatisticsqry"
+  ],
+  "got": [
+   "usp_rpt_jobdutyskillstatisticsqry"
+  ],
+  "reach": 2,
+  "paths": 3,
+  "tables": 4
+ },
+ {
+  "action": "JobPosition.GetInvalidJobPosition",
+  "want": [
+   "usp_ms_getinvalidjobposition"
+  ],
+  "got": [
+   "usp_ms_getinvalidjobposition"
+  ],
+  "reach": 2,
+  "paths": 2,
+  "tables": 1
+ },
+ {
+  "action": "JobPosition.GetValidJobPosition",
+  "want": [
+   "usp_ms_getjobposition"
+  ],
+  "got": [
+   "usp_ms_getjobposition"
+  ],
+  "reach": 1,
+  "paths": 2,
+  "tables": 1
+ },
+ {
+  "action": "JobPosition.JobPositionCreate",
+  "want": [
+   "usp_ms_jobpositionadd"
+  ],
+  "got": [
+   "usp_ms_jobpositionadd"
+  ],
+  "reach": 3,
+  "paths": 5,
+  "tables": 1
+ },
+ {
+  "action": "JobPosition.JobPositionInValid",
+  "want": [
+   "usp_ms_jobpositioninvalid"
+  ],
+  "got": [
+   "usp_ms_jobpositioninvalid"
+  ],
+  "reach": 2,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "JobPosition.JobPositionMtn",
+  "want": [
+   "usp_ms_getjobposition"
+  ],
+  "got": [
+   "usp_ms_getjobposition"
+  ],
+  "reach": 2,
+  "paths": 2,
+  "tables": 1
+ },
+ {
+  "action": "JobPosition.JobPositionUpdate",
+  "want": [
+   "usp_ms_jobpositionupd"
+  ],
+  "got": [
+   "usp_ms_jobpositionbackup",
+   "usp_ms_jobpositionupd"
+  ],
+  "reach": 3,
+  "paths": 6,
+  "tables": 2
+ },
+ {
+  "action": "JobPosition.JobPositionValid",
+  "want": [
+   "usp_ms_jobpositionvalid"
+  ],
+  "got": [
+   "usp_ms_jobpositionvalid"
+  ],
+  "reach": 2,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "JobType.GetInvalidJobType",
+  "want": [
+   "usp_ms_getinvalidjobtype"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "JobType.GetInvalidJobTypePartial",
+  "want": [
+   "usp_ms_getinvalidjobtype"
+  ],
+  "got": [
+   "usp_ms_getinvalidjobtype"
+  ],
+  "reach": 2,
+  "paths": 2,
+  "tables": 1
+ },
+ {
+  "action": "JobType.GetNewJobTypeID",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 2,
+  "paths": 49,
+  "tables": 23
+ },
+ {
+  "action": "JobType.GetValidJobType",
+  "want": [
+   "usp_ms_getvalidjobtype"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "JobType.GetValidJobTypePartial",
+  "want": [
+   "usp_ms_getvalidjobtype"
+  ],
+  "got": [
+   "usp_ms_getvalidjobtype"
+  ],
+  "reach": 2,
+  "paths": 2,
+  "tables": 1
+ },
+ {
+  "action": "JobType.JobTypeCreate",
+  "want": [
+   "usp_ms_jobtypeadd"
+  ],
+  "got": [
+   "usp_ms_jobtypeadd"
+  ],
+  "reach": 3,
+  "paths": 5,
+  "tables": 1
+ },
+ {
+  "action": "JobType.JobTypeInvalid",
+  "want": [
+   "usp_ms_jobtypeinvalid"
+  ],
+  "got": [
+   "usp_ms_jobtypebackup",
+   "usp_ms_jobtypeinvalid"
+  ],
+  "reach": 2,
+  "paths": 6,
+  "tables": 3
+ },
+ {
+  "action": "JobType.JobTypeMtn",
+  "want": [
+   "usp_ms_getjobtype",
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_ms_getjobtype",
+   "usp_sys_databring"
+  ],
+  "reach": 3,
+  "paths": 51,
+  "tables": 23
+ },
+ {
+  "action": "JobType.JobTypeUpd",
+  "want": [
+   "usp_ms_jobtypeupd"
+  ],
+  "got": [
+   "usp_ms_jobtypebackup",
+   "usp_ms_jobtypeupd"
+  ],
+  "reach": 3,
+  "paths": 8,
+  "tables": 3
+ },
+ {
+  "action": "JobType.JobTypeValid",
+  "want": [
+   "usp_ms_jobtypevalid"
+  ],
+  "got": [
+   "usp_ms_jobtypebackup",
+   "usp_ms_jobtypevalid"
+  ],
+  "reach": 2,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "ManagementSkillUpload.ImportData",
+  "want": [
+   "usp_ta_managementskilluploadadd"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ManagementSkillUpload.ManagementSkillUploadController",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ManagementSkillUpload.ManagementSkillUploadMtn",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ManagementSkillUpload.UploadExcelData",
+  "want": [
+   "usp_ta_managementskilluploadchk"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Menu.GetMenu",
+  "want": [
+   "usp_sys_getuserauthorizedmenuitems"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ModelRank.ModelRankAdd",
+  "want": [
+   "usp_ms_modelrankadd"
+  ],
+  "got": [
+   "usp_ms_modelrankadd"
+  ],
+  "reach": 4,
+  "paths": 5,
+  "tables": 1
+ },
+ {
+  "action": "ModelRank.ModelRankInValid",
+  "want": [
+   "usp_ms_modelrankinvalid"
+  ],
+  "got": [
+   "usp_ms_modelrankbackup",
+   "usp_ms_modelrankinvalid"
+  ],
+  "reach": 3,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "ModelRank.ModelRankInValidQry",
+  "want": [
+   "usp_ms_modelrankinvalidqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ModelRank.ModelRankMtn",
+  "want": [
+   "usp_ms_modelrankqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ModelRank.ModelRankPartial",
+  "want": [
+   "usp_ms_modelrankqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ModelRank.ModelRankQry",
+  "want": [
+   "usp_ms_modelrankqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ModelRank.ModelRankUpd",
+  "want": [
+   "usp_ms_modelrankupd"
+  ],
+  "got": [
+   "usp_ms_modelrankbackup",
+   "usp_ms_modelrankupd"
+  ],
+  "reach": 4,
+  "paths": 6,
+  "tables": 2
+ },
+ {
+  "action": "ModelRank.ModelRankValid",
+  "want": [
+   "usp_ms_modelrankvalid"
+  ],
+  "got": [
+   "usp_ms_modelrankbackup",
+   "usp_ms_modelrankvalid"
+  ],
+  "reach": 3,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "ModelRank.ReturnResult",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "MultiDimensional.ExportExcelAsync",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "MultiDimensional.JobDutyYearDimension",
+  "want": [
+   "usp_rpt_jobdutyyeardimensionqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "MultiDimensional.JobDutyYearDimensionDDL",
+  "want": [],
+  "got": [],
+  "reach": 4,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "MultiDimensional.JobTypeJobDutyDimension",
+  "want": [
+   "usp_rpt_jobtypejobdutydimensionqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "MultiDimensional.JobTypeJobDutyDimensionDDL",
+  "want": [],
+  "got": [],
+  "reach": 4,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "MultiDimensional.MultiDimensionalQry",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "NeedApprove.NeedApproveQry",
+  "want": [
+   "usp_ta_needapprovelistqry"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_needapprovelistqry"
+  ],
+  "reach": 1,
+  "paths": 6,
+  "tables": 9
+ },
+ {
+  "action": "PersonalData.GetPeronsalCourse",
+  "want": [
+   "usp_ta_personalcourseqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "PersonalData.PersonalDataMtn",
+  "want": [
+   "usp_ta_personalcertqry",
+   "usp_ta_personalcourseqry",
+   "usp_ta_personaldataojtbring",
+   "usp_ta_personaldataqry",
+   "usp_ta_personaldataviewstatus"
+  ],
+  "got": [],
+  "reach": 5,
+  "paths": 2,
+  "tables": 0
+ },
+ {
+  "action": "PersonalData.ResumeRevoke",
+  "want": [
+   "usp_ta_personaldataresumerevoke"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_personaldataresumerevoke"
+  ],
+  "reach": 6,
+  "paths": 20,
+  "tables": 6
+ },
+ {
+  "action": "PersonnelSkill.ExportJobDutySkillExcel",
+  "want": [
+   "usp_rpt_personnelskillqry"
+  ],
+  "got": [
+   "usp_rpt_personnelskillqry"
+  ],
+  "reach": 7,
+  "paths": 11,
+  "tables": 4
+ },
+ {
+  "action": "PersonnelSkill.GetPersonnelSkillPartial",
+  "want": [
+   "usp_rpt_personnelskillqry"
+  ],
+  "got": [
+   "usp_rpt_personnelskillqry"
+  ],
+  "reach": 3,
+  "paths": 11,
+  "tables": 4
+ },
+ {
+  "action": "PersonnelSkill.PersonnelSkillQry",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ProjectSection.ProjectSectionAdd",
+  "want": [
+   "usp_ms_projectsectionadd"
+  ],
+  "got": [
+   "usp_ms_projectsectionadd"
+  ],
+  "reach": 4,
+  "paths": 5,
+  "tables": 1
+ },
+ {
+  "action": "ProjectSection.ProjectSectionInValid",
+  "want": [
+   "usp_ms_projectsectioninvalid"
+  ],
+  "got": [
+   "usp_ms_projectsectioninvalid"
+  ],
+  "reach": 3,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "ProjectSection.ProjectSectionInValidQry",
+  "want": [
+   "usp_ms_projectsectioninvalidqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ProjectSection.ProjectSectionMtn",
+  "want": [
+   "usp_ms_projectsectionqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ProjectSection.ProjectSectionPartial",
+  "want": [
+   "usp_ms_projectsectionqry"
+  ],
+  "got": [],
+  "reach": 2,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ProjectSection.ProjectSectionUpd",
+  "want": [
+   "usp_ms_projectsectionupd"
+  ],
+  "got": [
+   "usp_ms_projectsectionupd"
+  ],
+  "reach": 4,
+  "paths": 6,
+  "tables": 2
+ },
+ {
+  "action": "ProjectSection.ProjectSectionValid",
+  "want": [
+   "usp_ms_projectsectionvalid"
+  ],
+  "got": [
+   "usp_ms_projectsectionvalid"
+  ],
+  "reach": 3,
+  "paths": 3,
+  "tables": 2
+ },
+ {
+  "action": "ProjectSection.ReturnResult",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Public.EmpAutoCompleteByAuth",
+  "want": [
+   "usp_sys_empautocomplete"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Public.EmpOnchangeByAuth",
+  "want": [
+   "usp_sys_authempblur"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Public.GetAuthDepList",
+  "want": [
+   "usp_sys_authdepbind"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Public.GetAuthEmpListByDep",
+  "want": [
+   "usp_sys_authempbindbydep"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Public.GetEmpListByJobDutyID",
+  "want": [
+   "usp_sys_authgetempbyjobduty"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Public.GetJobDutyListByAuth",
+  "want": [
+   "usp_sys_authjobdutybindbyjobtype"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Public.GetJobTypeListByAuth",
+  "want": [
+   "usp_sys_authjobtypebind"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Public.GetTrialJobTypeListByAuth",
+  "want": [
+   "usp_sys_authtrialjobtypebind"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Reference.Manual",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Reference.Play",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Reference.ResumeEntryTutorial",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Reference.TraditionEntryTutorial",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "Resume.Resume",
+  "want": [
+   "usp_rpt_getcurrentevaluationjudgeid"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeBossApprove.FetchOtherAbilityPartial",
+  "want": [
+   "usp_ta_resumeotherabilityqry"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_resumeotherabilityqry"
+  ],
+  "reach": 2,
+  "paths": 5,
+  "tables": 2
+ },
+ {
+  "action": "ResumeBossApprove.OtherAbilityAdd",
+  "want": [
+   "usp_ta_resumeotherabilityadd"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_resumeotherabilityadd"
+  ],
+  "reach": 2,
+  "paths": 11,
+  "tables": 4
+ },
+ {
+  "action": "ResumeBossApprove.OtherAbilityDelete",
+  "want": [
+   "usp_ta_resumeotherabilitydelete"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_resumeotherabilitydelete"
+  ],
+  "reach": 2,
+  "paths": 7,
+  "tables": 4
+ },
+ {
+  "action": "ResumeBossApprove.OtherAbilityUpd",
+  "want": [
+   "usp_ta_resumeotherabilityupd"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_resumeotherabilityupd"
+  ],
+  "reach": 2,
+  "paths": 9,
+  "tables": 2
+ },
+ {
+  "action": "ResumeBossApprove.ResumeBossApproveMtn",
+  "want": [
+   "usp_ta_personalcertqry",
+   "usp_ta_personalcourseqry",
+   "usp_ta_personaldataojtbring",
+   "usp_ta_personaldataqry",
+   "usp_ta_personaldataviewstatus",
+   "usp_ta_resumebossapproveviewstatus",
+   "usp_ta_resumedepthbreadthtrainingqry",
+   "usp_ta_resumeexperienceqry",
+   "usp_ta_resumeotherabilityqry"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_resumebossapproveviewstatus",
+   "usp_ta_resumedepthbreadthtrainingqry",
+   "usp_ta_resumeotherabilityqry"
+  ],
+  "reach": 10,
+  "paths": 23,
+  "tables": 7
+ },
+ {
+  "action": "ResumeBossApprove.ResumeBossConfirm",
+  "want": [
+   "usp_ta_resumetechbossconfirm"
+  ],
+  "got": [
+   "usp_sys_enqueuemail",
+   "usp_sys_getassessyearterm",
+   "usp_sys_rendermailbody",
+   "usp_ta_resumeevaluationresultcal",
+   "usp_ta_resumetechbossconfirm"
+  ],
+  "reach": 7,
+  "paths": 39,
+  "tables": 15
+ },
+ {
+  "action": "ResumeBossApprove.ResumeBossRevoke",
+  "want": [
+   "usp_ta_resumetechbossrevoke"
+  ],
+  "got": [
+   "usp_sys_enqueuemail",
+   "usp_sys_getassessyearterm",
+   "usp_sys_rendermailbody",
+   "usp_ta_resumetechbossrevoke"
+  ],
+  "reach": 5,
+  "paths": 18,
+  "tables": 8
+ },
+ {
+  "action": "ResumeBossApprove.ResumeOJTHistQry",
+  "want": [
+   "usp_ta_resumeojthistqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeBossApprove.ResumeOJTRevokeScoreCal",
+  "want": [
+   "usp_ta_resumeojtrevokescorecal"
+  ],
+  "got": [
+   "usp_ta_resumeojtrevokescorecal"
+  ],
+  "reach": 2,
+  "paths": 2,
+  "tables": 1
+ },
+ {
+  "action": "ResumeCourse.CourseAdd",
+  "want": [
+   "usp_ms_courseadd"
+  ],
+  "got": [
+   "usp_ms_courseadd"
+  ],
+  "reach": 3,
+  "paths": 4,
+  "tables": 2
+ },
+ {
+  "action": "ResumeCourse.CourseDelete",
+  "want": [
+   "usp_ms_coursedel"
+  ],
+  "got": [
+   "usp_ms_coursedel"
+  ],
+  "reach": 2,
+  "paths": 2,
+  "tables": 1
+ },
+ {
+  "action": "ResumeCourse.CourseImport",
+  "want": [
+   "usp_ms_courseimport"
+  ],
+  "got": [
+   "usp_ms_courseimport"
+  ],
+  "reach": 2,
+  "paths": 3,
+  "tables": 3
+ },
+ {
+  "action": "ResumeCourse.CourseTablePartial",
+  "want": [
+   "usp_ms_resumecourseqry"
+  ],
+  "got": [
+   "usp_ms_resumecourseqry"
+  ],
+  "reach": 2,
+  "paths": 2,
+  "tables": 2
+ },
+ {
+  "action": "ResumeCourse.CourseUpdate",
+  "want": [
+   "usp_ms_courseupd"
+  ],
+  "got": [
+   "usp_ms_courseupd"
+  ],
+  "reach": 3,
+  "paths": 7,
+  "tables": 2
+ },
+ {
+  "action": "ResumeCourse.CourseUpload",
+  "want": [
+   "usp_ms_courseupload",
+   "usp_ms_courseuploadtempqry"
+  ],
+  "got": [
+   "usp_ms_courseupload",
+   "usp_ms_courseuploadtempqry"
+  ],
+  "reach": 3,
+  "paths": 6,
+  "tables": 4
+ },
+ {
+  "action": "ResumeCourse.GetCourseCategory",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 1,
+  "paths": 49,
+  "tables": 23
+ },
+ {
+  "action": "ResumeCourse.ResumeCourseExcelTemplateDownload",
+  "want": [],
+  "got": [],
+  "reach": 2,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeCourse.ResumeCourseMtn",
+  "want": [
+   "usp_ms_courseuploadtempqry",
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_ms_courseuploadtempqry",
+   "usp_sys_databring"
+  ],
+  "reach": 3,
+  "paths": 52,
+  "tables": 26
+ },
+ {
+  "action": "ResumeCourse.SaveFileToken",
+  "want": [],
+  "got": [],
+  "reach": 2,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperience.GetExpContentByPoint",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperience.GetProjectExperienceData",
+  "want": [
+   "usp_ta_resumeexperiencehistqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperience.GetProjectExperienceTbPartial",
+  "want": [
+   "usp_sys_databring",
+   "usp_sys_getparameter",
+   "usp_ta_resumeexperienceqry"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 12,
+  "paths": 50,
+  "tables": 23
+ },
+ {
+  "action": "ResumeExperience.GetProjectSection",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 3,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperience.GetResumeExpContentByDutyId",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperience.GetResumeOJTbPartial",
+  "want": [
+   "usp_sys_databring",
+   "usp_ta_resumeojtqry"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 6,
+  "paths": 50,
+  "tables": 23
+ },
+ {
+  "action": "ResumeExperience.OJTInsert",
+  "want": [
+   "usp_ta_resumeojtadd"
+  ],
+  "got": [],
+  "reach": 5,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperience.ProjectExperienceAdd",
+  "want": [
+   "usp_ta_resumeexperienceadd"
+  ],
+  "got": [],
+  "reach": 5,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperience.ResumeConfirm",
+  "want": [
+   "usp_ta_resumeexperienceconfirm"
+  ],
+  "got": [
+   "usp_sys_enqueuemail",
+   "usp_sys_getassessyearterm",
+   "usp_sys_rendermailbody",
+   "usp_ta_resumeexperienceconfirm"
+  ],
+  "reach": 6,
+  "paths": 26,
+  "tables": 10
+ },
+ {
+  "action": "ResumeExperience.ResumeExperienceDelete",
+  "want": [
+   "usp_ta_resumeexperiencedel"
+  ],
+  "got": [],
+  "reach": 3,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperience.ResumeExperienceMtn",
+  "want": [
+   "usp_sys_databring",
+   "usp_sys_getparameter",
+   "usp_ta_approveflowcommentqry",
+   "usp_ta_resumeexperienceqry",
+   "usp_ta_resumeexperienceviewstatus",
+   "usp_ta_resumeojtqry"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_approveflowcommentqry",
+   "usp_ta_resumeexperienceviewstatus"
+  ],
+  "reach": 13,
+  "paths": 12,
+  "tables": 5
+ },
+ {
+  "action": "ResumeExperience.ResumeExperienceUpdate",
+  "want": [
+   "usp_ta_resumeexperienceupd"
+  ],
+  "got": [
+   "usp_ta_resumeexperienceupd"
+  ],
+  "reach": 4,
+  "paths": 7,
+  "tables": 2
+ },
+ {
+  "action": "ResumeExperience.ResumeOJTDelete",
+  "want": [
+   "usp_ta_resumeojtdel"
+  ],
+  "got": [],
+  "reach": 3,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperience.ResumeOJTUpdate",
+  "want": [
+   "usp_ta_resumeojtupd"
+  ],
+  "got": [],
+  "reach": 5,
+  "paths": 1,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperienceContent.CancelRow",
+  "want": [
+   "usp_ms_resumeexperiencecontentqry",
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperienceContent.EditRow",
+  "want": [
+   "usp_ms_resumeexperiencecontentqry",
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperienceContent.GetData",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperienceContent.MtnData",
+  "want": [
+   "usp_ms_resumeexperiencecontentmtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperienceContent.ResumeExperienceContentMtn",
+  "want": [
+   "usp_ms_resumeexperiencecontentqry",
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_ms_resumeexperiencecontentqry",
+   "usp_sys_databring"
+  ],
+  "reach": 4,
+  "paths": 51,
+  "tables": 23
+ },
+ {
+  "action": "ResumeExperienceContent.SaveData",
+  "want": [
+   "usp_ms_resumeexperiencecontentmtn"
+  ],
+  "got": [
+   "usp_ms_resumeexperiencecontentmtn"
+  ],
+  "reach": 3,
+  "paths": 11,
+  "tables": 2
+ },
+ {
+  "action": "ResumeExperienceItem.CancelRow",
+  "want": [
+   "usp_ms_resumeexperienceitemqry",
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperienceItem.EditRow",
+  "want": [
+   "usp_ms_resumeexperienceitemqry",
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperienceItem.GetData",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperienceItem.GetJobDuty",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperienceItem.MtnData",
+  "want": [
+   "usp_ms_resumeexperienceitemmtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeExperienceItem.ResumeExperienceItemMtn",
+  "want": [
+   "usp_ms_resumeexperienceitemqry",
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_ms_resumeexperienceitemqry",
+   "usp_sys_databring"
+  ],
+  "reach": 5,
+  "paths": 100,
+  "tables": 23
+ },
+ {
+  "action": "ResumeExperienceItem.SaveData",
+  "want": [
+   "usp_ms_resumeexperienceitemmtn"
+  ],
+  "got": [
+   "usp_ms_resumeexperienceitemmtn"
+  ],
+  "reach": 3,
+  "paths": 10,
+  "tables": 2
+ },
+ {
+  "action": "ResumeExperienceNotRecorded.NotRecordedQueryPartial",
+  "want": [
+   "usp_ta_resumeexperiencenotrecordedqry"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_resumeexperiencenotrecordedqry"
+  ],
+  "reach": 2,
+  "paths": 10,
+  "tables": 9
+ },
+ {
+  "action": "ResumeExperienceNotRecorded.ResumeExperienceNotRecordedQry",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 3,
+  "paths": 49,
+  "tables": 23
+ },
+ {
+  "action": "ResumePLApprove.GetProjectExperienceData",
+  "want": [
+   "usp_ta_resumeexperiencehistqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumePLApprove.ResumePLApproveMtn",
+  "want": [
+   "usp_ta_personalcertqry",
+   "usp_ta_personalcourseqry",
+   "usp_ta_personaldataojtbring",
+   "usp_ta_personaldataqry",
+   "usp_ta_personaldataviewstatus",
+   "usp_ta_resumeexperienceqry",
+   "usp_ta_resumeexperiencescorecalculate"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_resumeexperiencescorecalculate"
+  ],
+  "reach": 8,
+  "paths": 14,
+  "tables": 8
+ },
+ {
+  "action": "ResumePLApprove.ResumePLConfirm",
+  "want": [
+   "usp_ta_resumeexperienceplconfirm"
+  ],
+  "got": [
+   "usp_sys_enqueuemail",
+   "usp_sys_getassessyearterm",
+   "usp_sys_rendermailbody",
+   "usp_ta_resumeevaluationresultcal",
+   "usp_ta_resumeexperienceplconfirm"
+  ],
+  "reach": 6,
+  "paths": 42,
+  "tables": 14
+ },
+ {
+  "action": "ResumePLApprove.ResumePLRevoke",
+  "want": [
+   "usp_ta_resumeexperienceplrevoke"
+  ],
+  "got": [
+   "usp_sys_enqueuemail",
+   "usp_sys_getassessyearterm",
+   "usp_sys_rendermailbody",
+   "usp_ta_resumeexperienceplrevoke"
+  ],
+  "reach": 6,
+  "paths": 19,
+  "tables": 10
+ },
+ {
+  "action": "ResumeQuery.GetResumePartial",
+  "want": [
+   "usp_rpt_getcurrentevaluationjudgeid"
+  ],
+  "got": [
+   "usp_rpt_getcurrentevaluationjudgeid"
+  ],
+  "reach": 6,
+  "paths": 2,
+  "tables": 1
+ },
+ {
+  "action": "ResumeQuery.ResumeQry",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeSkillDefine.CancelRow",
+  "want": [
+   "usp_ms_resumeskilldefineqry",
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeSkillDefine.EditRow",
+  "want": [
+   "usp_ms_resumeskilldefineqry",
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeSkillDefine.GetData",
+  "want": [
+   "usp_ms_resumeskilldefineadd"
+  ],
+  "got": [
+   "usp_ms_resumeskilldefineadd"
+  ],
+  "reach": 3,
+  "paths": 4,
+  "tables": 2
+ },
+ {
+  "action": "ResumeSkillDefine.GetJobDuty",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "ResumeSkillDefine.ResumeSkillDefineMtn",
+  "want": [
+   "usp_ms_resumeskilldefineqry",
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_ms_resumeskilldefineqry",
+   "usp_sys_databring"
+  ],
+  "reach": 6,
+  "paths": 149,
+  "tables": 24
+ },
+ {
+  "action": "ResumeSkillDefine.SaveData",
+  "want": [
+   "usp_ms_resumeskilldefinemtn"
+  ],
+  "got": [
+   "usp_ms_resumeskilldefinemtn"
+  ],
+  "reach": 3,
+  "paths": 4,
+  "tables": 2
+ },
+ {
+  "action": "SkillAssessProgressStatus.SkillAssessProgressStatusQry",
+  "want": [
+   "usp_rpt_skillprogressstatusqry",
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_rpt_skillprogressstatusqry",
+   "usp_sys_databring",
+   "usp_sys_getassessyearterm"
+  ],
+  "reach": 4,
+  "paths": 59,
+  "tables": 26
+ },
+ {
+  "action": "SkillClassificationPersonnelDetail.GetData",
+  "want": [
+   "usp_rpt_skillclassificationpersonneldetailqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "SkillClassificationPersonnelDetail.SkillClassificationPersonnelDetailMtn",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "SkillDefineTradition.GetJobDutiesByJobType",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "SkillDefineTradition.SkillDefineTraditionAdd",
+  "want": [
+   "usp_ms_skilldefinetraditionadd"
+  ],
+  "got": [
+   "usp_ms_skilldefinetraditionadd"
+  ],
+  "reach": 3,
+  "paths": 5,
+  "tables": 2
+ },
+ {
+  "action": "SkillDefineTradition.SkillDefineTraditionMtn",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 4,
+  "paths": 98,
+  "tables": 23
+ },
+ {
+  "action": "SkillDefineTradition.SkillDefineTraditionQry",
+  "want": [
+   "usp_ms_skilldefinetraditionqry"
+  ],
+  "got": [
+   "usp_ms_skilldefinetraditionqry"
+  ],
+  "reach": 3,
+  "paths": 2,
+  "tables": 3
+ },
+ {
+  "action": "SkillDefineTradition.UpdateSkillDefineTradition",
+  "want": [
+   "usp_ms_skilldefinetraditionupd"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "SkillPieChart.GetData",
+  "want": [
+   "usp_rpt_skillpiechartqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "SkillPieChart.SkillPieChartMtn",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TalentDBDepShoulder.GetData",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TalentDBDepShoulder.MtnData",
+  "want": [
+   "usp_sys_talentdbdepshouldermtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TalentDBDepShoulder.SaveData",
+  "want": [
+   "usp_sys_talentdbdepshouldermtn"
+  ],
+  "got": [
+   "usp_sys_talentdbdepshouldermtn"
+  ],
+  "reach": 3,
+  "paths": 6,
+  "tables": 2
+ },
+ {
+  "action": "TalentDBDepShoulder.TalentDBDepShoulderMtn",
+  "want": [
+   "usp_sys_databring",
+   "usp_sys_talentdbdepshoulderqry"
+  ],
+  "got": [
+   "usp_sys_databring",
+   "usp_sys_talentdbdepshoulderqry"
+  ],
+  "reach": 4,
+  "paths": 51,
+  "tables": 23
+ },
+ {
+  "action": "TechnicianSkill.TechnicianSkillDDL",
+  "want": [
+   "usp_rpt_technicianskillqry"
+  ],
+  "got": [
+   "usp_rpt_technicianskillqry"
+  ],
+  "reach": 6,
+  "paths": 5,
+  "tables": 5
+ },
+ {
+  "action": "TechnicianSkill.TechnicianSkillQry",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 2,
+  "paths": 49,
+  "tables": 23
+ },
+ {
+  "action": "TechnicianSkill.TechnicianSkillQryPost",
+  "want": [
+   "usp_rpt_technicianskillqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TraditionalAssessment.FetchTraditionalAssessmentPersonalData",
+  "want": [
+   "usp_ta_traditionassessmentpersonaldataqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TraditionalAssessment.GetApproveComment",
+  "want": [
+   "usp_ta_approveflowcommentqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TraditionalAssessment.TraditionalAssessmentAdd",
+  "want": [
+   "usp_ta_traditionalassessmentjudgebossapprove"
+  ],
+  "got": [
+   "usp_sys_enqueuemail",
+   "usp_sys_getassessyearterm",
+   "usp_sys_rendermailbody",
+   "usp_ta_traditionalassessmentjudgebossapprove",
+   "usp_ta_traditionevaluationresultcal"
+  ],
+  "reach": 6,
+  "paths": 40,
+  "tables": 14
+ },
+ {
+  "action": "TraditionalAssessment.TraditionalAssessmentJudgeBossRevoke",
+  "want": [
+   "usp_ta_traditionalassessmentjudgebossrevoke"
+  ],
+  "got": [
+   "usp_sys_enqueuemail",
+   "usp_sys_getassessyearterm",
+   "usp_sys_rendermailbody",
+   "usp_ta_traditionalassessmentjudgebossrevoke"
+  ],
+  "reach": 5,
+  "paths": 16,
+  "tables": 7
+ },
+ {
+  "action": "TraditionalAssessment.TraditionalAssessmentMtn",
+  "want": [
+   "usp_ta_traditionalassessmentqry"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_traditionalassessmentqry"
+  ],
+  "reach": 2,
+  "paths": 8,
+  "tables": 9
+ },
+ {
+  "action": "TraditionalTechBossAssessment.TraditionalAssessmentTechBossConfirm",
+  "want": [
+   "usp_ta_traditionalassessmenttechbossapprove"
+  ],
+  "got": [
+   "usp_sys_enqueuemail",
+   "usp_sys_getassessyearterm",
+   "usp_sys_rendermailbody",
+   "usp_ta_traditionalassessmenttechbossapprove",
+   "usp_ta_traditionevaluationresultcal"
+  ],
+  "reach": 3,
+  "paths": 28,
+  "tables": 13
+ },
+ {
+  "action": "TraditionalTechBossAssessment.TraditionalAssessmentTechBossRevoke",
+  "want": [
+   "usp_ta_traditionalassessmenttechbossrevoke"
+  ],
+  "got": [
+   "usp_sys_enqueuemail",
+   "usp_sys_getassessyearterm",
+   "usp_sys_rendermailbody",
+   "usp_ta_traditionalassessmenttechbossrevoke"
+  ],
+  "reach": 5,
+  "paths": 21,
+  "tables": 8
+ },
+ {
+  "action": "TraditionalTechBossAssessment.TraditionalTechBossAssessmentMtn",
+  "want": [
+   "usp_ta_traditionaltechbossassessmentqry"
+  ],
+  "got": [
+   "usp_sys_getassessyearterm",
+   "usp_ta_traditionaltechbossassessmentqry"
+  ],
+  "reach": 2,
+  "paths": 4,
+  "tables": 10
+ },
+ {
+  "action": "TrialBossApprove.GetSkillLevelList",
+  "want": [
+   "usp_ta_trialbossapprovelist"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialBossApprove.TrialBossApproveMtn",
+  "want": [
+   "usp_ta_trialbossapproveqry"
+  ],
+  "got": [
+   "usp_ta_trialbossapproveqry"
+  ],
+  "reach": 2,
+  "paths": 5,
+  "tables": 9
+ },
+ {
+  "action": "TrialBossApprove.TrialBossAssess",
+  "want": [
+   "usp_ta_trialbossapproveassess"
+  ],
+  "got": [
+   "usp_ta_trialbossapproveassess"
+  ],
+  "reach": 4,
+  "paths": 19,
+  "tables": 9
+ },
+ {
+  "action": "TrialEvaluationMCTPUpload.ExportToExcel",
+  "want": [
+   "usp_ta_trialevaluationmctpuploadqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialEvaluationMCTPUpload.GetData",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialEvaluationMCTPUpload.GetJobDuty",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialEvaluationMCTPUpload.ImportData",
+  "want": [
+   "usp_ta_trialevaluationmctpuploadadd"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialEvaluationMCTPUpload.TrialEvaluationMCTPUploadMtn",
+  "want": [
+   "usp_sys_databring",
+   "usp_ta_trialevaluationmctpuploadqry"
+  ],
+  "got": [
+   "usp_sys_databring",
+   "usp_ta_trialevaluationmctpuploadqry"
+  ],
+  "reach": 5,
+  "paths": 102,
+  "tables": 24
+ },
+ {
+  "action": "TrialEvaluationMCTPUpload.UploadExcelData",
+  "want": [
+   "usp_ta_trialevaluationmctpuploadchk"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialJobDutySkillQuery.ExportDetailToExcel",
+  "want": [
+   "usp_rpt_trialjobdutyskillquerylist"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialJobDutySkillQuery.ExportToExcel",
+  "want": [
+   "usp_rpt_trialjobdutyskillqueryqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialJobDutySkillQuery.GetData",
+  "want": [
+   "usp_rpt_trialjobdutyskillqueryqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialJobDutySkillQuery.GetDetailData",
+  "want": [
+   "usp_rpt_trialjobdutyskillquerylist"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialJobDutySkillQuery.PoolSel",
+  "want": [
+   "usp_rpt_trialjobdutyskillquerypool"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialJobDutySkillQuery.TrialJobDutySkillQueryMtn",
+  "want": [],
+  "got": [],
+  "reach": 2,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentGoalUpload.ExportToExcel",
+  "want": [
+   "usp_ta_trialtalentgoaluploadqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentGoalUpload.GetData",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentGoalUpload.GetJobDuty",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentGoalUpload.ImportData",
+  "want": [
+   "usp_ta_trialtalentgoaluploadadd"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentGoalUpload.TrialTalentGoalUploadMtn",
+  "want": [
+   "usp_sys_databring",
+   "usp_ta_trialtalentgoaluploadqry"
+  ],
+  "got": [
+   "usp_sys_databring",
+   "usp_ta_trialtalentgoaluploadqry"
+  ],
+  "reach": 5,
+  "paths": 102,
+  "tables": 24
+ },
+ {
+  "action": "TrialTalentGoalUpload.UploadExcelData",
+  "want": [
+   "usp_ta_trialtalentgoaluploadchk"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentMCTPSummary.ExportToExcel",
+  "want": [
+   "usp_rpt_trialtalentmctpsummaryqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentMCTPSummary.GetDetailData",
+  "want": [
+   "usp_rpt_trialtalentmctpsummarylist"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentMCTPSummary.TrialTalentMCTPSummaryMtn",
+  "want": [
+   "usp_rpt_trialtalentmctpsummaryqry"
+  ],
+  "got": [
+   "usp_rpt_trialtalentmctpsummaryqry"
+  ],
+  "reach": 3,
+  "paths": 15,
+  "tables": 5
+ },
+ {
+  "action": "TrialTalentSkillDownload.ExportToExcel",
+  "want": [
+   "usp_ta_trialtalentskilldownloadqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentSkillDownload.GetJobDuty",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentSkillDownload.TrialTalentSkillDownloadMtn",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [
+   "usp_sys_databring"
+  ],
+  "reach": 3,
+  "paths": 49,
+  "tables": 23
+ },
+ {
+  "action": "TrialTalentSkillQuery.ExportToExcel",
+  "want": [
+   "usp_rpt_trialtalentskillqueryqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentSkillQuery.TrialTalentSkillQueryMtn",
+  "want": [],
+  "got": [],
+  "reach": 1,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentSkillUpload.ImportData",
+  "want": [
+   "usp_sys_databring",
+   "usp_ta_trialtalentskilluploadadd",
+   "usp_ta_trialtalentskilluploadqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "TrialTalentSkillUpload.TrialTalentSkillUploadMtn",
+  "want": [
+   "usp_sys_databring",
+   "usp_ta_trialtalentskilluploadqry"
+  ],
+  "got": [
+   "usp_sys_databring",
+   "usp_ta_trialtalentskilluploadqry"
+  ],
+  "reach": 3,
+  "paths": 52,
+  "tables": 23
+ },
+ {
+  "action": "TrialTalentSkillUpload.UploadExcelData",
+  "want": [
+   "usp_ta_trialtalentskilluploadchk"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserGroupMaintain.CancelRow",
+  "want": [
+   "usp_sys_usergroupmaintainqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserGroupMaintain.EditRow",
+  "want": [
+   "usp_sys_usergroupmaintainqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserGroupMaintain.MtnData",
+  "want": [
+   "usp_sys_usergroupmaintainmtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserGroupMaintain.SaveData",
+  "want": [
+   "usp_sys_usergroupmaintainmtn"
+  ],
+  "got": [
+   "usp_sys_usergroupmaintainmtn"
+  ],
+  "reach": 3,
+  "paths": 6,
+  "tables": 1
+ },
+ {
+  "action": "UserGroupMaintain.UserGroupMaintainMtn",
+  "want": [
+   "usp_sys_usergroupmaintainqry"
+  ],
+  "got": [
+   "usp_sys_usergroupmaintainqry"
+  ],
+  "reach": 2,
+  "paths": 2,
+  "tables": 1
+ },
+ {
+  "action": "UserGroupMember.GetData",
+  "want": [],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserGroupMember.MtnData",
+  "want": [
+   "usp_sys_usergroupmembermtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserGroupMember.SaveData",
+  "want": [
+   "usp_sys_usergroupmembermtn"
+  ],
+  "got": [
+   "usp_sys_usergroupmembermtn"
+  ],
+  "reach": 4,
+  "paths": 6,
+  "tables": 2
+ },
+ {
+  "action": "UserGroupMember.UserGroupMemberMtn",
+  "want": [
+   "usp_sys_databring",
+   "usp_sys_usergroupmemberqry"
+  ],
+  "got": [
+   "usp_sys_databring",
+   "usp_sys_usergroupmemberqry"
+  ],
+  "reach": 4,
+  "paths": 51,
+  "tables": 24
+ },
+ {
+  "action": "UserGroupPermission.GetFunctions",
+  "want": [
+   "usp_sys_usergrouppermissionqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserGroupPermission.SavePanel",
+  "want": [
+   "usp_sys_usergrouppermissionmtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserGroupPermission.UserGroupPermissionMtnAsync",
+  "want": [
+   "usp_sys_databring",
+   "usp_sys_usergrouppermissionqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserMaintain.CancelRow",
+  "want": [
+   "usp_sys_databring",
+   "usp_sys_usermaintainqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserMaintain.EditRow",
+  "want": [
+   "usp_sys_databring",
+   "usp_sys_usermaintainqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserMaintain.MtnData",
+  "want": [
+   "usp_sys_usermaintainmtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserMaintain.SaveData",
+  "want": [
+   "usp_sys_usermaintainmtn"
+  ],
+  "got": [
+   "usp_sys_usermaintainmtn"
+  ],
+  "reach": 3,
+  "paths": 7,
+  "tables": 1
+ },
+ {
+  "action": "UserMaintain.UserMaintainMtn",
+  "want": [
+   "usp_sys_databring",
+   "usp_sys_usermaintainqry"
+  ],
+  "got": [
+   "usp_sys_databring",
+   "usp_sys_usermaintainqry"
+  ],
+  "reach": 3,
+  "paths": 51,
+  "tables": 23
+ },
+ {
+  "action": "UserPermission.GetFunctions",
+  "want": [
+   "usp_sys_userpermissionqry"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserPermission.SavePanel",
+  "want": [
+   "usp_sys_userpermissionmtn"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UserPermission.UserPermissionMtn",
+  "want": [
+   "usp_sys_userpermissionqry"
+  ],
+  "got": [
+   "usp_sys_userpermissionqry"
+  ],
+  "reach": 2,
+  "paths": 5,
+  "tables": 5
+ },
+ {
+  "action": "UsersPicker.EmpIdAutocomplete",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UsersPicker.GetUserName",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UsersPicker.GetUsersByDept",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ },
+ {
+  "action": "UsersPicker.GetUsersDep",
+  "want": [
+   "usp_sys_databring"
+  ],
+  "got": [],
+  "reach": 0,
+  "paths": 0,
+  "tables": 0
+ }
+]

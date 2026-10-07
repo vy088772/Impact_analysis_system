@@ -82,6 +82,7 @@ def test_static_analyzer_host_contract() -> None:
                 "method_name": "Save",
                 "start_offset": 23,
                 "end_offset": 53,
+                "calls": [],
             }
         ]
 

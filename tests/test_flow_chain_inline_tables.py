@@ -19,7 +19,7 @@ from service import analyze_service
 from service.schemas import AzureSource, FindByTableRequest, FlowChainRequest
 from service.sql_cache_store import AmbiguousServer, CacheIdentity, build_object_location_index
 from tests.sql_cache_fixtures import cache_payload
-from tests.scan_fixtures import csharp_file, scan_of
+from tests.scan_fixtures import csharp_file, scan_of, with_bound_calls
 from service.request_context_adapters import InMemoryCacheStore
 from tests.request_context_fixtures import RequestStores
 
@@ -180,14 +180,19 @@ def test_a_relation_that_resolves_to_dbo_never_answers_another_schema_backward(m
 
 
 def test_forward_and_backward_give_the_same_inline_tables_for_one_method(monkeypatch, tmp_path) -> None:
-    save = MethodInfo(name="SaveData", access_modifier="private", return_type="void", calls=["WriteAudit"])
+    save = MethodInfo(name="SaveData", access_modifier="private", return_type="void")
     audit = MethodInfo(name="WriteAudit", access_modifier="private", return_type="void")
     relations = [
         _relation(tmp_path, "SaveData", ObjectName("", "", "dbo", "Orders"), "UPDATE"),
         _relation(tmp_path, "SaveData", ObjectName("", "", "dbo", "Items")),
         _relation(tmp_path, "WriteAudit", ObjectName("", "", "dbo", "AuditLog"), "INSERT"),
     ]
-    _serve(monkeypatch, tmp_path, _scan(tmp_path, [save, audit], relations))
+    scan = with_bound_calls(
+        _scan(tmp_path, [save, audit], relations),
+        "OrderPage.cs",
+        {"OrderPage.SaveData": ["OrderPage.WriteAudit"]},
+    )
+    _serve(monkeypatch, tmp_path, scan)
 
     forward = _forward("SaveData")
 
