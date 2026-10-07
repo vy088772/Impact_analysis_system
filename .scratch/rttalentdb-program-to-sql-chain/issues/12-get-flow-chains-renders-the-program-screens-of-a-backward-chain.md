@@ -25,13 +25,13 @@ See ticket 07 (Implementation notes) and ADR-0019.
 
 **Blocked by:** None. Ticket 07 is done.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A `program_screen` anchor renders its view, its action, its controller
+- [x] A `program_screen` anchor renders its view, its action, its controller
       and its strength
-- [ ] A `likely` anchor reads as a candidate in the rendered text
-- [ ] A WebForms anchor renders the same line as before
-- [ ] A chain with no anchor keeps its current "no UI" line
+- [x] A `likely` anchor reads as a candidate in the rendered text
+- [x] A WebForms anchor renders the same line as before
+- [x] A chain with no anchor keeps its current "no UI" line
 
 **Notes:**
 
@@ -41,3 +41,14 @@ See ticket 07 (Implementation notes) and ADR-0019.
   change.
 - `rag_client._merge_backward_chains` dedupes by `(file, method, sp_name,
   via)`. It keeps `ui_anchors` as they are, so it needs no change.
+
+## Implementation notes
+
+- Done 2026-10-07 in the spec-rag repo only. New helper
+  `_render_backward_anchor` in `impact_orch/agent_tools.py`; it renders by
+  `kind`. `program_screen` line: `對應 Program Screen：{view}（action, controller, strength=…）`.
+- A `likely` anchor adds a "候選" warning: a script URL only looks like a call.
+- A WebForms anchor and the "no UI" line are unchanged.
+- Tests: `tests/test_backward_chain_program_screen_render.py` (5 tests).
+- Full suite: 1628 pass. `test_sql_cache_fixtures.py::test_the_format_versions_are_the_sample_versions`
+  fails before and after this change (not caused by it).
