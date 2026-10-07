@@ -79,7 +79,7 @@ def test_method_sql_queries_keep_the_first_match_order(tmp_path: Path) -> None:
     assert result.classes[0].methods[0].sql_queries == EXPECTED
 
 
-def test_two_hash_seeds_give_the_same_method_sql_queries(tmp_path: Path) -> None:
+def test_different_hash_seeds_give_the_same_method_sql_queries(tmp_path: Path) -> None:
     path = _write_source(tmp_path)
 
     scans = [_scan_with_hash_seed(path, seed) for seed in ("1", "2", "3", "4")]

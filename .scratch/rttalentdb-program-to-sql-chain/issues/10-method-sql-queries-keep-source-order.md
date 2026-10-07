@@ -74,7 +74,8 @@ tables and dynamic SQL.
 - Cache version: no change, as the triage decided. The old cached order is a
   valid order of the same queries.
 - Verification: the C# parser and gateway tests gave 230 passed. The full
-  suite in the main directory gave 1820 passed. I did not run
+  pytest suite in the main directory is the impact suite baseline. It gave
+  1820 passed, so the 3 path-dependent worktree tests do not apply. I did not run
   `tests/test_search_roles.py` and `tests/test_sp_tables.py`. They stop at
   collection with `KeyError: 'PUR'`, because they need the PUR database.
 - mypy: no new errors. The 20 errors are old errors in `csharp_parser.py`
