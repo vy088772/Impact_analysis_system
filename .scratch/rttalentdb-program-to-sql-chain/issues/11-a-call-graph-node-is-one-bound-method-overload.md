@@ -21,8 +21,8 @@ See ADR-0044 and the overload note of ticket 05.
 
 **Blocked by:** None. Ticket 05 is done.
 
-**Status:** in-progress (2026-10-07; the Agent Brief below is the contract
-and replaces the checklist)
+**Status:** done (2026-10-07). The scan cache version is 48: ticket 13 took
+47 first. The CLASS_PATTERN slowness of the rescan moves to ticket 16.
 
 - [ ] A call to one overload reaches only the stored procedures of that
       overload
@@ -193,7 +193,8 @@ The forward chain, the backward chain (ticket 07), `expand_related_programs`
       (`test_the_backward_chain_from_one_overload_does_not_reach_an_action_that_calls_only_the_other`).
 - [x] A Program Screen with a GET and a POST action of one name reaches both
       (`test_a_program_screen_with_a_get_and_a_post_action_of_one_name_reaches_both`).
-- [x] The scan cache version is 47. The comment above it records the rescan.
+- [x] The scan cache version is 48 (47 went to ticket 13). The comment above
+      it records the rescan.
 - [x] `compare_flow.py` is not lower than ticket 09 (numbers below).
 - [x] No regression in the full suite (see below).
 
@@ -287,4 +288,31 @@ class (the fan-out). The review flagged a tension with "does not guess" in
 ADR-0044. Option B was `ambiguous_overload` and no edge. ADR-0044 now states
 the rule: the class is known, and only the overload is open, so it is not a
 guess between implementations.
+
+**Merge and rescan (2026-10-07):**
+
+- Ticket 13 merged first and took scan cache v47. The merge of ticket 11 keeps
+  v47 for ticket 13 and gives ticket 11 v48. The private v47 rescan above was
+  made before tickets 10 and 13, so it is not the final cache.
+- The shared `data/scan_cache` was rescanned at v48 with the merged code, all
+  16 roots (backup: `data/scan_cache_backup_v46_202610071536`). TOPCSCY took
+  2965 s, TTRDQ 1334 s and ETR 593 s; ticket 16 records why.
+- The full suite after the merge: 1849 passed; 2 failed, the two known
+  path-dependent tests of a worktree; 2 collection errors in
+  `test_search_roles.py` and `test_sp_tables.py` (`KeyError: 'PUR'`, scripts
+  that need a SQL Server connection).
+
+**Final probe results** (port 8800, main directory, v48, tickets 10, 11 and 13):
+
+```
+compare_flow.py:  actions that should reach SP 227 | fully matched 178 | partial 6 | none 43
+                  extra SPs not in truth 64 | reachable_methods sum 712 -> 704
+backward_flow.py: actions with a table 227 | fully reached 191 | partial 6 | none 30
+check_misses.py:  listed misses 49 | every miss is on the list
+```
+
+The numbers are the same as ticket 13 recorded. No action gains or loses a
+stored procedure. Eight actions reach one method name fewer. Each one loses
+`ConvertToMail`: the seven above, and `TrialTalentSkillUpload.ImportData`
+(`TrialTalentSkillUploadService.cs:168` calls `SendNoticeToSingle(string, ...)`).
 
