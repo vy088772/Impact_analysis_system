@@ -22,7 +22,7 @@ See ADR-0044.
 
 **Blocked by:** 05, 06, 07
 
-**Status:** ready-for-agent
+**Status:** in-progress (2026-10-07)
 
 - [ ] Each forward miss is on the list with a reason and a source location
 - [ ] Each backward miss is on the list with a reason and a source location
