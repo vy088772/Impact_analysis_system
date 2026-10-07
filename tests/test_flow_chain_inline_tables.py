@@ -19,7 +19,7 @@ from service import analyze_service
 from service.schemas import AzureSource, FindByTableRequest, FlowChainRequest
 from service.sql_cache_store import AmbiguousServer, CacheIdentity, build_object_location_index
 from tests.sql_cache_fixtures import cache_payload
-from tests.scan_fixtures import csharp_file, scan_of, with_bound_calls
+from tests.scan_fixtures import csharp_file, scan_of, source_line, with_bound_calls
 from service.request_context_adapters import InMemoryCacheStore
 from tests.request_context_fixtures import RequestStores
 
@@ -96,7 +96,7 @@ def _relation(root: Path, method: str, table: ObjectName, access_type: str = "SE
         csharp_file=str(root / "OrderPage.cs"),
         class_name="OrderPage",
         method_name=method,
-        line_number=1,
+        line_number=source_line(f"OrderPage.{method}"),
         table=table,
         database="Response",
         access_type=access_type,

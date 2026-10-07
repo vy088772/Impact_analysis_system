@@ -60,12 +60,21 @@ internal static class CSharpAnalyzer
         var semanticModel = callGraphCompilation.ContainsSyntaxTree(root.SyntaxTree)
             ? callGraphCompilation.GetSemanticModel(root.SyntaxTree)
             : null;
-        var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Select(method => new MethodSourceSpan(
-            method.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault()?.Identifier.Text ?? "",
-            method.Identifier.Text,
-            method.SpanStart,
-            method.Span.End,
-            BoundCallAnalyzer.Analyze(method, semanticModel, sourceRoots))).ToList();
+        // A source file outside the call graph compilation still gets one node for each method,
+        // from a compilation of its own tree, so its Database Invocations join a node.
+        var declarationModel = semanticModel
+            ?? BoundCallAnalyzer.SourceOnlyCompilation(new[] { root.SyntaxTree }).GetSemanticModel(root.SyntaxTree);
+        var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Select(method =>
+        {
+            var symbol = declarationModel.GetDeclaredSymbol(method);
+            return new MethodSourceSpan(
+                symbol?.ContainingType.Name ?? "",
+                method.Identifier.Text,
+                symbol is null ? "" : BoundCallAnalyzer.NodeOf(symbol),
+                method.SpanStart,
+                method.Span.End,
+                BoundCallAnalyzer.Analyze(method, semanticModel, sourceRoots));
+        }).ToList();
 
         var dbInvocations = root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>()
             .Where(creation => IsSqlCommandType(creation.Type))
@@ -1311,8 +1320,11 @@ internal static class AdapterAnalyzer
 }
 
 internal sealed record CSharpAnalysis(string SourceId, List<MethodSourceSpan> Methods, List<DirectSqlInvocation> DbInvocations);
+/// <summary>One method declaration. <see cref="Node"/> is its call graph node (ADR-0044), from
+/// <see cref="BoundCallAnalyzer.NodeOf"/>; <see cref="ClassName"/> and <see cref="MethodName"/>
+/// are its simple names, for display.</summary>
 internal sealed record MethodSourceSpan(
-    string ClassName, string MethodName, int StartOffset, int EndOffset, IReadOnlyList<BoundCall> Calls);
+    string ClassName, string MethodName, string Node, int StartOffset, int EndOffset, IReadOnlyList<BoundCall> Calls);
 internal sealed record CSharpSource(string InputPath, CompilationUnitSyntax Root);
 
 /// <summary>Raw facts for one direct `SqlCommand` setup; evidence rating happens in the Python gateway.</summary>
@@ -2647,7 +2659,7 @@ internal static class WrapperAnalyzer
             method.ContainingType.Name);
     }
 
-    private static readonly SymbolDisplayFormat BoundParameterTypeFormat = new(
+    internal static readonly SymbolDisplayFormat BoundParameterTypeFormat = new(
         globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
         typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
         miscellaneousOptions: SymbolDisplayMiscellaneousOptions.UseSpecialTypes);

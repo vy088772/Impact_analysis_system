@@ -21,9 +21,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Set, Tuple
 
-from code_analyzer.models import FileAnalysisResult, call_graph_node
+from code_analyzer.models import FileAnalysisResult
 from code_analyzer.project_scanner import ProjectScanResult
 
+from .call_graph_nodes import MethodNodes
 from .flow_chain_builder import bound_call_edges
 
 
@@ -44,21 +45,20 @@ class _Caller(NamedTuple):
 
 
 def _declarations(
-    csharp_results: List[FileAnalysisResult],
+    csharp_results: List[FileAnalysisResult], nodes: MethodNodes
 ) -> Dict[str, List[_Declaration]]:
-    """node（`Class.Method`）-> [(宣告它的檔案, 類別名, 方法名), ...]。
+    """node（`MethodSourceSpan.node`）-> [(宣告它的檔案, 類別名, 方法名), ...]。
 
-    同一個節點通常只有一個宣告；partial class 的 overload 分散在兩個檔案、或兩個
-    namespace 各有同名類別時，才會有兩個以上（它們在呼叫圖裡本來就是同一個節點）。
+    節點是綁定後的方法符號（ADR-0044），所以一個節點只有一個宣告；同一個檔案被兩個
+    掃描結果列到時，才會重複，這裡只留一筆。
     """
     declared: Dict[str, List[_Declaration]] = {}
     for fr in csharp_results:
-        for cls in fr.classes:
-            for m in cls.methods:
-                entries = declared.setdefault(call_graph_node(cls.name, m.name), [])
-                declaration = _Declaration(fr.file_path, cls.name, m.name)
-                if declaration not in entries:
-                    entries.append(declaration)
+        for span in nodes.spans_of(fr.file_path):
+            entries = declared.setdefault(span.node, [])
+            declaration = _Declaration(fr.file_path, span.class_name, span.method_name)
+            if declaration not in entries:
+                entries.append(declaration)
     return declared
 
 
@@ -94,19 +94,18 @@ def expand_related_programs(
         return []
 
     edges = bound_call_edges(scan)
-    declared = _declarations(scan.csharp_results)
+    nodes = MethodNodes(scan)
+    declared = _declarations(scan.csharp_results, nodes)
     start_files: Set[str] = {fr.file_path for fr in matched_files}
 
     frontier: List[_Caller] = []
     # 已排進 frontier 或 queue 的節點；每個節點只走一次。
     queued_nodes: Set[str] = set()
     for fr in matched_files:
-        for cls in fr.classes:
-            for m in cls.methods:
-                node = call_graph_node(cls.name, m.name)
-                if node not in queued_nodes and owns_action(fr.file_path, m.name):
-                    queued_nodes.add(node)
-                    frontier.append(_Caller(node, fr.file_path, m.name))
+        for span in nodes.spans_of(fr.file_path):
+            if span.node not in queued_nodes and owns_action(fr.file_path, span.method_name):
+                queued_nodes.add(span.node)
+                frontier.append(_Caller(span.node, fr.file_path, span.method_name))
 
     # 已列進結果的 (檔案, 節點)。
     reported: Set[Tuple[str, str]] = set()

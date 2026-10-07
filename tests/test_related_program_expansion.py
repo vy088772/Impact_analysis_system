@@ -16,7 +16,7 @@ from service.reference_expander import expand_related_programs
 from service.schemas import AnalyzeRequest
 from tests.program_screen_fixtures import _controller_result, _scan
 from tests.request_context_fixtures import RequestStores
-from tests.scan_fixtures import csharp_file, scan_of, with_bound_calls
+from tests.scan_fixtures import csharp_file, scan_of, with_bound_calls, with_declared_spans
 from tests.sql_cache_fixtures import cache_with_procedures
 
 
@@ -232,6 +232,7 @@ def test_an_mvc_screen_lists_the_service_that_its_action_calls(monkeypatch, tmp_
         _controller_result(tmp_path, "Services/IJobTypeService.cs", ["InvalidateJobType"]),
         _controller_result(tmp_path, "Services/JobTypeService.cs", ["InvalidateJobType", "Remove"]),
     ]
+    with_declared_spans(scan)
     with_bound_calls(
         scan,
         "Controllers/JobTypeController.cs",

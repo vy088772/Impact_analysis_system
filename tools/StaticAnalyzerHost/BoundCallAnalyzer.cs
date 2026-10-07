@@ -3,9 +3,10 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 /// <summary>
-/// One call inside a method declaration, with its Bound Call Target (ADR-0044): the class and
-/// the method that the call reaches. The class is a simple name, the same name a method span and
-/// a Database Invocation carry, so the call graph joins them without a translation.
+/// One call inside a method declaration, with its Bound Call Target (ADR-0044): the method that
+/// the call reaches. <see cref="TargetNode"/> is the call graph node of that method, the same
+/// node its method span carries (<see cref="BoundCallAnalyzer.NodeOf"/>). <see
+/// cref="TargetClass"/> and <see cref="TargetMethod"/> are its simple names, for display.
 ///
 /// A call through a corpus interface with no Local Implementer, or with two or more, has no
 /// target. It keeps its <see cref="UnresolvedReason"/> and, for a tie, every candidate class, so
@@ -17,6 +18,7 @@ internal sealed record BoundCall(
     int EndOffset,
     string TargetClass,
     string TargetMethod,
+    string TargetNode,
     string UnresolvedReason,
     IReadOnlyList<string> CandidateClasses);
 
@@ -63,6 +65,49 @@ internal static class BoundCallAnalyzer
             RuntimeReferences.Value,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
+    private static readonly SymbolDisplayFormat NodeTypeFormat = new(
+        globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
+        typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+        genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters);
+
+    private static readonly SymbolDisplayFormat NodeParameterTypeFormat =
+        WrapperAnalyzer.BoundParameterTypeFormat.WithGenericsOptions(SymbolDisplayGenericsOptions.IncludeTypeParameters);
+
+    // The type identity of a Local Implementer (`CSharpAnalyzer.GetTypeIdentity`): the namespace
+    // and the containing types, with no type parameters.
+    private static readonly SymbolDisplayFormat TypeIdentityFormat = new(
+        globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
+        typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces);
+
+    /// <summary>
+    /// The call graph node of one method (ADR-0044): the namespace and the containing types of
+    /// its class, its name, its type parameter count, and its parameter types, for example
+    /// <c>Shop.Store.Save(int)</c> or <c>Shop.Store.Get`1()</c>. Two overloads, a generic and a
+    /// non-generic method, and two classes of one simple name in two namespaces are each two
+    /// nodes. This is the one builder of the node: a method span and a Bound Call Target both
+    /// take it, so they join with no translation. The parameter types use the display format
+    /// of the bound wrapper identity, with their type arguments.
+    /// </summary>
+    internal static string NodeOf(IMethodSymbol method)
+    {
+        method = (method.ReducedFrom ?? method).OriginalDefinition;
+        var arity = method.Arity > 0 ? $"`{method.Arity}" : "";
+        return $"{method.ContainingType.ToDisplayString(NodeTypeFormat)}.{method.Name}{arity}{ParameterList(method)}";
+    }
+
+    private static string ParameterList(IMethodSymbol method)
+        => "(" + string.Join(",", method.Parameters.Select(parameter =>
+            RefKindPrefix(parameter.RefKind) + parameter.Type.ToDisplayString(NodeParameterTypeFormat))) + ")";
+
+    private static string RefKindPrefix(RefKind refKind) => refKind switch
+    {
+        RefKind.Ref => "ref ",
+        RefKind.Out => "out ",
+        RefKind.In => "in ",
+        RefKind.RefReadOnlyParameter => "ref readonly ",
+        _ => "",
+    };
+
     internal static List<BoundCall> Analyze(
         MethodDeclarationSyntax method,
         SemanticModel? semanticModel,
@@ -72,55 +117,106 @@ internal static class BoundCallAnalyzer
             return new List<BoundCall>();
         return method.DescendantNodes()
             .OfType<InvocationExpressionSyntax>()
-            .Select(call => Bind(call, semanticModel, sourceRoots))
-            .OfType<BoundCall>()
+            .SelectMany(call => Bind(call, semanticModel, sourceRoots))
             .ToList();
     }
 
-    private static BoundCall? Bind(
+    private static IEnumerable<BoundCall> Bind(
         InvocationExpressionSyntax call,
         SemanticModel semanticModel,
         IReadOnlyList<CompilationUnitSyntax> sourceRoots)
     {
         var symbolInfo = semanticModel.GetSymbolInfo(call);
         // A call whose arguments do not bind (a type from an unresolved package) gives candidate
-        // symbols instead of one symbol. They still name the method when every candidate is an
-        // overload of one method in one class, because a node of the call graph is that method.
+        // symbols instead of one symbol. When every candidate is an overload of one method in one
+        // class, the call reaches each candidate overload: the call graph cannot tell which one
+        // the compiler would choose, and it does not drop the edge.
         var candidates = (symbolInfo.Symbol is IMethodSymbol bound
                 ? new[] { bound }
                 : symbolInfo.CandidateSymbols.OfType<IMethodSymbol>())
             .Select(candidate => (candidate.ReducedFrom ?? candidate).OriginalDefinition)
             .Where(IsSourceMethod)
+            .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default)
             .ToList();
         if (candidates.Count == 0)
-            return null;
+            return Array.Empty<BoundCall>();
 
         var callText = string.Join(" ", call.Expression.ToString().Split(
             (char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        BoundCall Target(string targetClass, string targetMethod) => new(
-            callText, call.SpanStart, call.Span.End, targetClass, targetMethod, "", Array.Empty<string>());
+        BoundCall Target(IMethodSymbol target) => new(
+            callText, call.SpanStart, call.Span.End, target.ContainingType.Name, target.Name, NodeOf(target), "",
+            Array.Empty<string>());
         BoundCall Unresolved(string reason, IEnumerable<string> candidateClasses) => new(
-            callText, call.SpanStart, call.Span.End, "", "", reason,
+            callText, call.SpanStart, call.Span.End, "", "", "", reason,
             candidateClasses.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToList());
 
-        var targets = candidates
-            .Select(candidate => (Class: candidate.ContainingType.Name, Method: candidate.Name))
-            .Distinct()
-            .ToList();
-        if (targets.Count > 1)
-            return Unresolved(AmbiguousOverload, targets.Select(target => target.Class));
+        if (candidates.Any(candidate => candidate.Name != candidates[0].Name
+                || !SymbolEqualityComparer.Default.Equals(candidate.ContainingType, candidates[0].ContainingType)))
+            return new[] { Unresolved(AmbiguousOverload, candidates.Select(candidate => candidate.ContainingType.Name)) };
 
-        var method = candidates[0];
-        if (method.ContainingType.TypeKind != TypeKind.Interface)
-            return Target(method.ContainingType.Name, method.Name);
-
-        var implementers = LocalImplementers(method.ContainingType.Name, method.Name, sourceRoots);
-        return implementers.Count switch
+        return candidates.Select(method =>
         {
-            1 => Target(implementers[0].MethodDeclaringClassName, method.Name),
-            0 => Unresolved(NoLocalImplementer, Array.Empty<string>()),
-            _ => Unresolved(AmbiguousImplementation, implementers.Select(implementer => implementer.ClassName)),
-        };
+            if (method.ContainingType.TypeKind != TypeKind.Interface)
+                return Target(method);
+
+            var implementers = LocalImplementers(method.ContainingType.Name, method.Name, sourceRoots);
+            return implementers.Count switch
+            {
+                1 => ImplementationOf(method, implementers[0], semanticModel.Compilation) is { } implementation
+                    ? Target(implementation)
+                    : Unresolved(NoLocalImplementer, Array.Empty<string>()),
+                0 => Unresolved(NoLocalImplementer, Array.Empty<string>()),
+                _ => Unresolved(AmbiguousImplementation, implementers.Select(implementer => implementer.ClassName)),
+            };
+        }).ToList();
+    }
+
+    /// <summary>
+    /// The method of the Local Implementer that implements <paramref name="interfaceMethod"/>:
+    /// the overload the compiler maps to it, in the implementer or in the corpus base class that
+    /// declares it. When the compiler cannot map it (a base list that does not bind), the one
+    /// method of the declaring class with the same name and parameter types. Null when neither
+    /// rule finds one method.
+    /// </summary>
+    private static IMethodSymbol? ImplementationOf(
+        IMethodSymbol interfaceMethod,
+        WrapperAnalyzer.LocalImplementerCandidate implementer,
+        Compilation compilation)
+    {
+        var types = compilation.GetSymbolsWithName(implementer.ClassName, SymbolFilter.Type)
+            .OfType<INamedTypeSymbol>()
+            .Where(type => type.ToDisplayString(TypeIdentityFormat) == implementer.TypeIdentity)
+            .ToList();
+        var mapped = types
+            .SelectMany(type => type.AllInterfaces
+                .Where(contract => SymbolEqualityComparer.Default.Equals(
+                    contract.OriginalDefinition, interfaceMethod.ContainingType))
+                .SelectMany(contract => contract.GetMembers(interfaceMethod.Name).OfType<IMethodSymbol>())
+                .Where(member => SymbolEqualityComparer.Default.Equals(member.OriginalDefinition, interfaceMethod))
+                .Select(member => type.FindImplementationForInterfaceMember(member)))
+            .OfType<IMethodSymbol>()
+            .Select(method => method.OriginalDefinition)
+            .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default)
+            .ToList();
+        if (mapped.Count == 1)
+            return mapped[0];
+
+        var interfaceParameters = ParameterList(interfaceMethod);
+        var declared = types
+            .SelectMany(type => SelfAndBaseTypes(type))
+            .Where(type => type.Name == implementer.MethodDeclaringClassName)
+            .SelectMany(type => type.GetMembers(interfaceMethod.Name).OfType<IMethodSymbol>())
+            .Select(method => method.OriginalDefinition)
+            .Where(method => ParameterList(method) == interfaceParameters)
+            .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default)
+            .ToList();
+        return declared.Count == 1 ? declared[0] : null;
+    }
+
+    private static IEnumerable<INamedTypeSymbol> SelfAndBaseTypes(INamedTypeSymbol type)
+    {
+        for (var current = type; current is not null; current = current.BaseType)
+            yield return current;
     }
 
     private static bool IsSourceMethod(IMethodSymbol method)

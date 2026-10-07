@@ -198,7 +198,14 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 是 `CallSite` 清單，介面方法經 Local Implementer 規則解析到實作類別。正向鏈只用
 # 這些邊，不再比對呼叫文字。舊快取的方法 span 沒有 `calls`，正向鏈會停在 action
 # 本身，必須重新掃描。
-_CACHE_VERSION = 46
+# v47：呼叫圖的節點是綁定後的方法符號（見 ADR-0044 與
+# `.scratch/rttalentdb-program-to-sql-chain/issues/11-...md`）：analyzer host 為每個
+# 方法 span 記錄 `node`（namespace 與外層型別、方法名、型別參數個數、參數型別，例如
+# `Shop.Store.Save(int)`），每個 Bound Call Target 記錄 `target_node`。同名的
+# overload、兩個 namespace 的同名類別各是兩個節點；record 與 struct 的方法 span
+# 有自己的類別。舊快取沒有這兩個欄位，每個方法都沒有節點，正向鏈找不到起點，
+# 必須重新掃描（C# 掃描快取要在本機重掃，SQL 快取的更新不包含它）。
+_CACHE_VERSION = 47
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

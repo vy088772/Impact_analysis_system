@@ -34,7 +34,6 @@ from code_analyzer.csharp_analysis_gateway import (
     load_wrapper_review_exclusions,
     wrapper_observation_identity,
 )
-from code_analyzer.models import call_graph_node
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 
@@ -58,6 +57,7 @@ from .schemas import (
 )
 from .snippet_extractor import extract_snippets
 from .call_chain_builder import build_call_chains
+from .call_graph_nodes import MethodNodes
 from .sp_fetcher import fetch_sp_definitions
 from .view_fetcher import fetch_view_definitions
 from .udf_fetcher import fetch_udf_definitions
@@ -2638,10 +2638,13 @@ def flow_chain(
             needed_files=flow_chain_builder.files_of_nodes(scan, reach.nodes),
             refresh=req.refresh,
         )
+        # An invocation joins the node of the method span that holds it (ADR-0044).
+        method_nodes = MethodNodes(scan)
         rated_invocations = [
             invocation
             for invocation in evidence.rated_invocations
-            if call_graph_node(invocation.class_name, invocation.method_name) in reach.nodes
+            if method_nodes.at_offset(invocation.source.relative_path, invocation.source.start_offset)
+            in reach.nodes
         ]
         execution_graph = evidence.graph
         forward_execution_paths = evidence.paths_of(rated_invocations)

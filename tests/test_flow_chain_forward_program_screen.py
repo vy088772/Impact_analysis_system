@@ -15,7 +15,7 @@ from service import analyze_service
 from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FlowChainRequest
 from tests.program_screen_fixtures import _scan
-from tests.scan_fixtures import with_bound_calls
+from tests.scan_fixtures import source_offset, with_bound_calls
 from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     cache_payload,
@@ -45,14 +45,23 @@ def _graph(procedures: Sequence[str]) -> dict:
     return execution_graph(_DATABASE, nodes=nodes, relationships=relationships)
 
 
-def _invocation(relative_path: str, class_name: str, method_name: str, procedure: str) -> DbInvocation:
+def _source_span(relative_path: str, node: str) -> InvocationSourceSpan:
+    """A source span inside the method span of `node` (see `tests.scan_fixtures`)."""
+    start = source_offset(node)
+    return InvocationSourceSpan(relative_path=relative_path, start_offset=start, end_offset=start + 10)
+
+
+def _invocation(
+    relative_path: str, class_name: str, method_name: str, procedure: str, *, node: str = ""
+) -> DbInvocation:
+    """A proven invocation inside the method span of `node` (default `class_name.method_name`)."""
     return DbInvocation(
         class_name=class_name,
         method_name=method_name,
         database=_DATABASE,
         procedure_name=procedure,
         evidence=InvocationEvidence.PROVEN,
-        source=InvocationSourceSpan(relative_path=relative_path, start_offset=0, end_offset=10),
+        source=_source_span(relative_path, node or f"{class_name}.{method_name}"),
         command_text_literal="",
     )
 
@@ -438,6 +447,103 @@ def test_two_methods_with_one_name_in_two_classes_stay_two_nodes(monkeypatch, tm
     response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=procedures)
 
     assert _procedures(response) == ["dbo.usp_JobType_Save"]
+
+
+def _overload_scan(root: Path, calls: Dict[str, Sequence[str]]):
+    """The JobType screen, and `Store.Save(int)` and `Store.Save(string)` in one service file."""
+    scan = _service_scan(root, calls, {})
+    return with_bound_calls(scan, "Services/Store.cs", {"Store.Save(int)": [], "Store.Save(string)": []})
+
+
+_OVERLOAD_PROCEDURES = ["usp_Save_Id", "usp_Save_Code"]
+
+
+def _overload_source() -> _Source:
+    return _Source(
+        [
+            _invocation("Services/Store.cs", "Store", "Save", "usp_Save_Id", node="Store.Save(int)"),
+            _invocation("Services/Store.cs", "Store", "Save", "usp_Save_Code", node="Store.Save(string)"),
+        ],
+        _OVERLOAD_PROCEDURES,
+    )
+
+
+def test_a_call_to_one_overload_reaches_only_the_stored_procedures_of_that_overload(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """ADR-0044: a node is one bound method, so `Save(int)` and `Save(string)` are two nodes."""
+    scan = _overload_scan(tmp_path, {"JobTypeController.JobTypeMtn": ["Store.Save(int)"]})
+
+    response = _forward(
+        monkeypatch, tmp_path, scan, _overload_source(), "JobTypeMtn", "JobTypeMtn",
+        procedures=_OVERLOAD_PROCEDURES,
+    )
+
+    assert _procedures(response) == ["dbo.usp_Save_Id"]
+    assert response.forward_chain["method_path"] == ["JobTypeMtn", "Save"]
+    assert response.forward_chain["reachable_methods"] == ["JobTypeMtn", "Save"]
+
+
+def test_an_action_that_calls_two_overloads_reaches_the_stored_procedures_of_both(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _overload_scan(
+        tmp_path, {"JobTypeController.JobTypeMtn": ["Store.Save(int)", "Store.Save(string)"]}
+    )
+
+    response = _forward(
+        monkeypatch, tmp_path, scan, _overload_source(), "JobTypeMtn", "JobTypeMtn",
+        procedures=_OVERLOAD_PROCEDURES,
+    )
+
+    assert sorted(_procedures(response)) == ["dbo.usp_Save_Code", "dbo.usp_Save_Id"]
+
+
+def test_two_classes_of_one_simple_name_in_two_namespaces_stay_two_nodes(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _service_scan(tmp_path, {"JobTypeController.JobTypeMtn": ["A.Svc.Run"]}, {})
+    with_bound_calls(scan, "Services/A/Svc.cs", {"A.Svc.Run": []})
+    with_bound_calls(scan, "Services/B/Svc.cs", {"B.Svc.Run": []})
+    procedures = ["usp_A_Run", "usp_B_Run"]
+    source = _Source(
+        [
+            _invocation("Services/A/Svc.cs", "Svc", "Run", "usp_A_Run", node="A.Svc.Run"),
+            _invocation("Services/B/Svc.cs", "Svc", "Run", "usp_B_Run", node="B.Svc.Run"),
+        ],
+        procedures,
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=procedures)
+
+    assert _procedures(response) == ["dbo.usp_A_Run"]
+
+
+def test_a_program_screen_with_a_get_and_a_post_action_of_one_name_reaches_both(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """ADR-0019: an entry action is a name, so each overload of that name starts the chain."""
+    scan = _service_scan(tmp_path, {}, {"Services/QryService.cs": ["GetView", "Query"]})
+    with_bound_calls(
+        scan,
+        "Controllers/JobTypeController.cs",
+        {
+            "JobTypeController.JobTypeMtn()": ["QryService.GetView"],
+            "JobTypeController.JobTypeMtn(FormData)": ["QryService.Query"],
+        },
+    )
+    procedures = ["usp_GetView", "usp_Query"]
+    source = _Source(
+        [
+            _invocation("Services/QryService.cs", "QryService", "GetView", "usp_GetView"),
+            _invocation("Services/QryService.cs", "QryService", "Query", "usp_Query"),
+        ],
+        procedures,
+    )
+
+    response = _forward(monkeypatch, tmp_path, scan, source, "JobTypeMtn", "JobTypeMtn", procedures=procedures)
+
+    assert sorted(_procedures(response)) == ["dbo.usp_GetView", "dbo.usp_Query"]
 
 
 def test_the_reach_has_no_depth_limit_and_stops_each_cycle(monkeypatch, tmp_path: Path) -> None:

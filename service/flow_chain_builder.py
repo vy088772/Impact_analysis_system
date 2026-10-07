@@ -42,9 +42,10 @@ from typing import Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional
 
 from canonical_object_identity import bare_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
-from code_analyzer.models import CallSite, FileAnalysisResult, call_graph_node
+from code_analyzer.models import CallSite, FileAnalysisResult
 from code_analyzer.project_scanner import ProjectScanResult
 from . import inline_table_relations
+from .call_graph_nodes import MethodNodes
 from .graph_queries import filter_table_accesses, query_table_accesses
 from .program_screen import ProgramScreen
 from .sql_cache_store import CacheIdentity
@@ -104,13 +105,15 @@ class _CallGraph(NamedTuple):
     edges: Dict[str, List[str]]
     # node -> one diagnostic for each of its calls that has no Bound Call Target.
     unresolved_calls: Dict[str, List[dict]]
+    # node -> the bare method name, for the outputs that name a method.
+    method_names: Dict[str, str]
 
 
 def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
     """The call graph of the whole scan root.
 
-    A node is one class-qualified method (`Class.Method`), so two methods with the same
-    name in two classes stay two nodes. The edges come from every source file of the scan
+    A node is one bound method symbol (`MethodSourceSpan.node`), so two overloads, and two
+    methods with the same name in two classes, stay two nodes. The edges come from every source file of the scan
     root, not from the program files only: an action reaches the service methods that it
     calls. A call with no Bound Call Target gives no edge, and the call text is never
     matched by name. Such a call stays in `unresolved_calls`, so the chain can say why its
@@ -118,20 +121,27 @@ def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
     """
     edges: Dict[str, List[str]] = {}
     unresolved: Dict[str, List[dict]] = {}
+    method_names: Dict[str, str] = {}
     for key, snapshot in getattr(scan, "source_snapshots", {}).items():
         relative_path = str(snapshot.relative_path or key).replace("\\", "/")
         for span in snapshot.method_spans:
+            if not span.node:
+                continue
+            method_names[span.node] = span.method_name
             targets = edges.setdefault(span.node, [])
             for call in span.calls:
                 target = call.bound_target
                 if target:
+                    method_names.setdefault(target, call.target_method)
                     if target != span.node and target not in targets:
                         targets.append(target)
                 elif call.unresolved_reason:
                     unresolved.setdefault(span.node, []).append(
-                        _unresolved_call_diagnostic(span.node, call, relative_path)
+                        _unresolved_call_diagnostic(
+                            f"{span.class_name}.{span.method_name}", call, relative_path
+                        )
                     )
-    return _CallGraph(edges, unresolved)
+    return _CallGraph(edges, unresolved, method_names)
 
 
 def bound_call_edges(scan: ProjectScanResult) -> Dict[str, List[str]]:
@@ -146,6 +156,8 @@ def bound_call_edges(scan: ProjectScanResult) -> Dict[str, List[str]]:
 
 def _unresolved_call_diagnostic(caller: str, call: CallSite, relative_path: str) -> dict:
     """The `diagnostics` entry of a call with no Bound Call Target: the caller, the call, the reason.
+
+    `caller` is `Class.Method`, the simple names; `source_span` tells the overload apart.
 
     `reason` and `unresolved_reason` both hold the reason, the two names an unproven
     execution path in the same list carries.
@@ -165,20 +177,22 @@ def _unresolved_call_diagnostic(caller: str, call: CallSite, relative_path: str)
     }
 
 
-def _inline_sql_tables(scan: ProjectScanResult, reachable_nodes: Set[str]) -> Set[str]:
+def _inline_sql_tables(
+    scan: ProjectScanResult, nodes: MethodNodes, reachable_nodes: Set[str]
+) -> Set[str]:
     """列出可達方法的 inline SQL table relation 所指的資料表名稱，補足 SP 鏈以外的來源。
 
     有些方法（例如只組 DropDownList 選項的 BindXxx）直接用
     `obj.CreateReader("select ... from Table")` 這種內嵌 SQL 字串查資料，完全
     沒有 database invocation，這種情況下只看 SQL Execution Graph path 也不會涵蓋它。
     掃描時已經把這些 SQL 轉成 table relation；這裡只挑出「可達節點」的那些
-    relation。節點是類別加方法名稱，用完全相同的比對：relation 與節點都來自 C#
-    宣告，而 C# 的名稱分大小寫。
+    relation。relation 以它所在的行找到包住它的方法 span，用那個 span 的節點比對
+    （ADR-0044），不用它記錄的類別與方法名稱，所以同名的 overload 不會互相沾到。
     """
     return set(
         inline_table_relations.table_names_by_method(
             scan,
-            lambda site: call_graph_node(site.class_name, site.method_name) in reachable_nodes,
+            lambda site: nodes.at_line(site.file_path, site.line_number) in reachable_nodes,
         )
     )
 
@@ -186,26 +200,24 @@ def _inline_sql_tables(scan: ProjectScanResult, reachable_nodes: Set[str]) -> Se
 class ForwardReach(NamedTuple):
     """The methods that an anchor action reaches through its Bound Call Targets."""
 
-    # 一條代表性路徑（僅供顯示用），每一段是一個節點（`Class.Method`）。
+    # 一條代表性路徑（僅供顯示用），每一段是一個節點（`MethodSourceSpan.node`）。
     node_path: List[str]
-    # 所有可達的節點（`Class.Method`）；SP 與資料表關聯以它為依據。
+    # 所有可達的節點；SP 與資料表關聯以它為依據。
     nodes: Set[str]
     # 可達節點裡沒有 Bound Call Target 的呼叫（diagnostics 條目）；那些分支停在這裡。
     unresolved_calls: List[dict]
+    # 節點 -> 方法名稱（不含類別與參數），給回應裡列方法名稱的欄位用。
+    names: Mapping[str, str]
 
     @property
     def method_path(self) -> List[str]:
         """The representative path as bare method names, the shape `/flow_chain` answers."""
-        return [_method_name(node) for node in self.node_path]
+        return [self.names[node] for node in self.node_path]
 
     @property
     def method_names(self) -> Set[str]:
         """The reached methods as bare names, the shape `reachable_methods` answers."""
-        return {_method_name(node) for node in self.nodes}
-
-
-def _method_name(node: str) -> str:
-    return node.rsplit(".", 1)[-1]
+        return {self.names[node] for node in self.nodes}
 
 
 def _reachable_from(starts: List[str], adj: Dict[str, List[str]]) -> Tuple[List[str], Set[str]]:
@@ -248,17 +260,19 @@ def forward_reach(
 ) -> Optional[ForwardReach]:
     """The nodes that `anchor_method` reaches, or None when the program owns no such action.
 
-    The program scope (ADR-0019) selects the anchor action only. From the anchor, the
-    reach follows each Bound Call Target into any file of the scan root.
+    The program scope (ADR-0019) selects the anchor action only. The anchor is a name, so
+    each overload of that name starts the reach: a GET and a POST action of one name both
+    start. From the anchor, the reach follows each Bound Call Target into any file of the
+    scan root.
     """
+    method_nodes = MethodNodes(scan)
     starts = sorted(
         {
-            call_graph_node(cls.name, m.name)
+            span.node
             for fr in scan.csharp_results
             if owns_file(fr.file_path)
-            for cls in fr.classes
-            for m in cls.methods
-            if m.name == anchor_method and owns_action(fr.file_path, m.name)
+            for span in method_nodes.spans_of(fr.file_path)
+            if span.method_name == anchor_method and owns_action(fr.file_path, span.method_name)
         }
     )
     if not starts:
@@ -268,14 +282,14 @@ def forward_reach(
     unresolved_calls = [
         diagnostic for node in sorted(nodes) for diagnostic in graph.unresolved_calls.get(node, [])
     ]
-    return ForwardReach(node_path, nodes, unresolved_calls)
+    return ForwardReach(node_path, nodes, unresolved_calls, graph.method_names)
 
 
 def _caller_names(path: Mapping[str, object]) -> Optional[Tuple[str, str]]:
     """The class and the name of the method that holds a path's Database Invocation, or None.
 
-    A path that names the method but no class takes the class of its entry method, so
-    the node still joins the call graph.
+    A path that names the method but no class takes the class of its entry method. The
+    backward chain shows these names; the node comes from `_caller_node`.
     """
     caller_method = str(path.get("caller_method") or "")
     if not caller_method:
@@ -286,23 +300,25 @@ def _caller_names(path: Mapping[str, object]) -> Optional[Tuple[str, str]]:
     return caller_class, caller_method
 
 
-def _caller_node(path: Mapping[str, object]) -> str:
+def _caller_node(nodes: MethodNodes, path: Mapping[str, object]) -> str:
     """The node of the method that holds a path's Database Invocation, or "" when unknown.
 
+    The method span that holds the source span of the path gives the node (ADR-0044); its
+    class name and method name do not, so an overload never takes the path of another.
     The chain joins a path by this node, not by `entry_method`: the entry method is the
     outermost caller of a same-file chain that the call text gives, and the call graph
-    already reaches every caller through its Bound Call Targets (ADR-0044).
+    already reaches every caller through its Bound Call Targets.
     """
-    names = _caller_names(path)
-    return call_graph_node(*names) if names else ""
+    return nodes.of_source_span(path.get("source_span"))
 
 
 def files_of_nodes(scan: ProjectScanResult, nodes: Set[str]) -> List[FileAnalysisResult]:
     """The C# file results that declare at least one of `nodes`, in scan order."""
+    method_nodes = MethodNodes(scan)
     return [
         fr
         for fr in scan.csharp_results
-        if any(call_graph_node(cls.name, m.name) in nodes for cls in fr.classes for m in cls.methods)
+        if any(span.node in nodes for span in method_nodes.spans_of(fr.file_path))
     ]
 
 
@@ -339,6 +355,7 @@ def build_forward_chain(
     if reach is None:
         return None
     method_path, reachable_nodes = reach.method_path, reach.nodes
+    method_nodes = MethodNodes(scan)
 
     # Gateway + graph paths are the formal source for database calls.
     supplied_paths = execution_paths
@@ -351,7 +368,7 @@ def build_forward_chain(
                 if supplied_paths is not None
                 else build_execution_paths(invocations, graph)
             )
-            if not _caller_node(path) or _caller_node(path) in reachable_nodes
+            if not _caller_node(method_nodes, path) or _caller_node(method_nodes, path) in reachable_nodes
         ]
 
     formal_sp_chain: List[dict] = []
@@ -400,7 +417,7 @@ def build_forward_chain(
     # 有些方法完全沒呼叫 SP，只靠內嵌 SQL 字串查表，單看 sp_chain 會漏掉這些表。
     # 獨立回傳一份（inline_sql_tables）方便呼叫端知道「這些表不是從哪支 SP 來的」，
     # 同時也併入 all_tables，讓 tables/FK 展開跟 SP 來源的表一視同仁。
-    inline_tables = _inline_sql_tables(scan, reachable_nodes)
+    inline_tables = _inline_sql_tables(scan, method_nodes, reachable_nodes)
     all_tables.update(inline_tables)
 
     return {
@@ -504,20 +521,17 @@ def _screen_anchors_by_node(
 
     The strength is the strength of the screen-to-action link (ADR-0019): `determined`
     for a same-name action or a markup-layer View Anchor, `likely` for a script URL.
+    An action is a name, so each overload of that name is a node of the action.
     """
-    files = {fr.file_path: fr for fr in scan.csharp_results}
+    method_nodes = MethodNodes(scan)
     anchors: Dict[str, List[dict]] = {}
     for screen in screens:
         for action in screen.actions:
-            controller = files.get(action.controller_path)
-            if controller is None:
-                continue
             for node in sorted(
                 {
-                    call_graph_node(cls.name, m.name)
-                    for cls in controller.classes
-                    for m in cls.methods
-                    if m.name == action.name
+                    span.node
+                    for span in method_nodes.spans_of(action.controller_path)
+                    if span.method_name == action.name
                 }
             ):
                 anchors.setdefault(node, []).append(
@@ -605,7 +619,8 @@ def build_backward_chains(
     """
     invocations = list(invocations)
     chains: List[dict] = []
-    seen: Set[Tuple[str, str, str]] = set()
+    seen: Set[Tuple[str, str, str, str]] = set()
+    method_nodes = MethodNodes(scan)
     rev_adj_cache: Dict[str, Dict[str, List[str]]] = {}
     screen_anchors = _screen_anchors_by_node(scan, root, program_screens)
     callers = _reverse_edges(_bound_call_graph(scan).edges) if screen_anchors else {}
@@ -628,12 +643,14 @@ def build_backward_chains(
         csharp_file: str,
         class_name: str,
         method_name: str,
+        node: str,
         via: str,
         sp_name: str = "",
         access_record: Optional[Mapping[str, object]] = None,
         entry_method_name: str = "",
     ) -> None:
-        key = (csharp_file, class_name, method_name)
+        # `node` is the method span that holds the access: two overloads are two chains.
+        key = (csharp_file, class_name, method_name, node)
         if key in seen:
             return
         seen.add(key)
@@ -642,7 +659,7 @@ def build_backward_chains(
         for name in {method_name, entry_method_name} - {""}:
             candidate_methods |= {name} | _ancestors_of(name, rev_adj)
         ui_anchors = _find_ui_anchors_for_method(scan.aspx_results, candidate_methods, csharp_file)
-        ui_anchors += _program_screen_anchors(call_graph_node(class_name, method_name))
+        ui_anchors += _program_screen_anchors(node) if node else []
         entry = {
             "table": table_name,
             "via": via,
@@ -740,6 +757,7 @@ def build_backward_chains(
             matching_files[0],
             class_name,
             method_name,
+            _caller_node(method_nodes, access_record),
             via="stored_procedure",
             sp_name=sp_chain[-1] if sp_chain else "",
             access_record=access_record,
@@ -762,6 +780,7 @@ def build_backward_chains(
             rel.csharp_file,
             rel.class_name,
             rel.method_name,
+            method_nodes.at_line(rel.csharp_file, rel.line_number),
             via="direct_sql",
         )
 

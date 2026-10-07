@@ -17,7 +17,7 @@ from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FlowChainRequest
 from tests.program_screen_fixtures import _scan
 from tests.request_context_fixtures import RequestStores
-from tests.scan_fixtures import with_bound_calls
+from tests.scan_fixtures import source_offset, with_bound_calls
 from tests.sql_cache_fixtures import cache_payload, execution_graph
 
 _DATABASE = "OrdersDb"
@@ -45,9 +45,21 @@ def _graph() -> dict:
     )
 
 
+def _source_span(relative_path: str, node: str) -> InvocationSourceSpan:
+    """A source span inside the method span of `node` (see `tests.scan_fixtures`)."""
+    start = source_offset(node)
+    return InvocationSourceSpan(relative_path=relative_path, start_offset=start, end_offset=start + 10)
+
+
 def _invocation(
-    relative_path: str, class_name: str, method_name: str, method_chain: Sequence[str] = ()
+    relative_path: str,
+    class_name: str,
+    method_name: str,
+    method_chain: Sequence[str] = (),
+    *,
+    node: str = "",
 ) -> DbInvocation:
+    """A proven invocation inside the method span of `node` (default `class_name.method_name`)."""
     return DbInvocation(
         class_name=class_name,
         method_name=method_name,
@@ -55,7 +67,7 @@ def _invocation(
         database=_DATABASE,
         procedure_name=_PROCEDURE,
         evidence=InvocationEvidence.PROVEN,
-        source=InvocationSourceSpan(relative_path=relative_path, start_offset=0, end_offset=10),
+        source=_source_span(relative_path, node or f"{class_name}.{method_name}"),
         command_text_literal="",
     )
 
@@ -321,3 +333,30 @@ def test_a_webforms_chain_names_the_holding_method_and_keeps_the_control_event_o
             "handler": "btnSave_Click",
         }
     ]
+
+
+def test_the_backward_chain_from_one_overload_does_not_reach_an_action_that_calls_only_the_other(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """ADR-0044: the stored procedure is in `InvalidateJobType(string)`. `JobTypeMtn` calls only
+    `InvalidateJobType(int)`, so it is not a Program Screen action of the chain."""
+    scan = _job_type_scan(
+        tmp_path,
+        determined_anchors={"Views/JobType/JobTypeMtn.cshtml": [{"controller": "JobType", "action": "JobTypeInvalid"}]},
+        calls={
+            "JobTypeController.JobTypeMtn": ["JobTypeService.InvalidateJobType(int)"],
+            "JobTypeController.JobTypeInvalid": ["JobTypeService.InvalidateJobType(string)"],
+        },
+    )
+    with_bound_calls(
+        scan,
+        _SERVICE,
+        {"JobTypeService.InvalidateJobType(int)": [], "JobTypeService.InvalidateJobType(string)": []},
+    )
+    invocation = _invocation(
+        _SERVICE, "JobTypeService", "InvalidateJobType", node="JobTypeService.InvalidateJobType(string)"
+    )
+
+    chain = _service_chain(_backward(monkeypatch, tmp_path, scan, invocation))
+
+    assert _screens(chain) == [("JobTypeMtn", "JobTypeInvalid", "determined")]

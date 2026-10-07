@@ -18,6 +18,7 @@ from code_analyzer.razor_parser import RazorParser
 from service import analyze_service
 from service.schemas import AnalyzeRequest
 from tests.request_context_fixtures import RequestStores
+from tests.scan_fixtures import with_declared_spans
 from tests.sql_cache_fixtures import cache_with_procedures
 
 
@@ -111,7 +112,7 @@ def _scan(
         key = str((root / relative).resolve())
         db_invocations[key] = list(entries)
         connection_sources[key] = {"conn": "PUR"}
-    return ProjectScanResult(
+    return with_declared_spans(ProjectScanResult(
         project_root=str(root),
         project_name="screens",
         scan_time=datetime.now(),
@@ -129,7 +130,7 @@ def _scan(
         aspx_results=[_aspx_result(root, relative) for relative in pages],
         db_invocations=db_invocations,
         connection_sources=connection_sources,
-    )
+    ))
 
 
 def _invocation(class_name: str, method_name: str, procedure: str) -> Dict:

@@ -16,7 +16,7 @@ from service import flow_chain_builder
 from service import scan_store
 from service.schemas import AnalyzeRequest
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
-from tests.scan_fixtures import scan_of
+from tests.scan_fixtures import scan_of, source_line
 from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     analyzer_operation,
@@ -603,7 +603,7 @@ def test_forward_chain_without_graph_keeps_inline_sql(
                 csharp_file=str(source_file),
                 class_name="OrderPage",
                 method_name="SaveData",
-                line_number=1,
+                line_number=source_line("OrderPage.SaveData"),
                 table=ObjectName("", "", "dbo", "SOrder"),
                 database="OrdersDb",
                 access_type="SELECT",

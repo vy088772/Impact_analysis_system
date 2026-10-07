@@ -363,11 +363,13 @@ class ProjectScanResult:
                         end_offset=int(call.get("end_offset") or 0),
                         target_class=str(call.get("target_class") or ""),
                         target_method=str(call.get("target_method") or ""),
+                        target_node=str(call.get("target_node") or ""),
                         unresolved_reason=str(call.get("unresolved_reason") or ""),
                         candidate_classes=[str(name) for name in call.get("candidate_classes") or []],
                     )
                     for call in item.get("calls") or []
                 ],
+                node=str(item.get("node") or ""),
             )
             for item in host_result.get("methods", [])
         ]

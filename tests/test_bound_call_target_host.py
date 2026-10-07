@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost
 from config.settings import settings
 from service import scan_store
+from service.call_graph_nodes import MethodNodes
 
 RTTALENT_ROOT = PROJECT_ROOT / "data" / "repos" / "System_Dept_1" / "RTTalentDB" / "RTTalentDB"
 RTTALENT_CONTROLLER = RTTALENT_ROOT / "Controllers" / "JobTypeController.cs"
@@ -90,7 +91,7 @@ public class Controller(IJobService _primary)
 
 
 def _calls_by_method(result: dict) -> dict[str, list[dict]]:
-    """The calls of each node (`Class.Method`); the overloads of one method share a node."""
+    """The calls of each method by its simple names (`Class.Method`); this helper merges overloads."""
     calls: dict[str, list[dict]] = {}
     for method in result["methods"]:
         if method["class_name"]:
@@ -165,6 +166,104 @@ def test_a_call_into_a_framework_method_is_not_recorded(synthetic_calls) -> None
     assert not any("Select" in text or "ToList" in text for text in call_texts)
 
 
+NODE_SOURCE = """
+using System.Collections.Generic;
+
+namespace A { public class Svc { public void Run() { } } }
+namespace B { public class Svc { public void Run() { } } }
+
+namespace Shop
+{
+    public record Money(int Cents) { public int Twice() => Cents * 2; }
+    public struct Point { public int Sum() => 0; }
+
+    public class Outer { public class Inner { public void Deep(ref int value, List<string> names) { } } }
+
+    public class Store
+    {
+        public void Save(int id) { }
+        public void Save(string id) { }
+        public void Get() { }
+        public void Get<TModel>() { }
+    }
+
+    public interface IStore { void Save(int id); void Save(string id); }
+    public class LocalStore : IStore
+    {
+        public void Save(int id) { }
+        public void Save(string id) { }
+    }
+
+    public class Page
+    {
+        private readonly IStore _store;
+
+        public void Act()
+        {
+            new Store().Save(1);
+            new Store().Save("1");
+            new Store().Get();
+            new Store().Get<int>();
+            new A.Svc().Run();
+            new B.Svc().Run();
+            new Money(1).Twice();
+            new Point().Sum();
+            var value = 0;
+            new Outer.Inner().Deep(ref value, new List<string>());
+            _store.Save("2");
+        }
+    }
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def node_result() -> dict:
+    host = StaticAnalyzerHost.for_project(PROJECT_ROOT)
+    host.ensure_ready()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "Nodes.cs"
+        source_path.write_text(NODE_SOURCE, encoding="utf-8")
+        return host.analyze_csharp(source_path)
+
+
+@requires_dotnet
+def test_each_method_span_carries_its_bound_method_node(node_result) -> None:
+    """ADR-0044: a node is the bound method symbol, so overloads, generic arity and namespaces stay apart."""
+    spans = {(method["class_name"], method["node"]) for method in node_result["methods"]}
+
+    assert ("Store", "Shop.Store.Save(int)") in spans
+    assert ("Store", "Shop.Store.Save(string)") in spans
+    assert ("Store", "Shop.Store.Get()") in spans
+    assert ("Store", "Shop.Store.Get`1()") in spans
+    assert ("Svc", "A.Svc.Run()") in spans
+    assert ("Svc", "B.Svc.Run()") in spans
+    # A record, a struct and a nested class each get their real class.
+    assert ("Money", "Shop.Money.Twice()") in spans
+    assert ("Point", "Shop.Point.Sum()") in spans
+    assert ("Inner", "Shop.Outer.Inner.Deep(ref int,System.Collections.Generic.List<string>)") in spans
+
+
+@requires_dotnet
+def test_each_bound_call_target_names_the_node_of_its_overload(node_result) -> None:
+    [act] = [method for method in node_result["methods"] if method["node"] == "Shop.Page.Act()"]
+    targets = [(call["call_text"], call["target_node"]) for call in act["calls"]]
+
+    assert targets == [
+        ("new Store().Save", "Shop.Store.Save(int)"),
+        ("new Store().Save", "Shop.Store.Save(string)"),
+        ("new Store().Get", "Shop.Store.Get()"),
+        ("new Store().Get<int>", "Shop.Store.Get`1()"),
+        ("new A.Svc().Run", "A.Svc.Run()"),
+        ("new B.Svc().Run", "B.Svc.Run()"),
+        ("new Money(1).Twice", "Shop.Money.Twice()"),
+        ("new Point().Sum", "Shop.Point.Sum()"),
+        ("new Outer.Inner().Deep", "Shop.Outer.Inner.Deep(ref int,System.Collections.Generic.List<string>)"),
+        # An interface call binds to the overload of its Local Implementer.
+        ("_store.Save", "Shop.LocalStore.Save(string)"),
+    ]
+
+
 @requires_dotnet
 def test_a_scan_keeps_each_bound_call_target_in_the_scan_cache(tmp_path: Path) -> None:
     """The record goes from the host through the scan into the C# scan cache, and back."""
@@ -191,10 +290,59 @@ def test_a_scan_keeps_each_bound_call_target_in_the_scan_cache(tmp_path: Path) -
         settings.SCAN_CACHE_ROOT = previous_cache_root
 
     [save] = cached.source_snapshots["OrderPage.cs"].method_spans
-    assert save.node == "OrderPage.Save"
+    assert save.node == "OrderPage.Save()"
     assert [(call.call_text, call.bound_target) for call in save.calls] == [
-        ("_orders.Store", "OrderService.Store")
+        ("_orders.Store", "OrderService.Store()")
     ]
+
+
+@requires_dotnet
+def test_a_database_invocation_its_method_span_and_a_call_target_give_one_node(tmp_path: Path) -> None:
+    """ADR-0044: the invocation joins by the span that holds it, not by its class and method names."""
+    root = tmp_path / "project"
+    root.mkdir()
+    # `Db.Exec` takes the procedure from its caller, so the invocation of `usp_Save_Code`
+    # is the call in `Save(string)`.
+    (root / "Store.cs").write_text(
+        "using System.Data;\n"
+        "using System.Data.SqlClient;\n"
+        "namespace Shop {\n"
+        "public static class Db {\n"
+        "  public static void Exec(string procedure) {\n"
+        "    var command = new SqlCommand(procedure, new SqlConnection(\"x\"));\n"
+        "    command.CommandType = CommandType.StoredProcedure;\n"
+        "    command.ExecuteNonQuery();\n"
+        "  }\n"
+        "}\n"
+        "public class Store {\n"
+        "  public void Save(int id) { }\n"
+        "  public void Save(string code) { Db.Exec(\"dbo.usp_Save_Code\"); }\n"
+        "}\n"
+        "public class Page { public void Act() { new Store().Save(\"1\"); } }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    previous_cache_root = settings.SCAN_CACHE_ROOT
+    settings.SCAN_CACHE_ROOT = str(tmp_path / "cache")
+    try:
+        scan = scan_store.get_or_scan(root, refresh=True)
+    finally:
+        scan_store.clear_cache(root)
+        settings.SCAN_CACHE_ROOT = previous_cache_root
+
+    spans = {span.node: span for span in scan.source_snapshots["Store.cs"].method_spans}
+    [invocation] = [
+        item
+        for items in scan.db_invocations.values()
+        for item in items
+        if item["command_text"] == "dbo.usp_Save_Code"
+    ]
+    [call] = spans["Shop.Page.Act()"].calls
+
+    node = MethodNodes(scan).at_offset("Store.cs", invocation["start_offset"])
+    assert node == "Shop.Store.Save(string)"
+    assert node in spans
+    assert call.bound_target == node
 
 
 @requires_dotnet

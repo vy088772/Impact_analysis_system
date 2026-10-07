@@ -80,6 +80,7 @@ def test_static_analyzer_host_contract() -> None:
             {
                 "class_name": "Example",
                 "method_name": "Save",
+                "node": "Example.Save()",
                 "start_offset": 23,
                 "end_offset": 53,
                 "calls": [],

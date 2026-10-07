@@ -100,22 +100,14 @@ class CodeLocation:
         return hash((self.file_path, self.line_number, self.column_number))
 
 
-def call_graph_node(class_name: str, method_name: str) -> str:
-    """The call graph node of one method: its simple class name and its name (ADR-0044).
-
-    Database Invocations, table relations, method spans and Bound Call Targets all
-    carry these two names, so every side of the call graph joins on this one key.
-    """
-    return f"{class_name}.{method_name}"
-
-
 @dataclass
 class CallSite:
     """One call inside a method, with its Bound Call Target (ADR-0044).
 
     The analyzer host binds the call with the semantic model, and resolves an
-    interface method through the Local Implementer rule. `target_class` and
-    `target_method` name the method that the call reaches. Both are empty when
+    interface method through the Local Implementer rule. `target_node` is the call
+    graph node of the method that the call reaches; `target_class` and
+    `target_method` are its simple names, for display. All three are empty when
     the call has no Bound Call Target; `unresolved_reason` then says why, and
     `candidate_classes` names each tied class of `ambiguous_implementation`.
     """
@@ -127,29 +119,32 @@ class CallSite:
     target_method: str = ""
     unresolved_reason: str = ""
     candidate_classes: List[str] = field(default_factory=list)
+    target_node: str = ""
 
     @property
     def bound_target(self) -> str:
-        """The call graph node that the call reaches (`Class.Method`), or "" when it has none."""
-        if not self.target_method:
-            return ""
-        return call_graph_node(self.target_class, self.target_method)
+        """The call graph node that the call reaches, or "" when it has none."""
+        return self.target_node
 
 
 @dataclass
 class MethodSourceSpan:
-    """A method identity and its exclusive source offsets within one snapshot."""
+    """A method identity and its exclusive source offsets within one snapshot.
+
+    `node` is the call graph node of the method (ADR-0044): the bound method symbol,
+    with the namespace and the containing types of its class, its name, its type
+    parameter count and its parameter types, for example `Shop.Store.Save(int)`.
+    The analyzer host builds it, the same way for a span and for a Bound Call Target,
+    so two overloads are two nodes. `class_name` and `method_name` are the simple
+    names, for display.
+    """
 
     class_name: str
     method_name: str
     start_offset: int
     end_offset: int
     calls: List[CallSite] = field(default_factory=list)
-
-    @property
-    def node(self) -> str:
-        """The call graph node of this method: one class-qualified method (ADR-0044)."""
-        return call_graph_node(self.class_name, self.method_name)
+    node: str = ""
 
 
 @dataclass
@@ -165,6 +160,36 @@ class SourceSnapshot:
         """Return the exact source text represented by a verified method span."""
         return self.content[self._python_offset(span.start_offset):self._python_offset(span.end_offset)]
 
+    def node_at(self, utf16_offset: int) -> str:
+        """The node of the method span that holds the offset, or "" when no span holds it.
+
+        A Database Invocation joins the call graph this way, by its source offset, not by
+        its class name and method name (ADR-0044). The innermost span wins.
+        """
+        holding = [
+            span
+            for span in self.method_spans
+            if span.node and span.start_offset <= utf16_offset < span.end_offset
+        ]
+        return min(holding, key=lambda span: span.end_offset - span.start_offset).node if holding else ""
+
+    def node_at_line(self, line_number: int) -> str:
+        """The node of the method span that holds a part of the 1-based line, or "" when none does.
+
+        A table relation records a line, not an offset, so it joins the call graph this way.
+        """
+        lines = self.content.split("\n")
+        if not 1 <= line_number <= len(lines):
+            return ""
+        start = sum(_utf16_length(line) + 1 for line in lines[: line_number - 1])
+        end = start + _utf16_length(lines[line_number - 1])
+        holding = [
+            span
+            for span in self.method_spans
+            if span.node and span.start_offset <= end and start < span.end_offset
+        ]
+        return min(holding, key=lambda span: span.end_offset - span.start_offset).node if holding else ""
+
     def _python_offset(self, utf16_offset: int) -> int:
         units = 0
         for index, character in enumerate(self.content):
@@ -174,6 +199,10 @@ class SourceSnapshot:
         if units == utf16_offset:
             return len(self.content)
         raise ValueError(f"UTF-16 offset outside source snapshot: {utf16_offset}")
+
+
+def _utf16_length(text: str) -> int:
+    return sum(2 if ord(character) > 0xFFFF else 1 for character in text)
 
 
 # ============================================
