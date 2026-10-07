@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 _VIEW_SUFFIX = "view"
 _CONTROLLER_SUFFIX = "controller"
@@ -79,12 +79,20 @@ class _ViewFile:
     name: str
 
 
+# One controller method: its own name, or `(method name, routed action name)`.
+# MVC routes a method by its action name, which `[ActionName("X")]` or the
+# removed `Async` suffix can make differ from the method name.
+ActionEntry = Union[str, Tuple[str, str]]
+
+
 @dataclass(frozen=True)
 class _ControllerFile:
+    """`actions` holds each method's `(method name, routed action name)`."""
+
     path: str
     area: str
     name: str
-    actions: Tuple[str, ...]
+    actions: Tuple[Tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -99,14 +107,16 @@ def resolve_program_screens(
     program_code: str,
     *,
     view_paths: Iterable[str],
-    controller_actions: Mapping[str, Sequence[str]],
+    controller_actions: Mapping[str, Sequence[ActionEntry]],
     determined_anchors: Optional[Mapping[str, Sequence[Mapping[str, str]]]] = None,
     candidate_anchors: Optional[Mapping[str, Sequence[Mapping[str, str]]]] = None,
 ) -> List[ProgramScreen]:
     """Resolve one program code to the Program Screens it names.
 
-    `controller_actions` maps each scanned C# file to the method names it
-    declares; the files that are not controllers are ignored here.
+    `controller_actions` maps each scanned C# file to the methods it declares,
+    each a method name or a `(method name, routed action name)` pair; the files
+    that are not controllers are ignored here. A screen holds an action by its
+    routed action name and reports it by its method name.
 
     The two anchor maps carry each view's View Anchors at their own strength,
     keyed by view path. They arrive as two arguments because the two strengths
@@ -158,7 +168,7 @@ def resolve_program_screens(
 def resolve_every_program_screen(
     *,
     view_paths: Iterable[str],
-    controller_actions: Mapping[str, Sequence[str]],
+    controller_actions: Mapping[str, Sequence[ActionEntry]],
     determined_anchors: Optional[Mapping[str, Sequence[Mapping[str, str]]]] = None,
     candidate_anchors: Optional[Mapping[str, Sequence[Mapping[str, str]]]] = None,
 ) -> List[ProgramScreen]:
@@ -332,7 +342,7 @@ def _looks_up(controller: _ControllerFile, view: _ViewFile) -> bool:
         return False
     if not (_same(view.folder, controller.name) or _same(view.folder, _SHARED_FOLDER)):
         return False
-    return any(_same(action, view.name) for action in controller.actions)
+    return any(_same(routed, view.name) for _, routed in controller.actions)
 
 
 def _screen(
@@ -345,9 +355,9 @@ def _screen(
     named: List[ScreenAction] = []
     if controller is not None:
         named = [
-            ScreenAction(action, controller.path, DETERMINED)
-            for action in controller.actions
-            if _same(action, view.name)
+            ScreenAction(method, controller.path, DETERMINED)
+            for method, routed in controller.actions
+            if _same(routed, view.name)
         ]
     actions = _without_repeats(
         named
@@ -388,7 +398,7 @@ def _anchored(
         if target is None:
             continue
         declared = next(
-            (action for action in target.actions if _same(action, name)), ""
+            (method for method, routed in target.actions if _same(routed, name)), ""
         )
         if declared:
             actions.append(ScreenAction(declared, target.path, strength))
@@ -418,7 +428,7 @@ def _anchor_controller(
         item
         for item in controllers
         if _same(item.name, named.strip())
-        and any(_same(declared, action) for declared in item.actions)
+        and any(_same(routed, action) for _, routed in item.actions)
     ]
     inside = [item for item in reachable if _same_area(item.area, view.area)]
     outside = [item for item in reachable if not item.area]
@@ -473,7 +483,7 @@ def _controller_of(
         controller
         for controller in controllers
         if _same_area(controller.area, view.area)
-        and any(_same(action, view.name) for action in controller.actions)
+        and any(_same(routed, view.name) for _, routed in controller.actions)
     ]
     return declaring[0] if len(declaring) == 1 else None
 
@@ -503,7 +513,9 @@ def _view_file(path: str) -> Optional[_ViewFile]:
     return _ViewFile(path=path, area=area, folder=folder, name=name)
 
 
-def _controller_file(path: str, actions: Sequence[str]) -> Optional[_ControllerFile]:
+def _controller_file(
+    path: str, actions: Sequence[ActionEntry]
+) -> Optional[_ControllerFile]:
     parts = _parts(path)
     if not parts:
         return None
@@ -525,7 +537,10 @@ def _controller_file(path: str, actions: Sequence[str]) -> Optional[_ControllerF
         path=path,
         area=area,
         name=stem[: -len(_CONTROLLER_SUFFIX)],
-        actions=tuple(actions),
+        actions=tuple(
+            (entry, entry) if isinstance(entry, str) else (entry[0], entry[1])
+            for entry in actions
+        ),
     )
 
 

@@ -63,8 +63,9 @@ def _aspx_result(root: Path, relative: str) -> FileAnalysisResult:
 
 
 def _controller_result(
-    root: Path, relative: str, actions: Sequence[str]
+    root: Path, relative: str, actions: Sequence[str | tuple[str, str]]
 ) -> FileAnalysisResult:
+    """Each action is a method name, or `(method name, routed action name)`."""
     path = _write(root, relative, "// controller")
     # A code-behind `Alpha.aspx.cs` declares the class `Alpha`, as a real page does.
     class_name = Path(relative).name.split(".")[0]
@@ -79,9 +80,10 @@ def _controller_result(
                 file_path=str(path),
                 methods=[
                     MethodInfo(
-                        name=action,
+                        name=action if isinstance(action, str) else action[0],
                         access_modifier="public",
                         return_type="IActionResult",
+                        action_name=action if isinstance(action, str) else action[1],
                     )
                     for action in actions
                 ],
@@ -94,7 +96,7 @@ def _scan(
     root: Path,
     *,
     views: Sequence[str] = (),
-    controllers: Mapping[str, Sequence[str]] = {},
+    controllers: Mapping[str, Sequence[str | tuple[str, str]]] = {},
     pages: Sequence[str] = (),
     invocations: Mapping[str, List[Dict]] = {},
     view_sources: Mapping[str, str] = {},

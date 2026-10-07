@@ -105,9 +105,24 @@ class RazorParser:
     ASP_PAGE_ATTR_PATTERN = re.compile(r'asp-page\s*=\s*"([^"]+)"', re.IGNORECASE)
     FORM_ACTION_PATTERN = re.compile(r'<form\b[^>]*\baction\s*=\s*"([^"]+)"', re.IGNORECASE)
 
-    # 候選式：畫面自己 <script> 區塊裡的字串常值，形狀像 /Controller/Action。
+    HTML_COMMENT_PATTERN = r'<!--.*?-->'
+
+    # 決定式：Razor 的網址 helper 把 action 與 controller 當引數寫死，不是猜的。
+    # `Url.Action("A", "C", ...)`、`Url.Action("A")`（沒有 controller 就是畫面自己的）、
+    # `Html.BeginForm("A", "C", ...)`。第一個引數不是字串常值（變數）就不算。第二個
+    # 字串引數是 controller；第二個引數若是 `new { ... }` 或 `FormMethod.Post` 就沒有。
+    URL_HELPER_PATTERN = re.compile(
+        r'\b(?:Url\.Action|Html\.BeginForm)\(\s*"([^"]+)"(?:\s*,\s*"([^"]+)")?'
+    )
+
+    # 候選式：畫面自己 <script> 區塊裡的字串常值，形狀像 /Controller/Action。引號可以是
+    # `'`、`"` 或反引號（template literal）。
     SCRIPT_BLOCK_PATTERN = re.compile(r'<script\b[^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
-    STRING_LITERAL_PATTERN = re.compile(r'''(['"])((?:(?!\1).)*)\1''')
+    STRING_LITERAL_PATTERN = re.compile(r'''(['"`])((?:(?!\1).)*)\1''')
+    # `data-url` 屬性的值：第三段可以是 Razor 運算式，所以只取屬性值的前兩段。
+    DATA_URL_ATTR_PATTERN = re.compile(r'\bdata-url\s*=\s*"([^"]+)"', re.IGNORECASE)
+    # 第三段只接受路由值：識別字、數字，或 template literal 的 `${...}`。
+    _ROUTE_VALUE_PATTERN = re.compile(r'^(?:\w+|\$\{[^}]*\})$')
     _IDENTIFIER_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
     # 共用元件（見 CONTEXT.md「Shared Component Contribution」條目）。ViewComponent
@@ -433,11 +448,20 @@ class RazorParser:
                 controller, action = parsed
                 anchors.append({'action': action, 'controller': controller})
 
+        # 被註解掉的呼叫是死的，不是畫面會呼叫的目的地。
+        live = re.sub(self.HTML_COMMENT_PATTERN, '', re.sub(self.RAZOR_COMMENT_PATTERN, '', content, flags=re.DOTALL), flags=re.DOTALL)
+        for helper_match in self.URL_HELPER_PATTERN.finditer(live):
+            anchor = {'action': helper_match.group(1)}
+            if helper_match.group(2):
+                anchor['controller'] = helper_match.group(2)
+            anchors.append(anchor)
+
         return anchors
 
     def _extract_candidate_view_anchors(self, content: str) -> List[Dict]:
         """候選式 View Anchor：畫面自己 <script> 區塊裡形如 /Controller/Action
-        的網址字串——只是「像」呼叫目的地，不是宣告，評級固定是 likely。"""
+        的網址字串，或 `data-url` 屬性的網址——只是「像」呼叫目的地，不是宣告，評級固定是
+        likely。網址可以帶路由值當第三段（`/Order/Detail/5`、`Order/Detail/${id}`）。"""
         anchors: List[Dict] = []
 
         for script_match in self.SCRIPT_BLOCK_PATTERN.finditer(content):
@@ -447,6 +471,12 @@ class RazorParser:
                 if parsed:
                     controller, action = parsed
                     anchors.append({'action': action, 'controller': controller})
+
+        for attr_match in self.DATA_URL_ATTR_PATTERN.finditer(content):
+            parsed = self._leading_controller_action(attr_match.group(1))
+            if parsed:
+                controller, action = parsed
+                anchors.append({'action': action, 'controller': controller})
 
         return anchors
 
@@ -485,13 +515,15 @@ class RazorParser:
         return controller, action
 
     def _exact_controller_action(self, url: str) -> Optional[Tuple[str, str]]:
-        """script 區塊裡的字串只是「像」，形狀必須剛好是兩段合法識別字——分段
-        數不對，或任一分段不是合法識別字（例如帶副檔名的靜態檔案路徑），都不
-        算，不硬湊一個候選出來。"""
+        """script 區塊裡的字串只是「像」，形狀必須是兩段合法識別字，後面最多再跟一段
+        路由值——分段數不對，或前兩段不是合法識別字，或第三段不是路由值（例如帶副檔名
+        的靜態檔案路徑），都不算，不硬湊一個候選出來。"""
         segments = self._path_segments(url)
-        if len(segments) != 2:
+        if len(segments) not in (2, 3):
             return None
-        controller, action = segments
+        if len(segments) == 3 and not self._ROUTE_VALUE_PATTERN.match(segments[2]):
+            return None
+        controller, action = segments[0], segments[1]
         if not self._IDENTIFIER_PATTERN.match(controller) or not self._IDENTIFIER_PATTERN.match(action):
             return None
         return controller, action
