@@ -198,7 +198,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # 是 `CallSite` 清單，介面方法經 Local Implementer 規則解析到實作類別。正向鏈只用
 # 這些邊，不再比對呼叫文字。舊快取的方法 span 沒有 `calls`，正向鏈會停在 action
 # 本身，必須重新掃描。
-_CACHE_VERSION = 46
+# v47：View Anchor 多讀 `@Url.Action`、`Html.BeginForm`（決定式）與 template literal、
+# 三段網址、`data-url` 屬性（候選式），`MethodInfo` 新增 `action_name`（`[ActionName]`
+# 與去掉 `Async` 後 MVC 路由用的名稱），Program Screen 以 action 名稱認領方法（見
+# `.scratch/rttalentdb-program-to-sql-chain/issues/13-...md`）。舊快取的 razor_results
+# 少了這些 anchor、方法沒有 `action_name`，必須重新掃描。
+_CACHE_VERSION = 47
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

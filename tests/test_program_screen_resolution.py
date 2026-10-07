@@ -849,3 +849,90 @@ def test_two_editor_generated_page_models_beside_mvc_views_produce_no_anchors(
     for program in response.programs:
         assert _actions(program) == [program.program]
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A screen holds an action by its routed action name (ticket 13)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_an_action_name_attribute_matches_the_view_name_and_keeps_the_method_name(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _scan(
+        tmp_path,
+        views=["Views/TechnicianSkill/TechnicianSkillQry.cshtml"],
+        controllers={
+            "Controllers/TechnicianSkillController.cs": [
+                "TechnicianSkillQry",
+                ("TechnicianSkillQryPost", "TechnicianSkillQry"),
+            ]
+        },
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["TechnicianSkillQry"])
+
+    assert _actions(response.programs[0]) == [
+        "TechnicianSkillQry",
+        "TechnicianSkillQryPost",
+    ]
+
+
+def test_an_async_suffixed_method_matches_the_view_name(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _scan(
+        tmp_path,
+        views=["Views/UserGroupPermission/UserGroupPermissionMtn.cshtml"],
+        controllers={
+            "Controllers/UserGroupPermissionController.cs": [
+                ("UserGroupPermissionMtnAsync", "UserGroupPermissionMtn")
+            ]
+        },
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["UserGroupPermissionMtn"])
+
+    assert _actions(response.programs[0]) == ["UserGroupPermissionMtnAsync"]
+
+
+def test_an_anchor_names_an_action_by_its_routed_name(monkeypatch, tmp_path: Path) -> None:
+    view = "Views/Order/OrderQry.cshtml"
+    scan = _scan(
+        tmp_path,
+        views=[view],
+        controllers={
+            "Controllers/OrderController.cs": [
+                "OrderQry",
+                ("ExportAsync", "Export"),
+            ]
+        },
+        determined_anchors={view: [{"action": "Export"}]},
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["OrderQry"])
+
+    assert _actions(response.programs[0]) == ["OrderQry", "ExportAsync"]
+
+
+def test_a_view_that_calls_url_action_gives_a_screen_that_holds_the_action(
+    monkeypatch, tmp_path: Path
+) -> None:
+    scan = _scan(
+        tmp_path,
+        views=["Views/EmpJobDuty/EmpJobDutyMtn.cshtml"],
+        controllers={
+            "Controllers/EmpJobDutyController.cs": ["EmpJobDutyMtn", "GetEmpData", "Other"]
+        },
+        view_sources={
+            "Views/EmpJobDuty/EmpJobDutyMtn.cshtml": (
+                "<script>axios.post('@Url.Action(\"GetEmpData\")', {})</script>"
+            )
+        },
+    )
+
+    response = _analyze(monkeypatch, tmp_path, scan, ["EmpJobDutyMtn"])
+
+    assert _strengths(response.programs[0]) == {
+        "EmpJobDutyMtn": "determined",
+        "GetEmpData": "determined",
+    }

@@ -236,6 +236,7 @@ class MethodInfo:
     return_type: str                            # 回傳型別
     parameters: List[ParameterInfo] = field(default_factory=list)
     location: Optional[CodeLocation] = None
+    action_name: str = ""                       # MVC 路由用的 action 名稱（見 CSharpParser._routed_action_name）
     
     # 方法特性
     is_async: bool = False                      # 是否為非同步方法

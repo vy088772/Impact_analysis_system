@@ -413,7 +413,11 @@ def _mvc_screen_inputs(scan: ProjectScanResult) -> Dict[str, Any]:
     return {
         "view_paths": [r.file_path for r in scan.razor_results],
         "controller_actions": {
-            result.file_path: [m.name for cls in result.classes for m in cls.methods]
+            result.file_path: [
+                (m.name, m.action_name or m.name)
+                for cls in result.classes
+                for m in cls.methods
+            ]
             for result in scan.csharp_results
         },
         "determined_anchors": {

@@ -326,6 +326,11 @@ class CSharpParser:
     # HTTP 方法屬性
     HTTP_METHOD_PATTERN = r'\[(HttpGet|HttpPost|HttpPut|HttpDelete|HttpPatch|HttpOptions|HttpHead)(?:\(["\']([^"\']*?)["\']\))?\]'
     
+    # MVC 路由用的 action 名稱：`[ActionName("X")]` 改名；ASP.NET Core 另外會把方法名稱
+    # 結尾的 `Async` 去掉（SuppressAsyncSuffixInActionNames 預設為 true）。
+    ACTION_NAME_ATTRIBUTE_PATTERN = re.compile(r'\[\s*ActionName\(\s*"([^"]+)"\s*\)\s*\]')
+    _ASYNC_SUFFIX = "Async"
+
     # 認證與授權
     AUTHORIZE_PATTERN = r'\[Authorize(?:\(Roles\s*=\s*["\']([^"\']+)["\']\))?\]'
     
@@ -622,6 +627,9 @@ class CSharpParser:
                 return_type=return_type,
                 parameters=params,
                 location=CodeLocation(self.current_file, line_num),
+                action_name=self._routed_action_name(
+                    class_content[:match.start()], method_name
+                ),
                 is_async=is_async,
                 is_static=is_static,
                 is_virtual=is_virtual,
@@ -636,6 +644,25 @@ class CSharpParser:
         
         return methods
     
+    @classmethod
+    def _routed_action_name(cls, preceding: str, method_name: str) -> str:
+        """The action name MVC routes one method by.
+
+        `preceding` is the class text before the method. Only the attribute
+        lines directly above the method count, so a `[ActionName]` never moves
+        to the next method.
+        """
+        for line in reversed(preceding.rstrip().split('\n')):
+            stripped = line.strip()
+            if not stripped.startswith('['):
+                break
+            renamed = cls.ACTION_NAME_ATTRIBUTE_PATTERN.search(stripped)
+            if renamed:
+                return renamed.group(1)
+        if method_name.endswith(cls._ASYNC_SUFFIX) and len(method_name) > len(cls._ASYNC_SUFFIX):
+            return method_name[: -len(cls._ASYNC_SUFFIX)]
+        return method_name
+
     def _extract_method_parameters(self, content: str, start_pos: int) -> List[ParameterInfo]:
         """提取方法參數"""
         # 找出參數括號內的內容

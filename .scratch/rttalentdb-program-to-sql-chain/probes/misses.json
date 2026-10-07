@@ -71,88 +71,6 @@
    "Controllers/DomesticForeignEVController.cs:19"
   ]
  },
- "EmpJobDuty.CancelRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_empjobdutyqry"
-  ],
-  "source": [
-   "Views/EmpJobDuty/EmpJobDutyMtn.cshtml:205"
-  ]
- },
- "EmpJobDuty.EditRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_empjobdutyqry",
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/EmpJobDuty/EmpJobDutyMtn.cshtml:157"
-  ]
- },
- "EmpJobDuty.GetEmpData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/EmpJobDuty/EmpJobDutyMtn.cshtml:109"
-  ]
- },
- "EmpJobDuty.GetJobDuty": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/EmpJobDuty/EmpJobDutyMtn.cshtml:131"
-  ]
- },
- "EmpJobDuty.SaveData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_empjobdutymtn"
-  ],
-  "source": [
-   "Views/EmpJobDuty/EmpJobDutyMtn.cshtml:199"
-  ]
- },
- "EvaluationSchedule.CancelRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_evaluationscheduleqry"
-  ],
-  "source": [
-   "Views/EvaluationSchedule/EvaluationScheduleMtn.cshtml:189"
-  ]
- },
- "EvaluationSchedule.EditRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_evaluationscheduleqry"
-  ],
-  "source": [
-   "Views/EvaluationSchedule/EvaluationScheduleMtn.cshtml:149"
-  ]
- },
- "EvaluationSchedule.MtnData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_evaluationschedulemtn"
-  ],
-  "source": [
-   "Views/EvaluationSchedule/EvaluationScheduleMtn.cshtml:183"
-  ]
- },
- "EvaluationSchedule.SaveData": {
-  "reason": "view_anchor_begin_form",
-  "missing": [
-   "usp_sys_evaluationschedulemtn"
-  ],
-  "source": [
-   "Views/EvaluationSchedule/EvaluationScheduleMtn.cshtml:4"
-  ]
- },
  "JobType.GetInvalidJobType": {
   "reason": "no_caller",
   "missing": [
@@ -169,24 +87,6 @@
   ],
   "source": [
    "Controllers/JobTypeController.cs:30"
-  ]
- },
- "ManagementSkillUpload.ImportData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_managementskilluploadadd"
-  ],
-  "source": [
-   "Views/ManagementSkillUpload/ManagementSkillUploadMtn.cshtml:215"
-  ]
- },
- "ManagementSkillUpload.UploadExcelData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_managementskilluploadchk"
-  ],
-  "source": [
-   "Views/ManagementSkillUpload/ManagementSkillUploadMtn.cshtml:99"
   ]
  },
  "Menu.GetMenu": {
@@ -360,7 +260,7 @@
   ]
  },
  "Public.GetJobTypeListByAuth": {
-  "reason": "view_anchor_url_action",
+  "reason": "held_by_another_screen",
   "missing": [
    "usp_sys_authjobtypebind"
   ],
@@ -369,7 +269,7 @@
   ]
  },
  "Public.GetTrialJobTypeListByAuth": {
-  "reason": "view_anchor_url_action",
+  "reason": "held_by_another_screen",
   "missing": [
    "usp_sys_authtrialjobtypebind"
   ],
@@ -405,26 +305,17 @@
    "Services/TA/ResumeExperienceService.cs:96"
   ]
  },
- "ResumeBossApprove.ResumeOJTHistQry": {
-  "reason": "view_anchor_relative_url",
-  "missing": [
-   "usp_ta_resumeojthistqry"
-  ],
-  "source": [
-   "Views/ResumeBossApprove/ResumeBossApproveMtn.cshtml:520"
-  ]
- },
  "ResumeExperience.GetExpContentByPoint": {
-  "reason": "view_anchor_relative_url",
+  "reason": "helper_parameter",
   "missing": [
    "usp_sys_databring"
   ],
   "source": [
-   "Views/ResumeExperience/ResumeExperienceMtn.cshtml:644"
+   "Services/TA/ResumeExperienceService.cs:243"
   ]
  },
  "ResumeExperience.GetProjectExperienceData": {
-  "reason": "view_anchor_url_action",
+  "reason": "held_by_another_screen",
   "missing": [
    "usp_ta_resumeexperiencehistqry"
   ],
@@ -450,15 +341,6 @@
   ],
   "source": [
    "Services/TA/ResumeExperienceService.cs:69"
-  ]
- },
- "ResumeExperience.GetResumeExpContentByDutyId": {
-  "reason": "view_anchor_relative_url",
-  "missing": [
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/ResumeExperience/ResumeExperienceMtn.cshtml:684"
   ]
  },
  "ResumeExperience.GetResumeOJTbPartial": {
@@ -530,82 +412,6 @@
    "Services/TA/ResumeExperienceService.cs:181"
   ]
  },
- "ResumeExperienceContent.CancelRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_resumeexperiencecontentqry",
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/ResumeExperienceContent/ResumeExperienceContentMtn.cshtml:191"
-  ]
- },
- "ResumeExperienceContent.EditRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_resumeexperiencecontentqry",
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/ResumeExperienceContent/ResumeExperienceContentMtn.cshtml:149"
-  ]
- },
- "ResumeExperienceContent.MtnData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_resumeexperiencecontentmtn"
-  ],
-  "source": [
-   "Views/ResumeExperienceContent/ResumeExperienceContentMtn.cshtml:186"
-  ]
- },
- "ResumeExperienceItem.CancelRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_resumeexperienceitemqry",
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/ResumeExperienceItem/ResumeExperienceItemMtn.cshtml:230"
-  ]
- },
- "ResumeExperienceItem.EditRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_resumeexperienceitemqry",
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/ResumeExperienceItem/ResumeExperienceItemMtn.cshtml:198"
-  ]
- },
- "ResumeExperienceItem.GetJobDuty": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/ResumeExperienceItem/ResumeExperienceItemMtn.cshtml:146"
-  ]
- },
- "ResumeExperienceItem.MtnData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_resumeexperienceitemmtn"
-  ],
-  "source": [
-   "Views/ResumeExperienceItem/ResumeExperienceItemMtn.cshtml:225"
-  ]
- },
- "ResumePLApprove.GetProjectExperienceData": {
-  "reason": "view_anchor_relative_url",
-  "missing": [
-   "usp_ta_resumeexperiencehistqry"
-  ],
-  "source": [
-   "Views/ResumePLApprove/ResumePLApproveMtn.cshtml:65"
-  ]
- },
  "ResumePLApprove.ResumePLApproveMtn": {
   "reason": "helper_parameter",
   "missing": [
@@ -625,98 +431,6 @@
    "Services/TA/ResumeExperienceService.cs:96"
   ]
  },
- "ResumeSkillDefine.CancelRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_resumeskilldefineqry",
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/ResumeSkillDefine/ResumeSkillDefineMtn.cshtml:176"
-  ]
- },
- "ResumeSkillDefine.EditRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_resumeskilldefineqry",
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/ResumeSkillDefine/ResumeSkillDefineMtn.cshtml:148"
-  ]
- },
- "ResumeSkillDefine.GetJobDuty": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/ResumeSkillDefine/ResumeSkillDefineMtn.cshtml:104"
-  ]
- },
- "SkillClassificationPersonnelDetail.GetData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_rpt_skillclassificationpersonneldetailqry"
-  ],
-  "source": [
-   "Views/SkillClassificationPersonnelDetail/SkillClassificationPersonnelDetailMtn.cshtml:92"
-  ]
- },
- "SkillDefineTradition.GetJobDutiesByJobType": {
-  "reason": "view_anchor_relative_url",
-  "missing": [
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/SkillDefineTradition/SkillDefineTraditionMtn.cshtml:223"
-  ]
- },
- "SkillDefineTradition.UpdateSkillDefineTradition": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ms_skilldefinetraditionupd"
-  ],
-  "source": [
-   "Views/SkillDefineTradition/SkillDefineTraditionMtn.cshtml:141"
-  ]
- },
- "SkillPieChart.GetData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_rpt_skillpiechartqry"
-  ],
-  "source": [
-   "Views/SkillPieChart/SkillPieChartMtn.cshtml:92"
-  ]
- },
- "TalentDBDepShoulder.MtnData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_talentdbdepshouldermtn"
-  ],
-  "source": [
-   "Views/TalentDBDepShoulder/TalentDBDepShoulderMtn.cshtml:131"
-  ]
- },
- "TechnicianSkill.TechnicianSkillQryPost": {
-  "reason": "action_name_differs",
-  "missing": [
-   "usp_rpt_technicianskillqry"
-  ],
-  "source": [
-   "Controllers/TechnicianSkillController.cs:29"
-  ]
- },
- "TraditionalAssessment.FetchTraditionalAssessmentPersonalData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_traditionassessmentpersonaldataqry"
-  ],
-  "source": [
-   "Views/TraditionalAssessment/TraditionalAssessmentMtn.cshtml:40"
-  ]
- },
  "TraditionalAssessment.GetApproveComment": {
   "reason": "view_anchor_relative_url",
   "missing": [
@@ -726,310 +440,8 @@
    "wwwroot/js/traditional-assessment-common.js:602"
   ]
  },
- "TrialBossApprove.GetSkillLevelList": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_trialbossapprovelist"
-  ],
-  "source": [
-   "Views/TrialBossApprove/TrialBossApproveMtn.cshtml:45"
-  ]
- },
- "TrialEvaluationMCTPUpload.ExportToExcel": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_trialevaluationmctpuploadqry"
-  ],
-  "source": [
-   "Views/TrialEvaluationMCTPUpload/TrialEvaluationMCTPUploadMtn.cshtml:36"
-  ]
- },
- "TrialEvaluationMCTPUpload.GetJobDuty": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/TrialEvaluationMCTPUpload/TrialEvaluationMCTPUploadMtn.cshtml:122"
-  ]
- },
- "TrialEvaluationMCTPUpload.ImportData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_trialevaluationmctpuploadadd"
-  ],
-  "source": [
-   "Views/TrialEvaluationMCTPUpload/TrialEvaluationMCTPUploadMtn.cshtml:284"
-  ]
- },
- "TrialEvaluationMCTPUpload.UploadExcelData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_trialevaluationmctpuploadchk"
-  ],
-  "source": [
-   "Views/TrialEvaluationMCTPUpload/TrialEvaluationMCTPUploadMtn.cshtml:189"
-  ]
- },
- "TrialJobDutySkillQuery.ExportDetailToExcel": {
-  "reason": "view_anchor_begin_form",
-  "missing": [
-   "usp_rpt_trialjobdutyskillquerylist"
-  ],
-  "source": [
-   "Views/TrialJobDutySkillQuery/_TrialJobDutySkillQueryListPartial.cshtml:10"
-  ]
- },
- "TrialJobDutySkillQuery.ExportToExcel": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_rpt_trialjobdutyskillqueryqry"
-  ],
-  "source": [
-   "Views/TrialJobDutySkillQuery/TrialJobDutySkillQueryMtn.cshtml:125"
-  ]
- },
- "TrialJobDutySkillQuery.GetData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_rpt_trialjobdutyskillqueryqry"
-  ],
-  "source": [
-   "Views/TrialJobDutySkillQuery/TrialJobDutySkillQueryMtn.cshtml:105"
-  ]
- },
- "TrialJobDutySkillQuery.GetDetailData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_rpt_trialjobdutyskillquerylist"
-  ],
-  "source": [
-   "Views/TrialJobDutySkillQuery/TrialJobDutySkillQueryMtn.cshtml:163"
-  ]
- },
- "TrialJobDutySkillQuery.PoolSel": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_rpt_trialjobdutyskillquerypool"
-  ],
-  "source": [
-   "Views/TrialJobDutySkillQuery/TrialJobDutySkillQueryMtn.cshtml:64"
-  ]
- },
- "TrialTalentGoalUpload.ExportToExcel": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_trialtalentgoaluploadqry"
-  ],
-  "source": [
-   "Views/TrialTalentGoalUpload/TrialTalentGoalUploadMtn.cshtml:40"
-  ]
- },
- "TrialTalentGoalUpload.GetJobDuty": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/TrialTalentGoalUpload/TrialTalentGoalUploadMtn.cshtml:153"
-  ]
- },
- "TrialTalentGoalUpload.ImportData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_trialtalentgoaluploadadd"
-  ],
-  "source": [
-   "Views/TrialTalentGoalUpload/TrialTalentGoalUploadMtn.cshtml:330"
-  ]
- },
- "TrialTalentGoalUpload.UploadExcelData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_trialtalentgoaluploadchk"
-  ],
-  "source": [
-   "Views/TrialTalentGoalUpload/TrialTalentGoalUploadMtn.cshtml:219"
-  ]
- },
- "TrialTalentMCTPSummary.ExportToExcel": {
-  "reason": "view_anchor_begin_form",
-  "missing": [
-   "usp_rpt_trialtalentmctpsummaryqry"
-  ],
-  "source": [
-   "Views/TrialTalentMCTPSummary/TrialTalentMCTPSummaryMtn.cshtml:5"
-  ]
- },
- "TrialTalentMCTPSummary.GetDetailData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_rpt_trialtalentmctpsummarylist"
-  ],
-  "source": [
-   "Views/TrialTalentMCTPSummary/TrialTalentMCTPSummaryMtn.cshtml:148"
-  ]
- },
- "TrialTalentSkillDownload.ExportToExcel": {
-  "reason": "view_anchor_begin_form",
-  "missing": [
-   "usp_ta_trialtalentskilldownloadqry"
-  ],
-  "source": [
-   "Views/TrialTalentSkillDownload/TrialTalentSkillDownloadMtn.cshtml:4"
-  ]
- },
- "TrialTalentSkillDownload.GetJobDuty": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_databring"
-  ],
-  "source": [
-   "Views/TrialTalentSkillDownload/TrialTalentSkillDownloadMtn.cshtml:53"
-  ]
- },
- "TrialTalentSkillQuery.ExportToExcel": {
-  "reason": "view_anchor_begin_form",
-  "missing": [
-   "usp_rpt_trialtalentskillqueryqry"
-  ],
-  "source": [
-   "Views/TrialTalentSkillQuery/TrialTalentSkillQueryMtn.cshtml:2"
-  ]
- },
- "TrialTalentSkillUpload.ImportData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_databring",
-   "usp_ta_trialtalentskilluploadadd",
-   "usp_ta_trialtalentskilluploadqry"
-  ],
-  "source": [
-   "Views/TrialTalentSkillUpload/TrialTalentSkillUploadMtn.cshtml:297"
-  ]
- },
- "TrialTalentSkillUpload.UploadExcelData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_ta_trialtalentskilluploadchk"
-  ],
-  "source": [
-   "Views/TrialTalentSkillUpload/TrialTalentSkillUploadMtn.cshtml:178"
-  ]
- },
- "UserGroupMaintain.CancelRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_usergroupmaintainqry"
-  ],
-  "source": [
-   "Views/UserGroupMaintain/UserGroupMaintainMtn.cshtml:99"
-  ]
- },
- "UserGroupMaintain.EditRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_usergroupmaintainqry"
-  ],
-  "source": [
-   "Views/UserGroupMaintain/UserGroupMaintainMtn.cshtml:72"
-  ]
- },
- "UserGroupMaintain.MtnData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_usergroupmaintainmtn"
-  ],
-  "source": [
-   "Views/UserGroupMaintain/UserGroupMaintainMtn.cshtml:93"
-  ]
- },
- "UserGroupMember.MtnData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_usergroupmembermtn"
-  ],
-  "source": [
-   "Views/UserGroupMember/UserGroupMemberMtn.cshtml:105"
-  ]
- },
- "UserGroupPermission.GetFunctions": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_usergrouppermissionqry"
-  ],
-  "source": [
-   "Views/UserGroupPermission/UserGroupPermissionMtn.cshtml:71"
-  ]
- },
- "UserGroupPermission.SavePanel": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_usergrouppermissionmtn"
-  ],
-  "source": [
-   "Views/UserGroupPermission/UserGroupPermissionMtn.cshtml:113"
-  ]
- },
- "UserGroupPermission.UserGroupPermissionMtnAsync": {
-  "reason": "action_name_differs",
-  "missing": [
-   "usp_sys_databring",
-   "usp_sys_usergrouppermissionqry"
-  ],
-  "source": [
-   "Controllers/UserGroupPermissionController.cs:12"
-  ]
- },
- "UserMaintain.CancelRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_databring",
-   "usp_sys_usermaintainqry"
-  ],
-  "source": [
-   "Views/UserMaintain/UserMaintainMtn.cshtml:156"
-  ]
- },
- "UserMaintain.EditRow": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_databring",
-   "usp_sys_usermaintainqry"
-  ],
-  "source": [
-   "Views/UserMaintain/UserMaintainMtn.cshtml:119"
-  ]
- },
- "UserMaintain.MtnData": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_usermaintainmtn"
-  ],
-  "source": [
-   "Views/UserMaintain/UserMaintainMtn.cshtml:150"
-  ]
- },
- "UserPermission.GetFunctions": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_userpermissionqry"
-  ],
-  "source": [
-   "Views/UserPermission/UserPermissionMtn.cshtml:74"
-  ]
- },
- "UserPermission.SavePanel": {
-  "reason": "view_anchor_url_action",
-  "missing": [
-   "usp_sys_userpermissionmtn"
-  ],
-  "source": [
-   "Views/UserPermission/UserPermissionMtn.cshtml:129"
-  ]
- },
  "UsersPicker.EmpIdAutocomplete": {
-  "reason": "view_anchor_url_action",
+  "reason": "held_by_another_screen",
   "missing": [
    "usp_sys_databring"
   ],
@@ -1038,7 +450,7 @@
   ]
  },
  "UsersPicker.GetUserName": {
-  "reason": "view_anchor_url_action",
+  "reason": "held_by_another_screen",
   "missing": [
    "usp_sys_databring"
   ],
@@ -1047,7 +459,7 @@
   ]
  },
  "UsersPicker.GetUsersByDept": {
-  "reason": "view_anchor_url_action",
+  "reason": "held_by_another_screen",
   "missing": [
    "usp_sys_databring"
   ],
@@ -1056,7 +468,7 @@
   ]
  },
  "UsersPicker.GetUsersDep": {
-  "reason": "view_anchor_url_action",
+  "reason": "held_by_another_screen",
   "missing": [
    "usp_sys_databring"
   ],
