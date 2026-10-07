@@ -210,7 +210,11 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # overload、兩個 namespace 的同名類別各是兩個節點；record 與 struct 的方法 span
 # 有自己的類別。舊快取沒有這兩個欄位，每個方法都沒有節點，正向鏈找不到起點，
 # 必須重新掃描（C# 掃描快取要在本機重掃，SQL 快取的更新不包含它）。
-_CACHE_VERSION = 48
+# v49：View 用 `<script src>` 載入的 `.js` 檔，裡面的 `/Controller/Action` 網址也是這個
+# View 的候選 View Anchor（見 `.scratch/rttalentdb-program-to-sql-chain/issues/15-...md`）。
+# 只改 `.js` 檔不會讓已掃描的 View 更新，必須在本機重掃。舊快取的 razor_results 少了這些
+# anchor，必須重新掃描。
+_CACHE_VERSION = 49
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

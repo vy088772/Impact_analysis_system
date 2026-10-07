@@ -9,6 +9,8 @@ from typing import List, Dict, Optional, Set, Tuple
 from pathlib import Path
 from dataclasses import dataclass, field
 
+from .project_connection_scope import is_project_file
+from .source_text import decode_source_bytes
 from .models import FileAnalysisResult, FileType, FrameworkType, CodeLocation, StoredProcedureCall
 
 
@@ -124,6 +126,8 @@ class RazorParser:
     # 第三段只接受路由值：識別字、數字，或 template literal 的 `${...}`。
     _ROUTE_VALUE_PATTERN = re.compile(r'^(?:\w+|\$\{[^}]*\})$')
     _IDENTIFIER_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+    # `<script src="...">`：畫面載入的 .js 檔，裡面的網址也是這個畫面的候選 View Anchor。
+    SCRIPT_SRC_PATTERN = re.compile(r'<script\b[^>]*?\bsrc\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
 
     # 共用元件（見 CONTEXT.md「Shared Component Contribution」條目）。ViewComponent
     # 呼叫有兩種寫法：`Component.InvokeAsync("Name")`／`Component.Invoke("Name")`，
@@ -465,12 +469,7 @@ class RazorParser:
         anchors: List[Dict] = []
 
         for script_match in self.SCRIPT_BLOCK_PATTERN.finditer(content):
-            script_content = script_match.group(1)
-            for literal_match in self.STRING_LITERAL_PATTERN.finditer(script_content):
-                parsed = self._exact_controller_action(literal_match.group(2))
-                if parsed:
-                    controller, action = parsed
-                    anchors.append({'action': action, 'controller': controller})
+            anchors.extend(self._anchors_in_script_text(script_match.group(1)))
 
         for attr_match in self.DATA_URL_ATTR_PATTERN.finditer(content):
             parsed = self._leading_controller_action(attr_match.group(1))
@@ -478,7 +477,92 @@ class RazorParser:
                 controller, action = parsed
                 anchors.append({'action': action, 'controller': controller})
 
+        for script_text in self._loaded_script_texts(content):
+            code = '\n'.join(
+                line for line in script_text.splitlines() if not line.lstrip().startswith('//')
+            )
+            anchors.extend(self._anchors_in_script_text(code))
+
         return anchors
+
+    def _anchors_in_script_text(self, script_text: str) -> List[Dict]:
+        anchors: List[Dict] = []
+        for literal_match in self.STRING_LITERAL_PATTERN.finditer(script_text):
+            parsed = self._exact_controller_action(literal_match.group(2))
+            if parsed:
+                controller, action = parsed
+                anchors.append({'action': action, 'controller': controller})
+        return anchors
+
+    def _loaded_script_texts(self, content: str) -> List[str]:
+        """畫面用 `<script src>` 載入、而且找得到的 .js 檔內容（不跟隨 .js 載入 .js，
+        也不讀共用 layout 載入的檔——解析器只看這一個畫面檔）。"""
+        texts: List[str] = []
+        seen: Set[Path] = set()
+        for src_match in self.SCRIPT_SRC_PATTERN.finditer(content):
+            script_path = self._resolve_script_src(src_match.group(1))
+            if script_path is None or script_path in seen:
+                continue
+            seen.add(script_path)
+            try:
+                texts.append(decode_source_bytes(script_path.read_bytes()))
+            except OSError:
+                continue
+        return texts
+
+    def _resolve_script_src(self, src: str) -> Optional[Path]:
+        """`~/x`、`/x` 指向最近專案的 `wwwroot/x`；相對路徑先找 `wwwroot`，再找畫面
+        所在目錄。檔名不分大小寫，query string 去掉；外部網址、含 `@` 的 src、找不到的
+        檔案都回傳 None（不是錯誤）。"""
+        src = src.split('?', 1)[0].split('#', 1)[0].strip()
+        if not src or '@' in src or src.startswith('//') or re.match(r'^[A-Za-z][A-Za-z0-9+.-]*:', src):
+            return None
+        if not src.lower().endswith('.js') or not self.current_file:
+            return None
+        view_dir = Path(self.current_file).resolve().parent
+        project_dir = next(
+            (
+                directory
+                for directory in (view_dir, *view_dir.parents)
+                if any(
+                    is_project_file(entry.name) and entry.is_file()
+                    for entry in self._list_dir(directory)
+                )
+            ),
+            None,
+        )
+        if project_dir is None:
+            return None
+        relative = src[2:] if src.startswith('~/') else src.lstrip('/')
+        roots = [project_dir / 'wwwroot']
+        if not src.startswith(('~/', '/')):
+            roots.append(view_dir)
+        for root in roots:
+            found = self._find_ignoring_case(root, [part for part in relative.split('/') if part and part != '.'])
+            if found is not None:
+                return found
+        return None
+
+    @staticmethod
+    def _list_dir(directory: Path) -> List[Path]:
+        try:
+            return list(directory.iterdir())
+        except OSError:
+            return []
+
+    def _find_ignoring_case(self, root: Path, parts: List[str]) -> Optional[Path]:
+        current = root
+        for part in parts:
+            if part == '..':
+                return None
+            match = next(
+                (entry for entry in self._list_dir(current) if entry.name.lower() == part.lower()),
+                None,
+            )
+            if match is None:
+                return None
+            current = match
+        return current if parts and current.is_file() else None
 
     def _extract_view_component_references(self, content: str) -> List[str]:
         """這個畫面渲染的 ViewComponent 原始名稱，依出現順序、允許重複。"""

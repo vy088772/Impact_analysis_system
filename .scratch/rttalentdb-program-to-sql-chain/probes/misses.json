@@ -431,15 +431,6 @@
    "Services/TA/ResumeExperienceService.cs:96"
   ]
  },
- "TraditionalAssessment.GetApproveComment": {
-  "reason": "view_anchor_relative_url",
-  "missing": [
-   "usp_ta_approveflowcommentqry"
-  ],
-  "source": [
-   "wwwroot/js/traditional-assessment-common.js:602"
-  ]
- },
  "UsersPicker.EmpIdAutocomplete": {
   "reason": "held_by_another_screen",
   "missing": [
