@@ -21,7 +21,7 @@ See ADR-0044 and the Answer of ticket 03.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** done (2026-10-07). One ADR-0044 conflict is open: see the overload note below.
+**Status:** done (2026-10-07). The ADR-0044 overload conflict moves to ticket 11.
 
 - [x] The host reports a Bound Call Target for a call through a field, a
       primary constructor parameter, a property and a local variable
