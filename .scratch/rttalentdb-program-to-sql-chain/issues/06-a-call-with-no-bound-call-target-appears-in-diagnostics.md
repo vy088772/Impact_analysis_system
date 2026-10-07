@@ -15,7 +15,7 @@ See ADR-0044.
 
 **Blocked by:** 05
 
-**Status:** in-progress (2026-10-07)
+**Status:** done (2026-10-07)
 
 - [x] A call through an interface with no Local Implementer appears in
       `diagnostics` with its reason
@@ -56,3 +56,22 @@ See ADR-0044.
   (`impact_orch/agent_tools.py::_render_forward_chain`) does not render the
   forward chain `diagnostics`. So the user does not yet see this text in an
   answer. `rag_client._merge_forward_chains` already keeps the entries.
+
+## Code review (2026-10-07, `/code-review` on e78a606)
+
+No hard finding on either axis. Fixed: the status said `in-progress` with
+every box checked.
+
+Not changed:
+
+- Standards: the name `unresolved_call` is close to "resolved call", which the
+  Bound Call Target entry in `CONTEXT.md` lists under _Avoid_. The repo already
+  uses `unresolved_paths` and `unresolved_reason` for the same idea, and the
+  glossary has no term for "a call with no Bound Call Target". A glossary term
+  belongs to `/domain-modeling`; a rename of `kind` later changes the output.
+- Spec: a call into a framework or package interface gives no entry, because
+  the host records only calls into the scan root. ADR-0044 applies the Local
+  Implementer rule to a corpus interface only.
+- Spec: the RTTalentDB check is a manual run with the probe recorded above, not
+  a test. It needs the live scan cache and SQL cache.
+- Spec: the spec-rag rendering is not in any ticket yet (see the note above).
