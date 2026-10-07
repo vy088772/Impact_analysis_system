@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Sequence
 
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
-from service import analyze_service
+from service import analyze_service, flow_chain_builder
 from service.derived_execution_evidence import DerivedExecutionEvidence
 from service.schemas import FlowChainRequest
 from tests.program_screen_fixtures import _scan
@@ -715,3 +715,31 @@ def test_an_unproven_path_still_appears_in_diagnostics_beside_an_unresolved_call
 
     assert [d.get("path_id") for d in response.diagnostics if "path_id" in d] == ["service-path"]
     assert [d["reason"] for d in _unresolved_calls(response)] == ["no_local_implementer"]
+
+
+def test_a_path_that_no_method_span_holds_joins_no_forward_chain(tmp_path: Path) -> None:
+    """A Database Invocation in a constructor has no node, so it joins no chain (ADR-0044)."""
+    scan = _service_scan(tmp_path, {"JobTypeController.JobTypeMtn": []}, {})
+    relative = "Controllers/JobTypeController.cs"
+
+    def path(path_id: str, start_offset: int) -> dict:
+        return {
+            "path_id": path_id,
+            "evidence": "unresolved",
+            "source_span": {"relative_path": relative, "start_offset": start_offset, "end_offset": start_offset + 5},
+        }
+
+    outside = source_offset("JobTypeController.Unused") + 10_000
+    chain = flow_chain_builder.build_forward_chain(
+        scan,
+        "JobTypeMtn",
+        owns_file=lambda file_path: True,
+        graph={"nodes": [{"id": "x"}]},
+        execution_paths=[
+            path("in_action", source_offset("JobTypeController.JobTypeMtn")),
+            path("in_constructor", outside),
+            {"path_id": "no_source_span", "evidence": "unresolved"},
+        ],
+    )
+
+    assert [p["path_id"] for p in chain["execution_paths"]] == ["in_action", "no_source_span"]

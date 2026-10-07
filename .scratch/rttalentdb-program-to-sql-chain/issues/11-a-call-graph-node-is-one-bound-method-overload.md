@@ -238,6 +238,14 @@ method name, one for each overload that touches the table. The host
 `methods` entries and `calls` entries have the new fields `node` and
 `target_node`; the host contract version stays 4, as for ticket 05's `calls`.
 
+Correction (code review): the class of a span comes from the method symbol, so
+one more output changes. A method of a `record` or a `struct` that sits inside
+a class reports the `record` or the `struct`, not the outer class. An interface
+member span reports the interface, not `""`. This reaches the `class` of a
+method source entry in `/analyze` (`analyze_service.py`, the method source
+list), and the `class_hint` match of `_find_method_source` finds these methods
+by their real class.
+
 **Probe results** (private scan cache v47 of the 4 RTTalentDB roots, worktree
 service on port 8801, spec-rag mode-4 seam):
 
@@ -253,3 +261,29 @@ seven lose `ConvertToMail`, for example `TrialBossApprove.TrialBossAssess`:
 only the other overload `SendNoticeToSingle(MailToSingle)`
 (`NoticeService.cs:71`) calls `ConvertToMail`. The old shared node was a
 false positive. The SPs do not change, because `ConvertToMail` reaches no SP.
+
+**Code review (2026-10-07), fixes:**
+
+- A path with a source span that no method span holds (a constructor, a
+  property accessor, a field initializer) now joins no forward chain. Before,
+  a node of `""` kept the path in each chain. A path with no source span stays
+  (`_path_joins`, `test_a_path_that_no_method_span_holds_joins_no_forward_chain`).
+  Two older tests had their invocation at offset 10, outside each span; they
+  now place it in `SaveData`.
+- The interface fan-out gave two equal `ambiguous_implementation` diagnostics
+  for two candidate overloads. The host now gives one.
+- `node_at` and `node_at_line` share `_innermost_node`. The comment on the
+  one-tree compilation says that its node can differ from the full one.
+
+**Code review, not changed:** `MethodNodes(scan)` is built several times in
+one request (a dictionary of the snapshots, cheap); `CallSite.bound_target`
+stays as the name the graph code reads; the node stays a `str`, the type that
+the other keys of the scan use; the shortest span wins when two methods share
+one line (an edge case).
+
+**Open (ADR-0044 tension, flagged by the review):** a call whose arguments do
+not bind gives one Bound Call Target for each candidate overload of one method.
+ADR-0044 says the graph does not guess. Before this ticket these overloads
+shared one node, so the reach is the same as before. The user decides: keep the
+fan-out (A), or give the call `ambiguous_overload` and no edge (B).
+

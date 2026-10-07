@@ -112,8 +112,9 @@ class _CallGraph(NamedTuple):
 def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
     """The call graph of the whole scan root.
 
-    A node is one bound method symbol (`MethodSourceSpan.node`), so two overloads, and two
-    methods with the same name in two classes, stay two nodes. The edges come from every source file of the scan
+    A node is one bound method symbol (`MethodSourceSpan.node`), so two overloads, and
+    two methods with the same name in two classes, stay two nodes. The edges come from
+    every source file of the scan
     root, not from the program files only: an action reaches the service methods that it
     calls. A call with no Bound Call Target gives no edge, and the call text is never
     matched by name. Such a call stays in `unresolved_calls`, so the chain can say why its
@@ -312,6 +313,17 @@ def _caller_node(nodes: MethodNodes, path: Mapping[str, object]) -> str:
     return nodes.of_source_span(path.get("source_span"))
 
 
+def _path_joins(nodes: MethodNodes, path: Mapping[str, object], reachable_nodes: Set[str]) -> bool:
+    """Whether a forward chain keeps a path: its method is reachable, or it has no source span.
+
+    A path with a source span that no method span holds (a constructor, a property
+    accessor, a field initializer) has no node, so it joins no chain.
+    """
+    if not path.get("source_span"):
+        return True
+    return _caller_node(nodes, path) in reachable_nodes
+
+
 def files_of_nodes(scan: ProjectScanResult, nodes: Set[str]) -> List[FileAnalysisResult]:
     """The C# file results that declare at least one of `nodes`, in scan order."""
     method_nodes = MethodNodes(scan)
@@ -344,7 +356,8 @@ def build_forward_chain(
     owns_file：一個檔案路徑是否屬於這支程式；錨點只在通過它的檔案裡找。
     owns_action：這支程式是否擁有某檔案裡的某個 action；錨點必須是這支程式擁有的
     action（WebForms 程式擁有檔案內所有方法）。錨點之後的呼叫不受這兩個條件限制。
-    execution path 以它所在的方法（`caller_class.caller_method`）比對可達節點。
+    execution path 以包住它 source span 的方法 span 節點比對可達節點；有 source span
+    卻沒有方法 span 包住它（例如 constructor 裡的呼叫）的 path 不屬於任何節點，不列入。
     reach：呼叫端已經用 forward_reach 算好的可達節點；沒有時這裡自己算。
 
     回傳 None 代表在這支程式的檔案裡完全找不到這個方法名稱，或它不是這支程式
@@ -368,7 +381,7 @@ def build_forward_chain(
                 if supplied_paths is not None
                 else build_execution_paths(invocations, graph)
             )
-            if not _caller_node(method_nodes, path) or _caller_node(method_nodes, path) in reachable_nodes
+            if _path_joins(method_nodes, path, reachable_nodes)
         ]
 
     formal_sp_chain: List[dict] = []

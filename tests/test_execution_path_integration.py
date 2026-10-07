@@ -16,7 +16,7 @@ from service import flow_chain_builder
 from service import scan_store
 from service.schemas import AnalyzeRequest
 from code_analyzer.csharp_analysis_gateway import DbInvocation, InvocationEvidence, InvocationSourceSpan
-from tests.scan_fixtures import scan_of, source_line
+from tests.scan_fixtures import scan_of, source_line, source_offset
 from tests.request_context_fixtures import RequestStores
 from tests.sql_cache_fixtures import (
     analyzer_operation,
@@ -483,7 +483,7 @@ def test_forward_chain_excludes_unresolved_terminal_from_formal_sp_chain(tmp_pat
         database="OrdersDb",
         procedure_name="usp_Dynamic",
         evidence=InvocationEvidence.PROVEN,
-        source=InvocationSourceSpan("OrderPage.cs", 10, 80),
+        source=InvocationSourceSpan("OrderPage.cs", source_offset("OrderPage.SaveData"), source_offset("OrderPage.SaveData") + 70),
     )
 
     response = flow_chain_builder.build_forward_chain(
@@ -554,7 +554,7 @@ def test_forward_chain_sends_a_truncated_nested_sp_path_to_diagnostics_only(tmp_
         database="OrdersDb",
         procedure_name=level_names[0],
         evidence=InvocationEvidence.PROVEN,
-        source=InvocationSourceSpan("OrderPage.cs", 10, 80),
+        source=InvocationSourceSpan("OrderPage.cs", source_offset("OrderPage.SaveData"), source_offset("OrderPage.SaveData") + 70),
     )
 
     response = flow_chain_builder.build_forward_chain(

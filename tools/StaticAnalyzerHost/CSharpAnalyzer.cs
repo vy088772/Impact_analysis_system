@@ -61,7 +61,9 @@ internal static class CSharpAnalyzer
             ? callGraphCompilation.GetSemanticModel(root.SyntaxTree)
             : null;
         // A source file outside the call graph compilation still gets one node for each method,
-        // from a compilation of its own tree, so its Database Invocations join a node.
+        // from a compilation of its own tree, so its Database Invocations join a node. A parameter
+        // type from another file is an error type there, so the node can differ from the one the
+        // full compilation gives; no call binds into such a file, so no Bound Call Target needs it.
         var declarationModel = semanticModel
             ?? BoundCallAnalyzer.SourceOnlyCompilation(new[] { root.SyntaxTree }).GetSemanticModel(root.SyntaxTree);
         var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Select(method =>

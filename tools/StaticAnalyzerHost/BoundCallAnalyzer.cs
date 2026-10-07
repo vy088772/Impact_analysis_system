@@ -168,7 +168,11 @@ internal static class BoundCallAnalyzer
                 0 => Unresolved(NoLocalImplementer, Array.Empty<string>()),
                 _ => Unresolved(AmbiguousImplementation, implementers.Select(implementer => implementer.ClassName)),
             };
-        }).ToList();
+        })
+            // Two candidate interface overloads with no single implementer give one diagnostic.
+            .DistinctBy(boundCall => (boundCall.TargetNode, boundCall.UnresolvedReason,
+                string.Join(",", boundCall.CandidateClasses)))
+            .ToList();
     }
 
     /// <summary>

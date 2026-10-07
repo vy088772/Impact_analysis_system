@@ -4,7 +4,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set
 from enum import Enum
 from pathlib import Path
 from datetime import datetime
@@ -166,12 +166,9 @@ class SourceSnapshot:
         A Database Invocation joins the call graph this way, by its source offset, not by
         its class name and method name (ADR-0044). The innermost span wins.
         """
-        holding = [
-            span
-            for span in self.method_spans
-            if span.node and span.start_offset <= utf16_offset < span.end_offset
-        ]
-        return min(holding, key=lambda span: span.end_offset - span.start_offset).node if holding else ""
+        return _innermost_node(
+            span for span in self.method_spans if span.start_offset <= utf16_offset < span.end_offset
+        )
 
     def node_at_line(self, line_number: int) -> str:
         """The node of the method span that holds a part of the 1-based line, or "" when none does.
@@ -183,12 +180,9 @@ class SourceSnapshot:
             return ""
         start = sum(_utf16_length(line) + 1 for line in lines[: line_number - 1])
         end = start + _utf16_length(lines[line_number - 1])
-        holding = [
-            span
-            for span in self.method_spans
-            if span.node and span.start_offset <= end and start < span.end_offset
-        ]
-        return min(holding, key=lambda span: span.end_offset - span.start_offset).node if holding else ""
+        return _innermost_node(
+            span for span in self.method_spans if span.start_offset <= end and start < span.end_offset
+        )
 
     def _python_offset(self, utf16_offset: int) -> int:
         units = 0
@@ -199,6 +193,12 @@ class SourceSnapshot:
         if units == utf16_offset:
             return len(self.content)
         raise ValueError(f"UTF-16 offset outside source snapshot: {utf16_offset}")
+
+
+def _innermost_node(spans: Iterable[MethodSourceSpan]) -> str:
+    """The node of the shortest span that has a node, or "" when none has one."""
+    holding = [span for span in spans if span.node]
+    return min(holding, key=lambda span: span.end_offset - span.start_offset).node if holding else ""
 
 
 def _utf16_length(text: str) -> int:
