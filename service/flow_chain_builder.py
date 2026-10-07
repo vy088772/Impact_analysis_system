@@ -42,7 +42,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional
 
 from canonical_object_identity import bare_key
 from code_analyzer.csharp_analysis_gateway import DbInvocation, WRAPPER_EVIDENCE_FIELDS
-from code_analyzer.models import FileAnalysisResult
+from code_analyzer.models import FileAnalysisResult, call_graph_node
 from code_analyzer.project_scanner import ProjectScanResult
 from . import inline_table_relations
 from .graph_queries import filter_table_accesses, query_table_accesses
@@ -129,7 +129,7 @@ def _inline_sql_tables(scan: ProjectScanResult, reachable_nodes: Set[str]) -> Se
     return set(
         inline_table_relations.table_names_by_method(
             scan,
-            lambda site: f"{site.class_name}.{site.method_name}" in reachable_nodes,
+            lambda site: call_graph_node(site.class_name, site.method_name) in reachable_nodes,
         )
     )
 
@@ -137,14 +137,24 @@ def _inline_sql_tables(scan: ProjectScanResult, reachable_nodes: Set[str]) -> Se
 class ForwardReach(NamedTuple):
     """The methods that an anchor action reaches through its Bound Call Targets."""
 
-    # 一條代表性路徑（僅供顯示用），每一段是方法名稱。
-    method_path: List[str]
+    # 一條代表性路徑（僅供顯示用），每一段是一個節點（`Class.Method`）。
+    node_path: List[str]
     # 所有可達的節點（`Class.Method`）；SP 與資料表關聯以它為依據。
     nodes: Set[str]
 
     @property
+    def method_path(self) -> List[str]:
+        """The representative path as bare method names, the shape `/flow_chain` answers."""
+        return [_method_name(node) for node in self.node_path]
+
+    @property
     def method_names(self) -> Set[str]:
-        return {node.rsplit(".", 1)[-1] for node in self.nodes}
+        """The reached methods as bare names, the shape `reachable_methods` answers."""
+        return {_method_name(node) for node in self.nodes}
+
+
+def _method_name(node: str) -> str:
+    return node.rsplit(".", 1)[-1]
 
 
 def _reachable_from(starts: List[str], adj: Dict[str, List[str]]) -> Tuple[List[str], Set[str]]:
@@ -183,7 +193,7 @@ def forward_reach(
     anchor_method: str,
     *,
     owns_file: Callable[[str], bool],
-    owns_action: Callable[[str, str], bool] = lambda file_path, method_name: True,
+    owns_action: Callable[[str, str], bool],
 ) -> Optional[ForwardReach]:
     """The nodes that `anchor_method` reaches, or None when the program owns no such action.
 
@@ -192,7 +202,7 @@ def forward_reach(
     """
     starts = sorted(
         {
-            f"{cls.name}.{m.name}"
+            call_graph_node(cls.name, m.name)
             for fr in scan.csharp_results
             if owns_file(fr.file_path)
             for cls in fr.classes
@@ -202,8 +212,7 @@ def forward_reach(
     )
     if not starts:
         return None
-    path, nodes = _reachable_from(starts, _bound_call_adjacency(scan))
-    return ForwardReach([node.rsplit(".", 1)[-1] for node in path], nodes)
+    return ForwardReach(*_reachable_from(starts, _bound_call_adjacency(scan)))
 
 
 def _caller_node(path: Mapping[str, object]) -> str:
@@ -216,7 +225,7 @@ def _caller_node(path: Mapping[str, object]) -> str:
     caller_method = str(path.get("caller_method") or "")
     if not caller_method:
         return ""
-    return f"{path.get('caller_class') or ''}.{caller_method}"
+    return call_graph_node(str(path.get("caller_class") or ""), caller_method)
 
 
 def files_of_nodes(scan: ProjectScanResult, nodes: Set[str]) -> List[FileAnalysisResult]:
@@ -224,7 +233,7 @@ def files_of_nodes(scan: ProjectScanResult, nodes: Set[str]) -> List[FileAnalysi
     return [
         fr
         for fr in scan.csharp_results
-        if any(f"{cls.name}.{m.name}" in nodes for cls in fr.classes for m in cls.methods)
+        if any(call_graph_node(cls.name, m.name) in nodes for cls in fr.classes for m in cls.methods)
     ]
 
 
@@ -237,6 +246,7 @@ def build_forward_chain(
     graph: Optional[Mapping[str, object]] = None,
     invocations: Iterable[DbInvocation] = (),
     execution_paths: Optional[List[dict]] = None,
+    reach: Optional[ForwardReach] = None,
 ) -> Optional[dict]:
     """從指定的錨點方法出發，組出一條正向鏈。
 
@@ -250,11 +260,13 @@ def build_forward_chain(
     owns_action：這支程式是否擁有某檔案裡的某個 action；錨點必須是這支程式擁有的
     action（WebForms 程式擁有檔案內所有方法）。錨點之後的呼叫不受這兩個條件限制。
     execution path 以它所在的方法（`caller_class.caller_method`）比對可達節點。
+    reach：呼叫端已經用 forward_reach 算好的可達節點；沒有時這裡自己算。
 
     回傳 None 代表在這支程式的檔案裡完全找不到這個方法名稱，或它不是這支程式
     擁有的 action（呼叫端應視為此錨點無效，換下一個候選）。
     """
-    reach = forward_reach(scan, anchor_method, owns_file=owns_file, owns_action=owns_action)
+    if reach is None:
+        reach = forward_reach(scan, anchor_method, owns_file=owns_file, owns_action=owns_action)
     if reach is None:
         return None
     method_path, reachable_nodes = reach.method_path, reach.nodes

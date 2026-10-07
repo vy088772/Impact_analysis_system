@@ -34,6 +34,7 @@ from code_analyzer.csharp_analysis_gateway import (
     load_wrapper_review_exclusions,
     wrapper_observation_identity,
 )
+from code_analyzer.models import call_graph_node
 from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 from code_analyzer.static_analyzer_host import StaticAnalyzerHost, StaticAnalyzerHostError
 
@@ -2610,7 +2611,7 @@ def flow_chain(
         rated_invocations = [
             invocation
             for invocation in evidence.rated_invocations
-            if f"{invocation.class_name}.{invocation.method_name}" in reach.nodes
+            if call_graph_node(invocation.class_name, invocation.method_name) in reach.nodes
         ]
         execution_graph = evidence.graph
         forward_execution_paths = evidence.paths_of(rated_invocations)
@@ -2623,6 +2624,7 @@ def flow_chain(
         graph=execution_graph,
         invocations=rated_invocations,
         execution_paths=forward_execution_paths,
+        reach=reach,
     )
     return FlowChainResponse(
         direction="forward",

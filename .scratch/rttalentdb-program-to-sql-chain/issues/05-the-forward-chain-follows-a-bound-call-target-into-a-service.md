@@ -21,7 +21,7 @@ See ADR-0044 and the Answer of ticket 03.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** in-progress (2026-10-07, branch `ticket-05-bound-call-target`)
+**Status:** done (2026-10-07). One ADR-0044 conflict is open: see the overload note below.
 
 - [x] The host reports a Bound Call Target for a call through a field, a
       primary constructor parameter, a property and a local variable
@@ -36,7 +36,7 @@ See ADR-0044 and the Answer of ticket 03.
 - [x] Two methods with the same name in two classes do not merge into one node
 - [x] The C# scan cache version rises, and a rescan of RTTalentDB uses the new
       format
-- [ ] WebForms flow chain tests and the impact suite baseline do not regress
+- [x] WebForms flow chain tests and the impact suite baseline do not regress
 
 **Notes:**
 
@@ -76,6 +76,22 @@ call is `ambiguous_implementation`: `strategy.BuildViewModelAsync`, with the
 candidates `EmptyResumeStrategy`, `ResumeResumeStrategy` and
 `ResumeTraditionStrategy` (ticket 06).
 
+Test suite in the worktree
+(`pytest tests --ignore=tests/test_search_roles.py --ignore=tests/test_sp_tables.py`):
+1789 passed, 2 failed. The 2 failures are
+`test_program_refresh.py::test_refresh_does_not_write_wrapper_registry_or_system_catalog`
+and `test_wrapper_decompilation.py::test_decompile_wrapper_classifies_sqlfunc_dll_end_to_end`,
+two of the 3 known path-dependent tests that fail in a worktree.
+
+WebForms check on real roots:
+
+- STC (project compilation available): 150 calls, 150 bound.
+- TTRDQ (`unavailable_reference_resolution_failed`, so the source-only
+  compilation): 281 files, 1289 calls, 1289 bound. Of the 942 same-file edges
+  that the old call-text rule gave, the new edges keep 941. The one that is
+  gone is `DocIssue.Page_Load -> checkPart`. It came from the JavaScript string
+  `"checkPart('" + ... + "')"`, so it was a false edge.
+
 ## Implementation notes
 
 - Host: `tools/StaticAnalyzerHost/BoundCallAnalyzer.cs` binds each
@@ -89,14 +105,27 @@ candidates `EmptyResumeStrategy`, `ResumeResumeStrategy` and
   binds its calls in a source-only compilation of the same trees, with the
   runtime's own assemblies. The wrapper analysis still gets `null` there, so
   its ratings do not change.
-- The record goes from the host through `ProjectScanResult.capture_source_snapshot`
-  into `MethodSourceSpan.calls` (`CallSite`), and so into the scan cache. The
-  Python host adapter passes it on unchanged. It does not go through
-  `CSharpAnalysisGateway`, because the gateway rates Database Invocations only.
-  The cache version is 46.
-- A node is `Class.Method` with the simple class name, the same key that
-  Database Invocations and table relations carry. Overloads of one method
-  share one node.
+- **Different from the ticket text:** the record does not go through
+  `CSharpAnalysisGateway`. It goes from the host through
+  `ProjectScanResult.capture_source_snapshot` into `MethodSourceSpan.calls`
+  (`CallSite`), and so into the scan cache. The gateway rates Database
+  Invocations only, and a Bound Call Target has no evidence to rate. The
+  Python host adapter passes the record on unchanged. The cache version is 46.
+- A node is `Class.Method` (`code_analyzer.models.call_graph_node`) with the
+  simple class name, the same key that Database Invocations and table
+  relations carry.
+- **Open, ADR-0044 conflict:** the ADR says "A node is one bound method". The
+  ticket says "one class-qualified method". The code follows the ticket, so the
+  overloads of one method share one node, and a call to one overload reaches
+  the stored procedures of all of them. A node per overload needs a signature
+  on each method span, each call target and each Database Invocation; a
+  Database Invocation now carries only the method name. Two classes with one
+  simple name in two namespaces also share one node. A method of a `record`
+  or a `struct` has the class `""` in its span, so a call into it gives no edge.
+- The host also gives `ambiguous_overload` when the candidate symbols of one
+  call name two or more classes. ADR-0044 names only the two Local Implementer
+  cases. The chain stops the branch there too. Ticket 06 must report it or
+  remove it.
 - **Different from the ticket text:** an execution path joins the chain by the
   method that holds its invocation (`caller_class.caller_method`), not by
   `entry_method`. The entry method is the outermost caller of a same-file chain
@@ -122,3 +151,26 @@ candidates `EmptyResumeStrategy`, `ResumeResumeStrategy` and
 - The test fixture `_controller_result` named the class of `Alpha.aspx.cs`
   `Alpha.aspx`. A real code-behind class is `Alpha`, and the node key needs the
   real name. Two expected values in `test_analyze_evidence_source.py` follow.
+
+## Code review (2026-10-07, `/code-review` on b2603e4)
+
+Fixed:
+
+- Standards: the `Class.Method` key was built in seven places. It is now one
+  function, `call_graph_node`.
+- Standards: `/flow_chain` computed the reach twice. `build_forward_chain` now
+  takes the `reach` that the endpoint already has.
+- Standards: `forward_reach` had a default `owns_action` that no caller used.
+- Spec: the WebForms and suite results were not in this ticket. They are now.
+- Spec: the gateway deviation was not marked. It is now.
+
+Not changed:
+
+- Standards: "the chain reports the call and the reason in its `diagnostics`"
+  (ADR-0044). This ticket defers that to ticket 06. The host already records
+  `unresolved_reason` and `candidate_classes`, so ticket 06 needs no rescan.
+- Spec: the overload node, the simple class name, `ambiguous_overload` and the
+  stale calls after an incremental refresh. See the notes above.
+- Spec: a path with no `caller_method` still joins. Every path that
+  `build_execution_paths` makes has one, and the endpoint filters the
+  invocations by the reach first.

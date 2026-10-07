@@ -100,6 +100,15 @@ class CodeLocation:
         return hash((self.file_path, self.line_number, self.column_number))
 
 
+def call_graph_node(class_name: str, method_name: str) -> str:
+    """The call graph node of one method: its simple class name and its name (ADR-0044).
+
+    Database Invocations, table relations, method spans and Bound Call Targets all
+    carry these two names, so every side of the call graph joins on this one key.
+    """
+    return f"{class_name}.{method_name}"
+
+
 @dataclass
 class CallSite:
     """One call inside a method, with its Bound Call Target (ADR-0044).
@@ -124,7 +133,7 @@ class CallSite:
         """The call graph node that the call reaches (`Class.Method`), or "" when it has none."""
         if not self.target_method:
             return ""
-        return f"{self.target_class}.{self.target_method}"
+        return call_graph_node(self.target_class, self.target_method)
 
 
 @dataclass
@@ -140,7 +149,7 @@ class MethodSourceSpan:
     @property
     def node(self) -> str:
         """The call graph node of this method: one class-qualified method (ADR-0044)."""
-        return f"{self.class_name}.{self.method_name}"
+        return call_graph_node(self.class_name, self.method_name)
 
 
 @dataclass
