@@ -151,6 +151,8 @@ class RazorParser:
         self.current_file = None
         self.errors = []
         self.warnings = []
+        # 多個畫面載入同一支 .js 時只讀一次；以 (mtime, size) 判斷檔案有沒有變。
+        self._script_text_cache: Dict[Path, Tuple[Tuple[int, int], str]] = {}
         
         print(f"✅ Razor 解析器已初始化")
     
@@ -504,11 +506,23 @@ class RazorParser:
             if script_path is None or script_path in seen:
                 continue
             seen.add(script_path)
-            try:
-                texts.append(decode_source_bytes(script_path.read_bytes()))
-            except OSError:
-                continue
+            text = self._read_script_text(script_path)
+            if text is not None:
+                texts.append(text)
         return texts
+
+    def _read_script_text(self, script_path: Path) -> Optional[str]:
+        try:
+            stat = script_path.stat()
+            stamp = (stat.st_mtime_ns, stat.st_size)
+            cached = self._script_text_cache.get(script_path)
+            if cached is not None and cached[0] == stamp:
+                return cached[1]
+            text = decode_source_bytes(script_path.read_bytes())
+        except OSError:
+            return None
+        self._script_text_cache[script_path] = (stamp, text)
+        return text
 
     def _resolve_script_src(self, src: str) -> Optional[Path]:
         """`~/x`、`/x` 指向最近專案的 `wwwroot/x`；相對路徑先找 `wwwroot`，再找畫面

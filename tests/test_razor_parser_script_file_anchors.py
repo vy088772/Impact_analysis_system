@@ -99,3 +99,34 @@ def test_a_project_less_view_gives_no_anchor(tmp_path: Path) -> None:
     view.write_text('<script src="~/js/app.js"></script>', encoding="utf-8")
 
     assert RazorParser().parse_file(str(view)).view_anchors_candidate == []
+
+
+def test_one_parser_reads_a_shared_script_file_once_and_sees_a_change(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    script = project / "wwwroot" / "js" / "app.js"
+    script.write_text(JS, encoding="utf-8")
+    parser = RazorParser()
+    reads: list[Path] = []
+    original = Path.read_bytes
+
+    def counting(self: Path) -> bytes:
+        if self.name == "app.js":
+            reads.append(self)
+        return original(self)
+
+    Path.read_bytes = counting  # type: ignore[method-assign]
+    try:
+        for name in ("A.cshtml", "B.cshtml"):
+            view = project / "Views" / "Order" / name
+            view.write_text('<script src="~/js/app.js"></script>', encoding="utf-8")
+            assert parser.parse_file(str(view)).view_anchors_candidate == ANCHOR
+        assert len(reads) == 1
+
+        script.write_text("$.post('/Other/Thing');", encoding="utf-8")
+        view = project / "Views" / "Order" / "C.cshtml"
+        view.write_text('<script src="~/js/app.js"></script>', encoding="utf-8")
+        assert parser.parse_file(str(view)).view_anchors_candidate == [
+            {"action": "Thing", "controller": "Other"}
+        ]
+    finally:
+        Path.read_bytes = original  # type: ignore[method-assign]
