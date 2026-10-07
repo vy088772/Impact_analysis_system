@@ -155,6 +155,41 @@ def resolve_program_screens(
     )
 
 
+def resolve_every_program_screen(
+    *,
+    view_paths: Iterable[str],
+    controller_actions: Mapping[str, Sequence[str]],
+    determined_anchors: Optional[Mapping[str, Sequence[Mapping[str, str]]]] = None,
+    candidate_anchors: Optional[Mapping[str, Sequence[Mapping[str, str]]]] = None,
+) -> List[ProgramScreen]:
+    """Every MVC Program Screen of a scan: one per view, named by the view.
+
+    The backward chain asks which Program Screens hold one action, so it needs all
+    of them, not only the Program Screens of one program code. Each view takes its controller and its
+    actions by the same rules as `resolve_program_screens`.
+    """
+    views = [parsed for parsed in map(_view_file, view_paths) if parsed is not None]
+    controllers = [
+        parsed
+        for parsed in (
+            _controller_file(path, actions)
+            for path, actions in controller_actions.items()
+        )
+        if parsed is not None
+    ]
+    anchors = _anchors_by_view(determined_anchors, candidate_anchors)
+    return [
+        _screen(
+            view.name,
+            view,
+            _controller_of(view, controllers),
+            controllers,
+            anchors.get(view.path, _Anchors()),
+        )
+        for view in views
+    ]
+
+
 def resolve_razor_page_screens(
     program_code: str,
     *,
@@ -175,12 +210,41 @@ def resolve_razor_page_screens(
     code = (program_code or "").strip()
     if not code:
         return []
+    return _razor_page_screens(
+        view_paths, page_directives, page_model_handlers, program_code=program_code
+    )
+
+
+def resolve_every_razor_page_screen(
+    *,
+    view_paths: Iterable[str],
+    page_directives: Mapping[str, bool],
+    page_model_handlers: Mapping[str, Sequence[str]],
+) -> List[ProgramScreen]:
+    """Every Razor Pages Program Screen of a scan, each named by its view.
+
+    The same rules as `resolve_razor_page_screens`, for the backward chain,
+    which asks which Program Screens hold one handler.
+    """
+    return _razor_page_screens(view_paths, page_directives, page_model_handlers)
+
+
+def _razor_page_screens(
+    view_paths: Iterable[str],
+    page_directives: Mapping[str, bool],
+    page_model_handlers: Mapping[str, Sequence[str]],
+    *,
+    program_code: Optional[str] = None,
+) -> List[ProgramScreen]:
+    """The Razor Pages screens of the views, only those that `program_code` names when given."""
     screens: List[ProgramScreen] = []
     for view_path in view_paths:
         if not page_directives.get(view_path):
             continue
         name = _razor_view_name(view_path)
-        if name is None or not _same(name, code):
+        if name is None:
+            continue
+        if program_code is not None and not _same(name, program_code.strip()):
             continue
         handlers = page_model_handlers.get(view_path) or ()
         if not handlers:
@@ -188,7 +252,7 @@ def resolve_razor_page_screens(
         model_path = razor_page_model_path(view_path)
         screens.append(
             ProgramScreen(
-                program_code=program_code,
+                program_code=name if program_code is None else program_code,
                 view_path=view_path,
                 view_name=name,
                 area="",
