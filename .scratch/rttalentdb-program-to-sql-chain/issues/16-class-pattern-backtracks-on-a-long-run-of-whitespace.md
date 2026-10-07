@@ -197,3 +197,5 @@ Both callers get the fix, because they use the same constant.
   'PUR'`).
 - The shared scan cache needs a local rescan for v50 (out of scope; the
   user runs it).
+- Decision (2026-10-08): the user accepted `done` with the parse-time item
+  open. Ticket 17 tracks the rest of the time (`METHOD_PATTERN`).
