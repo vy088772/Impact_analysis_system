@@ -1875,14 +1875,13 @@ def analyze(
             related_programs: List[Dict] = []
             if req.expand_depth > 0 and matched_files:
                 related = expand_related_programs(
-                    scan.csharp_results,
+                    scan,
                     matched_files,
+                    owns_action=resolution.owns_action,
                     depth=req.expand_depth,
                     max_programs=req.expand_max_programs,
                 )
                 for rel in related:
-                    if not resolution.owns_method(rel["called_by"]):
-                        continue
                     entry: Dict = {
                         "file": _rel(rel["file"], root),
                         "class": rel["class"],
