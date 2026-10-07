@@ -19,7 +19,7 @@ analyzer host 以 semantic model 綁定每個呼叫，介面方法依 Local Impl
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Dict, List, Set, Tuple
+from typing import Callable, Dict, List, NamedTuple, Set, Tuple
 
 from code_analyzer.models import FileAnalysisResult, call_graph_node
 from code_analyzer.project_scanner import ProjectScanResult
@@ -27,21 +27,38 @@ from code_analyzer.project_scanner import ProjectScanResult
 from .flow_chain_builder import bound_call_edges
 
 
+class _Declaration(NamedTuple):
+    """One declaration of a call graph node: the file, the class and the method."""
+
+    file_path: str
+    class_name: str
+    method_name: str
+
+
+class _Caller(NamedTuple):
+    """One node to walk, and the file and the method that `called_by` names for its calls."""
+
+    node: str
+    file_path: str
+    method_name: str
+
+
 def _declarations(
     csharp_results: List[FileAnalysisResult],
-) -> Dict[str, List[Tuple[str, str, str]]]:
+) -> Dict[str, List[_Declaration]]:
     """node（`Class.Method`）-> [(宣告它的檔案, 類別名, 方法名), ...]。
 
     同一個節點通常只有一個宣告；partial class 的 overload 分散在兩個檔案、或兩個
     namespace 各有同名類別時，才會有兩個以上（它們在呼叫圖裡本來就是同一個節點）。
     """
-    declared: Dict[str, List[Tuple[str, str, str]]] = {}
+    declared: Dict[str, List[_Declaration]] = {}
     for fr in csharp_results:
         for cls in fr.classes:
             for m in cls.methods:
                 entries = declared.setdefault(call_graph_node(cls.name, m.name), [])
-                if (fr.file_path, cls.name, m.name) not in entries:
-                    entries.append((fr.file_path, cls.name, m.name))
+                declaration = _Declaration(fr.file_path, cls.name, m.name)
+                if declaration not in entries:
+                    entries.append(declaration)
     return declared
 
 
@@ -80,21 +97,22 @@ def expand_related_programs(
     declared = _declarations(scan.csharp_results)
     start_files: Set[str] = {fr.file_path for fr in matched_files}
 
-    # frontier 的每一項是 (節點, 呼叫者所在檔案, 呼叫者方法名)。
-    frontier: List[Tuple[str, str, str]] = []
-    walked: Set[str] = set()
+    frontier: List[_Caller] = []
+    # 已排進 frontier 或 queue 的節點；每個節點只走一次。
+    queued_nodes: Set[str] = set()
     for fr in matched_files:
         for cls in fr.classes:
             for m in cls.methods:
                 node = call_graph_node(cls.name, m.name)
-                if node not in walked and owns_action(fr.file_path, m.name):
-                    walked.add(node)
-                    frontier.append((node, fr.file_path, m.name))
+                if node not in queued_nodes and owns_action(fr.file_path, m.name):
+                    queued_nodes.add(node)
+                    frontier.append(_Caller(node, fr.file_path, m.name))
 
-    listed: Set[Tuple[str, str]] = set()
+    # 已列進結果的 (檔案, 節點)。
+    reported: Set[Tuple[str, str]] = set()
     related: List[dict] = []
     for d in range(1, depth + 1):
-        next_frontier: List[Tuple[str, str, str]] = []
+        next_frontier: List[_Caller] = []
         # 程式內部呼叫會在同一層加進 queue 繼續走。
         queue = list(frontier)
         while queue:
@@ -102,13 +120,13 @@ def expand_related_programs(
             for target in edges.get(node, []):
                 for target_file, target_class, target_method in declared.get(target, []):
                     if target_file == caller_file or target_file in start_files:
-                        if target not in walked:
-                            walked.add(target)
-                            queue.append((target, target_file, target_method))
+                        if target not in queued_nodes:
+                            queued_nodes.add(target)
+                            queue.append(_Caller(target, target_file, target_method))
                         continue
-                    if (target_file, target) in listed:
+                    if (target_file, target) in reported:
                         continue
-                    listed.add((target_file, target))
+                    reported.add((target_file, target))
                     related.append(
                         {
                             "file": target_file,
@@ -120,9 +138,9 @@ def expand_related_programs(
                     )
                     if len(related) >= max_programs:
                         return related
-                    if target not in walked:
-                        walked.add(target)
-                        next_frontier.append((target, target_file, target_method))
+                    if target not in queued_nodes:
+                        queued_nodes.add(target)
+                        next_frontier.append(_Caller(target, target_file, target_method))
         frontier = next_frontier
         if not frontier:
             break
