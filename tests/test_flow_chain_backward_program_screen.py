@@ -261,3 +261,63 @@ def test_a_chain_names_the_method_that_holds_the_invocation_not_the_outer_entry(
         "InvalidateJobType": [("JobTypeMtn", "JobTypeInvalid", "determined")],
         "RestoreJobType": [("JobTypeMtn", "JobTypeMtn", "determined")],
     }
+
+
+def test_a_screen_that_names_the_action_in_markup_and_in_a_script_url_is_determined(
+    monkeypatch, tmp_path: Path
+) -> None:
+    anchor = [{"controller": "JobType", "action": "JobTypeInvalid"}]
+    scan = _job_type_scan(
+        tmp_path,
+        determined_anchors={"Views/JobType/JobTypeMtn.cshtml": anchor},
+        candidate_anchors={"Views/JobType/JobTypeMtn.cshtml": anchor},
+    )
+
+    chain = _service_chain(_backward(monkeypatch, tmp_path, scan, _service_invocation()))
+
+    assert _screens(chain) == [("JobTypeMtn", "JobTypeInvalid", "determined")]
+
+
+def test_a_razor_pages_handler_gives_its_page(monkeypatch, tmp_path: Path) -> None:
+    scan = _job_type_scan(
+        tmp_path,
+        views=["Pages/JobTypes.cshtml"],
+        controllers={"Pages/JobTypes.cshtml.cs": ["OnPostInvalidate"]},
+    )
+    scan.razor_results[0].has_page_directive = True
+    scan = with_bound_calls(
+        scan, "Pages/JobTypes.cshtml.cs", {"JobTypes.OnPostInvalidate": ["JobTypeService.InvalidateJobType"]}
+    )
+
+    chain = _service_chain(_backward(monkeypatch, tmp_path, scan, _service_invocation()))
+
+    assert _screens(chain) == [("JobTypes", "OnPostInvalidate", "determined")]
+
+
+def test_a_webforms_chain_names_the_holding_method_and_keeps_the_control_event_of_its_entry(
+    monkeypatch, tmp_path: Path
+) -> None:
+    # The page method calls the holding method through no call text the scan sees, so
+    # only the entry method finds the control event.
+    scan = _scan(tmp_path, controllers={"Legacy/Alpha.aspx.cs": ["btnSave_Click", "SaveData"]}, pages=["Legacy/Alpha.aspx"])
+    scan.aspx_results[0].ui_fields = [
+        {"control": "asp:Button", "id": "btnSave", "events": {"Click": "btnSave_Click"}}
+    ]
+
+    chains = _backward(
+        monkeypatch,
+        tmp_path,
+        scan,
+        _invocation("Legacy/Alpha.aspx.cs", "Alpha", "SaveData", ["btnSave_Click", "SaveData"]),
+    )
+
+    assert [(chain["method"], chain["entry_method"]) for chain in chains] == [("SaveData", "Alpha.btnSave_Click")]
+    assert chains[0]["ui_anchors"] == [
+        {
+            "file": str(tmp_path / "Legacy/Alpha.aspx"),
+            "control": "asp:Button",
+            "id": "btnSave",
+            "event": "Click",
+            "handler": "btnSave_Click",
+        }
+    ]

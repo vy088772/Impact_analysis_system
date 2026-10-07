@@ -261,6 +261,21 @@ def forward_reach(
     return ForwardReach(node_path, nodes, unresolved_calls)
 
 
+def _caller_names(path: Mapping[str, object]) -> Optional[Tuple[str, str]]:
+    """The class and the name of the method that holds a path's Database Invocation, or None.
+
+    A path that names the method but no class takes the class of its entry method, so
+    the node still joins the call graph.
+    """
+    caller_method = str(path.get("caller_method") or "")
+    if not caller_method:
+        return None
+    caller_class = str(path.get("caller_class") or "")
+    if not caller_class:
+        caller_class = str(path.get("entry_method") or "").rpartition(".")[0]
+    return caller_class, caller_method
+
+
 def _caller_node(path: Mapping[str, object]) -> str:
     """The node of the method that holds a path's Database Invocation, or "" when unknown.
 
@@ -268,10 +283,8 @@ def _caller_node(path: Mapping[str, object]) -> str:
     outermost caller of a same-file chain that the call text gives, and the call graph
     already reaches every caller through its Bound Call Targets (ADR-0044).
     """
-    caller_method = str(path.get("caller_method") or "")
-    if not caller_method:
-        return ""
-    return call_graph_node(str(path.get("caller_class") or ""), caller_method)
+    names = _caller_names(path)
+    return call_graph_node(*names) if names else ""
 
 
 def files_of_nodes(scan: ProjectScanResult, nodes: Set[str]) -> List[FileAnalysisResult]:
@@ -512,12 +525,7 @@ def _screen_anchors_by_node(
 
 def _reverse_method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List[str]]:
     """method_name -> 呼叫它的 method_name 清單（跟 _method_adjacency 方向相反）。"""
-    forward = _method_adjacency(files)
-    rev: Dict[str, List[str]] = {}
-    for caller, callees in forward.items():
-        for callee in callees:
-            rev.setdefault(callee, []).append(caller)
-    return rev
+    return _reverse_edges(_method_adjacency(files))
 
 
 def _ancestors_of(method_name: str, rev_adj: Dict[str, List[str]], max_depth: int = 8) -> Set[str]:
@@ -716,8 +724,7 @@ def build_backward_chains(
         # The chain names the method that holds the invocation, the same join that the
         # forward chain uses (see _caller_node). The entry method still finds the
         # WebForms control events of the page.
-        class_name = str(access_record.get("caller_class") or "") if access_record.get("caller_method") else entry_class
-        method_name = str(access_record.get("caller_method") or "") or entry_method_name
+        class_name, method_name = _caller_names(access_record) or (entry_class, entry_method_name)
         sp_chain = list(access_record.get("sp_chain") or [])
         add_chain(
             matching_files[0],

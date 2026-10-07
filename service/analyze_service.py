@@ -76,6 +76,7 @@ from .table_match import (
 from .program_screen import (
     ProgramScreen,
     resolve_every_program_screen,
+    resolve_every_razor_page_screen,
     resolve_program_screens,
     resolve_razor_page_screens,
     razor_page_model_path,
@@ -408,7 +409,7 @@ def _razor_page_inputs(scan: ProjectScanResult) -> Dict[str, Any]:
 
 
 def _mvc_screen_inputs(scan: ProjectScanResult) -> Dict[str, Any]:
-    """The views, controller actions and View Anchors that MVC screen resolution reads."""
+    """The views, controller actions and View Anchors that MVC Program Screen resolution reads."""
     return {
         "view_paths": [r.file_path for r in scan.razor_results],
         "controller_actions": {
@@ -427,24 +428,14 @@ def _mvc_screen_inputs(scan: ProjectScanResult) -> Dict[str, Any]:
 def _every_program_screen(scan: ProjectScanResult) -> List[ProgramScreen]:
     """Every Program Screen of the scan, for the backward chain (ADR-0044).
 
-    A view with a page directive is a Razor Pages screen; every other view is an MVC
-    screen. A scan with no Razor view has no Program Screen, and WebForms keeps its
-    control event anchors.
+    A view with a page directive gives a Razor Pages Program Screen; every other view
+    gives an MVC Program Screen. A scan with no Razor view has no Program Screen, and
+    WebForms keeps its control event anchors.
     """
     if not scan.razor_results:
         return []
-    page_inputs = _razor_page_inputs(scan)
     page_views = {r.file_path for r in scan.razor_results if r.has_page_directive}
-    page_names = {
-        Path(path).name[: -len(".cshtml")].casefold(): Path(path).name[: -len(".cshtml")]
-        for path in page_views
-        if path.casefold().endswith(".cshtml")
-    }
-    pages = [
-        screen
-        for name in sorted(page_names.values())
-        for screen in resolve_razor_page_screens(name, **page_inputs)
-    ]
+    pages = resolve_every_razor_page_screen(**_razor_page_inputs(scan))
     mvc = [
         screen
         for screen in resolve_every_program_screen(**_mvc_screen_inputs(scan))

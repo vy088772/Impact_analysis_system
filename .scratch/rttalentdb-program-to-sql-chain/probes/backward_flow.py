@@ -5,14 +5,18 @@ chain for the table. The pair passes when one stored procedure chain of the tabl
 gives a Program Screen anchor of the truth action on `{Controller}Controller.cs`.
 The chain of one method keeps one stored procedure only (the first path of the
 method), so the probe does not ask for the chain of that procedure; it counts those
-chains apart. It also counts the pairs whose screen view sits in `Views/{Controller}`.
+chains apart. It also counts the pairs whose Program Screen view sits in `Views/{Controller}`.
+`truth.json` gives no view, so the probe asserts the action only.
 
 Tables come from the SQL Execution Graph of the RTTalentDB cache: the `reads` and
 `writes` of the operations that the procedure itself contains (no nested call).
 A table of another Database is left out and counted, and so is a temporary table
 (`#name`), which no other module can read.
 """
-import collections, json, os, sys
+import collections
+import json
+import os
+import sys
 from impact_orch import rag_client
 
 S = os.path.dirname(os.path.abspath(__file__)) + '/'
@@ -64,15 +68,14 @@ for key, procs in sorted(truth.items()):
             if got is None:
                 continue
             of_proc = [c for c in got if proc in {sp(s) for s in (c.get('sp_chain') or [c.get('sp_name', '')])}]
-            screens = [
-                a for c in got if c.get('via') == 'stored_procedure' for a in c.get('ui_anchors') or []
-                if a.get('kind') == 'program_screen'
-                and a.get('action', '').lower() == action.lower()
-                and os.path.basename(a.get('controller_file', '')).lower() == f'{prog}controller.cs'.lower()
-            ]
+            def holds(a):
+                return (a.get('kind') == 'program_screen' and a.get('action', '').lower() == action.lower()
+                        and os.path.basename(a.get('controller_file', '')).lower() == f'{prog}controller.cs'.lower())
+            screens = [a for c in got if c.get('via') == 'stored_procedure' for a in c.get('ui_anchors') or [] if holds(a)]
             rows.append({
                 'action': key, 'sp': proc, 'table': table, 'chains_of_sp': len(of_proc),
                 'reached': bool(screens),
+                'reached_by_sp': any(holds(a) for c in of_proc for a in c.get('ui_anchors') or []),
                 'views': sorted({(a['file'], a['strength']) for a in screens}),
                 'in_views_folder': any(f'/views/{prog.lower()}/' in '/' + a['file'].replace('\\', '/').lower() for a in screens),
             })
@@ -85,6 +88,7 @@ print('tables asked', len(chains), 'errors', dict(errs), '| other-Database table
 print('pairs (action, sp, table)', len(rows),
       '| sp has a chain', sum(1 for r in rows if r['chains_of_sp']),
       '| action reached', sum(1 for r in rows if r['reached']),
+      '(by a chain of that sp', str(sum(1 for r in rows if r['reached_by_sp'])) + ')',
       '| view in Views/{Controller}', sum(1 for r in rows if r['in_views_folder']))
 print('actions with a table', len(actions),
       '| fully reached', sum(1 for v in actions.values() if all(v)),

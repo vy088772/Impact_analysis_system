@@ -35,7 +35,7 @@ See ADR-0044 and ADR-0019.
 
 ```
 tables asked 61 errors {} | other-Database tables left out 102
-pairs (action, sp, table) 1637 | sp has a chain 1587 | action reached 883 | view in Views/{Controller} 864
+pairs (action, sp, table) 1637 | sp has a chain 1587 | action reached 883 (by a chain of that sp 865) | view in Views/{Controller} 864
 actions with a table 227 | fully reached 120 | partial 6 | none 101
 strengths {'determined': 645, 'likely': 290}
 ```
@@ -46,6 +46,10 @@ Baseline, the main directory service before this ticket
 The probe asks the backward chain for each table of each stored procedure that
 a truth action calls. A pair passes when a stored procedure chain of the table
 gives a Program Screen anchor of the action on `{Controller}Controller.cs`.
+18 pairs pass through the chain of another procedure of the same table: the
+chain of one method keeps the procedure of its first path only (see the notes).
+`truth.json` gives no view, so the probe asserts the action only and counts the
+pairs whose view is in `Views/{Controller}` (864).
 The tables are the direct `reads` and `writes` of the procedure in the SQL
 Execution Graph. A table of another Database (102) and a temporary table are
 left out.
@@ -58,12 +62,13 @@ The 107 actions that are not fully reached fall into two groups:
   are the helper parameter paths (ADR-0020) and the `not_in_resolved_catalog`
   paths of ticket 05, both known reasons for ticket 09.
 
-No action misses for a reason of the backward chain alone. 114 actions are
-fully matched in both directions.
+Per pair, the 754 misses are 667 pairs of the first group and 87 pairs of the
+second. No pair misses for a reason of the backward chain alone. 114 actions
+are fully matched in both directions.
 
 Test suite in the worktree
 (`pytest tests --ignore=tests/test_search_roles.py --ignore=tests/test_sp_tables.py`):
-1802 passed, 2 failed. The 2 failures are the known path-dependent tests
+1805 passed, 2 failed (after the review fixes). The 2 failures are the known path-dependent tests
 `test_program_refresh.py::test_refresh_does_not_write_wrapper_registry_or_system_catalog`
 and `test_wrapper_decompilation.py::test_decompile_wrapper_classifies_sqlfunc_dll_end_to_end`.
 
@@ -115,3 +120,40 @@ WebForms check on STC (32 tables of the STC graph, backward before and after):
   `control id (event=handler)`. A `program_screen` entry has none of these
   keys, so the agent sees an empty line for it. The renderer needs a branch on
   `kind`.
+
+## Code review (2026-10-07, `/code-review` on d5f9b7b)
+
+Fixed:
+
+- Standards: `_reverse_method_adjacency` repeated the body of the new
+  `_reverse_edges`. It now calls it.
+- Standards: the chain read `caller_class` and `caller_method` a second time
+  beside `_caller_node`. Both now use `_caller_names`.
+- Standards: `_every_program_screen` rebuilt the Razor page names and sent them
+  back one by one. `program_screen.resolve_every_razor_page_screen` now gives
+  them, beside `resolve_every_program_screen`.
+- Standards: some new docstrings used "screen" alone (CONTEXT.md: avoid). They
+  now say Program Screen.
+- Spec: a path with `caller_method` and no `caller_class` gave the node
+  `.Method`, which joins no edge. `_caller_names` now takes the class of the
+  entry method. The forward chain uses the same function.
+- Spec: new tests for a Razor Pages handler, for a Program Screen that names one
+  action in markup and in a script URL (`determined` wins), and for a WebForms
+  chain that names the holding method and keeps the control event of its entry
+  method.
+- Spec: the probe counted a pass through the chain of another procedure without
+  saying so. It now gives that count (18), and the pair-level miss reasons are
+  in the Result.
+
+Not changed:
+
+- Standards: the WebForms control event search still matches the call text in
+  one file (`_ancestors_of`, depth 8). ADR-0044 is about the call graph. The
+  ticket says "WebForms keeps its control event anchors", so this ticket keeps
+  that search as it was and only adds the entry method as a second start.
+- Standards: `_razor_page_inputs` and `_mvc_screen_inputs` return a dict for
+  `**`. The keys are the keyword names of the resolvers, and mypy shows no new
+  error.
+- Spec: a Shared view reached through a named controller (see the notes).
+- Spec: the `class`/`method` deviation and the spec-rag renderer. See the notes.
+  The user decides on the renderer.
