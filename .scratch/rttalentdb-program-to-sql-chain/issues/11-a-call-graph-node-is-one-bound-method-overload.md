@@ -171,3 +171,85 @@ The forward chain, the backward chain (ticket 07), `expand_related_programs`
 - The `wrapper_method_identity` format and the gateway contract keys.
 - The stale calls after an incremental refresh of one file (ticket 05 note).
 - A change of the Program Screen scope (ADR-0019).
+
+## Implementation (2026-10-07)
+
+**Acceptance criteria:**
+
+- [x] A call to one overload reaches only its stored procedures
+      (`test_a_call_to_one_overload_reaches_only_the_stored_procedures_of_that_overload`).
+- [x] An action that calls two overloads reaches both
+      (`test_an_action_that_calls_two_overloads_reaches_the_stored_procedures_of_both`).
+- [x] `M()` and `M<T>()` are two nodes (`test_each_method_span_carries_its_bound_method_node`).
+- [x] `A.Svc` and `B.Svc` are two nodes; a call to `A.Svc.Run` reaches only its
+      stored procedure (host test, and
+      `test_two_classes_of_one_simple_name_in_two_namespaces_stay_two_nodes`).
+- [x] A call into a `record` and a `struct` method gives an edge
+      (`test_each_bound_call_target_names_the_node_of_its_overload`).
+- [x] An invocation, its span and a call target give one key, through a real host
+      scan (`test_a_database_invocation_its_method_span_and_a_call_target_give_one_node`).
+- [x] The backward chain from `Save(string)` does not reach an action that calls
+      only `Save(int)`
+      (`test_the_backward_chain_from_one_overload_does_not_reach_an_action_that_calls_only_the_other`).
+- [x] A Program Screen with a GET and a POST action of one name reaches both
+      (`test_a_program_screen_with_a_get_and_a_post_action_of_one_name_reaches_both`).
+- [x] The scan cache version is 47. The comment above it records the rescan.
+- [x] `compare_flow.py` is not lower than ticket 09 (numbers below).
+- [x] No regression in the full suite (see below).
+
+**What changed:**
+
+- The host builds the node in one function, `BoundCallAnalyzer.NodeOf`:
+  ``Namespace.Outer.Class.Method`N(type,type)``, for example
+  `Shop.Store.Save(int)`, ``Shop.Store.Get`1()``,
+  `Shop.Outer.Inner.Deep(ref int,System.Collections.Generic.List<string>)`.
+  The parameter types use `BoundParameterTypeFormat` with the type arguments
+  added; a `ref`, `out` or `in` parameter has its keyword. A method span
+  (`node`) and a Bound Call Target (`target_node`) both come from it.
+- The class of a span comes from the symbol now. A `record`, a `struct` and an
+  interface span get their real class name (an interface span was `""`).
+- An interface call binds to the overload of the Local Implementer that the
+  compiler maps (`FindImplementationForInterfaceMember`). When the compiler
+  cannot map it, the one method of the declaring class with the same name and
+  parameter types. When neither finds one method, the call is
+  `no_local_implementer`.
+- A call whose arguments do not bind gives candidate symbols. When all the
+  candidates are overloads of one method in one class, the call now gives one
+  Bound Call Target for each candidate overload. Before, these overloads shared
+  one node, so the reach does not drop. Candidates in two classes stay
+  `ambiguous_overload` (ticket 06), and the check now compares the class
+  symbol, not the simple name.
+- Python: `call_graph_node` is gone. The host is the only builder (decision:
+  the bound symbol exists only in the host). `service/call_graph_nodes.py`
+  (`MethodNodes`) finds the node of a record by its place in the source: a
+  Database Invocation and an Execution Path by their source offset, a table
+  relation by its line, and a C# parser declaration by the spans of its file.
+  A record that no span holds has no node.
+- An entry action is a name, so each overload of that name starts the forward
+  chain and is a node of a Program Screen action.
+- Test fixtures (`tests/scan_fixtures.py`): each node takes a fixed slot (a
+  line and an offset range), so a test places an invocation or a relation in a
+  method with `source_offset(node)` or `source_line(node)`.
+
+**Output changes:** none in `reachable_methods`, `method_path`, `class`,
+`method`, or the `caller` of an `unresolved_call` diagnostic (it stays
+`Class.Method`). The backward chain can give two entries for one file and one
+method name, one for each overload that touches the table. The host
+`methods` entries and `calls` entries have the new fields `node` and
+`target_node`; the host contract version stays 4, as for ticket 05's `calls`.
+
+**Probe results** (private scan cache v47 of the 4 RTTalentDB roots, worktree
+service on port 8801, spec-rag mode-4 seam):
+
+```
+compare_flow.py:  actions that should reach SP 227 | fully matched 114 | partial 6 | none 107
+                  extra SPs not in truth 62 | reachable_methods sum 499 -> 492
+backward_flow.py: actions with a table 227 | fully reached 120 | partial 6 | none 101
+```
+
+Both are the same as ticket 09. Seven actions reach one method name fewer. All
+seven lose `ConvertToMail`, for example `TrialBossApprove.TrialBossAssess`:
+`TrialBossApproveService.cs:94` calls `SendNoticeToSingle(string, ...)`, and
+only the other overload `SendNoticeToSingle(MailToSingle)`
+(`NoticeService.cs:71`) calls `ConvertToMail`. The old shared node was a
+false positive. The SPs do not change, because `ConvertToMail` reaches no SP.
