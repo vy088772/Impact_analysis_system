@@ -105,6 +105,8 @@ class RazorParser:
     ASP_PAGE_ATTR_PATTERN = re.compile(r'asp-page\s*=\s*"([^"]+)"', re.IGNORECASE)
     FORM_ACTION_PATTERN = re.compile(r'<form\b[^>]*\baction\s*=\s*"([^"]+)"', re.IGNORECASE)
 
+    HTML_COMMENT_PATTERN = r'<!--.*?-->'
+
     # 決定式：Razor 的網址 helper 把 action 與 controller 當引數寫死，不是猜的。
     # `Url.Action("A", "C", ...)`、`Url.Action("A")`（沒有 controller 就是畫面自己的）、
     # `Html.BeginForm("A", "C", ...)`。第一個引數不是字串常值（變數）就不算。第二個
@@ -446,7 +448,9 @@ class RazorParser:
                 controller, action = parsed
                 anchors.append({'action': action, 'controller': controller})
 
-        for helper_match in self.URL_HELPER_PATTERN.finditer(content):
+        # 被註解掉的呼叫是死的，不是畫面會呼叫的目的地。
+        live = re.sub(self.HTML_COMMENT_PATTERN, '', re.sub(self.RAZOR_COMMENT_PATTERN, '', content, flags=re.DOTALL), flags=re.DOTALL)
+        for helper_match in self.URL_HELPER_PATTERN.finditer(live):
             anchor = {'action': helper_match.group(1)}
             if helper_match.group(2):
                 anchor['controller'] = helper_match.group(2)

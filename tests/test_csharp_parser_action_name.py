@@ -87,3 +87,20 @@ def test_an_action_name_attribute_does_not_leak_to_the_next_method(tmp_path: Pat
 
     assert methods["First"].action_name == "Renamed"
     assert methods["Second"].action_name == "Second"
+
+
+def test_an_action_name_attribute_sharing_a_bracket_with_another_attribute_is_read(
+    tmp_path: Path,
+) -> None:
+    methods = _methods(
+        tmp_path,
+        """
+        [HttpPost, ActionName("Renamed")]
+        public IActionResult Save()
+        {
+            return View();
+        }
+        """,
+    )
+
+    assert methods["Save"].action_name == "Renamed"

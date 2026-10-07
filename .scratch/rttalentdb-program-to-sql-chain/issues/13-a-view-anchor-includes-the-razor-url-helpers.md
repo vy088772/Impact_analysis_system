@@ -38,7 +38,7 @@ See ADR-0019, ADR-0044 and ticket 09.
 
 **Blocked by:** None.
 
-**Status:** review (2026-10-07; implementation done, code review notes below)
+**Status:** done (2026-10-07)
 
 - [x] The glossary entry **View Anchor** names each new form and its strength
 - [x] A view that calls `@Url.Action("Action", "Controller")` gives a Program
@@ -116,6 +116,30 @@ code and reads each scan as stale until a local rescan (see ticket 05).
 
 Full suite: 1840 passed (without `test_search_roles.py` and `test_sp_tables.py`,
 which fail at collection with no SQL Server, before this change too).
+
+## Review notes (2026-10-07, /code-review of 6fd7fda)
+
+Fixed in the review commit:
+
+- A call in a Razor comment (`@* *@`) or an HTML comment gave a determined anchor.
+  The URL helper pattern now runs on the content without both comment forms.
+- `[HttpPost, ActionName("X")]` (two attributes in one bracket) was not read.
+
+Left as is, on purpose:
+
+- A bare string in `Url.Action("A", "x")` is always the controller; a named-argument
+  call (`Url.Action(action: "A", controller: "C")`) gives no anchor. Not in RTTalentDB.
+- A multi-line `[ActionName]`, or a `//` comment between the attribute and the method,
+  is not read. Not in RTTalentDB.
+- A three-segment string such as `/foo/bar/baz` gives a `likely` candidate. The
+  Program Screen keeps only a candidate that names a declared action.
+- `Foo` and `FooAsync` in one controller: both route to `Foo`; the screen reports
+  the first method that matches an anchor. ASP.NET Core also reports this as ambiguous.
+- ADR-0019 line 36 still says `likely` for a script URL. The glossary is the source
+  for the new forms; update the ADR when a ticket changes its decision.
+- Smells (judgement calls): the `(method, action name)` tuple wants a small type;
+  the three `controller, action` anchor blocks in `razor_parser.py` repeat;
+  `_exact_controller_action` now accepts a third segment. Not changed.
 
 ## Comments
 

@@ -328,7 +328,7 @@ class CSharpParser:
     
     # MVC 路由用的 action 名稱：`[ActionName("X")]` 改名；ASP.NET Core 另外會把方法名稱
     # 結尾的 `Async` 去掉（SuppressAsyncSuffixInActionNames 預設為 true）。
-    ACTION_NAME_ATTRIBUTE_PATTERN = re.compile(r'\[\s*ActionName\(\s*"([^"]+)"\s*\)\s*\]')
+    ACTION_NAME_ATTRIBUTE_PATTERN = re.compile(r'\bActionName\(\s*"([^"]+)"\s*\)')
     _ASYNC_SUFFIX = "Async"
 
     # 認證與授權

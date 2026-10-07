@@ -301,3 +301,18 @@ def test_a_data_url_attribute_that_is_not_controller_and_action_shaped_is_no_anc
     result = _parse(tmp_path, '<div data-url="https://example.com/a.html"></div>')
 
     assert result.view_anchors_candidate == []
+
+
+def test_a_helper_call_inside_a_razor_or_html_comment_is_no_anchor(tmp_path: Path) -> None:
+    result = _parse(
+        tmp_path,
+        """
+        @* @Url.Action("Old", "Order") *@
+        <!-- @using (Html.BeginForm("Dead", "Order")) { } -->
+        <a href="@Url.Action("Live", "Order")">x</a>
+        """,
+    )
+
+    assert result.view_anchors_determined == [
+        {"action": "Live", "controller": "Order"}
+    ]
