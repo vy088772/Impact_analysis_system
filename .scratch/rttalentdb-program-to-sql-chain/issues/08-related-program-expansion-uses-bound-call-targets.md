@@ -14,7 +14,7 @@ See ADR-0044.
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** in-progress (2026-10-07)
 
 - [ ] `/analyze` for RTTalentDB JobType with expand depth 1 lists
       `JobTypeService` and the called method
