@@ -74,6 +74,12 @@ roots rescanned), main-directory code with this change.
   6 | none 30. The rows are the same, byte for byte, as
   `probes/backward_ticket13.json`.
 
+Check on the main-directory service (port 8800), shared scan cache v48
+(RTTalentDB, three roots), after the other session ended: the probe rows
+are the same, byte for byte, as `probes/backward_ticket14.json`
+(191 / 6 / 30). The three `IResumeStrategy` entries appear on the three
+reached `BuildViewModelAsync(string)` nodes.
+
 Open for the user: a spec-rag ticket to render `diagnostics` and the
 `program_screen` entry in `_render_backward_chains` (out of scope here).
 The glossary term for "a call with no Bound Call Target" is still open.
