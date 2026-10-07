@@ -39,6 +39,18 @@ seconds and the parser output does not change.
 - Measure (`re.finditer(CLASS_PATTERN, " " * n, re.MULTILINE)`): 500 spaces
   0.03 s, 1,000 spaces 0.20 s, 2,000 spaces 1.43 s to 1.60 s. Each double
   multiplies the time by about 7 to 8.
+- Other scan roots show the same cause. The longest whitespace run after
+  `strip_csharp_comments`, and the rescan time on 2026-10-07:
+
+  | Scan root | Longest run (file) | Rescan |
+  |---|---|---|
+  | TOPCSCY | 18,650 (`Services/DSM/ToolExcelCreateService.cs`) | 3015 s |
+  | TTRDQ | 14,362 (`PQR/PQRForm_V.aspx.cs`) | 1334 s |
+  | ETR | 8,935 (`Controllers/StandardController.cs`) | 607 s |
+  | TTPUR | 2,367 (`Annual/PUR_RateChangeConfirm.aspx.cs`) | 417 s (many files, not this cause) |
+
+  The TTRDQ and ETR times are not measured per file. The fix can save
+  about 1.5 hours on each full rescan.
 - The other `*_PATTERN` of `CSharpParser` on 2,000 spaces: `METHOD_PATTERN`
   0.15 s, each other one 0.00 s.
 - `CLASS_PATTERN` has a second call site, `csharp_parser.py:1890`, on
