@@ -18,11 +18,11 @@ linear on a run of whitespace, so this file parses in less than one second.
 **Notes:**
 
 - Source: ticket 16 (2026-10-07). Ticket 16 put `METHOD_PATTERN` out of scope
-  and asked for a separate ticket if a measure shows a cost on a real file.
-- Measure with the project `.venv`, after the ticket 16 fix:
+  and asked for a separate ticket if a measurement shows a cost on a real file.
+- Measurements with the project `.venv`, after the ticket 16 fix:
   - `re.finditer(METHOD_PATTERN, " " * n, re.M)`: 2,000 spaces 0.20 s,
-    4,000 spaces 0.82 s, 8,000 spaces 3.03 s. Each double multiplies the
-    time by about 4, so the cost is O(n²).
+    4,000 spaces 0.82 s, 8,000 spaces 3.03 s. When n doubles, the time
+    becomes about 4 times larger, so the cost is O(n²).
   - `METHOD_PATTERN` on the file after `strip_csharp_comments`: 16.31 s.
   - `cProfile` of `parse_file` on the file: `_extract_methods` takes almost
     all of the total time (18.3 s of 18.8 s). The machine had other load.

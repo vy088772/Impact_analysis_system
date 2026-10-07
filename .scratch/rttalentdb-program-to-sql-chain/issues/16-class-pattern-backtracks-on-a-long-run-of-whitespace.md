@@ -11,12 +11,12 @@ seconds and the parser output does not change.
 
 **Blocked by:** None.
 
-**Status:** done (2026-10-07)
+**Status:** done (2026-10-07). The parse-time item moves to ticket 17.
 
 **Category:** bug (performance)
 
-- [ ] `ToolExcelCreateService.cs` parses in a few seconds — 2656 s to 18.5 s;
-  the rest is `METHOD_PATTERN`, see ticket 17
+- [ ] `ToolExcelCreateService.cs` parses in a few seconds. The time goes
+  from 2656 s to 18.5 s. `METHOD_PATTERN` takes the rest (see ticket 17).
 - [x] The parser output of each scan root does not change, except the line
   number of a class with no access modifier (see the agent brief)
 - [x] A test parses a long run of whitespace in a time limit
@@ -171,6 +171,10 @@ Both callers get the fix, because they use the same constant.
     `Y-DOCs/TaskSchedule/SendMail.cs` `SendMail` 6 to 7,
     `Y-DOCs/TaskSchedule/Program.cs` `Program` 16 to 17.
   - No other difference, and no error.
+- The leading `\b` also stops a match of `class` inside a word. For example,
+  the old pattern found a false class `item` in
+  `foreach (Subclass item in xs)`. The new pattern finds no class there.
+  The comparison found no such case in the 16 scan roots.
 - Parse time (10 processes in parallel, so each time is higher than on an
   idle machine):
 
@@ -181,9 +185,9 @@ Both callers get the fix, because they use the same constant.
   | `ETR/Controllers/StandardController.cs` | 632 s | 5.1 s |
   | All 2,641 files | 5268 s | 482 s |
 
-- "A few seconds" is not met. `cProfile` shows that almost all of the
+- The parse time is not "a few seconds". `cProfile` shows that almost all of the
   remaining 18 s is in `_extract_methods`, on `METHOD_PATTERN`. This pattern
-  is out of scope. The measure on the file (16.3 s) meets the brief's
+  is out of scope. The measurement on the file (16.3 s) meets the brief's
   condition for a separate ticket, so ticket 17 records it.
 - Full test suite: 1871 passed, 2 failed, 2 collection errors. The 2
   failures also fail on HEAD in a worktree (`test_program_refresh` reads a

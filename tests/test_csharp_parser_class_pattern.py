@@ -1,4 +1,7 @@
-"""`CSharpParser.CLASS_PATTERN` runs in linear time on a long run of whitespace.
+"""`CSharpParser.CLASS_PATTERN` starts a match at a keyword, not at whitespace.
+
+It runs in linear time on a long run of whitespace, gives a class the line of
+its declaration, and keeps its named groups.
 
 `.scratch/rttalentdb-program-to-sql-chain/issues/16-...md`. Seam 1 is the
 pattern with `re.finditer`. Seam 2 is `CSharpParser.parse_file`.
@@ -9,7 +12,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import pytest
 
@@ -55,7 +58,9 @@ def test_a_class_with_no_access_modifier_gets_the_line_of_its_declaration(
         ("class X : Base, IFoo\n{", (None, None, "X", "Base, IFoo\n")),
     ],
 )
-def test_a_declaration_gives_the_same_groups(source: str, groups: tuple) -> None:
+def test_a_declaration_gives_the_same_groups(
+    source: str, groups: Tuple[Optional[str], Optional[str], str, Optional[str]]
+) -> None:
     match = re.search(CSharpParser.CLASS_PATTERN, source, re.MULTILINE)
 
     assert match is not None
