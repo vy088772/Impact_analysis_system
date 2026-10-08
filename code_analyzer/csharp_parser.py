@@ -288,8 +288,12 @@ class CSharpParser:
     # 傳回型別（group `ret`）接受：元組 `(bool A, string B)`、泛型 `Task<Dictionary<string, X>>`
     # （`<` 前可有空白）、nullable `?`、陣列 `[]`；方法名（group `name`）後可有泛型參數 `Name<T>(`。
     # 一律以群組名稱讀取；比對結果要先經 `_is_method_declaration` 過濾。
+    # 存取修飾詞的群組自己帶 `\s+`，一段空白只有一種切法，比對從宣告所在的行開始：
+    # 舊寫法 `^[ \t]*(...)?\s*` 在長段空白（`strip_csharp_comments` 把整塊註解
+    # 換成空白）上是 O(n²)，一個 21 KB 的檔案要 16 秒，而且沒有修飾詞的方法行號
+    # 指向前面空白行的開頭（見 `.scratch/rttalentdb-program-to-sql-chain/issues/17-...md`）。
     METHOD_PATTERN = (
-        r'^[ \t]*(?P<access>public|private|protected|internal)?\s*'
+        r'^[ \t]*(?:(?P<access>public|private|protected|internal)\s+)?'
         r'(?P<static>static\s+)?(?P<virtual>virtual\s+)?(?P<override>override\s+)?'
         r'(?P<abstract>abstract\s+)?(?P<async>async\s+)?'
         r'(?P<ret>(?:\([\w\s<>\[\],?.]+\)|[\w.]+(?:\s*<[\w\s<>\[\],?.()]+>)?)\??(?:\[[,\s]*\])*\??)'

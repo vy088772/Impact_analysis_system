@@ -218,7 +218,11 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # `.scratch/rttalentdb-program-to-sql-chain/issues/16-...md`）。沒有存取修飾詞的類別
 # （`class Foo`、`static class Baz`）的行號改成宣告所在的行，舊快取指向前面空白的開頭，
 # 必須重新掃描。
-_CACHE_VERSION = 50
+# v51：`CSharpParser.METHOD_PATTERN` 的比對從宣告所在的行開始（見
+# `.scratch/rttalentdb-program-to-sql-chain/issues/17-...md`）。空白行後面、沒有存取
+# 修飾詞的方法（`void Foo()`、`static int Bar()`）的行號改成宣告所在的行，舊快取
+# 指向前面空白行的開頭，必須重新掃描。
+_CACHE_VERSION = 51
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}
