@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
 _VIEW_SUFFIX = "view"
 _CONTROLLER_SUFFIX = "controller"
@@ -79,10 +79,10 @@ class _ViewFile:
     name: str
 
 
-# One controller method: its own name, or `(method name, routed action name)`.
-# MVC routes a method by its action name, which `[ActionName("X")]` or the
-# removed `Async` suffix can make differ from the method name.
-ActionEntry = Union[str, Tuple[str, str]]
+# One controller method: `(method name, routed action name)`. MVC routes a
+# method by its action name, which `[ActionName("X")]` or the removed `Async`
+# suffix can make differ from the method name.
+ActionEntry = Tuple[str, str]
 
 
 @dataclass(frozen=True)
@@ -537,10 +537,7 @@ def _controller_file(
         path=path,
         area=area,
         name=stem[: -len(_CONTROLLER_SUFFIX)],
-        actions=tuple(
-            (entry, entry) if isinstance(entry, str) else (entry[0], entry[1])
-            for entry in actions
-        ),
+        actions=tuple((method_name, action_name) for method_name, action_name in actions),
     )
 
 

@@ -423,6 +423,21 @@ def test_an_ambiguous_overload_call_appears_in_the_backward_diagnostics(monkeypa
     assert [d["reason"] for d in _unresolved_calls(response)] == ["ambiguous_overload"]
 
 
+def test_an_unmapped_implementation_call_appears_in_the_backward_diagnostics(monkeypatch, tmp_path: Path) -> None:
+    """The one Local Implementer is the reached class, but no method of it maps to the call."""
+    scan = _scan_with_calls(
+        tmp_path,
+        {
+            "JobTypeController.JobTypeInvalid": ["JobTypeService.InvalidateJobType"],
+            "JobTypeController.JobTypeMtn": ["!unmapped_implementation:JobTypeService"],
+        },
+    )
+
+    response = _backward_response(monkeypatch, tmp_path, scan, _service_invocation())
+
+    assert [d["reason"] for d in _unresolved_calls(response)] == ["unmapped_implementation"]
+
+
 def test_a_no_local_implementer_call_gives_no_backward_entry(monkeypatch, tmp_path: Path) -> None:
     scan = _scan_with_calls(
         tmp_path,

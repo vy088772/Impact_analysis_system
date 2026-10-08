@@ -215,6 +215,15 @@ def test_an_url_action_call_with_a_variable_action_gives_no_anchor(tmp_path: Pat
     assert result.view_anchors_determined == []
 
 
+def test_an_url_action_call_with_a_variable_second_argument_gives_no_anchor(
+    tmp_path: Path,
+) -> None:
+    """The variable may hold a controller name or route values: neither is written down."""
+    result = _parse(tmp_path, '<a href="@Url.Action("Edit", controllerName)">x</a>')
+
+    assert result.view_anchors_determined == []
+
+
 def test_a_begin_form_call_is_a_determined_anchor(tmp_path: Path) -> None:
     result = _parse(
         tmp_path,

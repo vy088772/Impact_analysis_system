@@ -109,7 +109,9 @@ class CallSite:
     graph node of the method that the call reaches; `target_class` and
     `target_method` are its simple names, for display. All three are empty when
     the call has no Bound Call Target; `unresolved_reason` then says why, and
-    `candidate_classes` names each tied class of `ambiguous_implementation`.
+    `candidate_classes` names the classes the call may reach: each tied class of
+    `ambiguous_implementation`, the class of each candidate of `ambiguous_overload`,
+    and the one Local Implementer of `unmapped_implementation`.
     """
 
     call_text: str
@@ -120,11 +122,6 @@ class CallSite:
     unresolved_reason: str = ""
     candidate_classes: List[str] = field(default_factory=list)
     target_node: str = ""
-
-    @property
-    def bound_target(self) -> str:
-        """The call graph node that the call reaches, or "" when it has none."""
-        return self.target_node
 
 
 @dataclass

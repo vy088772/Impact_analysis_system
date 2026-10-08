@@ -57,7 +57,6 @@ from .schemas import (
 )
 from .snippet_extractor import extract_snippets
 from .call_chain_builder import build_call_chains
-from .call_graph_nodes import MethodNodes
 from .sp_fetcher import fetch_sp_definitions
 from .view_fetcher import fetch_view_definitions
 from .udf_fetcher import fetch_udf_definitions
@@ -2591,7 +2590,7 @@ def flow_chain(
             for invocation in rated_invocations
             if invocation.evidence is not InvocationEvidence.PROVEN
         ]
-        chains = flow_chain_builder.build_backward_chains(
+        backward = flow_chain_builder.build_backward_chains(
             scan,
             root,
             req.table_name,
@@ -2602,12 +2601,11 @@ def flow_chain(
             sql_cache_identity=sql_cache_identity,
             execution_paths=execution_paths,
             program_screens=_every_program_screen(scan),
-            diagnostics=diagnostics,
         )
         return FlowChainResponse(
             direction="backward",
-            backward_chains=chains,
-            diagnostics=diagnostics,
+            backward_chains=backward.chains,
+            diagnostics=diagnostics + backward.diagnostics,
             source_root=str(root),
         )
 
@@ -2640,15 +2638,14 @@ def flow_chain(
             scans,
             scan,
             root,
-            needed_files=flow_chain_builder.files_of_nodes(scan, reach.nodes),
+            needed_files=reach.files(scan),
             refresh=req.refresh,
         )
         # An invocation joins the node of the method span that holds it (ADR-0044).
-        method_nodes = MethodNodes(scan)
         rated_invocations = [
             invocation
             for invocation in evidence.rated_invocations
-            if method_nodes.at_offset(invocation.source.relative_path, invocation.source.start_offset)
+            if reach.method_nodes.at_offset(invocation.source.relative_path, invocation.source.start_offset)
             in reach.nodes
         ]
         execution_graph = evidence.graph

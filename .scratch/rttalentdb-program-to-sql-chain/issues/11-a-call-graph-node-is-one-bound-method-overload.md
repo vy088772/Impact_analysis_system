@@ -23,13 +23,15 @@ See ADR-0044 and the overload note of ticket 05.
 
 **Status:** done (2026-10-07). The scan cache version is 48: ticket 13 took
 47 first. The CLASS_PATTERN slowness of the rescan moves to ticket 16.
+The two checklists below were ticked on 2026-10-08 from the checked list in
+**Implementation**; the code did not change (ticket 18).
 
-- [ ] A call to one overload reaches only the stored procedures of that
+- [x] A call to one overload reaches only the stored procedures of that
       overload
-- [ ] An action that calls two overloads reaches the stored procedures of
+- [x] An action that calls two overloads reaches the stored procedures of
       both
-- [ ] An invocation, a span and a call target of one overload give one key
-- [ ] The scan cache version rises, and the notes record the rescan
+- [x] An invocation, a span and a call target of one overload give one key
+- [x] The scan cache version rises, and the notes record the rescan
 
 **Notes:**
 
@@ -141,26 +143,26 @@ The forward chain, the backward chain (ticket 07), `expand_related_programs`
 
 **Acceptance criteria:**
 
-- [ ] A call to one overload reaches only the stored procedures of that
+- [x] A call to one overload reaches only the stored procedures of that
       overload (test with `Save(int)` and `Save(string)` in one class, each
       with a different stored procedure).
-- [ ] An action that calls two overloads reaches the stored procedures of both.
-- [ ] `M()` and `M<T>()` in one class are two nodes.
-- [ ] Two classes `A.Svc` and `B.Svc`, each with `Run()` and a different
+- [x] An action that calls two overloads reaches the stored procedures of both.
+- [x] `M()` and `M<T>()` in one class are two nodes.
+- [x] Two classes `A.Svc` and `B.Svc`, each with `Run()` and a different
       stored procedure, give two nodes. A call to `A.Svc.Run` reaches only
       the stored procedure of `A.Svc`.
-- [ ] A call into a method of a `record` and of a `struct` gives an edge.
-- [ ] A Database Invocation, its method span and a Bound Call Target to that
+- [x] A call into a method of a `record` and of a `struct` gives an edge.
+- [x] A Database Invocation, its method span and a Bound Call Target to that
       method give one key.
-- [ ] The backward chain from the stored procedure of `Save(string)` does not
+- [x] The backward chain from the stored procedure of `Save(string)` does not
       reach an action that calls only `Save(int)`.
-- [ ] A Program Screen with a GET and a POST action of one name reaches the
+- [x] A Program Screen with a GET and a POST action of one name reaches the
       stored procedures of both.
-- [ ] The scan cache version rises. Rescan RTTalentDB locally (an old cache
+- [x] The scan cache version rises. Rescan RTTalentDB locally (an old cache
       makes each system skip).
-- [ ] `probes/compare_flow.py` on RTTalentDB gives no fewer fully matched
+- [x] `probes/compare_flow.py` on RTTalentDB gives no fewer fully matched
       actions than ticket 09 recorded. Record the new numbers here.
-- [ ] WebForms flow chain tests and the impact suite baseline do not regress
+- [x] WebForms flow chain tests and the impact suite baseline do not regress
       (3 path-dependent tests differ in a worktree; they are not a regression).
 
 **Out of scope:**

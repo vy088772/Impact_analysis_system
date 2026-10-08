@@ -222,7 +222,12 @@ from code_analyzer.project_scanner import ProjectScanner, ProjectScanResult
 # `.scratch/rttalentdb-program-to-sql-chain/issues/17-...md`）。空白行後面、沒有存取
 # 修飾詞的方法（`void Foo()`、`static int Bar()`）的行號改成宣告所在的行，舊快取
 # 指向前面空白行的開頭，必須重新掃描。
-_CACHE_VERSION = 51
+# v52：介面只有一個 Local Implementer、卻對應不到它的方法時，呼叫的 unresolved_reason
+# 從 `no_local_implementer` 改成 `unmapped_implementation`，candidate_classes 是那個
+# implementer；`Url.Action("A", 變數)` 不再是決定式 View Anchor（見
+# `.scratch/rttalentdb-program-to-sql-chain/issues/18-...md`）。舊快取還是舊的 reason，
+# 必須重新掃描。
+_CACHE_VERSION = 52
 
 # 同 process 內的記憶體快取（避免重複反序列化）
 _mem_cache: Dict[str, ProjectScanResult] = {}

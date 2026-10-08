@@ -99,28 +99,26 @@ def _method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List[str]]:
 
 
 class _CallGraph(NamedTuple):
-    """The call graph of a scan, from the Bound Call Targets of its calls (ADR-0044)."""
+    """掃描結果的呼叫圖，邊取自每個呼叫的 Bound Call Target（ADR-0044）。"""
 
-    # node -> the nodes that its calls reach.
+    # 節點 -> 它的呼叫走到的節點。
     edges: Dict[str, List[str]]
-    # node -> one diagnostic for each of its calls that has no Bound Call Target.
+    # 節點 -> 它每一個沒有 Bound Call Target 的呼叫，各一筆 diagnostic。
     unresolved_calls: Dict[str, List[dict]]
-    # node -> the bare method name, for the outputs that name a method.
+    # 節點 -> 方法名稱（不含類別與參數），給回應裡列方法名稱的欄位用。
     method_names: Dict[str, str]
-    # node -> the simple class name of the method, to match `candidate_classes`.
+    # 節點 -> 方法所屬類別的簡單名稱，用來比對 `candidate_classes`。
     class_names: Dict[str, str]
 
 
 def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
-    """The call graph of the whole scan root.
+    """整個掃描根目錄的呼叫圖。
 
-    A node is one bound method symbol (`MethodSourceSpan.node`), so two overloads, and
-    two methods with the same name in two classes, stay two nodes. The edges come from
-    every source file of the scan
-    root, not from the program files only: an action reaches the service methods that it
-    calls. A call with no Bound Call Target gives no edge, and the call text is never
-    matched by name. Such a call stays in `unresolved_calls`, so the chain can say why its
-    branch stops (ticket 06).
+    節點是一個 bound method symbol（`MethodSourceSpan.node`），所以兩個 overload、兩個
+    類別裡同名的方法，都是兩個節點。邊取自掃描根目錄裡每一個原始碼檔案，不只取自程式
+    自己的檔案：action 會走到它呼叫的 service 方法。沒有 Bound Call Target 的呼叫不給
+    邊，也絕不以呼叫文字比對方法名稱；這種呼叫留在 `unresolved_calls`，鏈才說得出它的
+    分支為什麼停下來。
     """
     edges: Dict[str, List[str]] = {}
     unresolved: Dict[str, List[dict]] = {}
@@ -135,7 +133,7 @@ def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
             class_names[span.node] = span.class_name
             targets = edges.setdefault(span.node, [])
             for call in span.calls:
-                target = call.bound_target
+                target = call.target_node
                 if target:
                     method_names.setdefault(target, call.target_method)
                     if target != span.node and target not in targets:
@@ -150,22 +148,22 @@ def _bound_call_graph(scan: ProjectScanResult) -> _CallGraph:
 
 
 def bound_call_edges(scan: ProjectScanResult) -> Dict[str, List[str]]:
-    """node -> the nodes that its calls reach, from the Bound Call Targets of the scan.
+    """節點 -> 它的呼叫走到的節點，取自掃描結果的 Bound Call Target。
 
-    This is the one rule for which method a call reaches (ADR-0044). The flow chain and
-    the related program expansion of `/analyze` both use it. The expansion lists files,
-    not reasons, so it leaves out `unresolved_calls`: a call with no target lists nothing.
+    這是「一個呼叫走到哪個方法」的唯一規則（ADR-0044），flow chain 與 `/analyze` 的
+    related program expansion 都用它。expansion 只列檔案、不列原因，所以不帶
+    `unresolved_calls`：沒有目標的呼叫什麼都不列。
     """
     return _bound_call_graph(scan).edges
 
 
 def _unresolved_call_diagnostic(caller: str, call: CallSite, relative_path: str) -> dict:
-    """The `diagnostics` entry of a call with no Bound Call Target: the caller, the call, the reason.
+    """沒有 Bound Call Target 的呼叫在 `diagnostics` 裡的條目：呼叫者、呼叫、原因。
 
-    `caller` is `Class.Method`, the simple names; `source_span` tells the overload apart.
+    `caller` 是 `Class.Method`（簡單名稱）；`source_span` 分辨是哪一個 overload。
 
-    `reason` and `unresolved_reason` both hold the reason, the two names an unproven
-    execution path in the same list carries.
+    `reason` 與 `unresolved_reason` 都放原因，跟同一份清單裡未證實的 execution path
+    用的兩個欄位名稱一樣。
     """
     return {
         "kind": "unresolved_call",
@@ -203,7 +201,7 @@ def _inline_sql_tables(
 
 
 class ForwardReach(NamedTuple):
-    """The methods that an anchor action reaches through its Bound Call Targets."""
+    """錨點 action 沿 Bound Call Target 走到的方法。"""
 
     # 一條代表性路徑（僅供顯示用），每一段是一個節點（`MethodSourceSpan.node`）。
     node_path: List[str]
@@ -213,16 +211,26 @@ class ForwardReach(NamedTuple):
     unresolved_calls: List[dict]
     # 節點 -> 方法名稱（不含類別與參數），給回應裡列方法名稱的欄位用。
     names: Mapping[str, str]
+    # 算這份可達集合用的方法 span 索引；呼叫端用同一份找節點，不再另建一份。
+    method_nodes: MethodNodes
 
     @property
     def method_path(self) -> List[str]:
-        """The representative path as bare method names, the shape `/flow_chain` answers."""
+        """代表性路徑的方法名稱，`/flow_chain` 回應的形狀。"""
         return [self.names[node] for node in self.node_path]
 
     @property
     def method_names(self) -> Set[str]:
-        """The reached methods as bare names, the shape `reachable_methods` answers."""
+        """可達方法的名稱，`reachable_methods` 回應的形狀。"""
         return {self.names[node] for node in self.nodes}
+
+    def files(self, scan: ProjectScanResult) -> List[FileAnalysisResult]:
+        """宣告至少一個可達節點的 C# 檔案結果，依掃描順序。"""
+        return [
+            fr
+            for fr in scan.csharp_results
+            if any(span.node in self.nodes for span in self.method_nodes.spans_of(fr.file_path))
+        ]
 
 
 def _reachable_from(starts: List[str], adj: Dict[str, List[str]]) -> Tuple[List[str], Set[str]]:
@@ -263,12 +271,11 @@ def forward_reach(
     owns_file: Callable[[str], bool],
     owns_action: Callable[[str, str], bool],
 ) -> Optional[ForwardReach]:
-    """The nodes that `anchor_method` reaches, or None when the program owns no such action.
+    """`anchor_method` 走到的節點；這支程式沒有擁有這個 action 時回傳 None。
 
-    The program scope (ADR-0019) selects the anchor action only. The anchor is a name, so
-    each overload of that name starts the reach: a GET and a POST action of one name both
-    start. From the anchor, the reach follows each Bound Call Target into any file of the
-    scan root.
+    程式範圍（ADR-0019）只決定錨點 action。錨點是名稱，所以這個名稱的每一個 overload
+    都是起點：同名的 GET 與 POST action 都算。從錨點出發，沿每個 Bound Call Target
+    走進掃描根目錄裡的任何檔案。
     """
     method_nodes = MethodNodes(scan)
     starts = sorted(
@@ -287,14 +294,14 @@ def forward_reach(
     unresolved_calls = [
         diagnostic for node in sorted(nodes) for diagnostic in graph.unresolved_calls.get(node, [])
     ]
-    return ForwardReach(node_path, nodes, unresolved_calls, graph.method_names)
+    return ForwardReach(node_path, nodes, unresolved_calls, graph.method_names, method_nodes)
 
 
 def _caller_names(path: Mapping[str, object]) -> Optional[Tuple[str, str]]:
-    """The class and the name of the method that holds a path's Database Invocation, or None.
+    """持有 path 的 Database Invocation 的方法：它的類別與名稱；不知道時回傳 None。
 
-    A path that names the method but no class takes the class of its entry method. The
-    backward chain shows these names; the node comes from `_caller_node`.
+    path 有方法名稱卻沒有類別時，取 entry method 的類別。反向鏈顯示這兩個名稱；節點
+    則取自 `_caller_node`。
     """
     caller_method = str(path.get("caller_method") or "")
     if not caller_method:
@@ -306,36 +313,25 @@ def _caller_names(path: Mapping[str, object]) -> Optional[Tuple[str, str]]:
 
 
 def _caller_node(nodes: MethodNodes, path: Mapping[str, object]) -> str:
-    """The node of the method that holds a path's Database Invocation, or "" when unknown.
+    """持有 path 的 Database Invocation 的方法節點；不知道時回傳 ""。
 
-    The method span that holds the source span of the path gives the node (ADR-0044); its
-    class name and method name do not, so an overload never takes the path of another.
-    The chain joins a path by this node, not by `entry_method`: the entry method is the
-    outermost caller of a same-file chain that the call text gives, and the call graph
-    already reaches every caller through its Bound Call Targets.
+    節點取自包住 path source span 的方法 span（ADR-0044），不取自類別名稱與方法名稱，
+    所以一個 overload 不會拿到另一個 overload 的 path。鏈以這個節點銜接 path，不用
+    `entry_method`：entry method 是呼叫文字給出的同檔呼叫鏈最外層的呼叫者，而呼叫圖
+    已經沿 Bound Call Target 走到每一個呼叫者。
     """
     return nodes.of_source_span(path.get("source_span"))
 
 
 def _path_joins(nodes: MethodNodes, path: Mapping[str, object], reachable_nodes: Set[str]) -> bool:
-    """Whether a forward chain keeps a path: its method is reachable, or it has no source span.
+    """正向鏈是否保留一條 path：它的方法可達，或它沒有 source span。
 
-    A path with a source span that no method span holds (a constructor, a property
-    accessor, a field initializer) has no node, so it joins no chain.
+    有 source span、卻沒有方法 span 包住它的 path（constructor、property accessor、
+    field initializer）沒有節點，不屬於任何鏈。
     """
     if not path.get("source_span"):
         return True
     return _caller_node(nodes, path) in reachable_nodes
-
-
-def files_of_nodes(scan: ProjectScanResult, nodes: Set[str]) -> List[FileAnalysisResult]:
-    """The C# file results that declare at least one of `nodes`, in scan order."""
-    method_nodes = MethodNodes(scan)
-    return [
-        fr
-        for fr in scan.csharp_results
-        if any(span.node in nodes for span in method_nodes.spans_of(fr.file_path))
-    ]
 
 
 def build_forward_chain(
@@ -372,7 +368,7 @@ def build_forward_chain(
     if reach is None:
         return None
     method_path, reachable_nodes = reach.method_path, reach.nodes
-    method_nodes = MethodNodes(scan)
+    method_nodes = reach.method_nodes
 
     # Gateway + graph paths are the formal source for database calls.
     supplied_paths = execution_paths
@@ -523,7 +519,7 @@ def _find_ui_anchors_for_method(
 
 
 def _reverse_edges(edges: Mapping[str, List[str]]) -> Dict[str, List[str]]:
-    """node -> the nodes that call it: the Bound Call Target edges in reverse (ADR-0044)."""
+    """節點 -> 呼叫它的節點：Bound Call Target 的邊反過來（ADR-0044）。"""
     callers: Dict[str, List[str]] = {}
     for caller, callees in edges.items():
         for callee in callees:
@@ -532,15 +528,14 @@ def _reverse_edges(edges: Mapping[str, List[str]]) -> Dict[str, List[str]]:
 
 
 def _screen_anchors_by_node(
-    scan: ProjectScanResult, root: Path, screens: Sequence[ProgramScreen]
+    method_nodes: MethodNodes, root: Path, screens: Sequence[ProgramScreen]
 ) -> Dict[str, List[dict]]:
-    """node of an action -> one `ui_anchors` entry for each Program Screen that holds it.
+    """action 的節點 -> 每個持有它的 Program Screen 各一筆 `ui_anchors` 條目。
 
-    The strength is the strength of the screen-to-action link (ADR-0019): `determined`
-    for a same-name action or a markup-layer View Anchor, `likely` for a script URL.
-    An action is a name, so each overload of that name is a node of the action.
+    強度是畫面到 action 那條連結的強度（ADR-0019）：同名 action 或決定式 View Anchor
+    是 `determined`，候選式 View Anchor（script 裡的網址字串）是 `likely`。action 是
+    名稱，所以這個名稱的每一個 overload 都是這個 action 的節點。
     """
-    method_nodes = MethodNodes(scan)
     anchors: Dict[str, List[dict]] = {}
     for screen in screens:
         for action in screen.actions:
@@ -569,20 +564,20 @@ def _reverse_method_adjacency(files: List[FileAnalysisResult]) -> Dict[str, List
     return _reverse_edges(_method_adjacency(files))
 
 
-_POSSIBLE_CALLER_REASONS = ("ambiguous_implementation", "ambiguous_overload")
+_POSSIBLE_CALLER_REASONS = ("ambiguous_implementation", "ambiguous_overload", "unmapped_implementation")
 
 
 def _possible_caller_diagnostics(graph: _CallGraph, reached: Iterable[str]) -> List[dict]:
-    """The `diagnostics` entries of the calls that may reach a reached method (ticket 14).
+    """可能呼叫到被走到的方法、卻沒有 Bound Call Target 的呼叫，在 `diagnostics` 裡的條目。
 
-    The backward walk follows Bound Call Targets only. A call with no Bound Call Target
-    that is `ambiguous_implementation` or `ambiguous_overload` may still reach a method
-    whose class is one of its `candidate_classes`, so each such call gives one entry for
-    each reached method, with the forward `unresolved_call` shape plus `reached_method`.
-    A `no_local_implementer` call gives none: the class of a reached method would be a
-    Local Implementer, so the call would have a target. The calls add no edge.
+    反向走訪只沿 Bound Call Target 走。`ambiguous_implementation`、`ambiguous_overload`
+    或 `unmapped_implementation` 的呼叫沒有 Bound Call Target，但它的
+    `candidate_classes` 若含被走到方法的類別，仍可能呼叫到那個方法；這種呼叫對每個
+    被走到的方法各給一筆條目，形狀是正向的 `unresolved_call` 再加 `reached_method`。
+    `no_local_implementer` 的呼叫不給條目：被走到方法的類別若實作那個介面，就會是
+    Local Implementer，這個呼叫就會有目標。這些呼叫都不加邊。
 
-    A candidate is matched by the simple class name, the name that the analyzer host records.
+    候選以簡單類別名稱比對，也就是 analyzer host 記錄的名稱。
     """
     entries: List[dict] = []
     for node in sorted(set(reached)):
@@ -614,6 +609,15 @@ def _ancestors_of(method_name: str, rev_adj: Dict[str, List[str]], max_depth: in
     return visited
 
 
+class BackwardChains(NamedTuple):
+    """反向鏈的結果。"""
+
+    # 每筆候選鏈，形狀見 build_backward_chains。
+    chains: List[dict]
+    # 沒有 Bound Call Target、但可能呼叫到被走到方法的呼叫（unresolved_call 加 reached_method）。
+    diagnostics: List[dict]
+
+
 def build_backward_chains(
     scan,
     root: Path,
@@ -626,13 +630,12 @@ def build_backward_chains(
     sql_cache_identity: Optional[CacheIdentity],
     execution_paths: Optional[Iterable[Mapping[str, object]]] = None,
     program_screens: Sequence[ProgramScreen] = (),
-    diagnostics: Optional[List[dict]] = None,
-) -> List[dict]:
+) -> BackwardChains:
     """從指定的資料表（可選：欄位）出發，組出反向鏈候選清單。
 
+    回傳 BackwardChains：chains 是候選鏈；diagnostics 是「沒有 Bound Call Target 但可能
+    呼叫到被走到的方法」的呼叫（unresolved_call 項目，另有 reached_method）。
     database：請求的 Database；資料表名稱沒寫 database 時取這個值，比對規則見 table_match。
-    diagnostics：呼叫端給的空清單；函式把「沒有 Bound Call Target 但可能呼叫到被走到的方法」
-    的呼叫（unresolved_call 項目，另有 reached_method）加進去（ticket 14）。
     sql_cache_identity：handler 建好的 SQL 快取身分（沒有時為 None）；inline SQL 補 schema 時用它。
 
     scan：ProjectScanResult（已合併好的整包掃描結果，含 csharp_results、
@@ -663,23 +666,27 @@ def build_backward_chains(
     的 ui_anchors 誤把 A 頁面的 btnSave_Click 也列進來（明明兩者的呼叫關係毫無
     關聯，只是方法名稱剛好相同）。限縮在同一檔案後，仍能正確處理「事件處理常式
     呼叫同頁面內的其他方法」這個常見情境，但不會再跨無關頁面誤配。
+
+    這段 WebForms 控制項事件反查是 ADR-0044「反向只沿 Bound Call Target 走」的例外：
+    它仍以呼叫文字比對方法名稱，深度上限 8 層（_ancestors_of）。MVC 的 Program Screen
+    則沿 Bound Call Target 反向走，沒有深度上限。
     """
     invocations = list(invocations)
     chains: List[dict] = []
     seen: Set[Tuple[str, str, str, str]] = set()
     method_nodes = MethodNodes(scan)
     rev_adj_cache: Dict[str, Dict[str, List[str]]] = {}
-    screen_anchors = _screen_anchors_by_node(scan, root, program_screens)
+    screen_anchors = _screen_anchors_by_node(method_nodes, root, program_screens)
     call_graph = _bound_call_graph(scan)
     callers = _reverse_edges(call_graph.edges)
     reached_nodes: Set[str] = set()
 
     def _callers_reaching(node: str) -> Set[str]:
-        """`node` and each method that reaches it through Bound Call Targets."""
+        """`node` 本身，加上沿 Bound Call Target 走得到它的每一個方法。"""
         return _reachable_from([node], callers)[1] if node else set()
 
     def _program_screen_anchors(reached: Set[str]) -> List[dict]:
-        """The Program Screens of each action in `reached`."""
+        """`reached` 裡每個 action 的 Program Screen。"""
         return [anchor for caller in sorted(reached) for anchor in screen_anchors.get(caller, [])]
 
     def _rev_adj_for_file(csharp_file: str) -> Dict[str, List[str]]:
@@ -699,11 +706,12 @@ def build_backward_chains(
         access_record: Optional[Mapping[str, object]] = None,
         entry_method_name: str = "",
     ) -> None:
-        # `node` is the method span that holds the access: two overloads are two chains.
+        # `node` 是持有這次存取的方法 span：兩個 overload 是兩條鏈。
         key = (csharp_file, class_name, method_name, node)
         if key in seen:
             return
         seen.add(key)
+        # WebForms 控制項事件：同檔、以呼叫文字反查（ADR-0044 的 WebForms 例外）。
         rev_adj = _rev_adj_for_file(csharp_file)
         candidate_methods: Set[str] = set()
         for name in {method_name, entry_method_name} - {""}:
@@ -800,9 +808,8 @@ def build_backward_chains(
         entry_class, separator, entry_method_name = entry_method.rpartition(".")
         if not separator:
             entry_class, entry_method_name = "", entry_method
-        # The chain names the method that holds the invocation, the same join that the
-        # forward chain uses (see _caller_node). The entry method still finds the
-        # WebForms control events of the page.
+        # 鏈列出持有這次呼叫的方法，跟正向鏈的銜接方式一樣（見 _caller_node）；
+        # entry method 仍用來找頁面的 WebForms 控制項事件。
         class_name, method_name = _caller_names(access_record) or (entry_class, entry_method_name)
         sp_chain = list(access_record.get("sp_chain") or [])
         add_chain(
@@ -836,9 +843,7 @@ def build_backward_chains(
             via="direct_sql",
         )
 
-    if diagnostics is not None:
-        diagnostics.extend(_possible_caller_diagnostics(call_graph, reached_nodes))
-    return chains
+    return BackwardChains(chains, _possible_caller_diagnostics(call_graph, reached_nodes))
 
 
 def _graph_access_matches_column(access_record: Mapping[str, object], column_name: str) -> bool:

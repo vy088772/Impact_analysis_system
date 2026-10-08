@@ -25,7 +25,7 @@ The call graph follows only the methods that a call reaches. It does not add the
 
 The analyzer host records the Bound Call Target of each call. The host uses the semantic model, so it resolves fields, primary constructor parameters, properties, local variables, and overloads. When the bound method belongs to an interface, the host resolves the interface through the Local Implementer rule. The call graph uses the Bound Call Target. It does not use the call text.
 
-When no Local Implementer exists, or when two or more exist, the branch stops at that call. The chain reports the call and the reason in its `diagnostics`. It does not guess an implementation.
+When no Local Implementer exists, or when two or more exist, the branch stops at that call. The chain reports the call and the reason in its `diagnostics`. It does not guess an implementation. When one Local Implementer exists but no method of it maps to the interface method, the call is `unmapped_implementation`, with that class as its one candidate class, and the branch also stops.
 
 A call whose arguments do not bind gives candidate symbols, not one bound symbol. When all the candidates are overloads of one method in one class, the call reaches each candidate overload. This is not a guess between implementations: the class is known, and only the overload is open. Candidates in two or more classes stay `ambiguous_overload`, and the branch stops.
 
@@ -35,9 +35,13 @@ The reachable set has no depth limit. A visited set stops each cycle. A node is 
 
 ### Backward direction
 
-The backward chain uses the same edges in reverse. From a service method, it walks back to each controller action that reaches it. It then gives every Program Screen that holds that action, with the strength of the screen-to-action link: determined for a same-name action or a markup-layer View Anchor, and `likely` for a script URL View Anchor.
+The backward chain uses the same edges in reverse. From a service method, it walks back to each controller action that reaches it. It then gives every Program Screen that holds that action, with the strength of the screen-to-action link: determined for a same-name action or a determined View Anchor, and `likely` for a candidate View Anchor. A Razor URL helper, such as `@Url.Action("A", "C")`, is a determined View Anchor also inside a `<script>` block. A URL string in a script is a candidate View Anchor.
 
-The backward walk follows Bound Call Targets only. A call with no Bound Call Target may still reach a reached method. An `ambiguous_implementation` or `ambiguous_overload` call whose `candidate_classes` hold the class of a reached method appears in the backward `diagnostics`, in the forward `unresolved_call` shape plus `reached_method`. A reached method is the method that holds the access, and each method that reaches it. The walk does not follow the call. A `no_local_implementer` call gives no entry: the class of a reached method would be a Local Implementer, so the call would have a target. The match uses the simple class name that the analyzer host records, so two classes with one simple name in two namespaces can give a false entry.
+The backward walk follows Bound Call Targets only. A call with no Bound Call Target may still reach a reached method. An `ambiguous_implementation`, `ambiguous_overload` or `unmapped_implementation` call whose `candidate_classes` hold the class of a reached method appears in the backward `diagnostics`, in the forward `unresolved_call` shape plus `reached_method`. A reached method is the method that holds the access, and each method that reaches it. The walk does not follow the call. A `no_local_implementer` call gives no entry: the class of a reached method would be a Local Implementer, so the call would have a target. The match uses the simple class name that the analyzer host records, so two classes with one simple name in two namespaces can give a false entry.
+
+### WebForms control events
+
+A WebForms page has no Program Screen. The backward chain finds the `ui_anchors` of a WebForms method from the control events of its `.aspx` file. This search is an exception to the Backward direction and Depth rules. It matches the call text by method name, only inside the code-behind file of the method, and it stops at eight levels. The scan has no other link from a control event to its handler. The same-file limit keeps the same method names of other pages out. The forward chain and the MVC Program Screens of the backward chain do not use this search.
 
 ### One edge source
 

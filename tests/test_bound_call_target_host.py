@@ -42,6 +42,7 @@ using System.Linq;
 public interface IJobService { void Invalidate(int id); void Invalidate(string id); }
 public interface IShared { void Run(); }
 public interface IOrphan { void Lost(); }
+public interface IDrift { void Drift(); }
 
 public class JobService : IJobService
 {
@@ -50,6 +51,8 @@ public class JobService : IJobService
 }
 public class SharedA : IShared { public void Run() { } }
 public class SharedB : IShared { public void Run() { } }
+// Names the interface and a method of its name, but the parameters do not match.
+public class Drifted : IDrift { public void Drift(int step) { } }
 
 public abstract class BaseRepo { public void Save() { } }
 public interface IRepo { void Save(); }
@@ -67,6 +70,7 @@ public class Controller(IJobService _primary)
     public IJobService Prop { get; }
     private readonly IShared _shared;
     private readonly IOrphan _orphan;
+    private readonly IDrift _drift;
     private readonly IRepo _repo;
 
     public void Act()
@@ -78,6 +82,7 @@ public class Controller(IJobService _primary)
         local.Invalidate(4);
         _shared.Run();
         _orphan.Lost();
+        _drift.Drift();
         _repo.Save();
         var doubled = 5.Twice();
         System.Console.WriteLine("framework");
@@ -148,6 +153,15 @@ def test_an_interface_with_no_or_two_local_implementers_has_no_target(synthetic_
     assert calls["_shared.Run"]["candidate_classes"] == ["SharedA", "SharedB"]
     assert calls["_orphan.Lost"]["target_method"] == ""
     assert calls["_orphan.Lost"]["unresolved_reason"] == "no_local_implementer"
+
+
+@requires_dotnet
+def test_one_local_implementer_with_no_matching_method_names_that_implementer(synthetic_calls) -> None:
+    calls = {call["call_text"]: call for call in synthetic_calls["Controller.Act"]}
+
+    assert calls["_drift.Drift"]["target_method"] == ""
+    assert calls["_drift.Drift"]["unresolved_reason"] == "unmapped_implementation"
+    assert calls["_drift.Drift"]["candidate_classes"] == ["Drifted"]
 
 
 @requires_dotnet
@@ -291,7 +305,7 @@ def test_a_scan_keeps_each_bound_call_target_in_the_scan_cache(tmp_path: Path) -
 
     [save] = cached.source_snapshots["OrderPage.cs"].method_spans
     assert save.node == "OrderPage.Save()"
-    assert [(call.call_text, call.bound_target) for call in save.calls] == [
+    assert [(call.call_text, call.target_node) for call in save.calls] == [
         ("_orders.Store", "OrderService.Store()")
     ]
 
@@ -342,7 +356,7 @@ def test_a_database_invocation_its_method_span_and_a_call_target_give_one_node(t
     node = MethodNodes(scan).at_offset("Store.cs", invocation["start_offset"])
     assert node == "Shop.Store.Save(string)"
     assert node in spans
-    assert call.bound_target == node
+    assert call.target_node == node
 
 
 @requires_dotnet

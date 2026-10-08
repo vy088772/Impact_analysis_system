@@ -110,3 +110,12 @@ Choices:
   Backward: 192 fully reached.
 - `tests/test_search_roles.py` and `tests/test_sp_tables.py` fail at collection
   (`KeyError: 'PUR'`). They are not from this ticket. The other 1866 tests pass.
+
+**Code review follow-up (2026-10-08, ticket 18):**
+
+- The brief says "A relative `src` goes to `wwwroot` first." The code then
+  tries the folder of the view (`_resolve_script_src`). The notes above record
+  this choice; the brief did not state the second step. Kept.
+- The notes above say "the parser has no cache for it". Commit f970eca then
+  added `_script_text_cache`: a `.js` file that several views load is read once
+  per parser, keyed by its `(mtime, size)`. Kept.

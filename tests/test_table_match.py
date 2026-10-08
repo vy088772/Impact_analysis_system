@@ -411,7 +411,7 @@ def test_the_backward_chain_keeps_an_inline_relation_whose_connection_is_unresol
 
     chains = flow_chain_builder.build_backward_chains(
         scan, tmp_path, "dbo.Users", database="Response", sql_cache_identity=None
-    )
+    ).chains
 
     assert [(chain["via"], chain["method"]) for chain in chains] == [("direct_sql", "Load")]
 

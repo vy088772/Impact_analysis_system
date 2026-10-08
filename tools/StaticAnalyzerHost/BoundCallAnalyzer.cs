@@ -9,8 +9,9 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 /// cref="TargetClass"/> and <see cref="TargetMethod"/> are its simple names, for display.
 ///
 /// A call through a corpus interface with no Local Implementer, or with two or more, has no
-/// target. It keeps its <see cref="UnresolvedReason"/> and, for a tie, every candidate class, so
-/// the chain can report the call instead of a guess.
+/// target. Nor does a call whose one Local Implementer has no method that the compiler, or the
+/// parameter types, map to the interface method. It keeps its <see cref="UnresolvedReason"/> and
+/// every candidate class, so the chain can report the call instead of a guess.
 /// </summary>
 internal sealed record BoundCall(
     string CallText,
@@ -36,6 +37,7 @@ internal static class BoundCallAnalyzer
     internal const string NoLocalImplementer = "no_local_implementer";
     internal const string AmbiguousImplementation = "ambiguous_implementation";
     internal const string AmbiguousOverload = "ambiguous_overload";
+    internal const string UnmappedImplementation = "unmapped_implementation";
 
     private static readonly Lazy<IReadOnlyList<MetadataReference>> RuntimeReferences = new(() =>
         (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? "")
@@ -164,7 +166,7 @@ internal static class BoundCallAnalyzer
             {
                 1 => ImplementationOf(method, implementers[0], semanticModel.Compilation) is { } implementation
                     ? Target(implementation)
-                    : Unresolved(NoLocalImplementer, Array.Empty<string>()),
+                    : Unresolved(UnmappedImplementation, new[] { implementers[0].ClassName }),
                 0 => Unresolved(NoLocalImplementer, Array.Empty<string>()),
                 _ => Unresolved(AmbiguousImplementation, implementers.Select(implementer => implementer.ClassName)),
             };

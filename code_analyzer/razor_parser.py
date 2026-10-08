@@ -113,8 +113,10 @@ class RazorParser:
     # `Url.Action("A", "C", ...)`、`Url.Action("A")`（沒有 controller 就是畫面自己的）、
     # `Html.BeginForm("A", "C", ...)`。第一個引數不是字串常值（變數）就不算。第二個
     # 字串引數是 controller；第二個引數若是 `new { ... }` 或 `FormMethod.Post` 就沒有。
+    # 第二個引數是其他東西（變數）也不算：它可能是 controller，也可能是路由值。
     URL_HELPER_PATTERN = re.compile(
-        r'\b(?:Url\.Action|Html\.BeginForm)\(\s*"([^"]+)"(?:\s*,\s*"([^"]+)")?'
+        r'\b(?:Url\.Action|Html\.BeginForm)\(\s*"([^"]+)"\s*'
+        r'(?:,\s*"([^"]+)"|(?=\)|,\s*new\b|,\s*FormMethod\.))'
     )
 
     # 候選式：畫面自己 <script> 區塊裡的字串常值，形狀像 /Controller/Action。引號可以是
@@ -449,10 +451,7 @@ class RazorParser:
                 anchors.append({'page': page_match.group(1)})
 
         for form_match in self.FORM_ACTION_PATTERN.finditer(content):
-            parsed = self._leading_controller_action(form_match.group(1))
-            if parsed:
-                controller, action = parsed
-                anchors.append({'action': action, 'controller': controller})
+            anchors.extend(self._controller_action_anchor(self._leading_controller_action(form_match.group(1))))
 
         # 被註解掉的呼叫是死的，不是畫面會呼叫的目的地。
         live = re.sub(self.HTML_COMMENT_PATTERN, '', re.sub(self.RAZOR_COMMENT_PATTERN, '', content, flags=re.DOTALL), flags=re.DOTALL)
@@ -474,10 +473,7 @@ class RazorParser:
             anchors.extend(self._anchors_in_script_text(script_match.group(1)))
 
         for attr_match in self.DATA_URL_ATTR_PATTERN.finditer(content):
-            parsed = self._leading_controller_action(attr_match.group(1))
-            if parsed:
-                controller, action = parsed
-                anchors.append({'action': action, 'controller': controller})
+            anchors.extend(self._controller_action_anchor(self._leading_controller_action(attr_match.group(1))))
 
         for script_text in self._loaded_script_texts(content):
             code = '\n'.join(
@@ -490,11 +486,16 @@ class RazorParser:
     def _anchors_in_script_text(self, script_text: str) -> List[Dict]:
         anchors: List[Dict] = []
         for literal_match in self.STRING_LITERAL_PATTERN.finditer(script_text):
-            parsed = self._exact_controller_action(literal_match.group(2))
-            if parsed:
-                controller, action = parsed
-                anchors.append({'action': action, 'controller': controller})
+            anchors.extend(self._controller_action_anchor(self._exact_controller_action(literal_match.group(2))))
         return anchors
+
+    @staticmethod
+    def _controller_action_anchor(parsed: Optional[Tuple[str, str]]) -> List[Dict]:
+        """網址解析出的 (controller, action) 變成一個 View Anchor；解析不出來就沒有。"""
+        if not parsed:
+            return []
+        controller, action = parsed
+        return [{'action': action, 'controller': controller}]
 
     def _loaded_script_texts(self, content: str) -> List[str]:
         """畫面用 `<script src>` 載入、而且找得到的 .js 檔內容（不跟隨 .js 載入 .js，
