@@ -110,8 +110,9 @@ class CallSite:
     `target_method` are its simple names, for display. All three are empty when
     the call has no Bound Call Target; `unresolved_reason` then says why, and
     `candidate_classes` names the classes the call may reach: each tied class of
-    `ambiguous_implementation`, the class of each candidate of `ambiguous_overload`,
-    and the one Local Implementer of `unmapped_implementation`.
+    `ambiguous_implementation`, the containing type of each candidate of
+    `ambiguous_overload` (a class or an interface), and the one Local Implementer
+    of `unmapped_implementation`. All are simple names, sorted, with no repeat.
     """
 
     call_text: str

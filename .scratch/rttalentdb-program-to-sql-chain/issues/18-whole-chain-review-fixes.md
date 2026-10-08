@@ -59,3 +59,25 @@ Spec axis:
 - New tests: `test_one_local_implementer_with_no_matching_method_names_that_implementer`,
   `test_an_unmapped_implementation_call_appears_in_the_backward_diagnostics`,
   `test_an_url_action_call_with_a_variable_second_argument_gives_no_anchor`.
+
+## Code review follow-up (2026-10-08)
+
+The two-axis review of the first commit found these. All are fixed:
+
+- The `URL_HELPER_PATTERN` lookahead also dropped `Html.BeginForm("A", null,
+  FormMethod.Post)`, `@"C"` and named arguments. `null` and a named argument
+  such as `values:` now name no controller. `@"C"` and `controllerName: "C"`
+  name one. A variable still gives no anchor. Four new tests. The 1357 helper
+  calls of the cached systems still give the same result, so the v52 rescan
+  stays valid.
+- **Local Implementer** in the glossary said that the class "itself declares
+  the invoked method", so a class with no mapped method was not one. The entry
+  now says that the search compares names, and names `unmapped_implementation`.
+- The ADR-0044 WebForms section said "only inside the code-behind file". The
+  search compares file names, not folders, and also reads `.ascx`. The section
+  now says so, and names the false match of two pages with one file name.
+- ADR-0044: an `unmapped_implementation` call gives an entry when any method
+  of its implementer is reached.
+- The `CallSite` docstring states that `ambiguous_overload` candidates are
+  containing types (a class or an interface). `ForwardReach.files` states
+  that `scan` must be the scan of the reach.

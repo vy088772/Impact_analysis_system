@@ -225,7 +225,10 @@ class ForwardReach(NamedTuple):
         return {self.names[node] for node in self.nodes}
 
     def files(self, scan: ProjectScanResult) -> List[FileAnalysisResult]:
-        """宣告至少一個可達節點的 C# 檔案結果，依掃描順序。"""
+        """宣告至少一個可達節點的 C# 檔案結果，依掃描順序。
+
+        scan 必須是算出這份可達集合的同一份掃描結果；method_nodes 取自它。
+        """
         return [
             fr
             for fr in scan.csharp_results

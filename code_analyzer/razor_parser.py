@@ -113,10 +113,13 @@ class RazorParser:
     # `Url.Action("A", "C", ...)`、`Url.Action("A")`（沒有 controller 就是畫面自己的）、
     # `Html.BeginForm("A", "C", ...)`。第一個引數不是字串常值（變數）就不算。第二個
     # 字串引數是 controller；第二個引數若是 `new { ... }` 或 `FormMethod.Post` 就沒有。
-    # 第二個引數是其他東西（變數）也不算：它可能是 controller，也可能是路由值。
+    # 第二個引數是 `null` 或其他具名引數（`values: ...`）也沒有 controller；`@"C"` 與
+    # `controllerName: "C"` 是 controller。第二個引數是其他東西（變數）就不算：它可能是
+    # controller，也可能是路由值。
     URL_HELPER_PATTERN = re.compile(
         r'\b(?:Url\.Action|Html\.BeginForm)\(\s*"([^"]+)"\s*'
-        r'(?:,\s*"([^"]+)"|(?=\)|,\s*new\b|,\s*FormMethod\.))'
+        r'(?:,\s*(?:controllerName\s*:\s*)?@?"([^"]+)"'
+        r'|(?=\)|,\s*(?:new\b|FormMethod\.|null\b|(?!controllerName\b)[A-Za-z_]\w*\s*:(?!:))))'
     )
 
     # 候選式：畫面自己 <script> 區塊裡的字串常值，形狀像 /Controller/Action。引號可以是

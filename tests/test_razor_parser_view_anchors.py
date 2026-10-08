@@ -224,6 +224,30 @@ def test_an_url_action_call_with_a_variable_second_argument_gives_no_anchor(
     assert result.view_anchors_determined == []
 
 
+def test_a_null_controller_argument_has_no_controller(tmp_path: Path) -> None:
+    result = _parse(tmp_path, '@using (Html.BeginForm("Export", null, FormMethod.Post)) { }')
+
+    assert result.view_anchors_determined == [{"action": "Export"}]
+
+
+def test_a_verbatim_string_controller_names_that_controller(tmp_path: Path) -> None:
+    result = _parse(tmp_path, '<a href="@Url.Action("Edit", @"Order")">x</a>')
+
+    assert result.view_anchors_determined == [{"action": "Edit", "controller": "Order"}]
+
+
+def test_a_named_controller_argument_names_that_controller(tmp_path: Path) -> None:
+    result = _parse(tmp_path, '<a href="@Url.Action("Edit", controllerName: "Order")">x</a>')
+
+    assert result.view_anchors_determined == [{"action": "Edit", "controller": "Order"}]
+
+
+def test_a_named_route_values_argument_has_no_controller(tmp_path: Path) -> None:
+    result = _parse(tmp_path, '<a href="@Url.Action("Edit", values: new { id = 1 })">x</a>')
+
+    assert result.view_anchors_determined == [{"action": "Edit"}]
+
+
 def test_a_begin_form_call_is_a_determined_anchor(tmp_path: Path) -> None:
     result = _parse(
         tmp_path,
