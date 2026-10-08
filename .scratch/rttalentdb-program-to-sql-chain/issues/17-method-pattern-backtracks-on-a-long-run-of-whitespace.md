@@ -7,13 +7,13 @@ linear on a run of whitespace, so this file parses in less than one second.
 
 **Blocked by:** 16
 
-**Status:** in-review (2026-10-08, worktree `.claude/worktrees/ticket17-method-pattern`, branch `ticket17-method-pattern`)
+**Status:** done (2026-10-08)
 
 **Category:** bug (performance)
 
-- [ ] `ToolExcelCreateService.cs` parses in less than one second
-- [ ] The parser output of each scan root does not change, or each change has a report
-- [ ] A test parses a long run of whitespace in a time limit
+- [x] `ToolExcelCreateService.cs` parses in less than one second
+- [x] The parser output of each scan root does not change, or each change has a report
+- [x] A test parses a long run of whitespace in a time limit
 
 **Notes:**
 
@@ -110,21 +110,21 @@ constant.
   tickets can take the same number.
 
 **Acceptance criteria:**
-- [ ] A test runs `METHOD_PATTERN` (with `re.MULTILINE`) on 20,000 spaces
+- [x] A test runs `METHOD_PATTERN` (with `re.MULTILINE`) on 20,000 spaces
   and finishes in less than one second.
-- [ ] A test shows that `void Foo()` and `static int Bar()` after blank
+- [x] A test shows that `void Foo()` and `static int Bar()` after blank
   lines get the line number of the declaration.
-- [ ] A test shows that declarations with an access modifier, modifiers,
+- [x] A test shows that declarations with an access modifier, modifiers,
   a generic return type, a tuple return type and a generic method name give
   the same groups as before.
-- [ ] `ToolExcelCreateService.cs` in TOPCSCY parses in less than one
+- [x] `ToolExcelCreateService.cs` in TOPCSCY parses in less than one
   second (`parse_file`, idle machine).
-- [ ] With the old-to-new comparison script of ticket 16, the full
+- [x] With the old-to-new comparison script of ticket 16, the full
   `parse_file` result on each `.cs` file of the 16 scan roots is the same,
   except for `analysis_time` and the method line number above. Report each
   other difference. Do not accept it without a report.
-- [ ] The scan cache version rises by one.
-- [ ] The full test suite has no new failures. (Known failures on HEAD:
+- [x] The scan cache version rises by one.
+- [x] The full test suite has no new failures. (Known failures on HEAD:
   `test_program_refresh`, `test_wrapper_decompilation`, and the collection
   errors of `test_search_roles.py` and `test_sp_tables.py`.)
 
@@ -146,7 +146,8 @@ constant.
 - `re.finditer(METHOD_PATTERN, " " * 20_000, re.M)` now takes less than
   0.01 s.
 - `parse_file` on `TOPCSCY/TOPCSCY/Services/DSM/ToolExcelCreateService.cs`:
-  0.37 s (3 runs, with the comparison below on 8 other processes).
+  0.30 s (3 runs, load average 1.9). With the comparison below on 8 other
+  processes, it took 0.37 s. The old pattern took 16.95 s.
 - Old-to-new comparison: the script parsed each `.cs` file of the 16 scan
   roots (2,641 files) with the old pattern and the new pattern. It compared
   the full `parse_file` result. Only two fields change:
@@ -177,5 +178,12 @@ constant.
   363 s. Now the slowest files do not depend on `METHOD_PATTERN`
   (`TTRDQ/Dev/DevPartDetail.aspx.cs` 9.8 s,
   `TOPCSCY/Models/HomeViewModel.cs` 7.9 s). These are out of scope.
+- Full test suite: 1881 passed, 2 failed, 2 collection errors. These are
+  the known failures on HEAD: `test_program_refresh`,
+  `test_wrapper_decompilation`, and the collection errors of
+  `test_search_roles.py` and `test_sp_tables.py` (`KeyError: 'PUR'`).
+- Code review (Standards and Spec): no hard violation and no wrong
+  implementation. The fixes: this note records the suite result and the
+  idle-machine time, and the test tuple is now `_METHOD_GROUPS`.
 - The shared scan cache needs a local rescan for v51 (out of scope; the
   user runs it).

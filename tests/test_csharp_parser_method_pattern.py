@@ -19,7 +19,7 @@ import pytest
 from code_analyzer.csharp_parser import CSharpParser
 from code_analyzer.models import CodeLocation
 
-_GROUPS = ("access", "static", "virtual", "override", "abstract", "async", "ret", "name")
+_METHOD_GROUPS = ("access", "static", "virtual", "override", "abstract", "async", "ret", "name")
 
 
 def _line(location: Optional[CodeLocation]) -> int:
@@ -104,4 +104,4 @@ def test_a_declaration_gives_the_same_groups(
     match = re.search(CSharpParser.METHOD_PATTERN, source, re.MULTILINE)
 
     assert match is not None
-    assert match.group(*_GROUPS) == groups
+    assert match.group(*_METHOD_GROUPS) == groups
