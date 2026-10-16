@@ -20,7 +20,6 @@ from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache
 
 client = TestClient(app)
 
-TERMINAL = {"succeeded", "failed", "cancelled"}
 
 
 @pytest.fixture(autouse=True)

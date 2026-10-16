@@ -20,6 +20,7 @@ from . import refresh_progress
 ProgressCallback = Callable[[str, int, int, str], None]
 RefreshRun = Callable[[ProgressCallback], dict]
 
+
 def sql_key(identity_key: str) -> str:
     return f"sql:{identity_key}"
 
