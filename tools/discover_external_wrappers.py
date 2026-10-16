@@ -35,6 +35,7 @@ from service import analyze_service, scan_store  # noqa: E402
 from service.system_targets import (  # noqa: E402
     default_spec_rag_root,
     load_system_catalog,
+    read_or_rebuild_scan,
     resolve_system_targets,
     scan_cache_state,
 )
@@ -148,7 +149,7 @@ def _scan_report(
             [],
         )
 
-    scan = scan_store.get_or_scan(root, refresh=False)
+    scan = read_or_rebuild_scan(root)
     groups: OrderedDict[tuple, Dict[str, Any]] = OrderedDict()
     wrapper_calls = 0
     catalog = analyze_service.load_sp_catalog(system_id)

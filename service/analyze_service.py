@@ -88,7 +88,7 @@ from .shared_component import (
 )
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots
-from .scan_store import cache_status, cached_commit, get_or_scan, save_scan
+from .scan_store import cache_status, cached_commit, read_scan, rebuild_scan, save_scan
 from . import sql_cache_store
 from .request_context import Skipped, build_request_context, merge_scans as _merge_scans
 from .request_context_adapters import CacheIdentityResult, CacheStore, RealCacheStore, RealScanStore, ScanStore
@@ -2094,7 +2094,7 @@ def find_by_sp(
     is_cloned() 只檢查 repo 根目錄有沒有 .git，只要「任一」共用該 repo 的系統先
     分析過，其他共用系統的 is_cloned() 也會回傳 True，即使它自己的子路徑從沒被
     掃描過、快取根本不存在 —— 那樣會誤判成「已分析過」而略過 cache_only 檢查，
-    導致直接掉進下面的 get_or_scan() 觸發一次全新的完整掃描（就是使用者看到
+    導致直接掉進下面的掃描呼叫、觸發一次全新的完整掃描（就是使用者看到
     「明明 cache_only=True 卻還是重新掃描」的成因）。
     正確做法：比對「這個系統實際會用到的掃描快取」是否存在（scan_store.has_cache()，
     以解析後的實際路徑雜湊為鍵），而不是只看 repo 有沒有 clone 過。
@@ -3242,7 +3242,7 @@ def refresh_programs(root: Path, program_names: List[str]) -> ProgramRefreshResu
     """Refresh only files matching the requested programs in one scan root."""
     requested = list(dict.fromkeys(name.strip() for name in program_names if name.strip()))
     _require_current_program_cache(root)
-    scan = get_or_scan(root, refresh=False)
+    scan = read_scan(root)
 
     scanner = ProjectScanner(project_root=str(root))
     current_csharp_files = _unique_refresh_paths(scanner.find_csharp_files())
@@ -3351,7 +3351,7 @@ def refresh_source(
     )
 
     if not requested:
-        scans = [get_or_scan(r, refresh=True) for r in roots]
+        scans = [rebuild_scan(r) for r in roots]
         scan = scans[0] if len(scans) == 1 else _merge_scans(scans)
         scope = "system"
         partial = False
@@ -3573,7 +3573,7 @@ def redecompile_wrapper_receiver(
         )
     root = roots[0]
 
-    scan = get_or_scan(root, refresh=True)
+    scan = rebuild_scan(root)
     external_sources = _external_wrapper_sources(scan)
     matched_receiver = next(
         (

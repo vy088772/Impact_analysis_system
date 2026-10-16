@@ -110,11 +110,8 @@ def _patch_refresh(monkeypatch, root: Path, scan: ProjectScanResult) -> None:
         "resolve_scan_roots",
         lambda source, refresh=False: [root],
     )
-    monkeypatch.setattr(
-        analyze_service,
-        "get_or_scan",
-        lambda scan_root, refresh=False: scan,
-    )
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scan)
     monkeypatch.setattr(
         analyze_service,
         "load_contract_registry",
@@ -411,11 +408,8 @@ def test_source_backed_receiver_in_one_root_blocks_other_root_decompilation(
         lambda source, refresh=False: [source_root, external_root],
     )
     scans = {source_root: source_scan, external_root: external_scan}
-    monkeypatch.setattr(
-        analyze_service,
-        "get_or_scan",
-        lambda scan_root, refresh=False: scans[scan_root],
-    )
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scans[scan_root])
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scans[scan_root])
     monkeypatch.setattr(
         analyze_service,
         "load_contract_registry",

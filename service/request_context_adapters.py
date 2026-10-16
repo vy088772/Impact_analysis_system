@@ -15,7 +15,8 @@ class ScanStore(Protocol):
     def resolve_source(self, request: object) -> Source: ...
     def peek_scan_roots(self, source: Source) -> list[Path]: ...
     def resolve_scan_roots(self, source: Source, *, refresh: bool) -> list[Path]: ...
-    def get_scan(self, root: Path, *, refresh: bool) -> ProjectScanResult: ...
+    def read_scan(self, root: Path) -> ProjectScanResult: ...
+    def rebuild_scan(self, root: Path) -> ProjectScanResult: ...
     def has_cache(self, root: Path) -> bool: ...
     def repo_dir(self, project: str, repo: str) -> Path: ...
 
@@ -40,8 +41,11 @@ class RealScanStore:
     def resolve_scan_roots(self, source: Source, *, refresh: bool) -> list[Path]:
         return repo_manager.resolve_scan_roots(source, refresh=refresh)
 
-    def get_scan(self, root: Path, *, refresh: bool) -> ProjectScanResult:
-        return scan_store.get_or_scan(root, refresh=refresh)
+    def read_scan(self, root: Path) -> ProjectScanResult:
+        return scan_store.read_scan(root)
+
+    def rebuild_scan(self, root: Path) -> ProjectScanResult:
+        return scan_store.rebuild_scan(root)
 
     def has_cache(self, root: Path) -> bool:
         return scan_store.has_cache(root)
@@ -76,7 +80,11 @@ class InMemoryScanStore:
         self.calls.append("resolve")
         return list(self.roots)
 
-    def get_scan(self, root: Path, *, refresh: bool) -> ProjectScanResult:
+    def read_scan(self, root: Path) -> ProjectScanResult:
+        self.calls.append("scan")
+        return self.scans[root]
+
+    def rebuild_scan(self, root: Path) -> ProjectScanResult:
         self.calls.append("scan")
         return self.scans[root]
 

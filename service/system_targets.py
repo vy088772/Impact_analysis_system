@@ -19,6 +19,18 @@ from config.settings import settings
 from . import repo_manager, scan_store
 
 
+def read_or_rebuild_scan(root: Path):
+    """Read a usable C# Scan Result, and rebuild it on purpose when none exists.
+
+    Today's tools scan a System that has no usable result. Ticket 04 of cache-refresh-queue
+    decides whether this fallback stays.
+    """
+    try:
+        return scan_store.read_scan(root)
+    except scan_store.ScanOutdated:
+        return scan_store.rebuild_scan(root)
+
+
 def scan_cache_state(root: Path) -> Tuple[bool, str]:
     """Whether one scan root has a usable cache, and why not when it has none.
 

@@ -85,7 +85,7 @@ def _code_status(azure: dict) -> tuple[str, str]:
 
     # 已有快取 → 再比對「掃描當下記錄的 commit」與「repo 目前本機 HEAD」是否一致，
     # 偵測 repo 已 git pull 到新版、但掃描快取還是舊版程式碼結果的情況。快取本身
-    # 是否過期不影響快取是否可用（get_or_scan 仍會沿用），這裡只是額外提醒。
+    # 是否過期不影響快取是否可用（read_scan 仍會沿用），這裡只是額外提醒。
     stale = False
     for r in scan_roots:
         cached = scan_store.cached_commit(r)

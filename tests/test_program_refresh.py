@@ -182,7 +182,8 @@ def test_refresh_programs_replaces_selected_cache_records_only(monkeypatch, tmp_
         return scan
 
     monkeypatch.setattr(analyze_service, "cache_status", lambda scan_root: "current")
-    monkeypatch.setattr(analyze_service, "get_or_scan", fake_get_or_scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_get_or_scan(root, False))
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_get_or_scan(root, True))
     monkeypatch.setattr(analyze_service, "ProjectScanner", FakeScanner)
     monkeypatch.setattr(analyze_service, "save_scan", lambda scan_root, result: save_calls.append(result))
 
@@ -230,7 +231,8 @@ def test_refresh_programs_removes_deleted_orphaned_wrapper_facts(monkeypatch, tm
             return []
 
     monkeypatch.setattr(analyze_service, "cache_status", lambda scan_root: "current")
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scan)
     monkeypatch.setattr(analyze_service, "ProjectScanner", FakeScanner)
     monkeypatch.setattr(analyze_service, "save_scan", lambda scan_root, result: None)
 
@@ -622,7 +624,8 @@ def test_refresh_source_without_programs_keeps_full_refresh(monkeypatch, tmp_pat
         refresh_flags.append(refresh)
         return scan
 
-    monkeypatch.setattr(analyze_service, "get_or_scan", fake_get_or_scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_get_or_scan(root, False))
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_get_or_scan(root, True))
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 
@@ -676,7 +679,8 @@ def test_full_refresh_reconciles_raw_wrappers_once_without_sql(monkeypatch, tmp_
         scan_calls.append((scan_root, refresh))
         return scan
 
-    monkeypatch.setattr(analyze_service, "get_or_scan", fake_get_or_scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_get_or_scan(root, False))
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_get_or_scan(root, True))
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 
@@ -742,7 +746,8 @@ def test_refresh_response_wrapper_summary_accepts_real_refresh_shape(
         "resolve_scan_roots",
         lambda source, refresh=False: [root],
     )
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scan)
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 
@@ -796,11 +801,8 @@ def test_refresh_response_carries_framework_label_per_scan_root(monkeypatch, tmp
         "resolve_scan_roots",
         lambda source, refresh=False: [ttpur_root, atv_root],
     )
-    monkeypatch.setattr(
-        analyze_service,
-        "get_or_scan",
-        lambda scan_root, refresh=False: scans[str(scan_root)],
-    )
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scans[str(scan_root)])
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scans[str(scan_root)])
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 
@@ -911,7 +913,8 @@ def test_review_candidates_keep_each_source_snapshot_identity(monkeypatch, tmp_p
         "resolve_scan_roots",
         lambda source, refresh=False: [root],
     )
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scan)
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 
@@ -962,7 +965,8 @@ def test_refresh_selector_does_not_prove_database_evidence(monkeypatch, tmp_path
     )
 
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scan)
 
     result = analyze_service.refresh_source(
         {"project": "p", "repo": "r"},
@@ -1085,7 +1089,8 @@ def test_uncataloged_database_call_reaches_review_items_even_when_unambiguous(
     )
 
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scan)
 
     result = analyze_service.refresh_source(
         {"project": "p", "repo": "r"},
@@ -1141,7 +1146,8 @@ def test_refresh_reconciles_multi_root_wrappers_with_root_provenance(monkeypatch
         scan_calls.append((root, refresh))
         return scans[root]
 
-    monkeypatch.setattr(analyze_service, "get_or_scan", fake_get_or_scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_get_or_scan(root, False))
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_get_or_scan(root, True))
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 
@@ -1182,13 +1188,12 @@ def test_partial_refresh_reconciles_selected_cache_without_full_scan(monkeypatch
 
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
     monkeypatch.setattr(analyze_service, "cache_status", lambda scan_root: "current")
-    monkeypatch.setattr(
-        analyze_service,
-        "get_or_scan",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
+    monkeypatch.setattr(analyze_service, "read_scan", lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("partial wrapper reconciliation triggered a full scan")
-        ),
-    )
+        ))
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("partial wrapper reconciliation triggered a full scan")
+        ))
     monkeypatch.setattr(
         analyze_service,
         "refresh_programs",
@@ -1304,7 +1309,8 @@ def test_partial_refresh_keeps_wrapper_source_lookup_inside_each_root(monkeypatc
 
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: roots)
     monkeypatch.setattr(analyze_service, "cache_status", lambda scan_root: "current")
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda root, refresh=False: scans[root])
+    monkeypatch.setattr(analyze_service, "read_scan", lambda root: scans[root])
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: scans[root])
     monkeypatch.setattr(analyze_service, "ProjectScanner", lambda project_root: scanners[Path(project_root)])
     monkeypatch.setattr(analyze_service, "save_scan", lambda scan_root, result: None)
 
@@ -1335,7 +1341,8 @@ def test_refresh_does_not_write_wrapper_registry_or_system_catalog(monkeypatch, 
     before = {path: path.read_bytes() for path in (registry_path, catalog_path)}
 
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scan)
 
     analyze_service.refresh_source({"project": "p", "repo": "r"})
 
@@ -1374,7 +1381,8 @@ def test_refresh_reconciliation_uses_database_scoped_sp_catalog(monkeypatch, tmp
         connection_sources={str(source_file): {"conn": "OrdersDb"}},
     )
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scan)
     monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,

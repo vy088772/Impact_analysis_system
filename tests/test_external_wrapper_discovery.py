@@ -202,7 +202,8 @@ def test_report_groups_calls_and_preserves_source_locations(tmp_path: Path, monk
         },
     )
     monkeypatch.setattr(discovery.scan_store, "has_cache", lambda root: True)
-    monkeypatch.setattr(discovery.scan_store, "get_or_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(discovery.scan_store, "read_scan", lambda root: scan)
+    monkeypatch.setattr(discovery.scan_store, "rebuild_scan", lambda root: scan)
 
     report = discovery.build_report(
         [{"system_id": "Y-Docs_TTPUR", "root": tmp_path, "configured_contract": "sqlobject"}]
@@ -249,7 +250,8 @@ def test_report_keeps_distinct_wrapper_implementation_facts_separate(
         },
     )
     monkeypatch.setattr(discovery.scan_store, "has_cache", lambda root: True)
-    monkeypatch.setattr(discovery.scan_store, "get_or_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(discovery.scan_store, "read_scan", lambda root: scan)
+    monkeypatch.setattr(discovery.scan_store, "rebuild_scan", lambda root: scan)
 
     report = discovery.build_report(
         [{"system_id": "OrdersDb", "root": tmp_path, "configured_contract": ""}]
@@ -275,7 +277,8 @@ def test_report_evidence_and_provenance_match_refresh_reconciliation(
         connection_sources={str(source_file.resolve()): {"conn": "OrdersDb"}},
     )
     monkeypatch.setattr(discovery.scan_store, "has_cache", lambda root: True)
-    monkeypatch.setattr(discovery.scan_store, "get_or_scan", lambda root, refresh=False: scan)
+    monkeypatch.setattr(discovery.scan_store, "read_scan", lambda root: scan)
+    monkeypatch.setattr(discovery.scan_store, "rebuild_scan", lambda root: scan)
     monkeypatch.setattr(analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         analyze_service.sql_cache_store,

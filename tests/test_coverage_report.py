@@ -564,7 +564,8 @@ def _stub_measurement(monkeypatch, scans_by_root: dict, *, cache: str = "current
         calls.append((Path(root), refresh))
         return scans_by_root[str(Path(root))]
 
-    monkeypatch.setattr(tool.scan_store, "get_or_scan", fake_get_or_scan)
+    monkeypatch.setattr(tool.scan_store, "read_scan", lambda root: fake_get_or_scan(root, False))
+    monkeypatch.setattr(tool.scan_store, "rebuild_scan", lambda root: fake_get_or_scan(root, True))
     monkeypatch.setattr(tool.scan_store, "has_cache", lambda root: cache == "current")
     monkeypatch.setattr(tool.scan_store, "cache_status", lambda root: cache)
     monkeypatch.setattr(

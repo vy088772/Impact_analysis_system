@@ -133,11 +133,8 @@ def _patch_sync(monkeypatch, root: Path, scan: ProjectScanResult) -> None:
         "resolve_scan_roots",
         lambda source, refresh=False: [root],
     )
-    monkeypatch.setattr(
-        analyze_service,
-        "get_or_scan",
-        lambda scan_root, refresh=False: scan,
-    )
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root: scan)
     monkeypatch.setattr(analyze_service, "cached_commit", lambda scan_root: "deadbeef")
 
 

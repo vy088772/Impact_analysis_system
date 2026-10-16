@@ -449,7 +449,8 @@ def test_refresh_source_reports_semantic_binding_availability(monkeypatch, tmp_p
     scan.semantic_binding_availability = fake_binding
 
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: [root])
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda r, refresh=False: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda r: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda r: scan)
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 

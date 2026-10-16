@@ -389,7 +389,8 @@ def test_refresh_consumes_staged_contract_for_opaque_wrapper(monkeypatch, tmp_pa
         contract_proposals=[proposal],
     )
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=True: [root])
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root, refresh=True: scan)
     monkeypatch.setattr(analyze_service, "load_contract_registry", lambda: {"contracts": {}})
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
@@ -440,7 +441,8 @@ def test_decompiled_provenance_survives_preflight_and_wrapper_summary(
         contract_proposals=[proposal],
     )
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=True: [root])
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root, refresh=True: scan)
     monkeypatch.setattr(analyze_service, "load_contract_registry", lambda: {"contracts": {}})
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
@@ -480,7 +482,8 @@ def test_direct_inline_invocation_remains_outside_wrapper_preflight(monkeypatch,
         },
     )
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=True: [root])
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root, refresh=True: scan)
     monkeypatch.setattr(analyze_service, "load_contract_registry", lambda: {"contracts": {}})
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
@@ -591,7 +594,8 @@ def test_refresh_passes_valid_selector_boundary_to_reconciliation(monkeypatch, t
         }
     }
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=True: [root])
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root, refresh=True: scan)
     monkeypatch.setattr(analyze_service, "load_contract_registry", lambda: registry)
 
     result = analyze_service.refresh_source(
@@ -645,7 +649,8 @@ def test_incomplete_preflight_does_not_auto_select_or_promote_opaque_wrapper(
         }
     }
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=True: [root])
-    monkeypatch.setattr(analyze_service, "get_or_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "read_scan", lambda scan_root, refresh=True: scan)
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda scan_root, refresh=True: scan)
     monkeypatch.setattr(analyze_service, "load_contract_registry", lambda: registry)
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})

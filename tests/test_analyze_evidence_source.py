@@ -265,8 +265,11 @@ def test_analyze_without_a_scan_cache_never_skips_and_defaults_refresh_to_false(
         def resolve_scan_roots(self, source, *, refresh: bool):
             return [roots[refresh]]
 
-        def get_scan(self, root: Path, *, refresh: bool):
-            return scans_by_refresh[refresh]
+        def read_scan(self, root: Path):
+            return scans_by_refresh[False]
+
+        def rebuild_scan(self, root: Path):
+            return scans_by_refresh[True]
 
     scans = ScanStore()
     request = AnalyzeRequest(program_names=list(programs.values()), include_snippets=False)

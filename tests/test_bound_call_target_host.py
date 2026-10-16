@@ -296,9 +296,9 @@ def test_a_scan_keeps_each_bound_call_target_in_the_scan_cache(tmp_path: Path) -
     previous_cache_root = settings.SCAN_CACHE_ROOT
     settings.SCAN_CACHE_ROOT = str(tmp_path / "cache")
     try:
-        scan_store.get_or_scan(root, refresh=True)
+        scan_store.rebuild_scan(root)
         scan_store._mem_cache.clear()
-        cached = scan_store.get_or_scan(root, refresh=False)
+        cached = scan_store.read_scan(root)
     finally:
         scan_store.clear_cache(root)
         settings.SCAN_CACHE_ROOT = previous_cache_root
@@ -339,7 +339,7 @@ def test_a_database_invocation_its_method_span_and_a_call_target_give_one_node(t
     previous_cache_root = settings.SCAN_CACHE_ROOT
     settings.SCAN_CACHE_ROOT = str(tmp_path / "cache")
     try:
-        scan = scan_store.get_or_scan(root, refresh=True)
+        scan = scan_store.rebuild_scan(root)
     finally:
         scan_store.clear_cache(root)
         settings.SCAN_CACHE_ROOT = previous_cache_root

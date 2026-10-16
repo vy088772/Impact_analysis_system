@@ -409,25 +409,33 @@ def save_scan(root: Path, result: ProjectScanResult) -> None:
     _save(root, result)
 
 
-def get_or_scan(root: Path, refresh: bool = False) -> ProjectScanResult:
-    """
-    取得掃描結果：優先用記憶體 / 磁碟快取；refresh=True 則強制重新掃描。
-    """
-    key = str(root.resolve())
+class ScanOutdated(Exception):
+    """No usable C# Scan Result exists for a root (missing, invalid, or old format)."""
 
-    if not refresh:
-        if key in _mem_cache:
-            return _mem_cache[key]
-        cached = _load(root)
-        if cached is not None:
-            _mem_cache[key] = cached
-            print(f"⚡ 使用快取掃描結果：{root}")
-            return cached
+    freshness = "outdated"
 
+    def __init__(self, root: Path) -> None:
+        super().__init__(f"No usable C# Scan Result for {root}")
+        self.root = root
+
+
+def read_scan(root: Path) -> ProjectScanResult:
+    """
+    讀取可用的掃描結果（記憶體 / 磁碟快取），永遠不會觸發掃描。
+    找不到可用結果（不存在、無效、舊格式）時丟出 ScanOutdated（freshness="outdated"）。
+    """
+    cached = load_cached(root)
+    if cached is None:
+        raise ScanOutdated(root)
+    return cached
+
+
+def rebuild_scan(root: Path) -> ProjectScanResult:
+    """強制重新掃描並覆寫快取；只有刻意重建的呼叫端才使用。"""
     print(f"🔍 重新掃描程式碼：{root}")
     scanner = ProjectScanner(project_root=str(root))
     result = scanner.scan_project(analyze_sp=False)
-    _mem_cache[key] = result
+    _mem_cache[str(root.resolve())] = result
     _save(root, result)
     return result
 

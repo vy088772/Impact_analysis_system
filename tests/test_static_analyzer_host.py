@@ -443,7 +443,7 @@ def test_the_module_identity_states_no_database_and_an_unrecognised_module_state
     }
 
 
-def test_get_or_scan_persists_latest_csharp_source_snapshot() -> None:
+def test_rebuild_scan_persists_latest_csharp_source_snapshot() -> None:
     """A scan stores one complete C# snapshot keyed by its project-relative path."""
     previous_cache_root = settings.SCAN_CACHE_ROOT
     with tempfile.TemporaryDirectory() as project_dir, tempfile.TemporaryDirectory() as cache_dir:
@@ -461,7 +461,7 @@ def test_get_or_scan_persists_latest_csharp_source_snapshot() -> None:
         settings.SCAN_CACHE_ROOT = cache_dir
         try:
             scan_store.clear_cache(root)
-            result = scan_store.get_or_scan(root, refresh=True)
+            result = scan_store.rebuild_scan(root)
             snapshot = result.source_snapshots["Example.cs"]
             assert snapshot.content == stored_text
             assert len(snapshot.content_hash) == 64
@@ -472,7 +472,7 @@ def test_get_or_scan_persists_latest_csharp_source_snapshot() -> None:
             assert utf16_snapshot.content == utf16_source
             assert utf16_snapshot.source_for(utf16_snapshot.method_spans[0]) == "public void Read() { return; }"
 
-            cached = scan_store.get_or_scan(root, refresh=False)
+            cached = scan_store.read_scan(root)
             assert cached.source_snapshots["Example.cs"].content == stored_text
             assert "Other.cs" in cached.source_snapshots
             assert cached.source_snapshots["Utf16.cs"].content == utf16_source
@@ -631,7 +631,7 @@ def test_command_source_resolution_stays_linear_in_corpus_size() -> None:
 
 if __name__ == "__main__":
     test_static_analyzer_host_contract()
-    test_get_or_scan_persists_latest_csharp_source_snapshot()
+    test_rebuild_scan_persists_latest_csharp_source_snapshot()
     test_one_batch_walks_the_corpus_once_not_once_per_input()
     test_command_source_resolution_stays_linear_in_corpus_size()
     print("StaticAnalyzerHost tests passed")

@@ -851,12 +851,12 @@ def test_scan_cache_round_trip_keeps_raw_db_invocations() -> None:
         settings.SCAN_CACHE_ROOT = cache_dir
         try:
             scan_store.clear_cache(root)
-            result = scan_store.get_or_scan(root, refresh=True)
+            result = scan_store.rebuild_scan(root)
             key = str(source_path.resolve())
             assert result.db_invocations[key][0]["command_type_stored_procedure"] is True
             assert result.db_invocations[key][0]["command_text"] == "dbo.usp_SaveOrder"
 
-            cached = scan_store.get_or_scan(root, refresh=False)
+            cached = scan_store.read_scan(root)
             assert cached.db_invocations[key] == result.db_invocations[key]
         finally:
             scan_store.clear_cache(root)
