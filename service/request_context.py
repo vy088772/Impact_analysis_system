@@ -8,13 +8,26 @@ from typing import Callable
 
 from code_analyzer.project_scanner import ProjectScanResult
 from .derived_execution_evidence import DerivedExecutionEvidenceScope
-from .request_context_adapters import CacheIdentityResult, CacheStore, ScanStore, read_or_rebuild
+from . import cache_freshness
+from .request_context_adapters import CacheIdentityResult, CacheStore, ScanStore
+from .scan_store import ScanOutdated
 from .sql_cache_store import CacheIdentity
 
 
 @dataclass(frozen=True)
 class Skipped:
     pass
+
+
+@dataclass(frozen=True)
+class Unusable:
+    """A cache that the question needs is `outdated` or `refreshing` (ADR-0045).
+
+    ``caches`` are the typed reports of those caches. The handler answers with them
+    and reads nothing.
+    """
+
+    caches: list[dict]
 
 
 @dataclass(frozen=True)
@@ -34,10 +47,12 @@ def build_request_context(
     cache_store: CacheStore,
     check_identity: Callable[[CacheIdentityResult], None] | None = None,
     check_roots: Callable[[list[Path]], None] | None = None,
-) -> RequestContext | Skipped:
-    """Look up the identity, apply the handler's refusal, then prepare the scans.
+) -> RequestContext | Skipped | Unusable:
+    """Look up the identity, apply the handler's refusal, then read the scans.
 
-    A cache-only miss returns Skipped before root resolution or scanning.
+    A question never rebuilds a cache (ADR-0045): ``request.refresh`` neither scans nor pulls here.
+    A cache-only miss returns Skipped before root resolution or reading.
+    A C# Scan Result or a SQL cache that is `outdated` or `refreshing` returns Unusable.
     The context retains the raw identity result; an ambiguous result has no scope identity.
     """
     database = getattr(request, "database", "")
@@ -49,16 +64,29 @@ def build_request_context(
     )
     if check_identity is not None:
         check_identity(identity)
-    refresh = getattr(request, "refresh", False)
     source = scan_store.resolve_source(request)
-    if getattr(request, "cache_only", False) and not refresh:
-        candidates = scan_store.peek_scan_roots(source)
-        if not all(scan_store.has_cache(root) for root in candidates):
-            return Skipped()
-    roots = scan_store.resolve_scan_roots(source, refresh=refresh)
+    # Paths only: a question never clones, pulls or scans (ADR-0045).
+    roots = scan_store.peek_scan_roots(source)
+    if getattr(request, "cache_only", False):
+        gate = _unusable_candidates(scan_store, roots)
+        if gate is not None:
+            return gate
     if check_roots is not None:
         check_roots(roots)
-    scans = [_scan_for(scan_store, root, refresh) for root in roots]
+    # A request that names no Database reads no SQL cache, so it has no SQL cache to report.
+    sql_report = (
+        cache_freshness.sql_unusable(identity)
+        if database.strip() and isinstance(identity, CacheIdentity) else None
+    )
+    refreshing = cache_freshness.csharp_refreshing(roots)
+    if refreshing is not None or sql_report is not None:
+        return Unusable([report for report in (refreshing, sql_report) if report is not None])
+    scans: list[ProjectScanResult] = []
+    for root in roots:
+        try:
+            scans.append(scan_store.read_scan(root))
+        except ScanOutdated:
+            return Unusable([cache_freshness.csharp_outdated(roots)])
     scan = scans[0] if len(scans) == 1 else merge_scans(scans)
     root = (
         roots[0] if len(roots) == 1
@@ -70,11 +98,22 @@ def build_request_context(
     return RequestContext(roots, scans, scan, root, identity, scope)
 
 
-def _scan_for(scan_store: ScanStore, root: Path, refresh: bool) -> ProjectScanResult:
-    """Rebuild on an explicit refresh; otherwise read, and rebuild when the read reports `outdated`."""
-    if refresh:
-        return scan_store.rebuild_scan(root)
-    return read_or_rebuild(scan_store, root)
+def _unusable_candidates(scan_store: ScanStore, candidates: list[Path]) -> Unusable | Skipped | None:
+    """The cache-only gate: what a lookup answers before it reads any scan.
+
+    None when every candidate root has a usable cache. A root with no cache file at all is
+    "not scanned" (Skipped), the normal daily state. A root whose cache exists but is not
+    usable is `outdated`, and a root whose Refresh Job runs is `refreshing`.
+    """
+    refreshing = cache_freshness.csharp_refreshing(candidates)
+    if refreshing is not None:
+        return Unusable([refreshing])
+    without_cache = [root for root in candidates if not scan_store.has_cache(root)]
+    if not without_cache:
+        return None
+    if any(scan_store.cache_status(root) != "missing" for root in without_cache):
+        return Unusable([cache_freshness.csharp_outdated(candidates)])
+    return Skipped()
 
 
 def merge_scans(scans: list[ProjectScanResult]) -> ProjectScanResult:

@@ -87,6 +87,42 @@ def csharp_row(system_id: str, scan_roots: Iterable[Path]) -> dict[str, Any]:
     )
 
 
+def _unusable(kind: str, key: str, state: str, **identity: str) -> dict[str, Any]:
+    return {"kind": kind, "key": key, "state": state, **identity}
+
+
+def _is_running(key: str) -> bool:
+    last_job = refresh_queue.shared_queue.latest_for_key(key)
+    return last_job is not None and last_job["status"] == refresh_queue.RUNNING
+
+
+def csharp_refreshing(scan_roots: Iterable[Path]) -> Optional[dict[str, Any]]:
+    """The report of a C# Scan Result whose Refresh Job runs, or None. It reads no cache file."""
+    key = refresh_queue.csharp_key(str(root) for root in scan_roots)
+    return _unusable("csharp", key, REFRESHING) if _is_running(key) else None
+
+
+def csharp_outdated(scan_roots: Iterable[Path]) -> dict[str, Any]:
+    """The report of a C# Scan Result that a question could not read."""
+    return _unusable("csharp", refresh_queue.csharp_key(str(root) for root in scan_roots), OUTDATED)
+
+
+def sql_unusable(identity: sql_cache_store.CacheIdentity) -> Optional[dict[str, Any]]:
+    """The report of a SQL cache that a question must not read, or None.
+
+    A running Refresh Job gives `refreshing`. A cache with a file on disk that is not usable
+    gives `outdated`. A cache that was never scanned gives None: that is the normal "not scanned"
+    state of a lookup, with its own reason. A usable cache gives None.
+    """
+    key = refresh_queue.sql_key(identity.key)
+    fields = {"server": identity.server, "database": identity.database}
+    if _is_running(key):
+        return _unusable("sql", key, REFRESHING, **fields)
+    if sql_cache_store.has_cache_files(identity) and sql_cache_store.load_cached(identity) is None:
+        return _unusable("sql", key, OUTDATED, **fields)
+    return None
+
+
 def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
     """Every cache of every catalog system, grouped by system, in catalog order."""
     shared_sql: dict[tuple[str, str], Optional[dict[str, Any]]] = {}

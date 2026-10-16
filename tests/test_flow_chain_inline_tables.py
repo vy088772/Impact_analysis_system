@@ -44,6 +44,7 @@ def test_flow_skips_when_one_candidate_root_has_no_scan_cache(tmp_path: Path, di
         "diagnostics": [],
         "source_root": "",
         "skipped": True,
+        "unusable_caches": [],
     }
 
 
@@ -75,7 +76,7 @@ def test_flow_reads_an_ambiguous_database_as_not_scanned(tmp_path: Path, directi
 
 
 @pytest.mark.parametrize("direction", ["forward", "backward"])
-def test_flow_refresh_bypasses_a_missing_scan_cache(tmp_path: Path, direction: str) -> None:
+def test_flow_refresh_does_not_bypass_a_missing_scan_cache(tmp_path: Path, direction: str) -> None:
     stores = RequestStores.of(tmp_path, scan_of(tmp_path, [], []))
     stores.scan_store.cached_roots.clear()
 
@@ -85,10 +86,9 @@ def test_flow_refresh_bypasses_a_missing_scan_cache(tmp_path: Path, direction: s
         cache_store=stores.cache_store,
     )
 
-    assert response.skipped is False
-    assert response.source_root == str(tmp_path)
-    assert response.forward_chain is None
-    assert response.backward_chains == []
+    assert response.skipped is True
+    assert response.unusable_caches == []
+    assert "read" not in stores.scan_store.calls
 
 
 def _relation(root: Path, method: str, table: ObjectName, access_type: str = "SELECT") -> CSharpTableRelation:

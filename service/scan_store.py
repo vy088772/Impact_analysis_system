@@ -440,6 +440,18 @@ def rebuild_scan(root: Path) -> ProjectScanResult:
     return result
 
 
+def read_or_rebuild(root: Path) -> ProjectScanResult:
+    """Read a usable C# Scan Result, and scan when none exists.
+
+    For the maintainer tools (`tools/coverage_report.py` and the two wrapper tools) only: they
+    scan on purpose. A question path never calls this (ADR-0045): it reads with `read_scan`.
+    """
+    try:
+        return read_scan(root)
+    except ScanOutdated:
+        return rebuild_scan(root)
+
+
 def clear_cache(root: Path) -> None:
     """清除指定路徑的磁碟與記憶體快取。"""
     pkl, meta = _paths(root)

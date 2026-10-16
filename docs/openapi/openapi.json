@@ -132,6 +132,13 @@
           "source_root": {
             "title": "Source Root",
             "type": "string"
+          },
+          "unusable_caches": {
+            "items": {
+              "$ref": "#/components/schemas/UnusableCache"
+            },
+            "title": "Unusable Caches",
+            "type": "array"
           }
         },
         "required": [
@@ -3124,6 +3131,13 @@
             "default": "",
             "title": "Sp Name",
             "type": "string"
+          },
+          "unusable_caches": {
+            "items": {
+              "$ref": "#/components/schemas/UnusableCache"
+            },
+            "title": "Unusable Caches",
+            "type": "array"
           }
         },
         "title": "FindBySPResponse",
@@ -3225,6 +3239,13 @@
             "default": "",
             "title": "Table Name",
             "type": "string"
+          },
+          "unusable_caches": {
+            "items": {
+              "$ref": "#/components/schemas/UnusableCache"
+            },
+            "title": "Unusable Caches",
+            "type": "array"
           }
         },
         "title": "FindByTableResponse",
@@ -3352,6 +3373,13 @@
             "default": "",
             "title": "Source Root",
             "type": "string"
+          },
+          "unusable_caches": {
+            "items": {
+              "$ref": "#/components/schemas/UnusableCache"
+            },
+            "title": "Unusable Caches",
+            "type": "array"
           }
         },
         "title": "FlowChainResponse",
@@ -5522,6 +5550,49 @@
           }
         },
         "title": "TableMatchProgram",
+        "type": "object"
+      },
+      "UnusableCache": {
+        "additionalProperties": false,
+        "description": "A cache that a question needs and did not read, with its state (Impact ADR-0045).\n\nA question never rebuilds a cache. When a cache it needs is `outdated` or `refreshing`,\nthe response lists that cache here and holds no result from it. `key` is the Refresh\nQueue key of the cache (the same key as a row of GET /cache_freshness). `server` and\n`database` name a SQL cache; a C# Scan Result has neither.",
+        "properties": {
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "csharp",
+              "sql"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "server": {
+            "default": "",
+            "title": "Server",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "outdated",
+              "refreshing"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "key",
+          "state"
+        ],
+        "title": "UnusableCache",
         "type": "object"
       },
       "ValidationError": {

@@ -323,6 +323,11 @@ def path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
         )
     try:
         return analyze_service.get_path_evidence(req)
+    except analyze_service.CacheUnusableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc), "caches": exc.caches},
+        ) from exc
     except analyze_service.SqlExecutionGraphRequiredError as exc:
         raise _graph_readiness_http_error(exc) from exc
     except analyze_service.PathEvidenceError as exc:

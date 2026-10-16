@@ -171,12 +171,30 @@ class ProgramAnalysis(AnalyzeRecord):
     shared_component_contributions: List[SharedComponentContribution] = Field(default_factory=list)
 
 
+class UnusableCache(BaseModel):
+    """A cache that a question needs and did not read, with its state (Impact ADR-0045).
+
+    A question never rebuilds a cache. When a cache it needs is `outdated` or `refreshing`,
+    the response lists that cache here and holds no result from it. `key` is the Refresh
+    Queue key of the cache (the same key as a row of GET /cache_freshness). `server` and
+    `database` name a SQL cache; a C# Scan Result has neither.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["csharp", "sql"]
+    key: str
+    state: Literal["outdated", "refreshing"]
+    server: str = ""
+    database: str = ""
+
+
 class AnalyzeResponse(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     programs: List[ProgramAnalysis]
     not_found: List[str]
     source_root: str
+    unusable_caches: List[UnusableCache] = Field(default_factory=list)
 
 
 class RefreshRequest(BaseModel):
@@ -431,6 +449,7 @@ class FindBySPResponse(BaseModel):
     diagnostics: List[Dict] = Field(default_factory=list)
     skipped: bool = False                     # True：該 repo 尚未 clone/分析過，本次未比對
     source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）
+    unusable_caches: List[UnusableCache] = Field(default_factory=list)  # outdated/refreshing 的快取：本次沒有讀它
 
 
 class FindByTableRequest(LookupDatabaseHost):
@@ -504,6 +523,7 @@ class FindByTableResponse(BaseModel):
     diagnostics: List[Dict] = Field(default_factory=list)
     skipped: bool = False                     # True：該 repo 尚未 clone/分析過，本次未比對
     source_root: str = ""                     # 實際比對的本機路徑（除錯用；skipped 時為空）
+    unusable_caches: List[UnusableCache] = Field(default_factory=list)  # outdated/refreshing 的快取：本次沒有讀它
 
 
 class LocateObjectRequest(BaseModel):
@@ -706,3 +726,4 @@ class FlowChainResponse(BaseModel):
     diagnostics: List[Dict] = Field(default_factory=list)
     skipped: bool = False                     # True：該系統尚未 clone/分析過，本次未組鏈
     source_root: str = ""
+    unusable_caches: List[UnusableCache] = Field(default_factory=list)  # outdated/refreshing 的快取：本次沒有讀它

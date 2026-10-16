@@ -3,7 +3,7 @@
     "invocation_ratings": ["proven", "likely", "unresolved"],
     "wrapper_ratings": ["proven", "likely", "unresolved", "not_applicable"],
     "samples": [
-      {"programs": [], "not_found": ["Missing"], "source_root": ""},
+      {"programs": [], "not_found": ["Missing"], "source_root": "", "unusable_caches": []},
       {
         "programs": [{
           "program": "Empty", "file": "Empty.cs", "framework": "",
@@ -13,9 +13,16 @@
           "related_programs": [], "view_layer": [], "execution_paths": [],
           "compact_execution_paths": [], "compact_execution_paths_meta": {},
           "shared_component_contributions": []
-        }], "not_found": [], "source_root": "fixture"
+        }], "not_found": [], "source_root": "fixture", "unusable_caches": []
       }
     ],
+    "unusable_sample": {
+      "programs": [], "not_found": [], "source_root": "",
+      "unusable_caches": [
+        {"kind": "csharp", "key": "csharp:/repos/orders", "state": "outdated", "server": "", "database": ""},
+        {"kind": "sql", "key": "sql:host|orders", "state": "refreshing", "server": "host", "database": "Orders"}
+      ]
+    },
     "program": {
       "program": "Orders", "file": "Views/Orders/Index.cshtml", "framework": "mvc",
       "methods": [{"name": "Index", "class": "OrdersController", "strength": "determined"}, {"name": "Save", "class": "OrdersController"}],

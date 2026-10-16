@@ -223,6 +223,15 @@ def _paths(identity: CacheIdentity) -> tuple[Path, Path]:
     return root / identity.filename, root / identity.meta_filename
 
 
+def has_cache_files(identity: CacheIdentity) -> bool:
+    """True when a data or meta file of this identity is on disk, usable or not.
+
+    A cache that was never scanned has neither file. A cache that has a file but fails
+    ``load_cached`` is `outdated` (old format or invalid), not "never scanned".
+    """
+    return any(path.exists() for path in _paths(identity))
+
+
 def _index_path(identity: CacheIdentity) -> Path:
     return _cache_root() / identity.index_filename
 

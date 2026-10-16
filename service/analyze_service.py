@@ -89,8 +89,8 @@ from .shared_component import (
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots
 from .scan_store import ScanOutdated, cache_status, cached_commit, read_scan, rebuild_scan, save_scan
-from . import sql_cache_store
-from .request_context import Skipped, build_request_context, merge_scans as _merge_scans
+from . import cache_freshness, sql_cache_store
+from .request_context import Skipped, Unusable, build_request_context, merge_scans as _merge_scans
 from .request_context_adapters import CacheIdentityResult, CacheStore, RealCacheStore, RealScanStore, ScanStore
 from .derived_execution_evidence import (
     DerivedExecutionEvidence,
@@ -128,6 +128,21 @@ class PathEvidenceError(ValueError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+class CacheUnusableError(ValueError):
+    """A cache that the request needs is `outdated` or `refreshing` (ADR-0045).
+
+    ``caches`` are the typed reports. A response with a ``unusable_caches`` field carries them
+    itself; an endpoint without that field (``/path_evidence``) turns this error into a 409.
+    """
+
+    code = "cache_unusable"
+
+    def __init__(self, caches: List[Dict[str, Any]]) -> None:
+        self.caches = list(caches)
+        states = ", ".join(sorted({str(cache["state"]) for cache in self.caches}))
+        super().__init__(f"快取不可用（{states}）：請到更新頁重新整理快取。")
 
 
 class SqlExecutionGraphRequiredError(ValueError):
@@ -980,7 +995,10 @@ def _require_sql_execution_graph(
     database: str,
     sql_cache_identity: Optional[sql_cache_store.CacheIdentity],
 ) -> Tuple[Dict, Dict]:
-    """Return the cache and graph of the identity the handler built, or raise "not scanned".
+    """Return the cache and graph of the identity the handler built, or raise.
+
+    Raises CacheUnusableError when the SQL cache is `outdated` or `refreshing`, and
+    SqlExecutionGraphRequiredError ("not scanned") when it has no usable graph and no file.
 
     ``database`` is the requested name; it only names the error. A missing
     identity (no cache, or a Database on several hosts) is "not scanned".
@@ -990,6 +1008,9 @@ def _require_sql_execution_graph(
         raise ValueError(
             "database 不可為空；Gateway path analysis 需要指定 SQL execution graph cache。"
         )
+    unusable = cache_freshness.sql_unusable(sql_cache_identity) if sql_cache_identity is not None else None
+    if unusable is not None:
+        raise CacheUnusableError([unusable])
     cached = sql_cache_store.load_cached(sql_cache_identity) if sql_cache_identity is not None else None
     graph = (cached or {}).get("sql_execution_graph") if cached else None
     if not cached or not graph:
@@ -1223,6 +1244,8 @@ def get_path_evidence(
         check_identity=check_identity,
         check_roots=check_roots,
     )
+    if isinstance(context, Unusable):
+        raise CacheUnusableError(context.caches)
     assert not isinstance(context, Skipped)
     scans, scan, root = context.scans, context.scan, context.root
     sql_cache_identity = (
@@ -1637,6 +1660,8 @@ def analyze(
         scan_store=scan_store if scan_store is not None else RealScanStore(),
         cache_store=cache_store if cache_store is not None else RealCacheStore(),
     )
+    if isinstance(context, Unusable):
+        return AnalyzeResponse(programs=[], not_found=[], source_root="", unusable_caches=context.caches)
     assert not isinstance(context, Skipped)
     found = context.sql_cache_identity
     sql_cache_identity = found if isinstance(found, sql_cache_store.CacheIdentity) else None
@@ -2115,6 +2140,8 @@ def find_by_sp(
         cache_store=cache_store if cache_store is not None else RealCacheStore(),
         check_identity=check_identity,
     )
+    if isinstance(context, Unusable):
+        return FindBySPResponse(sp_name=sp_name, matches=[], unusable_caches=context.caches)
     if isinstance(context, Skipped):
         return FindBySPResponse(sp_name=sp_name, matches=[], skipped=True)
     scans, scan, root = context.scans, context.scan, context.root
@@ -2247,6 +2274,8 @@ def find_by_table(
         cache_store=cache_store if cache_store is not None else RealCacheStore(),
         check_identity=check_identity,
     )
+    if isinstance(context, Unusable):
+        return FindByTableResponse(table_name=table_name, matches=[], unusable_caches=context.caches)
     if isinstance(context, Skipped):
         return FindByTableResponse(table_name=table_name, matches=[], skipped=True)
     scans, scan, root = context.scans, context.scan, context.root
@@ -2572,6 +2601,8 @@ def flow_chain(
         scan_store=scan_store if scan_store is not None else RealScanStore(),
         cache_store=cache_store if cache_store is not None else RealCacheStore(),
     )
+    if isinstance(context, Unusable):
+        return FlowChainResponse(direction=req.direction, unusable_caches=context.caches)
     if isinstance(context, Skipped):
         return FlowChainResponse(direction=req.direction, skipped=True)
     scans, scan, root = context.scans, context.scan, context.root

@@ -42,7 +42,6 @@ from code_analyzer.csharp_analysis_gateway import (  # noqa: E402
 )
 from service import analyze_service, coverage_report, exclusion_candidates, scan_store  # noqa: E402
 from service.contract_registry import load_contract_registry  # noqa: E402
-from service.request_context_adapters import read_or_rebuild  # noqa: E402
 from service.system_targets import (  # noqa: E402
     default_spec_rag_root,
     load_system_catalog,
@@ -68,7 +67,7 @@ def measure_root_invocations(
     if cached_only and not cache_ready:
         return []
 
-    scan = read_or_rebuild(scan_store, root)
+    scan = scan_store.read_or_rebuild(root)
     rated = coverage_report.rate_scan_invocations(
         root,
         scan,

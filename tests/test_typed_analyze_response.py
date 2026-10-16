@@ -27,7 +27,7 @@ def agreement_samples() -> list[dict]:
         "execution_paths": [path, {**path, "terminal_operation": None}],
         "compact_execution_paths": [agreement["compact_path"], agreement["resolved_compact_path"]],
     }
-    samples = agreement["samples"] + [{"programs": [program], "not_found": [], "source_root": "fixture"}]
+    samples = agreement["samples"] + [{"programs": [program], "not_found": [], "source_root": "fixture", "unusable_caches": []}]
     for rating in agreement["invocation_ratings"]:
         sample = copy.deepcopy(samples[-1])
         sample["programs"][0]["database_invocations"][0]["evidence"] = rating
@@ -36,6 +36,7 @@ def agreement_samples() -> list[dict]:
         sample = copy.deepcopy(samples[-1])
         sample["programs"][0]["database_invocations"][0]["evidence_status"] = rating
         samples.append(sample)
+    samples.append(copy.deepcopy(agreement["unusable_sample"]))
     return samples
 
 

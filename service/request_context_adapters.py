@@ -15,28 +15,10 @@ Source = dict[str, str | list[str]]
 class ScanStore(Protocol):
     def resolve_source(self, request: object) -> Source: ...
     def peek_scan_roots(self, source: Source) -> list[Path]: ...
-    def resolve_scan_roots(self, source: Source, *, refresh: bool) -> list[Path]: ...
     def read_scan(self, root: Path) -> ProjectScanResult: ...
-    def rebuild_scan(self, root: Path) -> ProjectScanResult: ...
     def has_cache(self, root: Path) -> bool: ...
+    def cache_status(self, root: Path) -> str: ...
     def repo_dir(self, project: str, repo: str) -> Path: ...
-
-
-def read_or_rebuild(store: "ScanStoreOperations", root: Path) -> ProjectScanResult:
-    """Read a usable C# Scan Result, and rebuild it when the read reports `outdated`.
-
-    This keeps today's fallback for the question paths that still scan. Ticket 04 of
-    cache-refresh-queue removes it, together with every caller.
-    """
-    try:
-        return store.read_scan(root)
-    except ScanOutdated:
-        return store.rebuild_scan(root)
-
-
-class ScanStoreOperations(Protocol):
-    def read_scan(self, root: Path) -> ProjectScanResult: ...
-    def rebuild_scan(self, root: Path) -> ProjectScanResult: ...
 
 
 class CacheStore(Protocol):
@@ -56,17 +38,14 @@ class RealScanStore:
     def peek_scan_roots(self, source: Source) -> list[Path]:
         return repo_manager.peek_scan_roots(source)
 
-    def resolve_scan_roots(self, source: Source, *, refresh: bool) -> list[Path]:
-        return repo_manager.resolve_scan_roots(source, refresh=refresh)
-
     def read_scan(self, root: Path) -> ProjectScanResult:
         return scan_store.read_scan(root)
 
-    def rebuild_scan(self, root: Path) -> ProjectScanResult:
-        return scan_store.rebuild_scan(root)
-
     def has_cache(self, root: Path) -> bool:
         return scan_store.has_cache(root)
+
+    def cache_status(self, root: Path) -> str:
+        return scan_store.cache_status(root)
 
     def repo_dir(self, project: str, repo: str) -> Path:
         return repo_manager.repo_dir(project, repo)
@@ -95,23 +74,21 @@ class InMemoryScanStore:
         self.calls.append("peek")
         return list(self.roots if self.candidate_roots is None else self.candidate_roots)
 
-    def resolve_scan_roots(self, source: Source, *, refresh: bool) -> list[Path]:
-        self.calls.append("resolve")
-        return list(self.roots)
-
     def read_scan(self, root: Path) -> ProjectScanResult:
         self.calls.append("read")
         if root in self.outdated_roots:
             raise ScanOutdated(root)
         return self.scans[root]
 
-    def rebuild_scan(self, root: Path) -> ProjectScanResult:
-        self.calls.append("rebuild")
-        return self.scans[root]
-
     def has_cache(self, root: Path) -> bool:
         self.calls.append("cache")
         return root in self.cached_roots
+
+    def cache_status(self, root: Path) -> str:
+        self.calls.append("status")
+        if root in self.outdated_roots:
+            return "stale"
+        return "current" if root in self.cached_roots else "missing"
 
     def repo_dir(self, project: str, repo: str) -> Path:
         self.calls.append("repo")

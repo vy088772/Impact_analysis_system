@@ -28,6 +28,7 @@ def test_a_source_without_a_scan_cache_returns_the_same_skipped_response(tmp_pat
         "diagnostics": [],
         "source_root": "",
         "skipped": True,
+        "unusable_caches": [],
     }
 
 
@@ -44,24 +45,18 @@ def test_a_multi_folder_source_skips_if_either_root_has_no_cache(tmp_path: Path,
 
     assert response.skipped is True
     assert response.matches == []
-    assert "resolve" not in scans.calls
     assert "read" not in scans.calls and "rebuild" not in scans.calls
 
 
-@pytest.mark.parametrize("refresh,cache_only", [(True, True), (False, False), (False, True)])
-def test_a_ready_source_keeps_the_response_and_refresh_bypasses_the_skip(
-    tmp_path: Path, refresh: bool, cache_only: bool
-) -> None:
+@pytest.mark.parametrize("cache_only", [False, True])
+def test_a_ready_source_keeps_the_response(tmp_path: Path, cache_only: bool) -> None:
     identity = CacheIdentity.of("host", "Orders")
     scan = ProjectScanResult(project_root=str(tmp_path), project_name="orders", scan_time=datetime.now())
-    scans = InMemoryScanStore(
-        roots=[tmp_path], scans={tmp_path: scan},
-        cached_roots={tmp_path} if not refresh else set(),
-    )
+    scans = InMemoryScanStore(roots=[tmp_path], scans={tmp_path: scan}, cached_roots={tmp_path})
     with CacheRoot() as cache_root:
         write_cache(cache_root, identity, cache_payload("Orders", graph=execution_graph("Orders")))
         response = find_by_sp(
-            FindBySPRequest(sp_name="usp_Save", database="Orders", refresh=refresh, cache_only=cache_only),
+            FindBySPRequest(sp_name="usp_Save", database="Orders", cache_only=cache_only),
             evidence_source=lambda *args, **kwargs: DerivedExecutionEvidence([], {}),
             scan_store=scans,
             cache_store=InMemoryCacheStore({"Orders": identity}),
@@ -70,9 +65,17 @@ def test_a_ready_source_keeps_the_response_and_refresh_bypasses_the_skip(
     assert response.skipped is False
     assert response.matches == []
     assert response.source_root == str(tmp_path)
-    if refresh or not cache_only:
-        assert "peek" not in scans.calls
-        assert "cache" not in scans.calls
+
+
+def test_a_refresh_flag_does_not_bypass_the_skip_because_a_question_never_rebuilds(tmp_path: Path) -> None:
+    scans = InMemoryScanStore(roots=[tmp_path])
+    response = find_by_sp(
+        FindBySPRequest(sp_name="usp_Save", database="Orders", refresh=True),
+        scan_store=scans, cache_store=InMemoryCacheStore(),
+    )
+
+    assert response.skipped is True
+    assert "read" not in scans.calls
 
 
 @pytest.mark.parametrize("cache_only,refresh", [(True, False), (False, False), (True, True)])
