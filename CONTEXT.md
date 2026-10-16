@@ -318,6 +318,20 @@ _Avoid_: project type, required parsers, framework gate
 The stored procedures and tables a screen reaches by rendering a ViewComponent or a partial view — the MVC/Core counterpart of a WebForms user control. A ViewComponent's `Invoke`/`InvokeAsync` method is the only member reported; a partial view holds no server code of its own and only forwards to whatever it renders in turn, so resolution walks the render chain (partial through partial, partial through ViewComponent) and reports every ViewComponent actually reached. Every fact reached this way is labelled as coming from a shared component — merged into the screen's own `stored_procedures`/`tables`/`database_invocations`, but never merged into its `methods`, and broken out again in `shared_component_contributions` — so a menu or selector component rendered on many screens is never mistaken for one screen's own access. A component reaching no database contributes nothing, not an empty entry.
 _Avoid_: partial contribution, component SPs, included control
 
+## Cache Maintenance
+
+**Cache Freshness**:
+The state of one SQL cache or one C# Scan Result, as an analyst sees it. The states are `current`, `outdated`, `refreshing`, and `behind_source`. `outdated` means that the analyzer changed the cache format, so an answer from the cache can be wrong. `refreshing` means that a Refresh Job for the cache is running now. `behind_source` means that the remote repository has newer commits than the C# Scan Result. An `outdated` or `refreshing` cache blocks the answers that need it. A `behind_source` cache does not block an answer, because the answer stays correct for the scanned commit. Derived Execution Evidence has no Cache Freshness of its own, because an analyst never refreshes it directly.
+_Avoid_: stale, expired, cache status
+
+**Refresh Job**:
+One request to rebuild one SQL cache or one C# Scan Result. A Refresh Job also derives the Derived Execution Evidence that the rebuilt cache feeds, so the next question does not wait for that derivation. An analyst starts a Refresh Job from the update page or from a refresh command. A second request for the same cache, while the first one waits or runs, does not make a second Refresh Job.
+_Avoid_: refresh task, update job, refresh target
+
+**Refresh Queue**:
+The one ordered line of Refresh Jobs. The Refresh Queue runs one Refresh Job at a time, in the order that they arrive.
+_Avoid_: job list, refresh scheduler
+
 ## Repository Management
 
 **Clone**:
