@@ -626,7 +626,7 @@ class CacheFreshnessRow(BaseModel):
 
     kind "sql" carries `server` and `database`; kind "csharp" carries `system_id`.
     freshness: current | outdated | refreshing (`behind_source` comes with ticket 08).
-    last_scanned_at is None for a cache that is not usable.
+    last_scanned_at is the time on the cache's meta file; None when the cache was never scanned.
     last_job is None for a cache that never had a Refresh Job in this service run.
     """
 

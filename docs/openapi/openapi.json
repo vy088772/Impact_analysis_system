@@ -194,7 +194,7 @@
         "type": "object"
       },
       "CacheFreshnessRow": {
-        "description": "One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.\n\nkind \"sql\" carries `server` and `database`; kind \"csharp\" carries `system_id`.\nfreshness: current | outdated | refreshing (`behind_source` comes with ticket 08).\nlast_scanned_at is None for a cache that is not usable.\nlast_job is None for a cache that never had a Refresh Job in this service run.",
+        "description": "One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.\n\nkind \"sql\" carries `server` and `database`; kind \"csharp\" carries `system_id`.\nfreshness: current | outdated | refreshing (`behind_source` comes with ticket 08).\nlast_scanned_at is the time on the cache's meta file; None when the cache was never scanned.\nlast_job is None for a cache that never had a Refresh Job in this service run.",
         "properties": {
           "database": {
             "default": "",

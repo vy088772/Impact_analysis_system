@@ -149,6 +149,9 @@ def test_a_cache_with_an_old_format_version_lists_as_outdated(world, sql_root) -
 
     assert rows["AlphaDb"]["freshness"] == "outdated"
     assert rows["Alpha"]["freshness"] == "outdated"
+    # An outdated cache still says when it was last scanned.
+    assert rows["AlphaDb"]["last_scanned_at"]
+    assert rows["Alpha"]["last_scanned_at"]
 
 
 def test_an_invalid_cache_lists_as_outdated(world, sql_root) -> None:

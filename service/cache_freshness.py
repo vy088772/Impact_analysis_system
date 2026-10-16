@@ -46,7 +46,7 @@ def _row(
         "key": key,
         "label": label,
         "freshness": _state(has_usable_cache, last_job),
-        "last_scanned_at": last_scanned_at if has_usable_cache else None,
+        "last_scanned_at": last_scanned_at,
         "last_job": last_job,
         **identity,
     }
@@ -64,17 +64,19 @@ def sql_row(server: str, database: str) -> Optional[dict[str, Any]]:
         key=refresh_queue.sql_key(identity.key),
         label=identity.database,
         has_usable_cache=usable,
-        last_scanned_at=sql_cache_store.cached_saved_at(identity) if usable else None,
+        last_scanned_at=sql_cache_store.cached_saved_at(identity),
         server=identity.server,
         database=identity.database,
     )
 
 
 def csharp_row(system_id: str, scan_roots: Iterable[Path]) -> dict[str, Any]:
-    """The row of one C# Scan Result. It is `current` only when every scan root is."""
+    """The row of one C# Scan Result. It is `current` only when every scan root is.
+
+    The scan time is the oldest one on disk, so an `outdated` cache still shows when it was last scanned."""
     roots = list(scan_roots)
     usable = all(scan_store.load_cached(root) is not None for root in roots)
-    saved = [scan_store.cached_saved_at(root) for root in roots] if usable else []
+    saved = [scan_store.cached_saved_at(root) for root in roots]
     return _row(
         kind="csharp",
         key=refresh_queue.csharp_key(str(root) for root in roots),
