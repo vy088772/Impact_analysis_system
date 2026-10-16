@@ -92,6 +92,14 @@ class RefreshQueue:
                     return CANCELLED
             return FINISHED
 
+    def latest_for_key(self, key: str) -> dict[str, Any] | None:
+        """The last job of one cache, with its queue position."""
+        with self._condition:
+            latest = refresh_progress.latest_job_for_key(key)
+            if latest is None:
+                return None
+            return self._snapshot_locked(latest["job_id"])
+
     def wait_until_finished(self, job_id: str, timeout: float = 10.0) -> dict[str, Any] | None:
         """Block until the job ends. Tests and callers that need a result use it."""
         with self._condition:

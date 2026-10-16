@@ -15,6 +15,8 @@
     POST /refresh_sql → RefreshJobResponse（提交 Refresh Job：重新連線 SQL Server
                         撈取 SP/View/Function/資料表 Schema，建立 AST SQL Execution
                         Graph，覆寫本機 SQL 快取）
+    GET  /cache_freshness → CacheFreshnessResponse（每份 SQL 快取與 C# Scan Result 的
+                        Cache Freshness，依 catalog 系統分組；唯讀）
     POST /refresh_jobs → RefreshJobResponse（提交一個 Refresh Job，排入 Refresh Queue）
     GET  /refresh_jobs/{job_id} → RefreshJobResponse（狀態、排隊位置、進度、結果）
     POST /refresh_jobs/{job_id}/cancel → RefreshJobResponse（取消 waiting 的 job）
@@ -55,6 +57,7 @@ from .schemas import (
     RefreshSqlResponse,
     RefreshJobRequest,
     RefreshJobResponse,
+    CacheFreshnessResponse,
     FindBySPRequest,
     FindBySPResponse,
     FindByTableRequest,
@@ -68,7 +71,15 @@ from .schemas import (
     ScanRecordEntry,
     ScanRecordListResponse,
 )
-from . import analyze_service, contract_acceptance, refresh_progress, refresh_queue, sql_cache_store
+from . import (
+    analyze_service,
+    cache_freshness,
+    contract_acceptance,
+    refresh_progress,
+    refresh_queue,
+    sql_cache_store,
+    system_targets,
+)
 from .repo_manager import peek_scan_roots
 
 app = FastAPI(
@@ -385,6 +396,16 @@ def submit_refresh_job(req: RefreshJobRequest) -> RefreshJobResponse:
             detail="指定 program 的 refresh 是直接指令，不進 Refresh Queue",
         )
     return _submit_csharp_job(req.csharp)
+
+
+@app.get("/cache_freshness", response_model=CacheFreshnessResponse)
+def read_cache_freshness() -> CacheFreshnessResponse:
+    """The Cache Freshness of every cache, grouped by the systems of the catalog.
+
+    Read-only: it never scans, clones, or connects to a database. A SQL cache that several
+    systems share is listed under each of them, with one state."""
+    catalog = system_targets.load_system_catalog(system_targets.default_spec_rag_root())
+    return CacheFreshnessResponse(systems=cache_freshness.list_by_system(catalog))
 
 
 @app.get("/refresh_jobs/{job_id}", response_model=RefreshJobResponse)

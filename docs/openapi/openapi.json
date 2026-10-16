@@ -179,6 +179,109 @@
         "title": "AzureSource",
         "type": "object"
       },
+      "CacheFreshnessResponse": {
+        "description": "GET /cache_freshness: every cache of every catalog system, grouped by system.",
+        "properties": {
+          "systems": {
+            "items": {
+              "$ref": "#/components/schemas/CacheFreshnessSystem"
+            },
+            "title": "Systems",
+            "type": "array"
+          }
+        },
+        "title": "CacheFreshnessResponse",
+        "type": "object"
+      },
+      "CacheFreshnessRow": {
+        "description": "One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.\n\nkind \"sql\" carries `server` and `database`; kind \"csharp\" carries `system_id`.\nfreshness: current | outdated | refreshing (`behind_source` comes with ticket 08).\nlast_scanned_at is None for a cache that is not usable.\nlast_job is None for a cache that never had a Refresh Job in this service run.",
+        "properties": {
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "freshness": {
+            "title": "Freshness",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "sql",
+              "csharp"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RefreshJobResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_scanned_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scanned At"
+          },
+          "server": {
+            "default": "",
+            "title": "Server",
+            "type": "string"
+          },
+          "system_id": {
+            "default": "",
+            "title": "System Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "key",
+          "label",
+          "freshness"
+        ],
+        "title": "CacheFreshnessRow",
+        "type": "object"
+      },
+      "CacheFreshnessSystem": {
+        "properties": {
+          "caches": {
+            "items": {
+              "$ref": "#/components/schemas/CacheFreshnessRow"
+            },
+            "title": "Caches",
+            "type": "array"
+          },
+          "system_id": {
+            "title": "System Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "system_id"
+        ],
+        "title": "CacheFreshnessSystem",
+        "type": "object"
+      },
       "CompactPath": {
         "additionalProperties": false,
         "properties": {
@@ -5907,6 +6010,25 @@
           }
         },
         "summary": "Analyze"
+      }
+    },
+    "/cache_freshness": {
+      "get": {
+        "description": "The Cache Freshness of every cache, grouped by the systems of the catalog.\n\nRead-only: it never scans, clones, or connects to a database. A SQL cache that several\nsystems share is listed under each of them, with one state.",
+        "operationId": "read_cache_freshness_cache_freshness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheFreshnessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Cache Freshness"
       }
     },
     "/find_by_sp": {

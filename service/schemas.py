@@ -621,6 +621,37 @@ class RefreshJobRequest(BaseModel):
     csharp: Optional[RefreshRequest] = None
 
 
+class CacheFreshnessRow(BaseModel):
+    """One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.
+
+    kind "sql" carries `server` and `database`; kind "csharp" carries `system_id`.
+    freshness: current | outdated | refreshing (`behind_source` comes with ticket 08).
+    last_scanned_at is None for a cache that is not usable.
+    last_job is None for a cache that never had a Refresh Job in this service run.
+    """
+
+    kind: Literal["sql", "csharp"]
+    key: str
+    label: str
+    freshness: str
+    last_scanned_at: Optional[str] = None
+    last_job: Optional[RefreshJobResponse] = None
+    server: str = ""
+    database: str = ""
+    system_id: str = ""
+
+
+class CacheFreshnessSystem(BaseModel):
+    system_id: str
+    caches: List[CacheFreshnessRow] = Field(default_factory=list)
+
+
+class CacheFreshnessResponse(BaseModel):
+    """GET /cache_freshness: every cache of every catalog system, grouped by system."""
+
+    systems: List[CacheFreshnessSystem] = Field(default_factory=list)
+
+
 class ScanRecordEntry(BaseModel):
     """GET /scan_records 的一列：一份 SQL 快取的身分與 Scan Record（掃描時間）。
 

@@ -161,6 +161,15 @@ def get_job(job_id: str) -> dict[str, Any] | None:
         return asdict(snapshot) if snapshot is not None else None
 
 
+def latest_job_for_key(key: str) -> dict[str, Any] | None:
+    """The most recent job of one cache key, or None when the cache never had a job."""
+    with _LOCK:
+        jobs = [snapshot for snapshot in _SNAPSHOTS.values() if snapshot.key == key]
+        if not jobs:
+            return None
+        return asdict(max(jobs, key=lambda snapshot: (snapshot.updated_at, snapshot.job_id)))
+
+
 def _prune_locked() -> None:
     limit = max(1, int(_MAX_SNAPSHOTS))
     overflow = len(_SNAPSHOTS) - limit
