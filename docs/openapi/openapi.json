@@ -189,6 +189,17 @@
       "CacheFreshnessResponse": {
         "description": "GET /cache_freshness: every cache of every catalog system, grouped by system.",
         "properties": {
+          "source_checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Checked At"
+          },
           "systems": {
             "items": {
               "$ref": "#/components/schemas/CacheFreshnessSystem"
@@ -201,7 +212,7 @@
         "type": "object"
       },
       "CacheFreshnessRow": {
-        "description": "One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.\n\nkind \"sql\" carries `server` and `database`; kind \"csharp\" carries `system_id`.\nfreshness: current | outdated | refreshing (`behind_source` comes with ticket 08).\nlast_scanned_at is the time on the cache's meta file; None when the cache was never scanned.\nlast_job is None for a cache that never had a Refresh Job in this service run.",
+        "description": "One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.\n\nkind \"sql\" carries `server` and `database`; kind \"csharp\" carries `system_id`.\nfreshness: current | outdated | refreshing | behind_source.\nlast_scanned_at is the time on the cache's meta file; None when the cache was never scanned.\nlast_job is None for a cache that never had a Refresh Job in this service run.",
         "properties": {
           "database": {
             "default": "",
@@ -6201,6 +6212,25 @@
           }
         },
         "summary": "Read Cache Freshness"
+      }
+    },
+    "/cache_freshness/check": {
+      "post": {
+        "description": "Run the `behind_source` check now and return the new listing (Impact ADR-0045).\n\nOnly the update page calls this: when it opens, and when the analyst asks to check again.\nIt asks each remote repository for its branch head (no clone, no pull). A question never\ndoes.",
+        "operationId": "check_behind_source_cache_freshness_check_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheFreshnessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Check Behind Source"
       }
     },
     "/derivation_progress": {

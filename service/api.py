@@ -19,6 +19,8 @@
                         Evidence 時的進度階段；唯讀）
     GET  /cache_freshness → CacheFreshnessResponse（每份 SQL 快取與 C# Scan Result 的
                         Cache Freshness，依 catalog 系統分組；唯讀）
+    POST /cache_freshness/check → CacheFreshnessResponse（執行 behind_source 檢查，回傳新清單；
+                        只有更新頁會呼叫，問答不會）
     POST /refresh_jobs → RefreshJobResponse（提交一個 Refresh Job，排入 Refresh Queue）
     POST /refresh_jobs/update_all → UpdateAllResponse（為每一份 outdated 快取提交一個 Refresh Job）
     GET  /refresh_jobs/{job_id} → RefreshJobResponse（狀態、排隊位置、進度、結果）
@@ -86,6 +88,7 @@ from . import (
     evidence_refresh,
     refresh_progress,
     refresh_queue,
+    source_check,
     sql_cache_store,
     system_targets,
 )
@@ -478,7 +481,26 @@ def read_cache_freshness() -> CacheFreshnessResponse:
     Read-only: it never scans, clones, or connects to a database. A SQL cache that several
     systems share is listed under each of them, with one state."""
     catalog = system_targets.load_system_catalog(system_targets.default_spec_rag_root())
-    return CacheFreshnessResponse(systems=cache_freshness.list_by_system(catalog))
+    return _freshness_response(catalog)
+
+
+def _freshness_response(catalog: list) -> CacheFreshnessResponse:
+    return CacheFreshnessResponse(
+        systems=cache_freshness.list_by_system(catalog),
+        source_checked_at=source_check.checked_at(),
+    )
+
+
+@app.post("/cache_freshness/check", response_model=CacheFreshnessResponse)
+def check_behind_source() -> CacheFreshnessResponse:
+    """Run the `behind_source` check now and return the new listing (Impact ADR-0045).
+
+    Only the update page calls this: when it opens, and when the analyst asks to check again.
+    It asks each remote repository for its branch head (no clone, no pull). A question never
+    does."""
+    catalog = system_targets.load_system_catalog(system_targets.default_spec_rag_root())
+    source_check.check(cache_freshness.sources_of(catalog))
+    return _freshness_response(catalog)
 
 
 @app.get("/derivation_progress", response_model=DerivationProgressResponse)

@@ -672,7 +672,7 @@ class CacheFreshnessRow(BaseModel):
     """One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.
 
     kind "sql" carries `server` and `database`; kind "csharp" carries `system_id`.
-    freshness: current | outdated | refreshing (`behind_source` comes with ticket 08).
+    freshness: current | outdated | refreshing | behind_source.
     last_scanned_at is the time on the cache's meta file; None when the cache was never scanned.
     last_job is None for a cache that never had a Refresh Job in this service run.
     """
@@ -697,6 +697,7 @@ class CacheFreshnessResponse(BaseModel):
     """GET /cache_freshness: every cache of every catalog system, grouped by system."""
 
     systems: List[CacheFreshnessSystem] = Field(default_factory=list)
+    source_checked_at: Optional[str] = None  # time of the last `behind_source` check; None before the first
 
 
 class DerivationProgressEntry(BaseModel):

@@ -1,12 +1,14 @@
 """Cache Freshness: the state of each SQL cache and each C# Scan Result (Impact ADR-0045).
 
 The states are `current`, `outdated`, `refreshing` and `behind_source`. This module computes
-`current`, `outdated` and `refreshing`; `behind_source` comes with the update page's check
-(ticket 08).
+`current`, `outdated` and `refreshing` from the caches and the queue, and `behind_source`
+from the last remote check (`source_check`).
 
 - `outdated`: the cache is missing, invalid, or has an old format version.
 - `refreshing`: a Refresh Job for the cache runs now. A waiting job changes nothing.
 - A failed job changes nothing either: the state is the state of the cache on disk.
+- `behind_source`: a usable C# Scan Result whose recorded commit differs from the remote head
+  that the last check found. SQL caches never get it. `outdated` and `refreshing` win.
 
 The module only reads. It never scans, clones, pulls or connects to a database.
 A cache that several systems share is computed once per listing and shows the same state
@@ -18,17 +20,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
-from . import refresh_queue, repo_manager, scan_store, sql_cache_store
+from . import refresh_queue, repo_manager, scan_store, source_check, sql_cache_store
 
 CURRENT = "current"
 OUTDATED = "outdated"
 REFRESHING = "refreshing"
+BEHIND_SOURCE = "behind_source"
 
 
-def _state(has_usable_cache: bool, last_job: Optional[dict]) -> str:
+def _state(has_usable_cache: bool, last_job: Optional[dict], behind_source: bool = False) -> str:
     if last_job is not None and last_job["status"] == refresh_queue.RUNNING:
         return REFRESHING
-    return CURRENT if has_usable_cache else OUTDATED
+    if not has_usable_cache:
+        return OUTDATED
+    return BEHIND_SOURCE if behind_source else CURRENT
 
 
 def _row(
@@ -38,6 +43,7 @@ def _row(
     label: str,
     has_usable_cache: bool,
     last_scanned_at: Optional[str],
+    behind_source: bool = False,
     **identity: Any,
 ) -> dict[str, Any]:
     last_job = refresh_queue.shared_queue.latest_for_key(key)
@@ -45,7 +51,7 @@ def _row(
         "kind": kind,
         "key": key,
         "label": label,
-        "freshness": _state(has_usable_cache, last_job),
+        "freshness": _state(has_usable_cache, last_job, behind_source),
         "last_scanned_at": last_scanned_at,
         "last_job": last_job,
         **identity,
@@ -70,7 +76,18 @@ def sql_row(server: str, database: str) -> Optional[dict[str, Any]]:
     )
 
 
-def csharp_row(system_id: str, scan_roots: Iterable[Path]) -> dict[str, Any]:
+def _is_behind_source(source: dict, scan_roots: Iterable[Path]) -> bool:
+    """True when the last check found a remote head that differs from a recorded commit."""
+    head = source_check.remote_head(source)
+    if head is None:
+        return False
+    recorded = [scan_store.cached_commit(root) for root in scan_roots]
+    return any(commit and commit != head for commit in recorded)
+
+
+def csharp_row(
+    system_id: str, scan_roots: Iterable[Path], source: Optional[dict] = None
+) -> dict[str, Any]:
     """The row of one C# Scan Result. It is `current` only when every scan root is.
 
     The scan time is the oldest one on disk, so an `outdated` cache still shows when it was last scanned."""
@@ -83,6 +100,7 @@ def csharp_row(system_id: str, scan_roots: Iterable[Path]) -> dict[str, Any]:
         label=system_id,
         has_usable_cache=usable,
         last_scanned_at=min((stamp for stamp in saved if stamp), default=None),
+        behind_source=usable and source is not None and _is_behind_source(source, roots),
         system_id=system_id,
     )
 
@@ -123,6 +141,16 @@ def sql_unusable(identity: sql_cache_store.CacheIdentity) -> Optional[dict[str, 
     return None
 
 
+def sources_of(catalog_systems: Iterable[dict]) -> List[dict]:
+    """The Azure source of each catalog system that has a repository."""
+    sources = []
+    for system in catalog_systems:
+        azure = system.get("azure") or {}
+        if isinstance(azure, dict) and str(azure.get("repo") or "").strip():
+            sources.append(azure)
+    return sources
+
+
 def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
     """Every cache of every catalog system, grouped by system, in catalog order."""
     shared_sql: dict[tuple[str, str], Optional[dict[str, Any]]] = {}
@@ -134,7 +162,7 @@ def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
         caches: List[dict[str, Any]] = []
         azure = system.get("azure") or {}
         if isinstance(azure, dict) and str(azure.get("repo") or "").strip():
-            caches.append(csharp_row(system_id, repo_manager.peek_scan_roots(azure)))
+            caches.append(csharp_row(system_id, repo_manager.peek_scan_roots(azure), azure))
         for declared in system.get("databases") or []:
             if not isinstance(declared, dict):
                 continue
