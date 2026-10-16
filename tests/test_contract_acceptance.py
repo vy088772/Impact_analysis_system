@@ -241,12 +241,20 @@ def test_reclassification_uses_cached_raw_facts_without_rescanning(monkeypatch, 
     )
     monkeypatch.setattr(scan_store_module, "cache_status", lambda _: "current")
     monkeypatch.setattr(scan_store_module, "load_cached", lambda _: scan)
-    monkeypatch.setattr(scan_store_module, "read_scan", lambda *args, **kwargs: (_ for _ in ()).throw(
+    monkeypatch.setattr(
+        scan_store_module,
+        "read_scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("contract-only acceptance must not rescan C#")
-        ))
-    monkeypatch.setattr(scan_store_module, "rebuild_scan", lambda *args, **kwargs: (_ for _ in ()).throw(
+        ),
+    )
+    monkeypatch.setattr(
+        scan_store_module,
+        "rebuild_scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("contract-only acceptance must not rescan C#")
-        ))
+        ),
+    )
     monkeypatch.setattr(contract_acceptance_module.analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         contract_acceptance_module.analyze_service.sql_cache_store,
@@ -314,12 +322,20 @@ def test_registry_only_acceptance_keeps_database_evidence_unresolved(monkeypatch
     )
     monkeypatch.setattr(scan_store_module, "cache_status", lambda _: "current")
     monkeypatch.setattr(scan_store_module, "load_cached", lambda _: scan)
-    monkeypatch.setattr(scan_store_module, "read_scan", lambda *args, **kwargs: (_ for _ in ()).throw(
+    monkeypatch.setattr(
+        scan_store_module,
+        "read_scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("registry-only acceptance must not rescan C#")
-        ))
-    monkeypatch.setattr(scan_store_module, "rebuild_scan", lambda *args, **kwargs: (_ for _ in ()).throw(
+        ),
+    )
+    monkeypatch.setattr(
+        scan_store_module,
+        "rebuild_scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("registry-only acceptance must not rescan C#")
-        ))
+        ),
+    )
     monkeypatch.setattr(contract_acceptance_module.analyze_service.sql_cache_store, "find_cache_identity", one_server_holds_every_database)
     monkeypatch.setattr(
         contract_acceptance_module.analyze_service.sql_cache_store,
@@ -711,12 +727,20 @@ def test_requested_selector_drives_cached_reclassification(monkeypatch, tmp_path
     )
     monkeypatch.setattr(scan_store_module, "cache_status", lambda _: "current")
     monkeypatch.setattr(scan_store_module, "load_cached", lambda _: scan)
-    monkeypatch.setattr(scan_store_module, "read_scan", lambda *args, **kwargs: (_ for _ in ()).throw(
+    monkeypatch.setattr(
+        scan_store_module,
+        "read_scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("acceptance apply must not rescan C#")
-        ))
-    monkeypatch.setattr(scan_store_module, "rebuild_scan", lambda *args, **kwargs: (_ for _ in ()).throw(
+        ),
+    )
+    monkeypatch.setattr(
+        scan_store_module,
+        "rebuild_scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("acceptance apply must not rescan C#")
-        ))
+        ),
+    )
 
     result = accept_external_wrapper_contract(
         {
@@ -989,12 +1013,20 @@ def test_cached_reclassification_does_not_promote_new_source_facts(monkeypatch, 
     )
     monkeypatch.setattr(scan_store_module, "cache_status", lambda _: "current")
     monkeypatch.setattr(scan_store_module, "load_cached", lambda _: scan)
-    monkeypatch.setattr(scan_store_module, "read_scan", lambda *args, **kwargs: (_ for _ in ()).throw(
+    monkeypatch.setattr(
+        scan_store_module,
+        "read_scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("a source revision requires normal refresh")
-        ))
-    monkeypatch.setattr(scan_store_module, "rebuild_scan", lambda *args, **kwargs: (_ for _ in ()).throw(
+        ),
+    )
+    monkeypatch.setattr(
+        scan_store_module,
+        "rebuild_scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("a source revision requires normal refresh")
-        ))
+        ),
+    )
 
     result = reclassify_cached_scans(
         [root],

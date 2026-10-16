@@ -6,6 +6,7 @@ from typing import Protocol
 
 from code_analyzer.project_scanner import ProjectScanResult
 from . import repo_manager, scan_store, sql_cache_store
+from .scan_store import ScanOutdated
 
 CacheIdentityResult = sql_cache_store.CacheIdentity | sql_cache_store.AmbiguousServer | None
 Source = dict[str, str | list[str]]
@@ -19,6 +20,23 @@ class ScanStore(Protocol):
     def rebuild_scan(self, root: Path) -> ProjectScanResult: ...
     def has_cache(self, root: Path) -> bool: ...
     def repo_dir(self, project: str, repo: str) -> Path: ...
+
+
+def read_or_rebuild(store: "ScanStoreOperations", root: Path) -> ProjectScanResult:
+    """Read a usable C# Scan Result, and rebuild it when the read reports `outdated`.
+
+    This keeps today's fallback for the question paths that still scan. Ticket 04 of
+    cache-refresh-queue removes it, together with every caller.
+    """
+    try:
+        return store.read_scan(root)
+    except ScanOutdated:
+        return store.rebuild_scan(root)
+
+
+class ScanStoreOperations(Protocol):
+    def read_scan(self, root: Path) -> ProjectScanResult: ...
+    def rebuild_scan(self, root: Path) -> ProjectScanResult: ...
 
 
 class CacheStore(Protocol):
@@ -66,6 +84,7 @@ class InMemoryScanStore:
     cached_roots: set[Path] = field(default_factory=set)
     repository_root: Path = Path(".")
     candidate_roots: list[Path] | None = None
+    outdated_roots: set[Path] = field(default_factory=set)
     calls: list[str] = field(default_factory=list)
 
     def resolve_source(self, request: object) -> Source:
@@ -81,11 +100,13 @@ class InMemoryScanStore:
         return list(self.roots)
 
     def read_scan(self, root: Path) -> ProjectScanResult:
-        self.calls.append("scan")
+        self.calls.append("read")
+        if root in self.outdated_roots:
+            raise ScanOutdated(root)
         return self.scans[root]
 
     def rebuild_scan(self, root: Path) -> ProjectScanResult:
-        self.calls.append("scan")
+        self.calls.append("rebuild")
         return self.scans[root]
 
     def has_cache(self, root: Path) -> bool:

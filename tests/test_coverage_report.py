@@ -560,12 +560,12 @@ def _stub_measurement(monkeypatch, scans_by_root: dict, *, cache: str = "current
     """Serve prepared scans instead of touching the clone root or SQL Server."""
     calls: list = []
 
-    def fake_get_or_scan(root: Path, refresh: bool = False) -> ProjectScanResult:
+    def fake_scan(root: Path, refresh: bool = False) -> ProjectScanResult:
         calls.append((Path(root), refresh))
         return scans_by_root[str(Path(root))]
 
-    monkeypatch.setattr(tool.scan_store, "read_scan", lambda root: fake_get_or_scan(root, False))
-    monkeypatch.setattr(tool.scan_store, "rebuild_scan", lambda root: fake_get_or_scan(root, True))
+    monkeypatch.setattr(tool.scan_store, "read_scan", lambda root: fake_scan(root, False))
+    monkeypatch.setattr(tool.scan_store, "rebuild_scan", lambda root: fake_scan(root, True))
     monkeypatch.setattr(tool.scan_store, "has_cache", lambda root: cache == "current")
     monkeypatch.setattr(tool.scan_store, "cache_status", lambda root: cache)
     monkeypatch.setattr(

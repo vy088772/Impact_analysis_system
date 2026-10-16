@@ -32,10 +32,10 @@ from code_analyzer.csharp_analysis_gateway import (  # noqa: E402
 )
 from config.settings import settings  # noqa: E402
 from service import analyze_service, scan_store  # noqa: E402
+from service.request_context_adapters import read_or_rebuild  # noqa: E402
 from service.system_targets import (  # noqa: E402
     default_spec_rag_root,
     load_system_catalog,
-    read_or_rebuild_scan,
     resolve_system_targets,
     scan_cache_state,
 )
@@ -149,7 +149,7 @@ def _scan_report(
             [],
         )
 
-    scan = read_or_rebuild_scan(root)
+    scan = read_or_rebuild(scan_store, root)
     groups: OrderedDict[tuple, Dict[str, Any]] = OrderedDict()
     wrapper_calls = 0
     catalog = analyze_service.load_sp_catalog(system_id)

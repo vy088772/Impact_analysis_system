@@ -177,13 +177,13 @@ def test_refresh_programs_replaces_selected_cache_records_only(monkeypatch, tmp_
         def _find_files_by_extensions(self, extensions: set[str]) -> list[str]:
             return []
 
-    def fake_get_or_scan(scan_root: Path, refresh: bool = False) -> ProjectScanResult:
+    def fake_scan(scan_root: Path, refresh: bool = False) -> ProjectScanResult:
         assert refresh is False
         return scan
 
     monkeypatch.setattr(analyze_service, "cache_status", lambda scan_root: "current")
-    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_get_or_scan(root, False))
-    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_get_or_scan(root, True))
+    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_scan(root, False))
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_scan(root, True))
     monkeypatch.setattr(analyze_service, "ProjectScanner", FakeScanner)
     monkeypatch.setattr(analyze_service, "save_scan", lambda scan_root, result: save_calls.append(result))
 
@@ -620,12 +620,12 @@ def test_refresh_source_without_programs_keeps_full_refresh(monkeypatch, tmp_pat
         lambda source, refresh=False: [root],
     )
 
-    def fake_get_or_scan(scan_root: Path, refresh: bool = False) -> ProjectScanResult:
+    def fake_scan(scan_root: Path, refresh: bool = False) -> ProjectScanResult:
         refresh_flags.append(refresh)
         return scan
 
-    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_get_or_scan(root, False))
-    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_get_or_scan(root, True))
+    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_scan(root, False))
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_scan(root, True))
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 
@@ -675,12 +675,12 @@ def test_full_refresh_reconciles_raw_wrappers_once_without_sql(monkeypatch, tmp_
         lambda source, refresh=False: [root],
     )
 
-    def fake_get_or_scan(scan_root: Path, refresh: bool = False) -> ProjectScanResult:
+    def fake_scan(scan_root: Path, refresh: bool = False) -> ProjectScanResult:
         scan_calls.append((scan_root, refresh))
         return scan
 
-    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_get_or_scan(root, False))
-    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_get_or_scan(root, True))
+    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_scan(root, False))
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_scan(root, True))
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 
@@ -1142,12 +1142,12 @@ def test_refresh_reconciles_multi_root_wrappers_with_root_provenance(monkeypatch
 
     monkeypatch.setattr(analyze_service, "resolve_scan_roots", lambda source, refresh=False: roots)
 
-    def fake_get_or_scan(root: Path, refresh: bool = False) -> ProjectScanResult:
+    def fake_scan(root: Path, refresh: bool = False) -> ProjectScanResult:
         scan_calls.append((root, refresh))
         return scans[root]
 
-    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_get_or_scan(root, False))
-    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_get_or_scan(root, True))
+    monkeypatch.setattr(analyze_service, "read_scan", lambda root: fake_scan(root, False))
+    monkeypatch.setattr(analyze_service, "rebuild_scan", lambda root: fake_scan(root, True))
 
     result = analyze_service.refresh_source({"project": "p", "repo": "r"})
 

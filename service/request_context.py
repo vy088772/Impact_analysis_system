@@ -8,8 +8,7 @@ from typing import Callable
 
 from code_analyzer.project_scanner import ProjectScanResult
 from .derived_execution_evidence import DerivedExecutionEvidenceScope
-from .request_context_adapters import CacheIdentityResult, CacheStore, ScanStore
-from .scan_store import ScanOutdated
+from .request_context_adapters import CacheIdentityResult, CacheStore, ScanStore, read_or_rebuild
 from .sql_cache_store import CacheIdentity
 
 
@@ -72,16 +71,10 @@ def build_request_context(
 
 
 def _scan_for(scan_store: ScanStore, root: Path, refresh: bool) -> ProjectScanResult:
-    """Rebuild on an explicit refresh; otherwise read, and rebuild when no usable result exists.
-
-    The rebuild fallback keeps today's behavior. Ticket 04 of cache-refresh-queue removes it.
-    """
+    """Rebuild on an explicit refresh; otherwise read, and rebuild when the read reports `outdated`."""
     if refresh:
         return scan_store.rebuild_scan(root)
-    try:
-        return scan_store.read_scan(root)
-    except ScanOutdated:
-        return scan_store.rebuild_scan(root)
+    return read_or_rebuild(scan_store, root)
 
 
 def merge_scans(scans: list[ProjectScanResult]) -> ProjectScanResult:

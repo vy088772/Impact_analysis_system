@@ -45,7 +45,7 @@ def test_a_multi_folder_source_skips_if_either_root_has_no_cache(tmp_path: Path,
     assert response.skipped is True
     assert response.matches == []
     assert "resolve" not in scans.calls
-    assert "scan" not in scans.calls
+    assert "read" not in scans.calls and "rebuild" not in scans.calls
 
 
 @pytest.mark.parametrize("refresh,cache_only", [(True, True), (False, False), (False, True)])

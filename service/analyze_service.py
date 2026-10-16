@@ -88,7 +88,7 @@ from .shared_component import (
 )
 from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots
-from .scan_store import cache_status, cached_commit, read_scan, rebuild_scan, save_scan
+from .scan_store import ScanOutdated, cache_status, cached_commit, read_scan, rebuild_scan, save_scan
 from . import sql_cache_store
 from .request_context import Skipped, build_request_context, merge_scans as _merge_scans
 from .request_context_adapters import CacheIdentityResult, CacheStore, RealCacheStore, RealScanStore, ScanStore
@@ -3242,7 +3242,10 @@ def refresh_programs(root: Path, program_names: List[str]) -> ProgramRefreshResu
     """Refresh only files matching the requested programs in one scan root."""
     requested = list(dict.fromkeys(name.strip() for name in program_names if name.strip()))
     _require_current_program_cache(root)
-    scan = read_scan(root)
+    try:
+        scan = read_scan(root)
+    except ScanOutdated:
+        raise ProgramRefreshCacheError(root, cache_status(root)) from None
 
     scanner = ProjectScanner(project_root=str(root))
     current_csharp_files = _unique_refresh_paths(scanner.find_csharp_files())

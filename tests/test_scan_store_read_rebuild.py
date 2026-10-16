@@ -85,3 +85,58 @@ def test_rebuild_scan_scans_again_when_a_usable_cache_exists(store) -> None:
 
 def test_the_combined_operation_no_longer_exists() -> None:
     assert not hasattr(scan_store, "get_or_scan")
+
+
+def _request(**fields):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(database="Db", db_server="Srv", **fields)
+
+
+def test_a_question_reads_and_does_not_rebuild_when_a_result_is_usable(tmp_path) -> None:
+    from service.request_context import build_request_context
+    from service.request_context_adapters import InMemoryCacheStore, InMemoryScanStore
+
+    scan = ProjectScanResult(project_root=str(tmp_path), project_name="p", scan_time=datetime.now())
+    scans = InMemoryScanStore(roots=[tmp_path], scans={tmp_path: scan}, cached_roots={tmp_path})
+    build_request_context(_request(), scan_store=scans, cache_store=InMemoryCacheStore())
+    assert "read" in scans.calls
+    assert "rebuild" not in scans.calls
+
+
+def test_a_question_falls_back_to_an_explicit_rebuild_when_the_read_reports_outdated(tmp_path) -> None:
+    from service.request_context import build_request_context
+    from service.request_context_adapters import InMemoryCacheStore, InMemoryScanStore
+
+    scan = ProjectScanResult(project_root=str(tmp_path), project_name="p", scan_time=datetime.now())
+    scans = InMemoryScanStore(roots=[tmp_path], scans={tmp_path: scan}, outdated_roots={tmp_path})
+    build_request_context(_request(), scan_store=scans, cache_store=InMemoryCacheStore())
+    assert [c for c in scans.calls if c in ("read", "rebuild")] == ["read", "rebuild"]
+
+
+def test_a_refresh_rebuilds_without_reading(tmp_path) -> None:
+    from service.request_context import build_request_context
+    from service.request_context_adapters import InMemoryCacheStore, InMemoryScanStore
+
+    scan = ProjectScanResult(project_root=str(tmp_path), project_name="p", scan_time=datetime.now())
+    scans = InMemoryScanStore(roots=[tmp_path], scans={tmp_path: scan})
+    build_request_context(_request(refresh=True), scan_store=scans, cache_store=InMemoryCacheStore())
+    assert "rebuild" in scans.calls
+    assert "read" not in scans.calls
+
+
+def test_a_program_refresh_whose_cache_vanishes_reports_a_cache_error_and_does_not_scan(
+    tmp_path, monkeypatch
+) -> None:
+    from service import analyze_service
+
+    def vanished(root):
+        raise scan_store.ScanOutdated(root)
+
+    monkeypatch.setattr(analyze_service, "cache_status", lambda root: "current")
+    monkeypatch.setattr(analyze_service, "read_scan", vanished)
+    monkeypatch.setattr(
+        analyze_service, "rebuild_scan", lambda root: pytest.fail("a program refresh must not scan")
+    )
+    with pytest.raises(analyze_service.ProgramRefreshCacheError):
+        analyze_service.refresh_programs(tmp_path, ["Prog"])
