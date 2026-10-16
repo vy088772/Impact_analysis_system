@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
 from . import refresh_queue, repo_manager, scan_store, source_check, sql_cache_store
+from .schemas import RefreshRequest, RefreshSqlRequest, UpdateAllRequest
 
 CURRENT = "current"
 OUTDATED = "outdated"
@@ -28,8 +29,12 @@ REFRESHING = "refreshing"
 BEHIND_SOURCE = "behind_source"
 
 
+def _job_is_running(last_job: Optional[dict]) -> bool:
+    return last_job is not None and last_job["status"] == refresh_queue.RUNNING
+
+
 def _state(has_usable_cache: bool, last_job: Optional[dict], behind_source: bool = False) -> str:
-    if last_job is not None and last_job["status"] == refresh_queue.RUNNING:
+    if _job_is_running(last_job):
         return REFRESHING
     if not has_usable_cache:
         return OUTDATED
@@ -110,8 +115,7 @@ def _unusable(kind: str, key: str, state: str, **identity: str) -> dict[str, Any
 
 
 def _is_running(key: str) -> bool:
-    last_job = refresh_queue.shared_queue.latest_for_key(key)
-    return last_job is not None and last_job["status"] == refresh_queue.RUNNING
+    return _job_is_running(refresh_queue.shared_queue.latest_for_key(key))
 
 
 def csharp_refreshing(scan_roots: Iterable[Path]) -> Optional[dict[str, Any]]:
@@ -141,14 +145,17 @@ def sql_unusable(identity: sql_cache_store.CacheIdentity) -> Optional[dict[str, 
     return None
 
 
+def azure_source_of(system: dict) -> Optional[dict]:
+    """The Azure source of a catalog system, or None when the system has no repository."""
+    azure = system.get("azure") or {}
+    if isinstance(azure, dict) and str(azure.get("repo") or "").strip():
+        return azure
+    return None
+
+
 def sources_of(catalog_systems: Iterable[dict]) -> List[dict]:
     """The Azure source of each catalog system that has a repository."""
-    sources = []
-    for system in catalog_systems:
-        azure = system.get("azure") or {}
-        if isinstance(azure, dict) and str(azure.get("repo") or "").strip():
-            sources.append(azure)
-    return sources
+    return [azure for azure in map(azure_source_of, catalog_systems) if azure is not None]
 
 
 def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
@@ -160,8 +167,8 @@ def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
         if not system_id:
             continue
         caches: List[dict[str, Any]] = []
-        azure = system.get("azure") or {}
-        if isinstance(azure, dict) and str(azure.get("repo") or "").strip():
+        azure = azure_source_of(system)
+        if azure is not None:
             caches.append(csharp_row(system_id, repo_manager.peek_scan_roots(azure), azure))
         for declared in system.get("databases") or []:
             if not isinstance(declared, dict):
@@ -174,3 +181,39 @@ def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
                 caches.append(row)
         grouped.append({"system_id": system_id, "caches": caches})
     return grouped
+
+
+def update_all_requests(
+    catalog_systems: Iterable[dict], req: UpdateAllRequest
+) -> List[RefreshSqlRequest | RefreshRequest]:
+    """The refresh request of each `outdated` cache, in catalog order, one per shared cache."""
+    catalog = list(catalog_systems)
+    azure_of = {str(system.get("system_id") or "").strip(): azure_source_of(system) or {} for system in catalog}
+    requests: List[RefreshSqlRequest | RefreshRequest] = []
+    seen: set[str] = set()
+    for system in list_by_system(catalog):
+        for row in system["caches"]:
+            if row["freshness"] != OUTDATED or row["key"] in seen:
+                continue
+            seen.add(row["key"])
+            if row["kind"] == "sql":
+                override = req.sql_credentials.get(row["server"])
+                requests.append(
+                    RefreshSqlRequest(
+                        database=sql_cache_store.CacheIdentity.of(row["server"], row["database"]).key,
+                        server=row["server"],
+                        db_name=row["database"],
+                        db_user_id=override.db_user_id if override else "",
+                        db_password=override.db_password if override else "",
+                    )
+                )
+                continue
+            azure = azure_of[row["system_id"]]
+            requests.append(
+                RefreshRequest(
+                    system=row["system_id"],
+                    source={field: str(azure.get(field) or "") for field in ("project", "repo", "branch", "path")},
+                    wrapper_contract=req.wrapper_contracts.get(row["system_id"]) or "",
+                )
+            )
+    return requests

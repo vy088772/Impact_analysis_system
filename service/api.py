@@ -189,6 +189,7 @@ def _submit_csharp_job(req: RefreshRequest) -> RefreshJobResponse:
     snapshot = refresh_queue.shared_queue.submit(
         key=key,
         kind="csharp",
+        # The job field `database` is the label of the cache owner; a C# cache has a system, not a database.
         database=req.system.strip() or req.source.repo,
         run=evidence_refresh.then_derive(
             _csharp_refresh_run(req), lambda: evidence_refresh.targets_for_csharp(key)
@@ -433,45 +434,21 @@ def submit_refresh_job(req: RefreshJobRequest) -> RefreshJobResponse:
     return _submit_csharp_job(req.csharp)
 
 
+def _catalog() -> list:
+    return system_targets.load_system_catalog(system_targets.default_spec_rag_root())
+
+
 @app.post("/refresh_jobs/update_all", response_model=UpdateAllResponse)
 def update_all(req: UpdateAllRequest) -> UpdateAllResponse:
     """「全部更新」：為每一份 `outdated` 的快取提交一個 Refresh Job（依 catalog 順序）。
 
     `current`、`refreshing` 與 `behind_source` 的快取不提交；已有 waiting／running job 的快取
     不會有第二個 job，回應裡放的是那個既有 job。共用的 SQL 快取只提交一次。"""
-    catalog = system_targets.load_system_catalog(system_targets.default_spec_rag_root())
-    azure_of = {
-        str(system.get("system_id") or "").strip(): system.get("azure") or {} for system in catalog
-    }
-    jobs: dict[str, RefreshJobResponse] = {}
-    for system in cache_freshness.list_by_system(catalog):
-        for row in system["caches"]:
-            if row["freshness"] != cache_freshness.OUTDATED or row["key"] in jobs:
-                continue
-            if row["kind"] == "sql":
-                override = req.sql_credentials.get(row["server"])
-                jobs[row["key"]] = _submit_sql_job(
-                    RefreshSqlRequest(
-                        database=sql_cache_store.CacheIdentity.of(row["server"], row["database"]).key,
-                        server=row["server"],
-                        db_name=row["database"],
-                        db_user_id=override.db_user_id if override else "",
-                        db_password=override.db_password if override else "",
-                    )
-                )
-                continue
-            azure = azure_of[row["system_id"]]
-            jobs[row["key"]] = _submit_csharp_job(
-                RefreshRequest(
-                    system=row["system_id"],
-                    source={
-                        field: str(azure.get(field) or "")
-                        for field in ("project", "repo", "branch", "path")
-                    },
-                    wrapper_contract=req.wrapper_contracts.get(row["system_id"]) or "",
-                )
-            )
-    return UpdateAllResponse(jobs=list(jobs.values()))
+    jobs = [
+        _submit_sql_job(request) if isinstance(request, RefreshSqlRequest) else _submit_csharp_job(request)
+        for request in cache_freshness.update_all_requests(_catalog(), req)
+    ]
+    return UpdateAllResponse(jobs=jobs)
 
 
 @app.get("/cache_freshness", response_model=CacheFreshnessResponse)
@@ -480,7 +457,7 @@ def read_cache_freshness() -> CacheFreshnessResponse:
 
     Read-only: it never scans, clones, or connects to a database. A SQL cache that several
     systems share is listed under each of them, with one state."""
-    catalog = system_targets.load_system_catalog(system_targets.default_spec_rag_root())
+    catalog = _catalog()
     return _freshness_response(catalog)
 
 
@@ -498,7 +475,7 @@ def check_behind_source() -> CacheFreshnessResponse:
     Only the update page calls this: when it opens, and when the analyst asks to check again.
     It asks each remote repository for its branch head (no clone, no pull). A question never
     does."""
-    catalog = system_targets.load_system_catalog(system_targets.default_spec_rag_root())
+    catalog = _catalog()
     source_check.check(cache_freshness.sources_of(catalog))
     return _freshness_response(catalog)
 

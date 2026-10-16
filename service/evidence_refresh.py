@@ -21,6 +21,7 @@ does not name cannot be derived ahead; a question derives it.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from . import (
+    cache_freshness,
     derivation_progress,
     derived_execution_evidence,
     refresh_queue,
@@ -45,6 +47,8 @@ ProgressCallback = Callable[[str, int, int, str], None]
 
 DERIVED = "derived"
 SKIPPED = "skipped"
+
+logger = logging.getLogger(__name__)
 
 
 def catalog_systems() -> List[dict]:
@@ -108,8 +112,8 @@ class Target:
 def targets_of(system: dict) -> List[Target]:
     """The scopes of one catalog system, or none when it has no repository."""
     system_id = str(system.get("system_id") or "").strip()
-    azure = system.get("azure") or {}
-    if not system_id or not isinstance(azure, dict) or not str(azure.get("repo") or "").strip():
+    azure = cache_freshness.azure_source_of(system)
+    if not system_id or azure is None:
         return []
     contract = system.get("wrapper_contract")
     contract = contract.strip() if isinstance(contract, str) else ""
@@ -245,7 +249,7 @@ def observe_config(scope: DerivedExecutionEvidenceScope, config: RatingConfig) -
         if baseline is not None and baseline != config:
             start_config_check()
     except Exception as exc:  # noqa: BLE001 - watching the configuration must never fail a question
-        print(f"⚠️  設定變更偵測失敗（非致命）：{exc}")
+        logger.warning("設定變更偵測失敗（非致命）：%s", exc)
 
 
 _sweep_lock = threading.Lock()
@@ -284,7 +288,7 @@ def start_config_check() -> threading.Thread:
         try:
             check_config_at_start()
         except Exception as exc:  # noqa: BLE001
-            print(f"⚠️  設定變更檢查失敗（非致命）：{exc}")
+            logger.warning("設定變更檢查失敗（非致命）：%s", exc)
 
     thread = threading.Thread(target=run, name="evidence-config-check", daemon=True)
     thread.start()

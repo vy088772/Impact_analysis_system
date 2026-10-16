@@ -170,18 +170,28 @@ def latest_job_for_key(key: str) -> dict[str, Any] | None:
         return asdict(max(jobs, key=lambda snapshot: (snapshot.updated_at, snapshot.job_id)))
 
 
+def _age_of(snapshot: ProgressSnapshot) -> tuple[float, str]:
+    return (snapshot.updated_at, snapshot.job_id)
+
+
 def _prune_locked() -> None:
     limit = max(1, int(_MAX_SNAPSHOTS))
     overflow = len(_SNAPSHOTS) - limit
     if overflow <= 0:
         return
+    # The latest job of a cache keeps its error for the cache row, so it leaves last.
+    latest_of_key = {}
+    for snapshot in _SNAPSHOTS.values():
+        held = latest_of_key.get(snapshot.key)
+        if held is None or _age_of(snapshot) > _age_of(held):
+            latest_of_key[snapshot.key] = snapshot
     completed = sorted(
         (
             snapshot
             for snapshot in _SNAPSHOTS.values()
             if snapshot.status in TERMINAL_STATUSES
         ),
-        key=lambda snapshot: (snapshot.updated_at, snapshot.job_id),
+        key=lambda snapshot: (latest_of_key[snapshot.key] is snapshot, *_age_of(snapshot)),
     )
     for snapshot in completed[:overflow]:
         _SNAPSHOTS.pop(snapshot.job_id, None)

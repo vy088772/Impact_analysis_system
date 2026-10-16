@@ -171,3 +171,20 @@ def test_read_refresh_job_returns_stable_response_shape() -> None:
     assert response.job_id == job_id
     assert response.database == "OrdersDb"
     assert response.status == "waiting"
+
+
+def test_pruning_keeps_waiting_jobs_and_the_latest_job_of_each_cache(monkeypatch) -> None:
+    monkeypatch.setattr(refresh_progress, "_SNAPSHOTS", {})
+    monkeypatch.setattr(refresh_progress, "_MAX_SNAPSHOTS", 3)
+
+    refresh_progress.create_job("only-b", "TestDb", key="cache-b")
+    refresh_progress.update_job("only-b", status="failed", error="boom")
+    for job_id in ("first-a", "second-a"):
+        refresh_progress.create_job(job_id, "TestDb", key="cache-a")
+        refresh_progress.update_job(job_id, status="succeeded")
+    refresh_progress.create_job("waiting-c", "TestDb", key="cache-c")
+
+    assert refresh_progress.get_job("first-a") is None
+    assert refresh_progress.get_job("only-b")["error"] == "boom"
+    assert refresh_progress.get_job("second-a") is not None
+    assert refresh_progress.get_job("waiting-c")["status"] == "waiting"
