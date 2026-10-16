@@ -12,6 +12,9 @@ A repository that cannot be reached keeps no head: its row is never `behind_sour
 
 from __future__ import annotations
 
+import base64
+import logging
+import os
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +23,8 @@ from typing import Iterable, Optional
 from urllib.parse import quote
 
 from config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 _LS_REMOTE_TIMEOUT_SECONDS = 30
 _MAX_PARALLEL_CHECKS = 4
@@ -45,20 +50,29 @@ def fetch_remote_head(source: dict) -> Optional[str]:
     project, repo, branch = _key_of(source)
     if not (org and pat and project and repo):
         return None
-    url = (
-        f"https://:{quote(pat, safe='')}@dev.azure.com"
-        f"/{org}/{quote(project, safe='')}/_git/{quote(repo, safe='')}"
-    )
+    url = f"https://dev.azure.com/{org}/{quote(project, safe='')}/_git/{quote(repo, safe='')}"
+    # The PAT travels in the environment, not in the command line (`ps` shows arguments).
+    token = base64.b64encode(f":{pat}".encode()).decode()
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraheader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {token}",
+    }
     try:
         result = subprocess.run(
             ["git", "ls-remote", url, f"refs/heads/{branch}"],
             capture_output=True,
             text=True,
             timeout=_LS_REMOTE_TIMEOUT_SECONDS,
+            env=env,
         )
-    except Exception:
+    except Exception as exc:  # timeout, git missing: this repository keeps no head
+        logger.warning("ls-remote of %s/%s failed: %s", project, repo, type(exc).__name__)
         return None
     if result.returncode != 0:
+        logger.warning("ls-remote of %s/%s exited with %s", project, repo, result.returncode)
         return None
     fields = result.stdout.split()
     return fields[0] if fields else None

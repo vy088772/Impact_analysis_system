@@ -194,3 +194,27 @@ def test_a_question_never_checks_the_remote_and_answers_normally_for_a_behind_so
     assert response.status_code == 200
     assert response.json()["unusable_caches"] == []
     assert remote.calls == []
+
+
+def test_ls_remote_keeps_the_token_out_of_the_command_line_and_failures_give_no_head(monkeypatch) -> None:
+    import subprocess
+
+    monkeypatch.setattr(source_check.settings, "AZURE_DEVOPS_ORG", "org")
+    monkeypatch.setattr(source_check.settings, "AZURE_DEVOPS_PAT", "s3cret-pat")
+    seen: dict = {}
+
+    def fake_run(args, **kwargs):
+        seen["args"], seen["env"] = args, kwargs["env"]
+        return subprocess.CompletedProcess(args, 0, stdout="abc123\trefs/heads/main\n", stderr="")
+
+    monkeypatch.setattr(source_check.subprocess, "run", fake_run)
+    source = {"project": "P", "repo": "R", "branch": "main"}
+    assert source_check.fetch_remote_head(source) == "abc123"
+    assert "s3cret-pat" not in " ".join(seen["args"])
+    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+    def timeout(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, 30)
+
+    monkeypatch.setattr(source_check.subprocess, "run", timeout)
+    assert source_check.fetch_remote_head(source) is None
