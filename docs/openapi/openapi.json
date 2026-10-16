@@ -5261,6 +5261,23 @@
         "title": "SourceSpan",
         "type": "object"
       },
+      "SqlCredentialOverride": {
+        "description": "The scan account of one SQL server (ADR-0010). Both fields must hold a value to take effect.",
+        "properties": {
+          "db_password": {
+            "default": "",
+            "title": "Db Password",
+            "type": "string"
+          },
+          "db_user_id": {
+            "default": "",
+            "title": "Db User Id",
+            "type": "string"
+          }
+        },
+        "title": "SqlCredentialOverride",
+        "type": "object"
+      },
       "TableMatchProgram": {
         "properties": {
           "access_type": {
@@ -5629,6 +5646,54 @@
           "state"
         ],
         "title": "UnusableCache",
+        "type": "object"
+      },
+      "UpdateAllRequest": {
+        "description": "POST /refresh_jobs/update_all: submit one Refresh Job for each `outdated` cache.\n\nThe caller owns the scan accounts and the wrapper contract choices (they come from the\nspec-rag registries), so it passes them in. `sql_credentials` is keyed by the `server` of a\nlisting row; `wrapper_contracts` by the `system_id` of a listing row. A key that is absent\nmeans: no override, as for a single submit.",
+        "properties": {
+          "sql_credentials": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SqlCredentialOverride"
+            },
+            "title": "Sql Credentials",
+            "type": "object"
+          },
+          "wrapper_contracts": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Wrapper Contracts",
+            "type": "object"
+          }
+        },
+        "title": "UpdateAllRequest",
+        "type": "object"
+      },
+      "UpdateAllResponse": {
+        "description": "The jobs that \"update all\" covers, in queue order. A cache that already had a waiting or\nrunning job shows that existing job. A `current` or `behind_source` cache has none.",
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/RefreshJobResponse"
+            },
+            "title": "Jobs",
+            "type": "array"
+          }
+        },
+        "title": "UpdateAllResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -6456,6 +6521,45 @@
           }
         },
         "summary": "Submit Refresh Job"
+      }
+    },
+    "/refresh_jobs/update_all": {
+      "post": {
+        "description": "「全部更新」：為每一份 `outdated` 的快取提交一個 Refresh Job（依 catalog 順序）。\n\n`current`、`refreshing` 與 `behind_source` 的快取不提交；已有 waiting／running job 的快取\n不會有第二個 job，回應裡放的是那個既有 job。共用的 SQL 快取只提交一次。",
+        "operationId": "update_all_refresh_jobs_update_all_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAllRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateAllResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update All"
       }
     },
     "/refresh_jobs/{job_id}": {

@@ -641,6 +641,33 @@ class RefreshJobRequest(BaseModel):
     csharp: Optional[RefreshRequest] = None
 
 
+class SqlCredentialOverride(BaseModel):
+    """The scan account of one SQL server (ADR-0010). Both fields must hold a value to take effect."""
+
+    db_user_id: str = ""
+    db_password: str = ""
+
+
+class UpdateAllRequest(BaseModel):
+    """POST /refresh_jobs/update_all: submit one Refresh Job for each `outdated` cache.
+
+    The caller owns the scan accounts and the wrapper contract choices (they come from the
+    spec-rag registries), so it passes them in. `sql_credentials` is keyed by the `server` of a
+    listing row; `wrapper_contracts` by the `system_id` of a listing row. A key that is absent
+    means: no override, as for a single submit.
+    """
+
+    sql_credentials: Dict[str, SqlCredentialOverride] = Field(default_factory=dict)
+    wrapper_contracts: Dict[str, WrapperContractSelector] = Field(default_factory=dict)
+
+
+class UpdateAllResponse(BaseModel):
+    """The jobs that "update all" covers, in queue order. A cache that already had a waiting or
+    running job shows that existing job. A `current` or `behind_source` cache has none."""
+
+    jobs: List[RefreshJobResponse] = Field(default_factory=list)
+
+
 class CacheFreshnessRow(BaseModel):
     """One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.
 

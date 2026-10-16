@@ -20,6 +20,7 @@
     GET  /cache_freshness → CacheFreshnessResponse（每份 SQL 快取與 C# Scan Result 的
                         Cache Freshness，依 catalog 系統分組；唯讀）
     POST /refresh_jobs → RefreshJobResponse（提交一個 Refresh Job，排入 Refresh Queue）
+    POST /refresh_jobs/update_all → UpdateAllResponse（為每一份 outdated 快取提交一個 Refresh Job）
     GET  /refresh_jobs/{job_id} → RefreshJobResponse（狀態、排隊位置、進度、結果）
     POST /refresh_jobs/{job_id}/cancel → RefreshJobResponse（取消 waiting 的 job）
     POST /wrapper_contracts/accept → WrapperContractAcceptanceResponse（reviewed
@@ -61,6 +62,8 @@ from .schemas import (
     RefreshJobRequest,
     RefreshJobResponse,
     CacheFreshnessResponse,
+    UpdateAllRequest,
+    UpdateAllResponse,
     DerivationProgressResponse,
     FindBySPRequest,
     FindBySPResponse,
@@ -425,6 +428,47 @@ def submit_refresh_job(req: RefreshJobRequest) -> RefreshJobResponse:
             detail="指定 program 的 refresh 是直接指令，不進 Refresh Queue",
         )
     return _submit_csharp_job(req.csharp)
+
+
+@app.post("/refresh_jobs/update_all", response_model=UpdateAllResponse)
+def update_all(req: UpdateAllRequest) -> UpdateAllResponse:
+    """「全部更新」：為每一份 `outdated` 的快取提交一個 Refresh Job（依 catalog 順序）。
+
+    `current`、`refreshing` 與 `behind_source` 的快取不提交；已有 waiting／running job 的快取
+    不會有第二個 job，回應裡放的是那個既有 job。共用的 SQL 快取只提交一次。"""
+    catalog = system_targets.load_system_catalog(system_targets.default_spec_rag_root())
+    azure_of = {
+        str(system.get("system_id") or "").strip(): system.get("azure") or {} for system in catalog
+    }
+    jobs: dict[str, RefreshJobResponse] = {}
+    for system in cache_freshness.list_by_system(catalog):
+        for row in system["caches"]:
+            if row["freshness"] != cache_freshness.OUTDATED or row["key"] in jobs:
+                continue
+            if row["kind"] == "sql":
+                override = req.sql_credentials.get(row["server"])
+                jobs[row["key"]] = _submit_sql_job(
+                    RefreshSqlRequest(
+                        database=sql_cache_store.CacheIdentity.of(row["server"], row["database"]).key,
+                        server=row["server"],
+                        db_name=row["database"],
+                        db_user_id=override.db_user_id if override else "",
+                        db_password=override.db_password if override else "",
+                    )
+                )
+                continue
+            azure = azure_of[row["system_id"]]
+            jobs[row["key"]] = _submit_csharp_job(
+                RefreshRequest(
+                    system=row["system_id"],
+                    source={
+                        field: str(azure.get(field) or "")
+                        for field in ("project", "repo", "branch", "path")
+                    },
+                    wrapper_contract=req.wrapper_contracts.get(row["system_id"]) or "",
+                )
+            )
+    return UpdateAllResponse(jobs=list(jobs.values()))
 
 
 @app.get("/cache_freshness", response_model=CacheFreshnessResponse)
