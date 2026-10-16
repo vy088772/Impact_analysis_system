@@ -672,6 +672,20 @@ class CacheFreshnessResponse(BaseModel):
     systems: List[CacheFreshnessSystem] = Field(default_factory=list)
 
 
+class DerivationProgressEntry(BaseModel):
+    """One derivation of Derived Execution Evidence that a question runs now."""
+
+    stage: str = "deriving_evidence"
+    database: str = ""
+    started_at: float = 0.0
+
+
+class DerivationProgressResponse(BaseModel):
+    """GET /derivation_progress: the derivations that questions run now, oldest first."""
+
+    active: List[DerivationProgressEntry] = Field(default_factory=list)
+
+
 class ScanRecordEntry(BaseModel):
     """GET /scan_records 的一列：一份 SQL 快取的身分與 Scan Record（掃描時間）。
 

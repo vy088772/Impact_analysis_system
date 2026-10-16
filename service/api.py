@@ -15,6 +15,8 @@
     POST /refresh_sql → RefreshJobResponse（提交 Refresh Job：重新連線 SQL Server
                         撈取 SP/View/Function/資料表 Schema，建立 AST SQL Execution
                         Graph，覆寫本機 SQL 快取）
+    GET  /derivation_progress → DerivationProgressResponse（問答正在推導 Derived Execution
+                        Evidence 時的進度階段；唯讀）
     GET  /cache_freshness → CacheFreshnessResponse（每份 SQL 快取與 C# Scan Result 的
                         Cache Freshness，依 catalog 系統分組；唯讀）
     POST /refresh_jobs → RefreshJobResponse（提交一個 Refresh Job，排入 Refresh Queue）
@@ -41,7 +43,8 @@
 """
 from __future__ import annotations
 
-from typing import Callable, Union
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Callable, Union
 
 from fastapi import FastAPI, HTTPException
 
@@ -58,6 +61,7 @@ from .schemas import (
     RefreshJobRequest,
     RefreshJobResponse,
     CacheFreshnessResponse,
+    DerivationProgressResponse,
     FindBySPRequest,
     FindBySPResponse,
     FindByTableRequest,
@@ -75,6 +79,8 @@ from . import (
     analyze_service,
     cache_freshness,
     contract_acceptance,
+    derivation_progress,
+    evidence_refresh,
     refresh_progress,
     refresh_queue,
     sql_cache_store,
@@ -82,7 +88,18 @@ from . import (
 )
 from .repo_manager import peek_scan_roots
 
+evidence_refresh.install()
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # A configuration edit made while the service was down: refresh the evidence it changes.
+    evidence_refresh.start_config_check()
+    yield
+
+
 app = FastAPI(
+    lifespan=_lifespan,
     title="Impact Analysis Service",
     description="程式碼/DB 靜態影響分析服務（供 spec-rag 協調呼叫，不含 AI）",
     version="1.0.0",
@@ -162,11 +179,14 @@ def _csharp_cache_key(req: RefreshRequest) -> str:
 
 
 def _submit_csharp_job(req: RefreshRequest) -> RefreshJobResponse:
+    key = _csharp_cache_key(req)
     snapshot = refresh_queue.shared_queue.submit(
-        key=_csharp_cache_key(req),
+        key=key,
         kind="csharp",
         database=req.system.strip() or req.source.repo,
-        run=_csharp_refresh_run(req),
+        run=evidence_refresh.then_derive(
+            _csharp_refresh_run(req), lambda: evidence_refresh.targets_for_csharp(key)
+        ),
     )
     return RefreshJobResponse(**snapshot)
 
@@ -367,7 +387,11 @@ def _submit_sql_job(req: RefreshSqlRequest) -> RefreshJobResponse:
         )
 
     snapshot = refresh_queue.shared_queue.submit(
-        key=key, kind="sql", database=req.database, run=run, job_id=req.job_id
+        key=key,
+        kind="sql",
+        database=req.database,
+        run=evidence_refresh.then_derive(run, lambda: evidence_refresh.targets_for_sql(key)),
+        job_id=req.job_id,
     )
     return RefreshJobResponse(**snapshot)
 
@@ -411,6 +435,16 @@ def read_cache_freshness() -> CacheFreshnessResponse:
     systems share is listed under each of them, with one state."""
     catalog = system_targets.load_system_catalog(system_targets.default_spec_rag_root())
     return CacheFreshnessResponse(systems=cache_freshness.list_by_system(catalog))
+
+
+@app.get("/derivation_progress", response_model=DerivationProgressResponse)
+def read_derivation_progress() -> DerivationProgressResponse:
+    """The derivations that questions run now (Impact ADR-0045).
+
+    A question never rebuilds a cache, but it derives Derived Execution Evidence when none is
+    valid. The web page reads this to show the stage instead of a silent wait. A derivation that a
+    Refresh Job runs shows in that job's progress and not here."""
+    return DerivationProgressResponse(active=derivation_progress.active())
 
 
 @app.get("/refresh_jobs/{job_id}", response_model=RefreshJobResponse)

@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from code_analyzer import csharp_analysis_gateway
-from service import analyze_service, contract_registry, derived_execution_evidence
+from service import analyze_service, contract_registry, derived_execution_evidence, evidence_refresh
 
 PINNED_REGISTRY = Path(__file__).parent / "fixtures" / "external_wrapper_contracts.json"
 
@@ -46,3 +46,12 @@ def _pinned_contract_registry(request, monkeypatch):
             "load_contract_registry",
             lambda path=PINNED_REGISTRY, **kwargs: load_registry(path, **kwargs),
         )
+
+
+@pytest.fixture(autouse=True)
+def _no_catalog_for_evidence_refresh(monkeypatch):
+    """A Refresh Job derives evidence for the catalog systems it feeds, and a configuration edit
+    submits a job for each affected scope. Without this pin the suite would read the real catalog
+    and derive from the real caches. A test of that stage names its own catalog."""
+    monkeypatch.setattr(evidence_refresh, "catalog_systems", lambda: [])
+    monkeypatch.setattr(evidence_refresh, "_seen", type(evidence_refresh._seen)())

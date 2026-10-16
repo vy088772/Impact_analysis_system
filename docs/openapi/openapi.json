@@ -1254,6 +1254,42 @@
         "title": "Definition",
         "type": "object"
       },
+      "DerivationProgressEntry": {
+        "description": "One derivation of Derived Execution Evidence that a question runs now.",
+        "properties": {
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "stage": {
+            "default": "deriving_evidence",
+            "title": "Stage",
+            "type": "string"
+          },
+          "started_at": {
+            "default": 0.0,
+            "title": "Started At",
+            "type": "number"
+          }
+        },
+        "title": "DerivationProgressEntry",
+        "type": "object"
+      },
+      "DerivationProgressResponse": {
+        "description": "GET /derivation_progress: the derivations that questions run now, oldest first.",
+        "properties": {
+          "active": {
+            "items": {
+              "$ref": "#/components/schemas/DerivationProgressEntry"
+            },
+            "title": "Active",
+            "type": "array"
+          }
+        },
+        "title": "DerivationProgressResponse",
+        "type": "object"
+      },
       "Diagnostic": {
         "additionalProperties": false,
         "properties": {
@@ -6100,6 +6136,25 @@
           }
         },
         "summary": "Read Cache Freshness"
+      }
+    },
+    "/derivation_progress": {
+      "get": {
+        "description": "The derivations that questions run now (Impact ADR-0045).\n\nA question never rebuilds a cache, but it derives Derived Execution Evidence when none is\nvalid. The web page reads this to show the stage instead of a silent wait. A derivation that a\nRefresh Job runs shows in that job's progress and not here.",
+        "operationId": "read_derivation_progress_derivation_progress_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DerivationProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Derivation Progress"
       }
     },
     "/find_by_sp": {

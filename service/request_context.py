@@ -40,6 +40,25 @@ class RequestContext:
     scope: DerivedExecutionEvidenceScope
 
 
+def cache_identity_of(request: object, cache_store: CacheStore) -> CacheIdentityResult:
+    """The SQL Cache Identity that a request routes to: its host and Database, or a lookup by name."""
+    database = getattr(request, "database", "")
+    server = getattr(request, "db_server", "")
+    return (
+        CacheIdentity.of(server, database)
+        if server.strip() and database.strip()
+        else cache_store.find_cache_identity(database)
+    )
+
+
+def evidence_root(roots: list[Path], source: dict, scan_store: ScanStore) -> Path:
+    """The root that rating reads relative paths against: the one scan root, or the repository root."""
+    return (
+        roots[0] if len(roots) == 1
+        else scan_store.repo_dir(str(source["project"]), str(source["repo"]))
+    )
+
+
 def build_request_context(
     request: object,
     *,
@@ -56,12 +75,7 @@ def build_request_context(
     The context retains the raw identity result; an ambiguous result has no scope identity.
     """
     database = getattr(request, "database", "")
-    server = getattr(request, "db_server", "")
-    identity = (
-        CacheIdentity.of(server, database)
-        if server.strip() and database.strip()
-        else cache_store.find_cache_identity(database)
-    )
+    identity = cache_identity_of(request, cache_store)
     if check_identity is not None:
         check_identity(identity)
     source = scan_store.resolve_source(request)
@@ -88,10 +102,7 @@ def build_request_context(
         except ScanOutdated:
             return Unusable([cache_freshness.csharp_outdated(roots)])
     scan = scans[0] if len(scans) == 1 else merge_scans(scans)
-    root = (
-        roots[0] if len(roots) == 1
-        else scan_store.repo_dir(str(source["project"]), str(source["repo"]))
-    )
+    root = evidence_root(roots, source, scan_store)
     scope = DerivedExecutionEvidenceScope.of(
         request, roots, identity if isinstance(identity, CacheIdentity) else None
     )

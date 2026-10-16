@@ -4,6 +4,7 @@ The queue lives in memory. A restart of the Impact service drops the waiting job
 One worker thread runs the jobs in the order that they arrive.
 
 A job is keyed by its cache identity: `sql_key()` for a SQL cache, `csharp_key()` for a C# Scan Result.
+A job that only derives evidence (a configuration edit) is keyed by `evidence_key()`.
 A submit for a key that already waits or runs returns the existing job. The first request wins:
 the options of a later duplicate submit do not change a job that waits or runs.
 """
@@ -27,6 +28,11 @@ def sql_key(identity_key: str) -> str:
 
 def csharp_key(scan_roots: Iterable[str]) -> str:
     return "csharp:" + "|".join(scan_roots)
+
+
+def evidence_key(scope_label: str) -> str:
+    """The key of a job that derives the Derived Execution Evidence of one scope and nothing else."""
+    return f"evidence:{scope_label}"
 
 
 CANCELLED = "cancelled"

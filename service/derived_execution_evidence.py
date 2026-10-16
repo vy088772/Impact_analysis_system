@@ -32,7 +32,7 @@ from code_analyzer.csharp_analysis_gateway import (
 from code_analyzer.models import FileAnalysisResult, MethodInfo
 from code_analyzer.project_scanner import ProjectScanResult
 
-from . import derived_execution_evidence_store
+from . import derivation_progress, derived_execution_evidence_store
 from . import sql_cache_store
 from .contract_registry import load_contract_registry
 from .execution_path_builder import (
@@ -188,6 +188,30 @@ def rating_config_inputs(
     )
 
 
+RatingConfig = Tuple[Optional[Dict[str, Any]], Dict[str, Any], Tuple[Dict[str, Any], ...]]
+
+# Called with a scope and the configuration that a question just read for it. The Refresh Queue
+# side uses it to start a Refresh Job when the configuration differs from the last evidence
+# (Impact ADR-0045). `None` means nobody watches.
+config_read_observer: Optional[Callable[[DerivedExecutionEvidenceScope, RatingConfig], None]] = None
+
+
+def recorded_config(scope: DerivedExecutionEvidenceScope) -> Optional[RatingConfig]:
+    """The configuration that the evidence of `scope` was derived with, or `None` when it has none.
+
+    Reads the retained evidence, then the stored one. It never derives.
+    """
+    retained = _retention.get(scope)
+    if retained is not None:
+        stamp = retained.stamp
+    else:
+        stored = derived_execution_evidence_store.load(scope)
+        if stored is None:
+            return None
+        stamp = stored.stamp
+    return (stamp.external_wrapper_contract, stamp.contract_registry, stamp.wrapper_review_exclusions)
+
+
 def _validity_stamp(
     scope: DerivedExecutionEvidenceScope,
     scans: Iterable[ProjectScanResult],
@@ -204,9 +228,10 @@ def _validity_stamp(
                 _freshness_or_sentinel(sql_cache_store.cached_saved_at(identity)),
                 (cached.get("sql_execution_graph") or {}).get("graph_version"),
             )
-    external_wrapper_contract, contract_registry, wrapper_review_exclusions = (
-        rating_config_inputs(scope)
-    )
+    config = rating_config_inputs(scope)
+    if config_read_observer is not None:
+        config_read_observer(scope, config)
+    external_wrapper_contract, contract_registry, wrapper_review_exclusions = config
     return ValidityStamp(
         scan_freshness=tuple(_scan_freshness(Path(scan.project_root)) for scan in scans),
         sql_cache_freshness=sql_cache_freshness,
@@ -735,9 +760,12 @@ def evidence_for_scope(
             )
 
     files = merged_scan.csharp_results if needed_files is None else needed_files
-    rated_invocations, graph = _rated_execution_invocations(
-        scope, merged_scan, list(files), root
-    )
+    # A derivation reads the existing caches only (ADR-0045). It reports a stage, so the page
+    # does not wait in silence; inside a Refresh Job the job reports it instead.
+    with derivation_progress.question_derivation(scope.database):
+        rated_invocations, graph = _rated_execution_invocations(
+            scope, merged_scan, list(files), root
+        )
     if needed_files is not None:
         return DerivedExecutionEvidence(rated_invocations, graph)  # not retained (ADR-0040)
     evidence = _retain(scope, stamp, rated_invocations, graph, None)
@@ -751,7 +779,10 @@ __all__ = [
     "DerivedExecutionEvidence",
     "DerivedExecutionEvidenceScope",
     "EvidenceSource",
+    "RatingConfig",
     "ValidityStamp",
+    "config_read_observer",
     "evidence_for_scope",
     "rating_config_inputs",
+    "recorded_config",
 ]
