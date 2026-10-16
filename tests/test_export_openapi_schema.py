@@ -42,7 +42,14 @@ def test_export_covers_analyze_refresh_and_path_evidence() -> None:
 
 def test_refresh_wrapper_summary_is_typed_not_a_raw_dict() -> None:
     schema = build_schema()
-    refresh_response_ref = response_ref_for(schema, "/refresh")
+    # `/refresh` returns a Refresh Job, or a RefreshResponse for a program-scoped refresh.
+    refresh_refs = [
+        option["$ref"].rsplit("/", 1)[-1]
+        for option in response_schema_for(schema, "/refresh")["anyOf"]
+    ]
+    assert "RefreshJobResponse" in refresh_refs
+    refresh_response_ref = "RefreshResponse"
+    assert refresh_response_ref in refresh_refs
     refresh_schema = schema["components"]["schemas"][refresh_response_ref]
 
     wrapper_summary_field = refresh_schema["properties"]["wrapper_summary"]

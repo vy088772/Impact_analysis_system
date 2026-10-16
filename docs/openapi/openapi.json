@@ -4259,6 +4259,121 @@
         "title": "ProgramAnalysis",
         "type": "object"
       },
+      "RefreshJobRequest": {
+        "description": "POST /refresh_jobs: submit one Refresh Job for one cache.\n\nkind \"sql\" reads `sql`; kind \"csharp\" reads `csharp` (a full repository refresh).",
+        "properties": {
+          "csharp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RefreshRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "enum": [
+              "sql",
+              "csharp"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "sql": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RefreshSqlRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "RefreshJobRequest",
+        "type": "object"
+      },
+      "RefreshJobResponse": {
+        "description": "One Refresh Job: its state, its queue position, its progress, and its result.\n\nstatus: waiting | running | succeeded | failed | cancelled (Impact ADR-0045).\nqueue_position: 1 for the next job to run; 0 for a job that runs now or has ended.\nresult: the refresh summary once the job succeeds; empty before that.",
+        "properties": {
+          "current": {
+            "default": 0,
+            "title": "Current",
+            "type": "integer"
+          },
+          "database": {
+            "default": "",
+            "title": "Database",
+            "type": "string"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "item": {
+            "default": "",
+            "title": "Item",
+            "type": "string"
+          },
+          "job_id": {
+            "default": "",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "key": {
+            "default": "",
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "default": "sql",
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "queue_position": {
+            "default": 0,
+            "title": "Queue Position",
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "title": "Result",
+            "type": "object"
+          },
+          "stage": {
+            "default": "",
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "default": "waiting",
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "updated_at": {
+            "default": 0.0,
+            "title": "Updated At",
+            "type": "number"
+          }
+        },
+        "title": "RefreshJobResponse",
+        "type": "object"
+      },
       "RefreshRequest": {
         "description": "POST /refresh 請求：更新某系統的程式碼並重新解析。",
         "properties": {
@@ -4401,62 +4516,6 @@
         "title": "RefreshResponse",
         "type": "object"
       },
-      "RefreshSqlProgressResponse": {
-        "properties": {
-          "current": {
-            "default": 0,
-            "title": "Current",
-            "type": "integer"
-          },
-          "database": {
-            "default": "",
-            "title": "Database",
-            "type": "string"
-          },
-          "error": {
-            "default": "",
-            "title": "Error",
-            "type": "string"
-          },
-          "item": {
-            "default": "",
-            "title": "Item",
-            "type": "string"
-          },
-          "job_id": {
-            "default": "",
-            "title": "Job Id",
-            "type": "string"
-          },
-          "message": {
-            "default": "",
-            "title": "Message",
-            "type": "string"
-          },
-          "stage": {
-            "default": "",
-            "title": "Stage",
-            "type": "string"
-          },
-          "status": {
-            "default": "starting",
-            "title": "Status",
-            "type": "string"
-          },
-          "total": {
-            "default": 0,
-            "title": "Total",
-            "type": "integer"
-          },
-          "updated_at": {
-            "default": 0.0,
-            "title": "Updated At",
-            "type": "number"
-          }
-        },
-        "title": "RefreshSqlProgressResponse",
-        "type": "object"
-      },
       "RefreshSqlRequest": {
         "description": "POST /refresh_sql 請求：重新連線 SQL Server 撷取整庫 SP/View/Function/資料表\nSchema，覆寫本機快取（data/sql_cache/）。\n\nserver/db_name 由呼叫端（spec-rag 的 catalog，逐資料庫標注）提供，不使用\nImpact 端 .env 的 DB_SERVER/DB_DATABASES；兩者缺一即報錯，不嘗試連線。\n\ndb_user_id/db_password 是這台伺服器的掃描帳密覆寫（見 ADR-0010）：兩者都有\n值才生效，缺一即沿用 .env 的全域 DB_AUTH_MODE 身分。帳密由呼叫端的登錄檔\n提供，Impact 永遠不從被掃應用程式的 Web.config 推導掃描用的連線身分。",
         "properties": {
@@ -4494,42 +4553,6 @@
           "db_name"
         ],
         "title": "RefreshSqlRequest",
-        "type": "object"
-      },
-      "RefreshSqlResponse": {
-        "properties": {
-          "database": {
-            "default": "",
-            "title": "Database",
-            "type": "string"
-          },
-          "functions": {
-            "default": 0,
-            "title": "Functions",
-            "type": "integer"
-          },
-          "job_id": {
-            "default": "",
-            "title": "Job Id",
-            "type": "string"
-          },
-          "procedures": {
-            "default": 0,
-            "title": "Procedures",
-            "type": "integer"
-          },
-          "tables": {
-            "default": 0,
-            "title": "Tables",
-            "type": "integer"
-          },
-          "views": {
-            "default": 0,
-            "title": "Views",
-            "type": "integer"
-          }
-        },
-        "title": "RefreshSqlResponse",
         "type": "object"
       },
       "RelatedProgram": {
@@ -6103,7 +6126,7 @@
     },
     "/refresh": {
       "post": {
-        "description": "更新指令：git pull 取得最新程式碼並重新解析、覆寫快取。",
+        "description": "更新指令。完整 refresh 提交一個 Refresh Job 並回傳該 job（Refresh Queue 一次只跑一個）。\n\n指定 program_names 的 refresh 仍是直接指令，不進 Refresh Queue，直接回傳結果。",
         "operationId": "refresh_refresh_post",
         "requestBody": {
           "content": {
@@ -6120,7 +6143,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RefreshResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/RefreshJobResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RefreshResponse"
+                    }
+                  ],
+                  "title": "Response Refresh Refresh Post"
                 }
               }
             },
@@ -6140,9 +6171,128 @@
         "summary": "Refresh"
       }
     },
+    "/refresh_jobs": {
+      "post": {
+        "description": "提交一個 Refresh Job：重建一份 SQL 快取，或一份 C# Scan Result。",
+        "operationId": "submit_refresh_job_refresh_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Refresh Job"
+      }
+    },
+    "/refresh_jobs/{job_id}": {
+      "get": {
+        "description": "讀取一個 Refresh Job：狀態、排隊位置、進度與結果。",
+        "operationId": "refresh_job_refresh_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Job"
+      }
+    },
+    "/refresh_jobs/{job_id}/cancel": {
+      "post": {
+        "description": "取消一個 waiting 的 Refresh Job。running 的 job 不可取消：停止可能留下寫到一半的快取。",
+        "operationId": "cancel_refresh_job_refresh_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Refresh Job"
+      }
+    },
     "/refresh_sql": {
       "post": {
-        "description": "更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與\n資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取\n（data/sql_cache/）。\n\nserver/db_name 由呼叫端（catalog）提供，缺一即報錯、不嘗試連線。連線身分預設\n用 .env 的全域 DB_AUTH_MODE；請求帶了完整的 db_user_id/db_password 才改用那組\n覆寫（ADR-0010）。",
+        "description": "更新 SQL 快取指令：提交一個 Refresh Job 並回傳該 job；不在請求內做事。\n\nRefresh Queue 一次只跑一個 job：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與\n資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取\n（data/sql_cache/）。同一份快取已有 waiting／running 的 job 時，回傳那個既有 job。\n\nserver/db_name 由呼叫端（catalog）提供，缺一即報錯、不排入佇列。連線身分預設\n用 .env 的全域 DB_AUTH_MODE；請求帶了完整的 db_user_id/db_password 才改用那組\n覆寫（ADR-0010）。",
         "operationId": "refresh_sql_refresh_sql_post",
         "requestBody": {
           "content": {
@@ -6159,7 +6309,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RefreshSqlResponse"
+                  "$ref": "#/components/schemas/RefreshJobResponse"
                 }
               }
             },
@@ -6181,7 +6331,7 @@
     },
     "/refresh_sql/status/{job_id}": {
       "get": {
-        "description": "查詢 SQL 快取更新的即時進度。",
+        "description": "查詢 Refresh Job 的即時進度（舊路徑；與 GET /refresh_jobs/{job_id} 相同）。",
         "operationId": "refresh_sql_status_refresh_sql_status__job_id__get",
         "parameters": [
           {
@@ -6199,7 +6349,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RefreshSqlProgressResponse"
+                  "$ref": "#/components/schemas/RefreshJobResponse"
                 }
               }
             },

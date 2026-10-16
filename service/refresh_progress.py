@@ -1,4 +1,7 @@
-"""Thread-safe in-memory progress state for SQL cache refresh jobs."""
+"""Thread-safe in-memory progress record of every Refresh Job (SQL cache or C# Scan Result).
+
+A Refresh Job has the states `waiting`, `running`, `succeeded`, `failed` and `cancelled`
+(Impact ADR-0045). `service/refresh_queue.py` owns the order; this module owns the record."""
 
 from __future__ import annotations
 
@@ -13,6 +16,8 @@ from typing import Any
 class ProgressSnapshot:
     job_id: str
     database: str
+    kind: str
+    key: str
     status: str
     stage: str
     current: int
@@ -21,28 +26,38 @@ class ProgressSnapshot:
     message: str
     error: str
     updated_at: float
+    result: dict[str, Any]
 
 
 _MAX_SNAPSHOTS = 100
-_TERMINAL_STATUSES = frozenset({"completed", "failed"})
-_VALID_STATUSES = frozenset({"starting", "running", "completed", "failed"})
+_TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
+_VALID_STATUSES = frozenset({"waiting", "running", "succeeded", "failed", "cancelled"})
 _LOCK = Lock()
 _SNAPSHOTS: dict[str, ProgressSnapshot] = {}
 
 
-def create_job(job_id: str | None, database: str) -> str:
+def create_job(
+    job_id: str | None,
+    database: str,
+    *,
+    kind: str = "sql",
+    key: str = "",
+) -> str:
     normalized_id = (job_id or "").strip() or uuid.uuid4().hex
     snapshot = ProgressSnapshot(
         job_id=normalized_id,
         database=database,
-        status="starting",
-        stage="connecting",
+        kind=kind,
+        key=key,
+        status="waiting",
+        stage="waiting",
         current=0,
         total=1,
         item="",
-        message="準備連線 SQL Server",
+        message="等待 Refresh Queue",
         error="",
         updated_at=time.time(),
+        result={},
     )
     with _LOCK:
         if normalized_id in _SNAPSHOTS:
@@ -87,7 +102,8 @@ def update_job(
 
 def complete_job(
     job_id: str,
-    message: str = "SQL refresh 工作已完成；正式 Graph readiness 仍由查詢邊界驗證",
+    message: str = "Refresh 工作已完成；正式 Graph readiness 仍由查詢邊界驗證",
+    result: dict[str, Any] | None = None,
 ) -> None:
     with _LOCK:
         snapshot = _SNAPSHOTS.get(job_id)
@@ -96,14 +112,15 @@ def complete_job(
         total = max(snapshot.total, snapshot.current, 1)
         _SNAPSHOTS[job_id] = replace(
             snapshot,
-            status="completed",
-            stage="completed",
+            status="succeeded",
+            stage="succeeded",
             current=total,
             total=total,
             item="",
             message=message,
             error="",
             updated_at=time.time(),
+            result=dict(result or {}),
         )
 
 
@@ -116,8 +133,24 @@ def fail_job(job_id: str, error: str) -> None:
             snapshot,
             status="failed",
             stage="failed",
-            message="SQL 快取更新失敗",
+            message="Refresh 工作失敗",
             error=error,
+            updated_at=time.time(),
+        )
+
+
+def cancel_job(job_id: str) -> None:
+    """Mark a job `cancelled`. The queue calls this only for a job that still waits."""
+    with _LOCK:
+        snapshot = _SNAPSHOTS.get(job_id)
+        if snapshot is None or snapshot.status in _TERMINAL_STATUSES:
+            return
+        _SNAPSHOTS[job_id] = replace(
+            snapshot,
+            status="cancelled",
+            stage="cancelled",
+            item="",
+            message="已取消",
             updated_at=time.time(),
         )
 
@@ -137,7 +170,7 @@ def _prune_locked() -> None:
         (
             snapshot
             for snapshot in _SNAPSHOTS.values()
-            if snapshot.status in {"completed", "failed"}
+            if snapshot.status in _TERMINAL_STATUSES
         ),
         key=lambda snapshot: (snapshot.updated_at, snapshot.job_id),
     )

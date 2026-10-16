@@ -586,10 +586,20 @@ class RefreshSqlResponse(BaseModel):
     tables: int = 0
 
 
-class RefreshSqlProgressResponse(BaseModel):
+class RefreshJobResponse(BaseModel):
+    """One Refresh Job: its state, its queue position, its progress, and its result.
+
+    status: waiting | running | succeeded | failed | cancelled (Impact ADR-0045).
+    queue_position: 1 for the next job to run; 0 for a job that runs now or has ended.
+    result: the refresh summary once the job succeeds; empty before that.
+    """
+
     job_id: str = ""
     database: str = ""
-    status: str = "starting"
+    kind: str = "sql"
+    key: str = ""
+    status: str = "waiting"
+    queue_position: int = 0
     stage: str = ""
     current: int = 0
     total: int = 0
@@ -597,6 +607,22 @@ class RefreshSqlProgressResponse(BaseModel):
     message: str = ""
     error: str = ""
     updated_at: float = 0.0
+    result: Dict[str, Any] = Field(default_factory=dict)
+
+
+# The progress record of the SQL refresh is now the record of every Refresh Job.
+RefreshSqlProgressResponse = RefreshJobResponse
+
+
+class RefreshJobRequest(BaseModel):
+    """POST /refresh_jobs: submit one Refresh Job for one cache.
+
+    kind "sql" reads `sql`; kind "csharp" reads `csharp` (a full repository refresh).
+    """
+
+    kind: Literal["sql", "csharp"]
+    sql: Optional[RefreshSqlRequest] = None
+    csharp: Optional[RefreshRequest] = None
 
 
 class ScanRecordEntry(BaseModel):

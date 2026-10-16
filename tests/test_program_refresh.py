@@ -21,6 +21,7 @@ from code_analyzer.project_scanner import ProjectScanResult
 from service import analyze_service
 from service import scan_store
 from service.schemas import RefreshResponse
+from tests.refresh_job_fixtures import finished, succeeded
 from tests.sql_cache_fixtures import cache_payload, one_server_holds_every_database
 
 
@@ -538,11 +539,15 @@ def test_refresh_api_forwards_wrapper_contract_and_serializes_summary(monkeypatc
 
     monkeypatch.setattr(api.analyze_service, "refresh_source", fake_refresh_source)
 
-    response = api.refresh(
-        RefreshRequest(
-            system="SYS",
-            wrapper_contract="sqlobject",
-            source={"project": "p", "repo": "r", "path": "TTPUR"},
+    response = RefreshResponse(
+        **succeeded(
+            api.refresh(
+                RefreshRequest(
+                    system="SYS",
+                    wrapper_contract="sqlobject",
+                    source={"project": "p", "repo": "r", "path": "TTPUR"},
+                )
+            )
         )
     )
 
@@ -571,11 +576,13 @@ def test_refresh_api_forwards_rerun_decompile_receiver_types(monkeypatch) -> Non
 
     monkeypatch.setattr(api.analyze_service, "refresh_source", fake_refresh_source)
 
-    api.refresh(
-        RefreshRequest(
-            system="SYS",
-            source={"project": "p", "repo": "r", "path": "TTPUR"},
-            rerun_decompile_receiver_types=["SQLFunc"],
+    succeeded(
+        api.refresh(
+            RefreshRequest(
+                system="SYS",
+                source={"project": "p", "repo": "r", "path": "TTPUR"},
+                rerun_decompile_receiver_types=["SQLFunc"],
+            )
         )
     )
 
@@ -594,10 +601,12 @@ def test_refresh_api_omits_rerun_receiver_types_when_not_requested(monkeypatch) 
 
     monkeypatch.setattr(api.analyze_service, "refresh_source", fake_refresh_source)
 
-    api.refresh(
-        RefreshRequest(
-            system="SYS",
-            source={"project": "p", "repo": "r", "path": "TTPUR"},
+    succeeded(
+        api.refresh(
+            RefreshRequest(
+                system="SYS",
+                source={"project": "p", "repo": "r", "path": "TTPUR"},
+            )
         )
     )
 
@@ -823,12 +832,11 @@ def test_refresh_response_carries_framework_label_per_scan_root(monkeypatch, tmp
     assert response.framework_reports == result["framework_reports"]
 
 
-def test_refresh_api_reports_unidentifiable_framework_as_a_clear_400(monkeypatch) -> None:
+def test_refresh_api_reports_unidentifiable_framework_as_a_failed_job_with_a_clear_error(monkeypatch) -> None:
     """Ticket 04 (ADR-0021): "fails with a clear message" must reach an actual
     /refresh caller as a structured 400, not an unhandled 500 -- this is what
     ProjectScanner's ValueError on Framework Label = Unknown turns into at the
     API boundary."""
-    from fastapi import HTTPException
     from service import api
     from service.schemas import RefreshRequest
 
@@ -840,17 +848,18 @@ def test_refresh_api_reports_unidentifiable_framework_as_a_clear_400(monkeypatch
 
     monkeypatch.setattr(api.analyze_service, "refresh_source", fake_refresh_source)
 
-    with pytest.raises(HTTPException) as exc_info:
+    job = finished(
         api.refresh(
             RefreshRequest(
                 system="SYS",
                 source={"project": "p", "repo": "r", "path": "Mystery"},
             )
         )
+    )
 
-    assert exc_info.value.status_code == 400
-    assert "Unknown" in exc_info.value.detail
-    assert "Mystery" in exc_info.value.detail
+    assert job["status"] == "failed"
+    assert "Unknown" in job["error"]
+    assert "Mystery" in job["error"]
 
 
 def test_review_candidates_keep_each_source_snapshot_identity(monkeypatch, tmp_path) -> None:

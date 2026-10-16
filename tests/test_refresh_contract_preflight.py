@@ -670,6 +670,7 @@ def test_incomplete_preflight_does_not_auto_select_or_promote_opaque_wrapper(
 def test_refresh_api_accepts_array_selector_without_string_coercion(monkeypatch) -> None:
     from service import api
     from service.schemas import RefreshRequest
+    from tests.refresh_job_fixtures import succeeded
 
     observed: dict[str, object] = {}
 
@@ -679,10 +680,12 @@ def test_refresh_api_accepts_array_selector_without_string_coercion(monkeypatch)
 
     monkeypatch.setattr(api.analyze_service, "refresh_source", fake_refresh_source)
 
-    api.refresh(
-        RefreshRequest(
-            system="Orders",
-            wrapper_contract=["beta", "alpha"],
+    succeeded(
+        api.refresh(
+            RefreshRequest(
+                system="Orders",
+                wrapper_contract=["beta", "alpha"],
+            )
         )
     )
 

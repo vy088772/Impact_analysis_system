@@ -12,14 +12,15 @@ if str(PROJECT_ROOT) not in sys.path:
 from service import refresh_progress
 from service import analyze_service, api
 from service.schemas import RefreshSqlProgressResponse, RefreshSqlRequest
+from tests.refresh_job_fixtures import finished
 
 
 def test_refresh_progress_lifecycle() -> None:
     job_id = refresh_progress.create_job("progress-test-job", "TestDb")
     started = refresh_progress.get_job(job_id)
     assert started is not None
-    assert started["status"] == "starting"
-    assert started["stage"] == "connecting"
+    assert started["status"] == "waiting"
+    assert started["stage"] == "waiting"
 
     refresh_progress.update_job(
         job_id,
@@ -39,8 +40,8 @@ def test_refresh_progress_lifecycle() -> None:
     refresh_progress.complete_job(job_id)
     completed = refresh_progress.get_job(job_id)
     assert completed is not None
-    assert completed["status"] == "completed"
-    assert completed["stage"] == "completed"
+    assert completed["status"] == "succeeded"
+    assert completed["stage"] == "succeeded"
 
 
 def test_unknown_refresh_progress_job_is_ignored() -> None:
@@ -62,7 +63,7 @@ def test_refresh_progress_completion_preserves_final_counts() -> None:
     completed = refresh_progress.get_job(job_id)
 
     assert completed is not None
-    assert completed["status"] == "completed"
+    assert completed["status"] == "succeeded"
     assert completed["current"] == 10
     assert completed["total"] == 10
 
@@ -133,25 +134,32 @@ def test_refresh_sql_route_marks_failed_job(monkeypatch) -> None:
 
     monkeypatch.setattr(analyze_service, "refresh_sql_source", fail_refresh)
 
-    try:
-        api.refresh_sql(
-            RefreshSqlRequest(
-                database="OrdersDb",
-                server="sql-server",
-                db_name="Orders",
-                job_id="api-failed-progress-job",
-            )
+    submitted = api.refresh_sql(
+        RefreshSqlRequest(
+            database="OrdersDb",
+            server="sql-server",
+            db_name="Orders",
+            job_id="api-failed-progress-job",
         )
-    except Exception as exc:
-        assert getattr(exc, "status_code", None) == 500
-    else:
-        raise AssertionError("refresh_sql should expose the refresh failure")
+    )
+    failed = finished(submitted)
 
-    failed = refresh_progress.get_job("api-failed-progress-job")
-    assert failed is not None
     assert failed["status"] == "failed"
     assert failed["stage"] == "failed"
     assert failed["error"] == "database unavailable"
+    assert refresh_progress.get_job("api-failed-progress-job")["status"] == "failed"
+
+
+def test_refresh_progress_cancel_ends_a_waiting_job() -> None:
+    job_id = refresh_progress.create_job("progress-cancel-job", "TestDb")
+
+    refresh_progress.cancel_job(job_id)
+    cancelled = refresh_progress.get_job(job_id)
+
+    assert cancelled is not None
+    assert cancelled["status"] == "cancelled"
+    refresh_progress.update_job(job_id, status="running")
+    assert refresh_progress.get_job(job_id)["status"] == "cancelled"
 
 
 def test_refresh_sql_status_returns_stable_response_shape() -> None:
@@ -162,4 +170,4 @@ def test_refresh_sql_status_returns_stable_response_shape() -> None:
     assert isinstance(response, RefreshSqlProgressResponse)
     assert response.job_id == job_id
     assert response.database == "OrdersDb"
-    assert response.status == "starting"
+    assert response.status == "waiting"

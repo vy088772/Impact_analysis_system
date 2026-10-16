@@ -14,8 +14,10 @@ from service.schemas import (
     PathEvidenceRequest,
     PathEvidenceResponse,
     RefreshRequest,
+    RefreshResponse,
     SPMatchProgram,
 )
+from tests.refresh_job_fixtures import succeeded
 from tests.sql_cache_fixtures import one_server_holds_every_database
 from service.request_context_adapters import InMemoryCacheStore, InMemoryScanStore
 
@@ -129,7 +131,9 @@ def test_refresh_route_wrapper_summary_review_items_expose_evidence_status_only(
         lambda source, **kwargs: {"scope": "system", "wrapper_summary": fake_summary},
     )
 
-    response = api.refresh(RefreshRequest(system="SYS", source={"project": "p", "repo": "r"}))
+    response = RefreshResponse(
+        **succeeded(api.refresh(RefreshRequest(system="SYS", source={"project": "p", "repo": "r"})))
+    )
 
     for item in response.wrapper_summary.review_items:
         assert item.evidence_status == "unresolved"

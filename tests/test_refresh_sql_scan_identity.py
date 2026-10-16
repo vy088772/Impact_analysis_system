@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from config.settings import settings
 from service import analyze_service, api, sql_cache_store
 from service.schemas import RefreshSqlRequest
+from tests.refresh_job_fixtures import succeeded
 
 _TARGET = {
     "alias": "vmsystest07.topmost.com.tw__SysErrorRecord",
@@ -90,13 +91,15 @@ def test_the_refresh_sql_route_forwards_the_override(monkeypatch) -> None:
 
     monkeypatch.setattr(analyze_service, "refresh_sql_source", _fake_refresh)
 
-    api.refresh_sql(
-        RefreshSqlRequest(
-            database="vmsystest07.topmost.com.tw__SysErrorRecord",
-            server="vmsystest07.topmost.com.tw",
-            db_name="SysErrorRecord",
-            db_user_id="ScanUser",
-            db_password="secret",
+    succeeded(
+        api.refresh_sql(
+            RefreshSqlRequest(
+                database="vmsystest07.topmost.com.tw__SysErrorRecord",
+                server="vmsystest07.topmost.com.tw",
+                db_name="SysErrorRecord",
+                db_user_id="ScanUser",
+                db_password="secret",
+            )
         )
     )
 
@@ -113,11 +116,13 @@ def test_the_refresh_sql_route_sends_no_credentials_by_default(monkeypatch) -> N
 
     monkeypatch.setattr(analyze_service, "refresh_sql_source", _fake_refresh)
 
-    api.refresh_sql(
-        RefreshSqlRequest(
-            database="vmsystest07.topmost.com.tw__SysErrorRecord",
-            server="vmsystest07.topmost.com.tw",
-            db_name="SysErrorRecord",
+    succeeded(
+        api.refresh_sql(
+            RefreshSqlRequest(
+                database="vmsystest07.topmost.com.tw__SysErrorRecord",
+                server="vmsystest07.topmost.com.tw",
+                db_name="SysErrorRecord",
+            )
         )
     )
 

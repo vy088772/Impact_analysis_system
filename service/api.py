@@ -10,12 +10,15 @@
 端點：
     GET  /health   → {"status": "ok"}
     POST /analyze  → AnalyzeResponse（依 program_names 回傳靜態分析結果）
-    POST /refresh  → RefreshResponse（git pull + 重新解析，覆寫快取）
-    POST /refresh_sql → RefreshSqlResponse（重新連線 SQL Server 撈取 SP/View/
-                        Function/資料表 Schema，建立 AST SQL Execution Graph，
-                        覆寫本機 SQL 快取）
-    GET  /refresh_sql/status/{job_id} → RefreshSqlProgressResponse（查詢 SQL
-                        refresh 的即時階段與計數）
+    POST /refresh  → RefreshJobResponse（提交 Refresh Job：git pull + 重新解析，
+                        覆寫快取；指定 program_names 時直接執行並回 RefreshResponse）
+    POST /refresh_sql → RefreshJobResponse（提交 Refresh Job：重新連線 SQL Server
+                        撈取 SP/View/Function/資料表 Schema，建立 AST SQL Execution
+                        Graph，覆寫本機 SQL 快取）
+    GET  /refresh_sql/status/{job_id} → RefreshJobResponse（同 GET /refresh_jobs/{job_id}）
+    POST /refresh_jobs → RefreshJobResponse（提交一個 Refresh Job，排入 Refresh Queue）
+    GET  /refresh_jobs/{job_id} → RefreshJobResponse（狀態、排隊位置、進度、結果）
+    POST /refresh_jobs/{job_id}/cancel → RefreshJobResponse（取消 waiting 的 job）
     POST /wrapper_contracts/accept → WrapperContractAcceptanceResponse（reviewed
                          proposal 的 preview 或明確 apply）
     POST /find_by_sp  → FindBySPResponse（反查哪些程式呼叫了指定 SP，純比對已
@@ -37,7 +40,7 @@
 """
 from __future__ import annotations
 
-from typing import Union
+from typing import Callable, Union
 
 from fastapi import FastAPI, HTTPException
 
@@ -51,6 +54,8 @@ from .schemas import (
     WrapperContractAcceptanceResponse,
     RefreshSqlRequest,
     RefreshSqlResponse,
+    RefreshJobRequest,
+    RefreshJobResponse,
     RefreshSqlProgressResponse,
     FindBySPRequest,
     FindBySPResponse,
@@ -65,7 +70,8 @@ from .schemas import (
     ScanRecordEntry,
     ScanRecordListResponse,
 )
-from . import analyze_service, contract_acceptance, refresh_progress, sql_cache_store
+from . import analyze_service, contract_acceptance, refresh_progress, refresh_queue, sql_cache_store
+from .repo_manager import peek_scan_roots
 
 app = FastAPI(
     title="Impact Analysis Service",
@@ -108,16 +114,16 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         raise HTTPException(status_code=500, detail=f"分析失敗：{exc}")
 
 
-@app.post("/refresh", response_model=RefreshResponse)
-def refresh(req: RefreshRequest) -> RefreshResponse:
-    """更新指令：git pull 取得最新程式碼並重新解析、覆寫快取。"""
+def _csharp_refresh_run(req: RefreshRequest) -> Callable[[Callable[..., None]], dict]:
+    """The rebuild of one C# Scan Result. The queue calls it; a program-scoped refresh calls it directly."""
     source = {
         "project": req.source.project,
         "repo": req.source.repo,
         "branch": req.source.branch,
         "path": req.source.path,
     }
-    try:
+
+    def run(_report: Callable[..., None]) -> dict:
         refresh_kwargs = {"program_names": req.program_names}
         selector = req.wrapper_contract
         selector_is_set = (
@@ -132,12 +138,48 @@ def refresh(req: RefreshRequest) -> RefreshResponse:
         if req.rerun_decompile_receiver_types:
             refresh_kwargs["rerun_receiver_types"] = req.rerun_decompile_receiver_types
         result = analyze_service.refresh_source(source, **refresh_kwargs)
-        return RefreshResponse(**result)
+        return RefreshResponse(**result).model_dump()
+
+    return run
+
+
+def _csharp_cache_key(req: RefreshRequest) -> str:
+    """`csharp:` + the scan roots. Reads the paths only: it never clones or pulls."""
+    source = {
+        "project": req.source.project,
+        "repo": req.source.repo,
+        "path": req.source.path,
+    }
+    try:
+        roots = [str(root) for root in peek_scan_roots(source)]
+    except Exception:  # noqa: BLE001 - a key must exist even when the paths cannot resolve
+        roots = [f"{req.source.project}/{req.source.repo}/{req.source.path}"]
+    return "csharp:" + "|".join(roots)
+
+
+def _submit_csharp_job(req: RefreshRequest) -> RefreshJobResponse:
+    snapshot = refresh_queue.queue.submit(
+        key=_csharp_cache_key(req),
+        kind="csharp",
+        database=req.system.strip() or req.source.repo,
+        run=_csharp_refresh_run(req),
+    )
+    return RefreshJobResponse(**snapshot)
+
+
+@app.post("/refresh", response_model=Union[RefreshJobResponse, RefreshResponse])
+def refresh(req: RefreshRequest) -> Union[RefreshJobResponse, RefreshResponse]:
+    """更新指令。完整 refresh 提交一個 Refresh Job 並回傳該 job（Refresh Queue 一次只跑一個）。
+
+    指定 program_names 的 refresh 仍是直接指令，不進 Refresh Queue，直接回傳結果。"""
+    if not req.program_names:
+        return _submit_csharp_job(req)
+    try:
+        return RefreshResponse(**_csharp_refresh_run(req)(lambda *args: None))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"更新失敗：{exc}")
-
 
 
 @app.post(
@@ -291,15 +333,7 @@ def path_evidence(req: PathEvidenceRequest) -> PathEvidenceResponse:
         raise HTTPException(status_code=500, detail=f"Path evidence 取得失敗：{exc}") from exc
 
 
-@app.post("/refresh_sql", response_model=RefreshSqlResponse)
-def refresh_sql(req: RefreshSqlRequest) -> RefreshSqlResponse:
-    """更新 SQL 快取指令：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與
-    資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取
-    （data/sql_cache/）。
-
-    server/db_name 由呼叫端（catalog）提供，缺一即報錯、不嘗試連線。連線身分預設
-    用 .env 的全域 DB_AUTH_MODE；請求帶了完整的 db_user_id/db_password 才改用那組
-    覆寫（ADR-0010）。"""
+def _submit_sql_job(req: RefreshSqlRequest) -> RefreshJobResponse:
     if not req.database:
         raise HTTPException(status_code=400, detail="database 不可為空")
     if not req.server or not req.db_name:
@@ -308,41 +342,84 @@ def refresh_sql(req: RefreshSqlRequest) -> RefreshSqlResponse:
             detail=f"server/db_name 不可為空（收到 server={req.server!r}, db_name={req.db_name!r}）；"
                    f"請在 catalog（spec-rag 端）為此系統設定完整的 database.server/database.name。",
         )
-    job_id = refresh_progress.create_job(req.job_id, req.database)
     try:
-        result = analyze_service.refresh_sql_source(
+        key = "sql:" + sql_cache_store.CacheIdentity.of(req.server, req.db_name).key
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def run(report: Callable[..., None]) -> dict:
+        return analyze_service.refresh_sql_source(
             req.database,
             req.server,
             req.db_name,
             user_id=req.db_user_id,
             password=req.db_password,
-            progress_callback=lambda stage, current, total, item: refresh_progress.update_job(
-                job_id,
-                status="running",
-                stage=stage,
-                current=current,
-                total=total,
-                item=item,
-                message=f"{stage} {current}/{total}",
-            ),
+            progress_callback=report,
         )
-        refresh_progress.complete_job(job_id)
-        return RefreshSqlResponse(job_id=job_id, **result)
-    except ValueError as exc:
-        refresh_progress.fail_job(job_id, str(exc))
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        refresh_progress.fail_job(job_id, str(exc))
-        raise HTTPException(status_code=500, detail=f"SQL 快取更新失敗：{exc}")
+
+    snapshot = refresh_queue.queue.submit(
+        key=key, kind="sql", database=req.database, run=run, job_id=req.job_id
+    )
+    return RefreshJobResponse(**snapshot)
 
 
-@app.get("/refresh_sql/status/{job_id}", response_model=RefreshSqlProgressResponse)
-def refresh_sql_status(job_id: str) -> RefreshSqlProgressResponse:
-    """查詢 SQL 快取更新的即時進度。"""
-    snapshot = refresh_progress.get_job(job_id)
+@app.post("/refresh_sql", response_model=RefreshJobResponse)
+def refresh_sql(req: RefreshSqlRequest) -> RefreshJobResponse:
+    """更新 SQL 快取指令：提交一個 Refresh Job 並回傳該 job；不在請求內做事。
+
+    Refresh Queue 一次只跑一個 job：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與
+    資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取
+    （data/sql_cache/）。同一份快取已有 waiting／running 的 job 時，回傳那個既有 job。
+
+    server/db_name 由呼叫端（catalog）提供，缺一即報錯、不排入佇列。連線身分預設
+    用 .env 的全域 DB_AUTH_MODE；請求帶了完整的 db_user_id/db_password 才改用那組
+    覆寫（ADR-0010）。"""
+    return _submit_sql_job(req)
+
+
+@app.get("/refresh_sql/status/{job_id}", response_model=RefreshJobResponse)
+def refresh_sql_status(job_id: str) -> RefreshJobResponse:
+    """查詢 Refresh Job 的即時進度（舊路徑；與 GET /refresh_jobs/{job_id} 相同）。"""
+    return refresh_job(job_id)
+
+
+@app.post("/refresh_jobs", response_model=RefreshJobResponse)
+def submit_refresh_job(req: RefreshJobRequest) -> RefreshJobResponse:
+    """提交一個 Refresh Job：重建一份 SQL 快取，或一份 C# Scan Result。"""
+    if req.kind == "sql":
+        if req.sql is None:
+            raise HTTPException(status_code=400, detail="kind=sql 需要 sql 欄位")
+        return _submit_sql_job(req.sql)
+    if req.csharp is None:
+        raise HTTPException(status_code=400, detail="kind=csharp 需要 csharp 欄位")
+    if req.csharp.program_names:
+        raise HTTPException(
+            status_code=400,
+            detail="指定 program 的 refresh 是直接指令，不進 Refresh Queue",
+        )
+    return _submit_csharp_job(req.csharp)
+
+
+@app.get("/refresh_jobs/{job_id}", response_model=RefreshJobResponse)
+def refresh_job(job_id: str) -> RefreshJobResponse:
+    """讀取一個 Refresh Job：狀態、排隊位置、進度與結果。"""
+    snapshot = refresh_queue.queue.get(job_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="找不到這個 refresh job")
-    return RefreshSqlProgressResponse(**snapshot)
+    return RefreshJobResponse(**snapshot)
+
+
+@app.post("/refresh_jobs/{job_id}/cancel", response_model=RefreshJobResponse)
+def cancel_refresh_job(job_id: str) -> RefreshJobResponse:
+    """取消一個 waiting 的 Refresh Job。running 的 job 不可取消：停止可能留下寫到一半的快取。"""
+    outcome = refresh_queue.queue.cancel(job_id)
+    if outcome == refresh_queue.NOT_FOUND:
+        raise HTTPException(status_code=404, detail="找不到這個 refresh job")
+    if outcome == refresh_queue.RUNNING:
+        raise HTTPException(status_code=409, detail="job 正在執行，無法取消")
+    if outcome == refresh_queue.FINISHED:
+        raise HTTPException(status_code=409, detail="job 已結束，無法取消")
+    return refresh_job(job_id)
 
 
 @app.get("/scan_records", response_model=ScanRecordListResponse)
