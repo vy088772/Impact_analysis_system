@@ -6213,7 +6213,7 @@
     "/refresh_jobs/{job_id}": {
       "get": {
         "description": "讀取一個 Refresh Job：狀態、排隊位置、進度與結果。",
-        "operationId": "refresh_job_refresh_jobs__job_id__get",
+        "operationId": "read_refresh_job_refresh_jobs__job_id__get",
         "parameters": [
           {
             "in": "path",
@@ -6247,7 +6247,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Refresh Job"
+        "summary": "Read Refresh Job"
       }
     },
     "/refresh_jobs/{job_id}/cancel": {
@@ -6327,46 +6327,6 @@
           }
         },
         "summary": "Refresh Sql"
-      }
-    },
-    "/refresh_sql/status/{job_id}": {
-      "get": {
-        "description": "查詢 Refresh Job 的即時進度（舊路徑；與 GET /refresh_jobs/{job_id} 相同）。",
-        "operationId": "refresh_sql_status_refresh_sql_status__job_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "job_id",
-            "required": true,
-            "schema": {
-              "title": "Job Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RefreshJobResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Refresh Sql Status"
       }
     },
     "/scan_records": {

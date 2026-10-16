@@ -3,8 +3,9 @@
 The queue lives in memory. A restart of the Impact service drops the waiting jobs.
 One worker thread runs the jobs in the order that they arrive.
 
-A job is keyed by its cache identity: `sql:<SQL Cache Identity key>` or `csharp:<scan roots>`.
-A submit for a key that already waits or runs returns the existing job.
+A job is keyed by its cache identity: `sql_key()` for a SQL cache, `csharp_key()` for a C# Scan Result.
+A submit for a key that already waits or runs returns the existing job. The first request wins:
+the options of a later duplicate submit do not change a job that waits or runs.
 """
 
 from __future__ import annotations
@@ -12,12 +13,20 @@ from __future__ import annotations
 import threading
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from . import refresh_progress
 
 ProgressCallback = Callable[[str, int, int, str], None]
 RefreshRun = Callable[[ProgressCallback], dict]
+
+def sql_key(identity_key: str) -> str:
+    return f"sql:{identity_key}"
+
+
+def csharp_key(scan_roots: Iterable[str]) -> str:
+    return "csharp:" + "|".join(scan_roots)
+
 
 CANCELLED = "cancelled"
 RUNNING = "running"
@@ -53,6 +62,8 @@ class RefreshQueue:
             existing_id = self._active_by_key.get(key)
             if existing_id is not None:
                 return self._snapshot_locked(existing_id)
+            if job_id and refresh_progress.get_job(job_id) is not None:
+                job_id = ""  # an id that a past job used must not point at that job's record
             new_id = refresh_progress.create_job(job_id, database, kind=kind, key=key)
             self._waiting.append(_Pending(new_id, key, run))
             self._active_by_key[key] = new_id
@@ -85,7 +96,7 @@ class RefreshQueue:
         with self._condition:
             self._condition.wait_for(
                 lambda: (snapshot := refresh_progress.get_job(job_id)) is None
-                or snapshot["status"] in {"succeeded", "failed", "cancelled"},
+                or snapshot["status"] in refresh_progress.TERMINAL_STATUSES,
                 timeout=timeout,
             )
             return self._snapshot_locked(job_id)
@@ -142,7 +153,7 @@ class RefreshQueue:
         result: dict = {}
         try:
             result = pending.run(report)
-        except Exception as exc:  # noqa: BLE001 - every failure ends the job, never the worker
+        except BaseException as exc:  # noqa: BLE001 - every failure, even SystemExit, ends the job and never the worker
             error = str(exc) or type(exc).__name__
         with self._condition:
             if error is None:
@@ -154,4 +165,4 @@ class RefreshQueue:
             self._condition.notify_all()
 
 
-queue = RefreshQueue()
+shared_queue = RefreshQueue()

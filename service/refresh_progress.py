@@ -30,7 +30,7 @@ class ProgressSnapshot:
 
 
 _MAX_SNAPSHOTS = 100
-_TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
+TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 _VALID_STATUSES = frozenset({"waiting", "running", "succeeded", "failed", "cancelled"})
 _LOCK = Lock()
 _SNAPSHOTS: dict[str, ProgressSnapshot] = {}
@@ -80,7 +80,7 @@ def update_job(
 ) -> None:
     with _LOCK:
         snapshot = _SNAPSHOTS.get(job_id)
-        if snapshot is None or snapshot.status in _TERMINAL_STATUSES:
+        if snapshot is None or snapshot.status in TERMINAL_STATUSES:
             return
         if status is not None and status not in _VALID_STATUSES:
             raise ValueError(f"unsupported refresh progress status: {status}")
@@ -107,7 +107,7 @@ def complete_job(
 ) -> None:
     with _LOCK:
         snapshot = _SNAPSHOTS.get(job_id)
-        if snapshot is None or snapshot.status in _TERMINAL_STATUSES:
+        if snapshot is None or snapshot.status in TERMINAL_STATUSES:
             return
         total = max(snapshot.total, snapshot.current, 1)
         _SNAPSHOTS[job_id] = replace(
@@ -127,7 +127,7 @@ def complete_job(
 def fail_job(job_id: str, error: str) -> None:
     with _LOCK:
         snapshot = _SNAPSHOTS.get(job_id)
-        if snapshot is None or snapshot.status in _TERMINAL_STATUSES:
+        if snapshot is None or snapshot.status in TERMINAL_STATUSES:
             return
         _SNAPSHOTS[job_id] = replace(
             snapshot,
@@ -143,7 +143,7 @@ def cancel_job(job_id: str) -> None:
     """Mark a job `cancelled`. The queue calls this only for a job that still waits."""
     with _LOCK:
         snapshot = _SNAPSHOTS.get(job_id)
-        if snapshot is None or snapshot.status in _TERMINAL_STATUSES:
+        if snapshot is None or snapshot.status in TERMINAL_STATUSES:
             return
         _SNAPSHOTS[job_id] = replace(
             snapshot,
@@ -170,7 +170,7 @@ def _prune_locked() -> None:
         (
             snapshot
             for snapshot in _SNAPSHOTS.values()
-            if snapshot.status in _TERMINAL_STATUSES
+            if snapshot.status in TERMINAL_STATUSES
         ),
         key=lambda snapshot: (snapshot.updated_at, snapshot.job_id),
     )

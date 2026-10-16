@@ -11,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from service import refresh_progress
 from service import analyze_service, api
-from service.schemas import RefreshSqlProgressResponse, RefreshSqlRequest
+from service.schemas import RefreshJobResponse, RefreshSqlRequest
 from tests.refresh_job_fixtures import finished
 
 
@@ -162,12 +162,12 @@ def test_refresh_progress_cancel_ends_a_waiting_job() -> None:
     assert refresh_progress.get_job(job_id)["status"] == "cancelled"
 
 
-def test_refresh_sql_status_returns_stable_response_shape() -> None:
+def test_read_refresh_job_returns_stable_response_shape() -> None:
     job_id = refresh_progress.create_job("api-status-progress-job", "OrdersDb")
 
-    response = api.refresh_sql_status(job_id)
+    response = api.read_refresh_job(job_id)
 
-    assert isinstance(response, RefreshSqlProgressResponse)
+    assert isinstance(response, RefreshJobResponse)
     assert response.job_id == job_id
     assert response.database == "OrdersDb"
     assert response.status == "waiting"

@@ -610,10 +610,6 @@ class RefreshJobResponse(BaseModel):
     result: Dict[str, Any] = Field(default_factory=dict)
 
 
-# The progress record of the SQL refresh is now the record of every Refresh Job.
-RefreshSqlProgressResponse = RefreshJobResponse
-
-
 class RefreshJobRequest(BaseModel):
     """POST /refresh_jobs: submit one Refresh Job for one cache.
 

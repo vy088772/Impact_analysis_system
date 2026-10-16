@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 
 from service import analyze_service, refresh_queue
 from service.api import app
+from service.sql_cache_store import CacheIdentity
+from tests.sql_cache_fixtures import CacheRoot, cache_payload, write_cache
 
 client = TestClient(app)
 
@@ -24,7 +26,7 @@ TERMINAL = {"succeeded", "failed", "cancelled"}
 @pytest.fixture(autouse=True)
 def fresh_queue(monkeypatch):
     """Each test gets its own queue, so no job leaks from one test to the next."""
-    monkeypatch.setattr(refresh_queue, "queue", refresh_queue.RefreshQueue())
+    monkeypatch.setattr(refresh_queue, "shared_queue", refresh_queue.RefreshQueue())
 
 
 class FakeRebuild:
@@ -279,12 +281,76 @@ def test_a_sql_request_without_a_server_is_refused_before_it_queues(rebuild) -> 
     assert rebuild.started == []
 
 
-def test_the_old_status_path_reads_the_same_job(rebuild) -> None:
+def test_a_failed_job_leaves_the_previous_cache_on_disk_unchanged(monkeypatch) -> None:
+    """The real SQL refresh flow runs; only the connection fails. The old cache file survives."""
+    identity = CacheIdentity.of("srv", "OrdersDb")
+
+    class UnreachableAnalyzer:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def connect(self) -> bool:
+            return False
+
+    monkeypatch.setattr("code_analyzer.sql_analyzer.SQLAnalyzer", UnreachableAnalyzer)
+    with CacheRoot() as cache_root:
+        write_cache(cache_root, identity, cache_payload("OrdersDb"))
+        before = (cache_root / identity.filename).read_bytes()
+
+        job = client.post("/refresh_sql", json=sql_body("OrdersDb")).json()
+        failed = wait_for(job["job_id"], "failed")
+
+        assert "OrdersDb" in failed["error"]
+        assert (cache_root / identity.filename).read_bytes() == before
+
+
+def test_an_exit_raised_inside_a_rebuild_fails_the_job_and_the_queue_keeps_working(
+    monkeypatch, rebuild
+) -> None:
+    def exiting_rebuild(database, server, db_name, **_kwargs):
+        raise SystemExit("rebuild called exit")
+
+    monkeypatch.setattr(analyze_service, "refresh_sql_source", exiting_rebuild)
+    first = client.post("/refresh_sql", json=sql_body("A")).json()
+    assert wait_for(first["job_id"], "failed")["status"] == "failed"
+
+    monkeypatch.setattr(analyze_service, "refresh_sql_source", rebuild.sql)
+    rebuild.gate("A").set()
+    again = client.post("/refresh_sql", json=sql_body("A")).json()
+
+    assert again["job_id"] != first["job_id"]
+    assert wait_for(again["job_id"], "succeeded")["status"] == "succeeded"
+
+
+def test_a_supplied_job_id_that_a_finished_job_used_gets_a_fresh_id(rebuild) -> None:
+    rebuild.gate("A").set()
+    rebuild.gate("B").set()
+    first = client.post("/refresh_sql", json={**sql_body("A"), "job_id": "cli-1"}).json()
+    wait_for(first["job_id"], "succeeded")
+
+    second = client.post("/refresh_sql", json={**sql_body("B"), "job_id": "cli-1"}).json()
+
+    assert second["job_id"] != "cli-1"
+    assert wait_for(second["job_id"], "succeeded")["database"] == "B"
+    assert client.get("/refresh_jobs/cli-1").json()["database"] == "A"
+
+
+def test_a_duplicate_submit_with_other_options_returns_the_existing_job(rebuild) -> None:
+    """The first request wins: the options of a duplicate submit do not change a job that waits or runs."""
+    running = client.post("/refresh_sql", json=sql_body("A")).json()
+    wait_for(running["job_id"], "running")
+
+    again = client.post(
+        "/refresh_sql", json={**sql_body("A"), "db_user_id": "other", "db_password": "other"}
+    ).json()
+
+    assert again["job_id"] == running["job_id"]
+    rebuild.gate("A").set()
+
+
+def test_a_cancel_of_a_finished_job_is_refused(rebuild) -> None:
     rebuild.gate("A").set()
     job = client.post("/refresh_sql", json=sql_body("A")).json()
     wait_for(job["job_id"], "succeeded")
 
-    old = client.get(f"/refresh_sql/status/{job['job_id']}").json()
-
-    assert old["status"] == "succeeded"
-    assert old["job_id"] == job["job_id"]
+    assert client.post(f"/refresh_jobs/{job['job_id']}/cancel").status_code == 409
