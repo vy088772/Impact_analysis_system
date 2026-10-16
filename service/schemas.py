@@ -48,7 +48,7 @@ class AnalyzeRequest(BaseModel):
     database: str = ""                        # 資料庫簡稱／快取鍵（通常是 spec-rag 的 system_id；留空則跳過 DB 相關功能）
     db_server: str = ""                       # 資料庫主機位址（由 catalog 逐系統提供；與 db_name 需同時提供）
     db_name: str = ""                         # 實際資料庫名稱（由 catalog 逐系統提供）
-    refresh: bool = False                    # True → git pull + 重新解析，覆寫快取
+    refresh: bool = False                    # True → 只重新推導 Derived Execution Evidence；問答從不 pull、掃描或重建快取（ADR-0045）
     include_view_layer: bool = False         # 是否帶出 View 層資訊（aspx/razor/vue 解析摘要）
     include_execution_paths: bool = True     # 是否組出 C# → SQL Execution Graph paths
     question: str = ""                       # 分析師/agent 的原始問題；用於 Compact Path Candidates 的相關性排序
@@ -417,7 +417,7 @@ class FindBySPRequest(LookupDatabaseHost):
     wrapper_contract: WrapperContractSelector = ""  # 外部 wrapper contract selector
     database: str = ""                        # SQL execution graph cache key，通常是 system_id
     cache_only: bool = True                   # True → repo 未 clone 過就跳過，不觸發 clone
-    refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
+    refresh: bool = False                     # True → 只重新推導 Derived Execution Evidence；問答從不 pull、掃描或重建快取（ADR-0045）
 
 
 class SPMatchProgram(WrapperEvidenceFields):
@@ -464,7 +464,7 @@ class FindByTableRequest(LookupDatabaseHost):
     table_name: str                           # 要反查的資料表名稱（可含或不含 schema 前綴，不分大小寫比對）
     wrapper_contract: WrapperContractSelector = ""  # 外部 wrapper contract selector
     cache_only: bool = True                   # True → repo 未 clone/分析過就跳過，不觸發 clone
-    refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再比對
+    refresh: bool = False                     # True → 只重新推導 Derived Execution Evidence；問答從不 pull、掃描或重建快取（ADR-0045）
     database: str = ""                        # 選填：資料庫快取鍵（通常是 spec-rag 的 system_id）。
     # 提供時會由 SQL Execution Graph 解析 SP/View/Function lineage；C# inline
     # SQL facts 仍保留直接出現的表名，兩者都會納入結果。
@@ -716,7 +716,7 @@ class FlowChainRequest(BaseModel):
     db_server: str = ""                       # 資料庫主機位址（與 db_name 需同時提供）
     db_name: str = ""                         # 實際資料庫名稱
     cache_only: bool = True                   # True → 系統未 clone/分析過就跳過，不觸發 clone
-    refresh: bool = False                     # True → git pull + 重新解析（覆寫快取）後再組鏈
+    refresh: bool = False                     # True → 只重新推導 Derived Execution Evidence；問答從不 pull、掃描或重建快取（ADR-0045）
 
 
 class FlowChainResponse(BaseModel):
