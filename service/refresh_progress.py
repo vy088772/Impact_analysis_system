@@ -194,4 +194,4 @@ def _prune_locked() -> None:
         key=lambda snapshot: (snapshot.updated_at, snapshot.job_id),
     )
     for snapshot in active[:overflow]:
-        _SNAPSHOTS.pop(snapshot.job_id, None)
+        _SNAPSHOTS.pop(snapshot.job_id, None)
