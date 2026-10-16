@@ -48,3 +48,9 @@ pydantic>=2.11           # 資料模型驗證
 # 開發工具（型別檢查）
 # ========================================
 mypy==2.3.1               # 型別檢查：python -m mypy <檔案或目錄>
+
+# ========================================
+# 開發工具（測試）
+# ========================================
+httpx2>=2.13             # starlette TestClient 必需（tests/analyze_response_fixtures.py）
+pytest>=9.1              # 測試執行器（tests/analyze_response_fixtures.py 也 import 它）
