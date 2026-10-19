@@ -671,7 +671,8 @@ class UpdateAllResponse(BaseModel):
 class CacheFreshnessRow(BaseModel):
     """One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.
 
-    kind "sql" carries `server` and `database`; kind "csharp" carries `system_id`.
+    kind "sql" carries `server` and `database`; kind "csharp" carries `system_id`, plus
+    `repo` and `paths` (the catalog folders it scans; empty means the whole repository).
     freshness: current | outdated | refreshing | behind_source.
     last_scanned_at is the time on the cache's meta file; None when the cache was never scanned.
     last_job is None for a cache that never had a Refresh Job in this service run.
@@ -686,6 +687,8 @@ class CacheFreshnessRow(BaseModel):
     server: str = ""
     database: str = ""
     system_id: str = ""
+    repo: str = ""
+    paths: List[str] = Field(default_factory=list)
 
 
 class CacheFreshnessSystem(BaseModel):

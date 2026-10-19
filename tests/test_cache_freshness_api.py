@@ -124,6 +124,21 @@ def test_each_cache_lists_with_its_system_freshness_scan_time_and_last_job(world
     assert rows["AlphaDb"]["database"] == "AlphaDb"
 
 
+def test_a_code_cache_lists_the_repository_and_the_folders_it_scans(world) -> None:
+    from service import cache_freshness
+
+    row = cache_freshness.csharp_row(
+        "Y-DOCs_TTPUR", [], {"repo": "Y-DOCs", "path": ["TTPUR", "ATV", " "]}
+    )
+    assert row["repo"] == "Y-DOCs"
+    assert row["paths"] == ["TTPUR", "ATV"]
+    assert cache_freshness.csharp_row("X", [], {"repo": "R", "path": "TTRDQ"})["paths"] == ["TTRDQ"]
+
+    rows = listing()["Alpha"]
+    assert rows["Alpha"]["repo"] == "AlphaRepo"
+    assert rows["Alpha"]["paths"] == []
+
+
 def test_a_missing_cache_lists_as_outdated_with_no_scan_time(world) -> None:
     rows = listing()["Alpha"]
 

@@ -90,12 +90,20 @@ def _is_behind_source(source: dict, scan_roots: Iterable[Path]) -> bool:
     return any(commit and commit != head for commit in recorded)
 
 
+def _source_paths(source: Optional[dict]) -> List[str]:
+    """The catalog folders of a source: one name, a list, or none (the whole repository)."""
+    declared = (source or {}).get("path") or []
+    names = [declared] if isinstance(declared, str) else declared
+    return [str(name).strip() for name in names if str(name).strip()]
+
+
 def csharp_row(
     system_id: str, scan_roots: Iterable[Path], source: Optional[dict] = None
 ) -> dict[str, Any]:
     """The row of one C# Scan Result. It is `current` only when every scan root is.
 
-    The scan time is the oldest one on disk, so an `outdated` cache still shows when it was last scanned."""
+    The scan time is the oldest one on disk, so an `outdated` cache still shows when it was last scanned.
+    `repo` and `paths` tell the page what the scan covers: an empty `paths` is the whole repository."""
     roots = list(scan_roots)
     usable = all(scan_store.load_cached(root) is not None for root in roots)
     saved = [scan_store.cached_saved_at(root) for root in roots]
@@ -107,6 +115,8 @@ def csharp_row(
         last_scanned_at=min((stamp for stamp in saved if stamp), default=None),
         behind_source=usable and source is not None and _is_behind_source(source, roots),
         system_id=system_id,
+        repo=str((source or {}).get("repo") or "").strip(),
+        paths=_source_paths(source),
     )
 
 
