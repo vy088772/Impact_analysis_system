@@ -32,3 +32,9 @@ Derived Execution Evidence is not a cache that an analyst refreshes. Each Refres
 - The update page checks for `behind_source` when an analyst opens it, and again when the analyst asks for a new check. The page shows the time of the last check. A question never checks the remote repository.
 - An "update all" action submits a Refresh Job for each `outdated` cache. It does not include a `behind_source` cache. An analyst submits each `behind_source` cache alone.
 - Any later proposal to rebuild a cache inside a question reverses this ADR and needs its own ADR.
+
+## Amendment: the Environment Check locks rows (2026-10-22)
+
+`llamaindex-spec-rag` ADR-0020 adds an Environment Check. The Impact service tests SQL Server access and Azure Repos access itself, because it is the process that makes the connections. The test logs in to each server that the catalog names, and runs `git ls-remote` one time for each remote host. A remote host is one Azure DevOps project, because every repository of the catalog is in one organization.
+
+The service keeps the last result in memory. Each SQL row of a failed server and each C# row of a failed host gets a `locked_reason`. A Refresh Job for a locked row gets HTTP 409 with that reason, and no job starts. "Update all" skips the locked rows and still submits the other `outdated` caches. Before the first check, and after a restart, no row is locked.

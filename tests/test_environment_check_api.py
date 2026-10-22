@@ -109,7 +109,7 @@ def test_the_check_gives_one_item_for_each_server_and_each_remote_host(two_hosts
     servers = items_of(result, "sql_server")
     hosts = items_of(result, "azure_repos")
     assert set(servers) == {SERVER_A, SERVER_B}
-    assert set(hosts) == {"dev.azure.com/org/P", "dev.azure.com/org/Q"}
+    assert set(hosts) == {"dev.azure.com/org/p", "dev.azure.com/org/q"}
     for item in [*servers.values(), *hosts.values()]:
         assert item == {**item, "ok": True, "reason": "", "locks": ""}
     # One git ls-remote for each host, against the first repository of that host.
@@ -137,10 +137,10 @@ def test_a_host_whose_ls_remote_fails_fails_and_the_other_host_keeps_its_result(
 
     hosts = items_of(check(), "azure_repos")
 
-    assert hosts["dev.azure.com/org/Q"]["ok"] is False
-    assert hosts["dev.azure.com/org/Q"]["reason"] == "git ls-remote 失敗：Authentication failed"
-    assert hosts["dev.azure.com/org/Q"]["locks"] == "dev.azure.com/org/Q 的 C# 列"
-    assert hosts["dev.azure.com/org/P"]["ok"] is True
+    assert hosts["dev.azure.com/org/q"]["ok"] is False
+    assert hosts["dev.azure.com/org/q"]["reason"] == "git ls-remote 失敗：Authentication failed"
+    assert hosts["dev.azure.com/org/q"]["locks"] == "dev.azure.com/org/q 的 C# 列"
+    assert hosts["dev.azure.com/org/p"]["ok"] is True
 
 
 def lock_listing() -> dict[str, dict[str, str]]:
@@ -214,10 +214,15 @@ def test_a_refresh_job_for_a_locked_row_gets_409_with_the_reason_and_no_job_star
         json={"kind": "csharp", "csharp": {"system": "Beta", "source": {"project": "P", "repo": "BetaRepo"}}},
     )
     direct = client.post("/refresh_sql", json={"database": "BetaDb", "server": SERVER_A, "db_name": "BetaDb"})
+    other_case = client.post(
+        "/refresh_jobs",
+        json={"kind": "csharp", "csharp": {"system": "Alpha", "source": {"project": "p", "repo": "AlphaRepo"}}},
+    )
 
     assert (sql.status_code, sql.json()["detail"]) == (409, "SQL Server 拒絕這個登入帳號")
     assert (csharp.status_code, csharp.json()["detail"]) == (409, "這台機器沒有 git")
     assert direct.status_code == 409
+    assert other_case.status_code == 409
     allowed = client.post(
         "/refresh_jobs",
         json={"kind": "csharp", "csharp": {"system": "Gamma", "source": {"project": "Q", "repo": "GammaRepo"}}},

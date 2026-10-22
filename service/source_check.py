@@ -49,6 +49,12 @@ def remote_url(source: dict) -> str:
     return f"https://dev.azure.com/{org}/{quote(project, safe='')}/_git/{quote(repo, safe='')}"
 
 
+def remote_host(source: dict) -> str:
+    """The remote host of `source` for the Environment Check: its Azure DevOps project, in lower case."""
+    project, _, _ = _key_of(source)
+    return f"dev.azure.com/{settings.AZURE_DEVOPS_ORG}/{project.strip()}".lower()
+
+
 def can_ask_remote(source: dict) -> bool:
     """True when the settings and `source` name enough to ask the remote."""
     project, repo, _ = _key_of(source)
