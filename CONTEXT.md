@@ -332,6 +332,22 @@ _Avoid_: refresh task, update job, refresh target
 The one ordered line of Refresh Jobs. The Refresh Queue runs one Refresh Job at a time, in the order that they arrive.
 _Avoid_: job list, refresh scheduler
 
+**Update Capability**:
+One outside resource that one kind of update needs on the machine that runs it. This service owns two: SQL Server access for a SQL cache, and Azure Repos access for a C# Scan Result. It is the term of `llamaindex-spec-rag`'s `CONTEXT.md`, reused here unchanged; that repository owns ESP access and Word.
+_Avoid_: prerequisite, dependency, environment
+
+**Environment Check**:
+The test of each Update Capability, with one plain reason for each target that fails. This service tests each server of the Database Registry and each Remote Host, in its own process, because a test in another process can use another account. The service keeps the Lock Reasons of the last Environment Check in memory, so a restart locks nothing until the next check. See `llamaindex-spec-rag` ADR-0020 and the amendment of ADR-0045.
+_Avoid_: health check, preflight
+
+**Remote Host**:
+One Azure DevOps project, `dev.azure.com/<org>/<project>`, in lower case. Every repository of the catalog is in one organization, so a project is the smallest unit that one `git ls-remote` can test for many repositories. The Environment Check tests the first repository of each Remote Host only.
+_Avoid_: remote, server, organization
+
+**Lock Reason**:
+The failure of the last Environment Check that stops the update of one cache. A SQL row gets the reason of its server, and a C# row gets the reason of its Remote Host. A Refresh Job for a cache with a Lock Reason gets HTTP 409 and does not start, and "update all" skips it. An empty Lock Reason means that the cache is not locked.
+_Avoid_: blocked reason, disabled reason
+
 ## Repository Management
 
 **Clone**:

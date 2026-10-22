@@ -2247,44 +2247,6 @@
         "title": "EmptyPathCounts",
         "type": "object"
       },
-      "EnvironmentCapability": {
-        "description": "One Update Capability that the Impact service tests, for one target.\n\ncapability: sql_server (target: a server of the Database Registry) | azure_repos (target: a\nremote host, `dev.azure.com/<org>/<project>`). reason and locks are empty when ok is true.",
-        "properties": {
-          "capability": {
-            "enum": [
-              "sql_server",
-              "azure_repos"
-            ],
-            "title": "Capability",
-            "type": "string"
-          },
-          "locks": {
-            "default": "",
-            "title": "Locks",
-            "type": "string"
-          },
-          "ok": {
-            "title": "Ok",
-            "type": "boolean"
-          },
-          "reason": {
-            "default": "",
-            "title": "Reason",
-            "type": "string"
-          },
-          "target": {
-            "title": "Target",
-            "type": "string"
-          }
-        },
-        "required": [
-          "capability",
-          "target",
-          "ok"
-        ],
-        "title": "EnvironmentCapability",
-        "type": "object"
-      },
       "EnvironmentCheckRequest": {
         "description": "POST /environment/check: the scan account of each SQL server (ADR-0010), keyed as in \"update all\".",
         "properties": {
@@ -2300,27 +2262,23 @@
         "type": "object"
       },
       "EnvironmentCheckResponse": {
-        "description": "The last Environment Check of the Impact service; checked_at is None before the first check.",
+        "description": "POST /environment/check: the result of the Environment Check that just ran.",
         "properties": {
           "capabilities": {
             "items": {
-              "$ref": "#/components/schemas/EnvironmentCapability"
+              "$ref": "#/components/schemas/UpdateCapabilityResult"
             },
             "title": "Capabilities",
             "type": "array"
           },
           "checked_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Checked At"
+            "title": "Checked At",
+            "type": "string"
           }
         },
+        "required": [
+          "checked_at"
+        ],
         "title": "EnvironmentCheckResponse",
         "type": "object"
       },
@@ -5801,6 +5759,44 @@
         "title": "UpdateAllResponse",
         "type": "object"
       },
+      "UpdateCapabilityResult": {
+        "description": "The Environment Check result of one Update Capability, for one target.\n\ncapability: sql_server (target: a server of the Database Registry) | azure_repos (target: a\nremote host, `dev.azure.com/<org>/<project>`). reason and locks are empty when ok is true.",
+        "properties": {
+          "capability": {
+            "enum": [
+              "sql_server",
+              "azure_repos"
+            ],
+            "title": "Capability",
+            "type": "string"
+          },
+          "locks": {
+            "default": "",
+            "title": "Locks",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "target",
+          "ok"
+        ],
+        "title": "UpdateCapabilityResult",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -6346,28 +6342,9 @@
         "summary": "Read Derivation Progress"
       }
     },
-    "/environment": {
-      "get": {
-        "description": "The last Environment Check of this service; `checked_at` is None before the first check.",
-        "operationId": "read_environment_environment_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EnvironmentCheckResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Read Environment"
-      }
-    },
     "/environment/check": {
       "post": {
-        "description": "Run the Environment Check now (`llamaindex-spec-rag` ADR-0020) and return the new result.\n\nIt logs in to each server of the Database Registry with a short login time limit, and runs\n`git ls-remote` one time for each remote host of the catalog. The result locks the SQL rows of\na failed server and the C# rows of a failed host, until the next check.",
+        "description": "Run the Environment Check now (`llamaindex-spec-rag` ADR-0020) and return the new result.\n\nIt logs in to each server of the Database Registry (and of the catalog) with a short login time limit, and runs\n`git ls-remote` one time for each remote host of the catalog. The result locks the SQL rows of\na failed server and the C# rows of a failed host, until the next check.",
         "operationId": "check_environment_environment_check_post",
         "requestBody": {
           "content": {

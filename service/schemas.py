@@ -710,8 +710,8 @@ class EnvironmentCheckRequest(BaseModel):
     sql_credentials: Dict[str, SqlCredentialOverride] = Field(default_factory=dict)
 
 
-class EnvironmentCapability(BaseModel):
-    """One Update Capability that the Impact service tests, for one target.
+class UpdateCapabilityResult(BaseModel):
+    """The Environment Check result of one Update Capability, for one target.
 
     capability: sql_server (target: a server of the Database Registry) | azure_repos (target: a
     remote host, `dev.azure.com/<org>/<project>`). reason and locks are empty when ok is true.
@@ -725,10 +725,10 @@ class EnvironmentCapability(BaseModel):
 
 
 class EnvironmentCheckResponse(BaseModel):
-    """The last Environment Check of the Impact service; checked_at is None before the first check."""
+    """POST /environment/check: the result of the Environment Check that just ran."""
 
-    checked_at: Optional[str] = None
-    capabilities: List[EnvironmentCapability] = Field(default_factory=list)
+    checked_at: str
+    capabilities: List[UpdateCapabilityResult] = Field(default_factory=list)
 
 
 class DerivationProgressEntry(BaseModel):

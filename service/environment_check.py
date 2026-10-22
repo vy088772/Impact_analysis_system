@@ -2,14 +2,14 @@
 
 The web asks for it when it starts and when the maintainer asks to check again
 (`llamaindex-spec-rag` ADR-0020: each Update Capability is tested in the process that makes the
-connection). The check logs in to each server of the Database Registry (the servers that the
-catalog names) with a short login time limit, and runs `git ls-remote` one time for each remote
-host, against the first repository of that host. A remote host is one Azure DevOps project
-(`source_check.remote_host`), because the catalog puts every repository under one organization.
+connection). The check logs in to each server of the Database Registry with a short login time
+limit, and runs `git ls-remote` one time for each remote host, against the first repository of that
+host. A remote host is one Azure DevOps project (`source_check.remote_host`), because the catalog
+puts every repository under one organization.
 
-The service keeps the last result in memory. A SQL row of a failed server and a C# row of a failed
-host get that failure as their lock reason: the service refuses their Refresh Jobs, and "update all"
-skips them. Before the first check, and after a restart, nothing is locked.
+The service keeps the failures of the last check in memory. A SQL row of a failed server and a C#
+row of a failed host get that failure as their lock reason: the service refuses their Refresh Jobs,
+and "update all" skips them. Before the first check, and after a restart, nothing is locked.
 
 Each probe returns None when it passes, or a plain reason when it fails. Tests replace the probes.
 """
@@ -21,12 +21,12 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Iterable, Mapping, Optional
+from typing import Callable, Iterable, List, Mapping, Optional, Tuple
 
 from config.settings import settings
 
-from . import source_check, sql_cache_store
-from .schemas import SqlCredentialOverride
+from . import source_check, sql_cache_store, system_targets
+from .schemas import EnvironmentCheckResponse, SqlCredentialOverride, UpdateCapabilityResult
 
 SQL_LOGIN_TIMEOUT_SECONDS = 5
 GIT_TIMEOUT_SECONDS = 15
@@ -87,10 +87,8 @@ def probe_azure_repos(source: dict) -> Optional[str]:
 
 @dataclass
 class LastCheck:
-    """The last result, and the lock reason of each failed server and host."""
+    """The lock reasons of the last check: capability -> target -> reason."""
 
-    result: dict[str, Any] = field(default_factory=lambda: {"checked_at": None, "capabilities": []})
-    # capability -> target -> reason
     locks: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
@@ -108,33 +106,38 @@ class _Probe:
     run: Callable[[], Optional[str]]
 
 
-def _servers(catalog: Iterable[dict]) -> dict[str, tuple[str, str]]:
-    """Each server of the catalog (normalized, as a SQL row shows it): the first (server, database)."""
+def _servers(
+    registry: Iterable[Tuple[str, List[str]]], catalog: Iterable[dict]
+) -> dict[str, tuple[str, str]]:
+    """Each server (normalized, as a SQL row shows it), with the (server, database) to log in to.
+
+    The servers come from the Database Registry. A server that only the catalog names is tested too,
+    because its rows still show on the update page."""
     servers: dict[str, tuple[str, str]] = {}
-    for system in catalog:
-        for declared in system.get("databases") or []:
-            if not isinstance(declared, dict):
-                continue
-            server, database = str(declared.get("server") or "").strip(), str(declared.get("name") or "").strip()
-            target = sql_cache_store.normalize_server(server)
-            if target and database:
-                servers.setdefault(target, (server, database))
+    declared = [(server, names[0] if names else "master") for server, names in registry]
+    declared += [pair for system in catalog for pair in system_targets.declared_databases(system)]
+    for server, database in declared:
+        target = sql_cache_store.normalize_server(server)
+        if target and database:
+            servers.setdefault(target, (server, database))
     return servers
 
 
 def _hosts(catalog: Iterable[dict]) -> dict[str, dict]:
     """Each remote host of the catalog: its first repository."""
-    from .cache_freshness import sources_of
-
     hosts: dict[str, dict] = {}
-    for source in sources_of(catalog):
+    for source in system_targets.sources_of(catalog):
         hosts.setdefault(source_check.remote_host(source), source)
     return hosts
 
 
-def _probes(catalog: list, sql_credentials: Mapping[str, SqlCredentialOverride]) -> list[_Probe]:
+def _probes(
+    registry: Iterable[Tuple[str, List[str]]],
+    catalog: list,
+    sql_credentials: Mapping[str, SqlCredentialOverride],
+) -> list[_Probe]:
     probes = []
-    for target, (server, database) in _servers(catalog).items():
+    for target, (server, database) in _servers(registry, catalog).items():
         account = sql_credentials.get(target) or SqlCredentialOverride()
         probes.append(
             _Probe(
@@ -153,10 +156,12 @@ def _probes(catalog: list, sql_credentials: Mapping[str, SqlCredentialOverride])
 
 
 def run(
-    catalog: list, sql_credentials: Optional[Mapping[str, SqlCredentialOverride]] = None
-) -> dict[str, Any]:
-    """Run every probe at the same time, keep the result and its locks, and return the result."""
-    probes = _probes(catalog, sql_credentials or {})
+    registry: Iterable[Tuple[str, List[str]]],
+    catalog: list,
+    sql_credentials: Optional[Mapping[str, SqlCredentialOverride]] = None,
+) -> EnvironmentCheckResponse:
+    """Run every probe at the same time, keep the lock reasons, and return the result."""
+    probes = _probes(registry, catalog, sql_credentials or {})
     outcomes: dict[int, Optional[str]] = {}
 
     def run_one(index: int, probe: _Probe) -> None:
@@ -175,30 +180,22 @@ def run(
         thread.join(max(0.0, started + probe.time_limit + _MARGIN_SECONDS - time.monotonic()))
         reason = _no_answer(probe.label, probe.time_limit) if thread.is_alive() else outcomes[index]
         items.append(
-            {
-                "capability": probe.capability,
-                "target": probe.target,
-                "ok": reason is None,
-                "reason": reason or "",
-                "locks": "" if reason is None else probe.locks,
-            }
+            UpdateCapabilityResult(
+                capability=probe.capability,
+                target=probe.target,
+                ok=reason is None,
+                reason=reason or "",
+                locks="" if reason is None else probe.locks,
+            )
         )
         if reason is not None:
             last.locks.setdefault(probe.capability, {})[probe.target] = reason
-    last.result = {
-        "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "capabilities": items,
-    }
     global _last
     with _lock:
         _last = last
-    return last.result
-
-
-def result() -> dict[str, Any]:
-    """The last result; `checked_at` is None before the first check."""
-    with _lock:
-        return _last.result
+    return EnvironmentCheckResponse(
+        checked_at=datetime.now().astimezone().isoformat(timespec="seconds"), capabilities=items
+    )
 
 
 def sql_lock_reason(server: str) -> str:

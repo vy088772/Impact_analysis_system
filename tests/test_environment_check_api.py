@@ -92,6 +92,27 @@ def two_hosts(world):
     return world
 
 
+def test_each_server_of_the_database_registry_is_tested_even_when_no_system_declares_it(
+    two_hosts, probes
+) -> None:
+    registry = {
+        "servers": [
+            {"server": "dbc.example.com\\SQL2019", "uid_env": "", "pwd_env": "", "databases": ["Archive", "Log"]},
+            {"server": SERVER_A.upper(), "uid_env": "", "pwd_env": "", "databases": ["RegistryDb"]},
+        ]
+    }
+    registry_path = system_targets.default_spec_rag_root() / "catalog" / "SQLServerData.json"
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    servers = items_of(check(), "sql_server")
+
+    assert set(servers) == {"dbc.example.com", SERVER_A, SERVER_B}
+    # It logs in with the named instance, into the first database of the Registry.
+    logins = {call[0]: call[1] for call in probes.sql_calls}
+    assert logins["dbc.example.com\\SQL2019"] == "Archive"
+    assert logins[SERVER_A.upper()] == "RegistryDb"
+
+
 def check(**body) -> dict:
     response = client.post("/environment/check", json=body)
     assert response.status_code == 200
@@ -168,8 +189,6 @@ def test_the_listing_locks_the_sql_rows_of_a_failed_server_and_the_csharp_rows_o
 
 
 def test_before_the_first_check_no_row_is_locked(two_hosts, probes) -> None:
-    assert client.get("/environment").json() == {"checked_at": None, "capabilities": []}
-
     locks = lock_listing()
 
     assert all(reason == "" for rows in locks.values() for reason in rows.values())
@@ -178,8 +197,8 @@ def test_before_the_first_check_no_row_is_locked(two_hosts, probes) -> None:
 
 def test_the_last_result_stays_until_the_next_check(two_hosts, probes) -> None:
     probes.sql_failures = {SERVER_A: "SQL Server 在 5 秒內沒有回應"}
-    first = check()
-    assert client.get("/environment").json() == first
+    check()
+    assert lock_listing()["Beta"]["BetaDb"] == "SQL Server 在 5 秒內沒有回應"
 
     probes.sql_failures = {}
     check()
@@ -265,8 +284,7 @@ def test_the_openapi_export_includes_the_environment_check_and_the_lock_reason()
 
     schema = build_schema()
 
-    assert "/environment" in schema["paths"]
     assert "/environment/check" in schema["paths"]
     assert "locked_reason" in schema["components"]["schemas"]["CacheFreshnessRow"]["properties"]
-    capability = schema["components"]["schemas"]["EnvironmentCapability"]["properties"]
+    capability = schema["components"]["schemas"]["UpdateCapabilityResult"]["properties"]
     assert set(capability) == {"capability", "target", "ok", "reason", "locks"}

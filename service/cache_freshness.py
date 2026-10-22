@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
 from . import environment_check, refresh_queue, repo_manager, scan_store, source_check, sql_cache_store
+from .system_targets import azure_source_of, declared_databases
 from .schemas import RefreshRequest, RefreshSqlRequest, UpdateAllRequest
 
 CURRENT = "current"
@@ -159,19 +160,6 @@ def sql_unusable(identity: sql_cache_store.CacheIdentity) -> Optional[dict[str, 
     return None
 
 
-def azure_source_of(system: dict) -> Optional[dict]:
-    """The Azure source of a catalog system, or None when the system has no repository."""
-    azure = system.get("azure") or {}
-    if isinstance(azure, dict) and str(azure.get("repo") or "").strip():
-        return azure
-    return None
-
-
-def sources_of(catalog_systems: Iterable[dict]) -> List[dict]:
-    """The Azure source of each catalog system that has a repository."""
-    return [azure for azure in map(azure_source_of, catalog_systems) if azure is not None]
-
-
 def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
     """Every cache of every catalog system, grouped by system, in catalog order."""
     shared_sql: dict[tuple[str, str], Optional[dict[str, Any]]] = {}
@@ -184,10 +172,7 @@ def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
         azure = azure_source_of(system)
         if azure is not None:
             caches.append(csharp_row(system_id, repo_manager.peek_scan_roots(azure), azure))
-        for declared in system.get("databases") or []:
-            if not isinstance(declared, dict):
-                continue
-            pair = (str(declared.get("server") or ""), str(declared.get("name") or ""))
+        for pair in declared_databases(system):
             if pair not in shared_sql:
                 shared_sql[pair] = sql_row(*pair)
             row = shared_sql[pair]

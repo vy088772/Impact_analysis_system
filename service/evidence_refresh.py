@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from . import (
-    cache_freshness,
     derivation_progress,
     derived_execution_evidence,
     refresh_queue,
@@ -112,7 +111,7 @@ class Target:
 def targets_of(system: dict) -> List[Target]:
     """The scopes of one catalog system, or none when it has no repository."""
     system_id = str(system.get("system_id") or "").strip()
-    azure = cache_freshness.azure_source_of(system)
+    azure = system_targets.azure_source_of(system)
     if not system_id or azure is None:
         return []
     contract = system.get("wrapper_contract")

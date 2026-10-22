@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from config.settings import settings
 
@@ -53,6 +53,46 @@ def load_system_catalog(spec_rag_root: Path) -> List[dict]:
         return []
     systems = payload.get("systems", [])
     return [item for item in systems if isinstance(item, dict)] if isinstance(systems, list) else []
+
+
+def azure_source_of(system: dict) -> Optional[dict]:
+    """The Azure source of a catalog system, or None when the system has no repository."""
+    azure = system.get("azure") or {}
+    if isinstance(azure, dict) and str(azure.get("repo") or "").strip():
+        return azure
+    return None
+
+
+def sources_of(catalog_systems: Iterable[dict]) -> List[dict]:
+    """The Azure source of each catalog system that has a repository."""
+    return [azure for azure in map(azure_source_of, catalog_systems) if azure is not None]
+
+
+def declared_databases(system: dict) -> List[Tuple[str, str]]:
+    """The (server, database name) of each Declared Database Dependency of a catalog system."""
+    return [
+        (str(declared.get("server") or "").strip(), str(declared.get("name") or "").strip())
+        for declared in system.get("databases") or []
+        if isinstance(declared, dict)
+    ]
+
+
+def load_database_registry(spec_rag_root: Path) -> List[Tuple[str, List[str]]]:
+    """Each server of `llamaindex-spec-rag`'s Database Registry, with its database names.
+
+    It reads names only. The scan account of a server stays with the caller (ADR-0010).
+    An empty list when the Registry cannot be read."""
+    registry_path = Path(spec_rag_root) / "catalog" / "SQLServerData.json"
+    try:
+        payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    groups = payload.get("servers", []) if isinstance(payload, dict) else []
+    return [
+        (str(group.get("server") or "").strip(), [str(name).strip() for name in group.get("databases") or []])
+        for group in groups
+        if isinstance(group, dict) and str(group.get("server") or "").strip()
+    ]
 
 
 def resolve_system_targets(
