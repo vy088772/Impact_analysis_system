@@ -2741,6 +2741,822 @@
       "signature_version": "contract-behavior-v1",
       "status": "accepted"
     },
+    "sqlobject-2fc78fa2ffb3": {
+      "behavior_signature": {
+        "operations": [
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 2
+            },
+            "branch_rules": [
+              {
+                "mode": "call_site",
+                "sink": "Fill"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "call_site",
+            "method_arity": 3,
+            "method_identity": "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[],string)",
+            "method_name": "createdataset",
+            "operation_identity": "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[],string)",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]",
+              "string"
+            ],
+            "required_parameter_count": 3,
+            "terminal_sink": "Fill"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 3
+            },
+            "branch_rules": [
+              {
+                "mode": "call_site",
+                "sink": "Fill"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "call_site",
+            "method_arity": 4,
+            "method_identity": "sqlobject.createtable(string,system.data.sqlclient.sqlparameter[],string,string)",
+            "method_name": "createtable",
+            "operation_identity": "sqlobject.createtable(string,system.data.sqlclient.sqlparameter[],string,string)",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]",
+              "string",
+              "string"
+            ],
+            "required_parameter_count": 4,
+            "terminal_sink": "Fill"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "ExecuteNonQuery"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 1,
+            "method_identity": "sqlobject.editdata(string)",
+            "method_name": "editdata",
+            "operation_identity": "sqlobject.editdata(string)",
+            "parameter_types": [
+              "string"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteNonQuery"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "ExecuteNonQuery"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 2,
+            "method_identity": "sqlobject.editdata(string,system.data.sqlclient.sqlparameter[])",
+            "method_name": "editdata",
+            "operation_identity": "sqlobject.editdata(string,system.data.sqlclient.sqlparameter[])",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "ExecuteNonQuery"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "ExecuteReader"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 1,
+            "method_identity": "sqlobject.createreader(string)",
+            "method_name": "createreader",
+            "operation_identity": "sqlobject.createreader(string)",
+            "parameter_types": [
+              "string"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteReader"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "ExecuteReader"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 2,
+            "method_identity": "sqlobject.createreader(string,system.data.sqlclient.sqlparameter)",
+            "method_name": "createreader",
+            "operation_identity": "sqlobject.createreader(string,system.data.sqlclient.sqlparameter)",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "ExecuteReader"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "ExecuteReader"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 2,
+            "method_identity": "sqlobject.createreader(string,system.data.sqlclient.sqlparameter[])",
+            "method_name": "createreader",
+            "operation_identity": "sqlobject.createreader(string,system.data.sqlclient.sqlparameter[])",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "ExecuteReader"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "ExecuteScalar"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 1,
+            "method_identity": "sqlobject.getfirstvalue(string)",
+            "method_name": "getfirstvalue",
+            "operation_identity": "sqlobject.getfirstvalue(string)",
+            "parameter_types": [
+              "string"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteScalar"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "ExecuteScalar"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 2,
+            "method_identity": "sqlobject.getfirstvalue(string,system.data.sqlclient.sqlparameter)",
+            "method_name": "getfirstvalue",
+            "operation_identity": "sqlobject.getfirstvalue(string,system.data.sqlclient.sqlparameter)",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "ExecuteScalar"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "ExecuteScalar"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 2,
+            "method_identity": "sqlobject.getfirstvalue(string,system.data.sqlclient.sqlparameter[])",
+            "method_name": "getfirstvalue",
+            "operation_identity": "sqlobject.getfirstvalue(string,system.data.sqlclient.sqlparameter[])",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "ExecuteScalar"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "Fill"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 2,
+            "method_identity": "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter)",
+            "method_name": "createdataset",
+            "operation_identity": "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter)",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "Fill"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "Fill"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 2,
+            "method_identity": "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[])",
+            "method_name": "createdataset",
+            "operation_identity": "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[])",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "Fill"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "Fill"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 2,
+            "method_identity": "sqlobject.createtable(string,string)",
+            "method_name": "createtable",
+            "operation_identity": "sqlobject.createtable(string,string)",
+            "parameter_types": [
+              "string",
+              "string"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "Fill"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "inline_sql",
+                "sink": "Fill"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "inline_sql",
+            "method_arity": 3,
+            "method_identity": "sqlobject.createtable(string,system.data.sqlclient.sqlparameter[],string)",
+            "method_name": "createtable",
+            "operation_identity": "sqlobject.createtable(string,system.data.sqlclient.sqlparameter[],string)",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]",
+              "string"
+            ],
+            "required_parameter_count": 3,
+            "terminal_sink": "Fill"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "stored_procedure",
+                "sink": "ExecuteNonQuery"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "stored_procedure",
+            "method_arity": 1,
+            "method_identity": "sqlobject.exeprocnon(string)",
+            "method_name": "exeprocnon",
+            "operation_identity": "sqlobject.exeprocnon(string)",
+            "parameter_types": [
+              "string"
+            ],
+            "required_parameter_count": 1,
+            "terminal_sink": "ExecuteNonQuery"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "stored_procedure",
+                "sink": "ExecuteNonQuery"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "stored_procedure",
+            "method_arity": 2,
+            "method_identity": "sqlobject.exeprocnon(string,int)",
+            "method_name": "exeprocnon",
+            "operation_identity": "sqlobject.exeprocnon(string,int)",
+            "parameter_types": [
+              "string",
+              "int"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "ExecuteNonQuery"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "stored_procedure",
+                "sink": "ExecuteNonQuery"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "stored_procedure",
+            "method_arity": 2,
+            "method_identity": "sqlobject.exeprocnon(string,system.data.sqlclient.sqlparameter[])",
+            "method_name": "exeprocnon",
+            "operation_identity": "sqlobject.exeprocnon(string,system.data.sqlclient.sqlparameter[])",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "ExecuteNonQuery"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "stored_procedure",
+                "sink": "ExecuteNonQuery"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "stored_procedure",
+            "method_arity": 3,
+            "method_identity": "sqlobject.exeprocnon(string,system.data.sqlclient.sqlparameter[],int)",
+            "method_name": "exeprocnon",
+            "operation_identity": "sqlobject.exeprocnon(string,system.data.sqlclient.sqlparameter[],int)",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]",
+              "int"
+            ],
+            "required_parameter_count": 3,
+            "terminal_sink": "ExecuteNonQuery"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "stored_procedure",
+                "sink": "ExecuteReader"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "stored_procedure",
+            "method_arity": 2,
+            "method_identity": "sqlobject.exeprocread(string,system.data.sqlclient.sqlparameter)",
+            "method_name": "exeprocread",
+            "operation_identity": "sqlobject.exeprocread(string,system.data.sqlclient.sqlparameter)",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "ExecuteReader"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "branch_rules": [
+              {
+                "mode": "stored_procedure",
+                "sink": "ExecuteReader"
+              }
+            ],
+            "connection_behavior_boundary": "wrapper_connection",
+            "effective_command_semantics": "stored_procedure",
+            "method_arity": 2,
+            "method_identity": "sqlobject.exeprocread(string,system.data.sqlclient.sqlparameter[])",
+            "method_name": "exeprocread",
+            "operation_identity": "sqlobject.exeprocread(string,system.data.sqlclient.sqlparameter[])",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "terminal_sink": "ExecuteReader"
+          }
+        ],
+        "signature_version": "contract-behavior-v1"
+      },
+      "comparison_report": "comparison-2fc78fa2ffb3e98452d7deb9532a5f7135bc331672d680d37c0c0609b77bd104",
+      "comparison_reports": {
+        "history": [
+          "comparison-2fc78fa2ffb3e98452d7deb9532a5f7135bc331672d680d37c0c0609b77bd104"
+        ],
+        "latest": "comparison-2fc78fa2ffb3e98452d7deb9532a5f7135bc331672d680d37c0c0609b77bd104"
+      },
+      "contract_fingerprint": "2fc78fa2ffb3e98452d7deb9532a5f7135bc331672d680d37c0c0609b77bd104",
+      "evidence_kind": "decompiled_auto",
+      "implementation_snapshots": [
+        {
+          "artifact_identity": "/Users/topmost/yuhsienTseng/規格書問答系統/Impact_analysis_system/data/repos/System_Dept_1/TTJournal/TTJournal/bin/SQLObject.dll@sha256:42c2f95a24d6bd5bb4fe5432742c2db4ae4e631f9008978e725e0d206152a2da",
+          "assembly_identity": "42c2f95a24d6bd5bb4fe5432742c2db4ae4e631f9008978e725e0d206152a2da",
+          "assembly_revision": "42c2f95a24d6bd5bb4fe5432742c2db4ae4e631f9008978e725e0d206152a2da",
+          "behavior_surface_unit": "SQLObject",
+          "snapshot_identity": "64576348bbb383b406bcc6b9b580098423759293c1955f14fc6ba54ae1258a80"
+        }
+      ],
+      "lifecycle": {
+        "revision": 1,
+        "status": "accepted"
+      },
+      "methods": {
+        "CreateDataSet": [
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[])",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "sink": "Fill"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 2
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 3,
+            "method_identity": "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[],string)",
+            "mode": "call_site",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]",
+              "string"
+            ],
+            "required_parameter_count": 3,
+            "sink": "Fill"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter)",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter"
+            ],
+            "required_parameter_count": 2,
+            "sink": "Fill"
+          }
+        ],
+        "CreateReader": [
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 1,
+            "method_identity": "sqlobject.createreader(string)",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string"
+            ],
+            "required_parameter_count": 1,
+            "sink": "ExecuteReader"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.createreader(string,system.data.sqlclient.sqlparameter[])",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "sink": "ExecuteReader"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.createreader(string,system.data.sqlclient.sqlparameter)",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter"
+            ],
+            "required_parameter_count": 2,
+            "sink": "ExecuteReader"
+          }
+        ],
+        "CreateTable": [
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.createtable(string,string)",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string",
+              "string"
+            ],
+            "required_parameter_count": 2,
+            "sink": "Fill"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0,
+              "command_type": 3
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 4,
+            "method_identity": "sqlobject.createtable(string,system.data.sqlclient.sqlparameter[],string,string)",
+            "mode": "call_site",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]",
+              "string",
+              "string"
+            ],
+            "required_parameter_count": 4,
+            "sink": "Fill"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 3,
+            "method_identity": "sqlobject.createtable(string,system.data.sqlclient.sqlparameter[],string)",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]",
+              "string"
+            ],
+            "required_parameter_count": 3,
+            "sink": "Fill"
+          }
+        ],
+        "EditData": [
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 1,
+            "method_identity": "sqlobject.editdata(string)",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string"
+            ],
+            "required_parameter_count": 1,
+            "sink": "ExecuteNonQuery"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.editdata(string,system.data.sqlclient.sqlparameter[])",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "sink": "ExecuteNonQuery"
+          }
+        ],
+        "ExeProcNon": [
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.exeprocnon(string,system.data.sqlclient.sqlparameter[])",
+            "mode": "stored_procedure",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "sink": "ExecuteNonQuery"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 3,
+            "method_identity": "sqlobject.exeprocnon(string,system.data.sqlclient.sqlparameter[],int)",
+            "mode": "stored_procedure",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]",
+              "int"
+            ],
+            "required_parameter_count": 3,
+            "sink": "ExecuteNonQuery"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 1,
+            "method_identity": "sqlobject.exeprocnon(string)",
+            "mode": "stored_procedure",
+            "parameter_types": [
+              "string"
+            ],
+            "required_parameter_count": 1,
+            "sink": "ExecuteNonQuery"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.exeprocnon(string,int)",
+            "mode": "stored_procedure",
+            "parameter_types": [
+              "string",
+              "int"
+            ],
+            "required_parameter_count": 2,
+            "sink": "ExecuteNonQuery"
+          }
+        ],
+        "ExeProcRead": [
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.exeprocread(string,system.data.sqlclient.sqlparameter[])",
+            "mode": "stored_procedure",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "sink": "ExecuteReader"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.exeprocread(string,system.data.sqlclient.sqlparameter)",
+            "mode": "stored_procedure",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter"
+            ],
+            "required_parameter_count": 2,
+            "sink": "ExecuteReader"
+          }
+        ],
+        "GetFirstValue": [
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 1,
+            "method_identity": "sqlobject.getfirstvalue(string)",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string"
+            ],
+            "required_parameter_count": 1,
+            "sink": "ExecuteScalar"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.getfirstvalue(string,system.data.sqlclient.sqlparameter[])",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter[]"
+            ],
+            "required_parameter_count": 2,
+            "sink": "ExecuteScalar"
+          },
+          {
+            "argument_roles": {
+              "command_text": 0
+            },
+            "connection_behavior_boundary": "wrapper_connection",
+            "method_arity": 2,
+            "method_identity": "sqlobject.getfirstvalue(string,system.data.sqlclient.sqlparameter)",
+            "mode": "inline_sql",
+            "parameter_types": [
+              "string",
+              "system.data.sqlclient.sqlparameter"
+            ],
+            "required_parameter_count": 2,
+            "sink": "ExecuteScalar"
+          }
+        ]
+      },
+      "receiver_types": [
+        "SQLObject"
+      ],
+      "signature_version": "contract-behavior-v1",
+      "status": "accepted"
+    },
     "sqlobject-4195c73e585b": {
       "behavior_signature": {
         "operations": [
