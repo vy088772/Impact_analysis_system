@@ -689,6 +689,7 @@ class CacheFreshnessRow(BaseModel):
     system_id: str = ""
     repo: str = ""
     paths: List[str] = Field(default_factory=list)
+    locked_reason: str = ""  # the failure of the last Environment Check that locks this row; empty when none
 
 
 class CacheFreshnessSystem(BaseModel):
@@ -701,6 +702,33 @@ class CacheFreshnessResponse(BaseModel):
 
     systems: List[CacheFreshnessSystem] = Field(default_factory=list)
     source_checked_at: Optional[str] = None  # time of the last `behind_source` check; None before the first
+
+
+class EnvironmentCheckRequest(BaseModel):
+    """POST /environment/check: the scan account of each SQL server (ADR-0010), keyed as in "update all"."""
+
+    sql_credentials: Dict[str, SqlCredentialOverride] = Field(default_factory=dict)
+
+
+class EnvironmentCapability(BaseModel):
+    """One Update Capability that the Impact service tests, for one target.
+
+    capability: sql_server (target: a server of the Database Registry) | azure_repos (target: a
+    remote host, `dev.azure.com/<org>/<project>`). reason and locks are empty when ok is true.
+    """
+
+    capability: Literal["sql_server", "azure_repos"]
+    target: str
+    ok: bool
+    reason: str = ""
+    locks: str = ""
+
+
+class EnvironmentCheckResponse(BaseModel):
+    """The last Environment Check of the Impact service; checked_at is None before the first check."""
+
+    checked_at: Optional[str] = None
+    capabilities: List[EnvironmentCapability] = Field(default_factory=list)
 
 
 class DerivationProgressEntry(BaseModel):

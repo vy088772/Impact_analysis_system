@@ -20,7 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
-from . import refresh_queue, repo_manager, scan_store, source_check, sql_cache_store
+from . import environment_check, refresh_queue, repo_manager, scan_store, source_check, sql_cache_store
 from .schemas import RefreshRequest, RefreshSqlRequest, UpdateAllRequest
 
 CURRENT = "current"
@@ -48,6 +48,7 @@ def _row(
     label: str,
     has_usable_cache: bool,
     last_scanned_at: Optional[str],
+    locked_reason: str,
     behind_source: bool = False,
     **identity: Any,
 ) -> dict[str, Any]:
@@ -59,6 +60,7 @@ def _row(
         "freshness": _state(has_usable_cache, last_job, behind_source),
         "last_scanned_at": last_scanned_at,
         "last_job": last_job,
+        "locked_reason": locked_reason,
         **identity,
     }
 
@@ -76,6 +78,7 @@ def sql_row(server: str, database: str) -> Optional[dict[str, Any]]:
         label=identity.database,
         has_usable_cache=usable,
         last_scanned_at=sql_cache_store.cached_saved_at(identity),
+        locked_reason=environment_check.sql_lock_reason(identity.server),
         server=identity.server,
         database=identity.database,
     )
@@ -113,6 +116,7 @@ def csharp_row(
         label=system_id,
         has_usable_cache=usable,
         last_scanned_at=min((stamp for stamp in saved if stamp), default=None),
+        locked_reason=environment_check.csharp_lock_reason(source),
         behind_source=usable and source is not None and _is_behind_source(source, roots),
         system_id=system_id,
         repo=str((source or {}).get("repo") or "").strip(),
@@ -196,14 +200,16 @@ def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
 def update_all_requests(
     catalog_systems: Iterable[dict], req: UpdateAllRequest
 ) -> List[RefreshSqlRequest | RefreshRequest]:
-    """The refresh request of each `outdated` cache, in catalog order, one per shared cache."""
+    """The refresh request of each `outdated` cache, in catalog order, one per shared cache.
+
+    A row that the last Environment Check locks gets no request."""
     catalog = list(catalog_systems)
     azure_of = {str(system.get("system_id") or "").strip(): azure_source_of(system) or {} for system in catalog}
     requests: List[RefreshSqlRequest | RefreshRequest] = []
     seen: set[str] = set()
     for system in list_by_system(catalog):
         for row in system["caches"]:
-            if row["freshness"] != OUTDATED or row["key"] in seen:
+            if row["freshness"] != OUTDATED or row["locked_reason"] or row["key"] in seen:
                 continue
             seen.add(row["key"])
             if row["kind"] == "sql":

@@ -42,17 +42,25 @@ def _key_of(source: dict) -> tuple[str, str, str]:
     return (str(source.get("project") or ""), str(source.get("repo") or ""), _branch_of(source))
 
 
-def fetch_remote_head(source: dict) -> Optional[str]:
-    """The head commit of the remote branch of `source`, or None when it cannot be read.
+def remote_url(source: dict) -> str:
+    """The Azure Repos URL of the repository of `source`."""
+    project, repo, _ = _key_of(source)
+    org = settings.AZURE_DEVOPS_ORG
+    return f"https://dev.azure.com/{org}/{quote(project, safe='')}/_git/{quote(repo, safe='')}"
 
-    Tests replace this function with a fake remote."""
-    org, pat = settings.AZURE_DEVOPS_ORG, settings.AZURE_DEVOPS_PAT
-    project, repo, branch = _key_of(source)
-    if not (org and pat and project and repo):
-        return None
-    url = f"https://dev.azure.com/{org}/{quote(project, safe='')}/_git/{quote(repo, safe='')}"
+
+def can_ask_remote(source: dict) -> bool:
+    """True when the settings and `source` name enough to ask the remote."""
+    project, repo, _ = _key_of(source)
+    return bool(settings.AZURE_DEVOPS_ORG and settings.AZURE_DEVOPS_PAT and project and repo)
+
+
+def ls_remote(source: dict, timeout: float = _LS_REMOTE_TIMEOUT_SECONDS) -> subprocess.CompletedProcess:
+    """Run `git ls-remote` for the branch of `source`. A timeout or a missing git raises.
+
+    The caller first makes sure that `can_ask_remote(source)` is true."""
     # The PAT travels in the environment, not in the command line (`ps` shows arguments).
-    token = base64.b64encode(f":{pat}".encode()).decode()
+    token = base64.b64encode(f":{settings.AZURE_DEVOPS_PAT}".encode()).decode()
     env = {
         **os.environ,
         "GIT_TERMINAL_PROMPT": "0",
@@ -60,14 +68,24 @@ def fetch_remote_head(source: dict) -> Optional[str]:
         "GIT_CONFIG_KEY_0": "http.extraheader",
         "GIT_CONFIG_VALUE_0": f"Authorization: Basic {token}",
     }
+    return subprocess.run(
+        ["git", "ls-remote", remote_url(source), f"refs/heads/{_branch_of(source)}"],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+    )
+
+
+def fetch_remote_head(source: dict) -> Optional[str]:
+    """The head commit of the remote branch of `source`, or None when it cannot be read.
+
+    Tests replace this function with a fake remote."""
+    if not can_ask_remote(source):
+        return None
+    project, repo, _ = _key_of(source)
     try:
-        result = subprocess.run(
-            ["git", "ls-remote", url, f"refs/heads/{branch}"],
-            capture_output=True,
-            text=True,
-            timeout=_LS_REMOTE_TIMEOUT_SECONDS,
-            env=env,
-        )
+        result = ls_remote(source)
     except Exception as exc:  # timeout, git missing: this repository keeps no head
         logger.warning("ls-remote of %s/%s failed: %s", project, repo, type(exc).__name__)
         return None

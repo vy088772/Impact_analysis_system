@@ -25,6 +25,9 @@
     POST /refresh_jobs/update_all → UpdateAllResponse（為每一份 outdated 快取提交一個 Refresh Job）
     GET  /refresh_jobs/{job_id} → RefreshJobResponse（狀態、排隊位置、進度、結果）
     POST /refresh_jobs/{job_id}/cancel → RefreshJobResponse（取消 waiting 的 job）
+    GET  /environment → EnvironmentCheckResponse（最後一次 Environment Check 的結果；唯讀）
+    POST /environment/check → EnvironmentCheckResponse（測試每台 SQL Server 與每個 Azure Repos
+                        遠端主機，保留結果；失敗的目標鎖住它的 SQL 列與 C# 列）
     POST /wrapper_contracts/accept → WrapperContractAcceptanceResponse（reviewed
                          proposal 的 preview 或明確 apply）
     POST /find_by_sp  → FindBySPResponse（反查哪些程式呼叫了指定 SP，純比對已
@@ -47,7 +50,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Callable, Union
+from typing import AsyncIterator, Callable, Optional, Union
 
 from fastapi import FastAPI, HTTPException
 
@@ -79,12 +82,15 @@ from .schemas import (
     PathEvidenceResponse,
     ScanRecordEntry,
     ScanRecordListResponse,
+    EnvironmentCheckRequest,
+    EnvironmentCheckResponse,
 )
 from . import (
     analyze_service,
     cache_freshness,
     contract_acceptance,
     derivation_progress,
+    environment_check,
     evidence_refresh,
     refresh_progress,
     refresh_queue,
@@ -184,8 +190,15 @@ def _csharp_cache_key(req: RefreshRequest) -> str:
     return refresh_queue.csharp_key(str(root) for root in peek_scan_roots(_source_dict(req)))
 
 
+def _refuse_locked(locked_reason: str) -> None:
+    """A Refresh Job for a row that the last Environment Check locks starts nothing: HTTP 409."""
+    if locked_reason:
+        raise HTTPException(status_code=409, detail=locked_reason)
+
+
 def _submit_csharp_job(req: RefreshRequest) -> RefreshJobResponse:
     key = _csharp_cache_key(req)
+    _refuse_locked(environment_check.csharp_lock_reason(_source_dict(req)))
     snapshot = refresh_queue.shared_queue.submit(
         key=key,
         kind="csharp",
@@ -382,6 +395,7 @@ def _submit_sql_job(req: RefreshSqlRequest) -> RefreshJobResponse:
         key = refresh_queue.sql_key(sql_cache_store.CacheIdentity.of(req.server, req.db_name).key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _refuse_locked(environment_check.sql_lock_reason(sql_cache_store.normalize_server(req.server)))
 
     def run(report: Callable[..., None]) -> dict:
         return analyze_service.refresh_sql_source(
@@ -478,6 +492,23 @@ def check_behind_source() -> CacheFreshnessResponse:
     catalog = _catalog()
     source_check.check(cache_freshness.sources_of(catalog))
     return _freshness_response(catalog)
+
+
+@app.get("/environment", response_model=EnvironmentCheckResponse)
+def read_environment() -> EnvironmentCheckResponse:
+    """The last Environment Check of this service; `checked_at` is None before the first check."""
+    return EnvironmentCheckResponse(**environment_check.result())
+
+
+@app.post("/environment/check", response_model=EnvironmentCheckResponse)
+def check_environment(req: Optional[EnvironmentCheckRequest] = None) -> EnvironmentCheckResponse:
+    """Run the Environment Check now (`llamaindex-spec-rag` ADR-0020) and return the new result.
+
+    It logs in to each server of the Database Registry with a short login time limit, and runs
+    `git ls-remote` one time for each remote host of the catalog. The result locks the SQL rows of
+    a failed server and the C# rows of a failed host, until the next check."""
+    credentials = (req or EnvironmentCheckRequest()).sql_credentials
+    return EnvironmentCheckResponse(**environment_check.run(_catalog(), credentials))
 
 
 @app.get("/derivation_progress", response_model=DerivationProgressResponse)

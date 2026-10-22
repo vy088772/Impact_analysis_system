@@ -212,7 +212,7 @@
         "type": "object"
       },
       "CacheFreshnessRow": {
-        "description": "One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.\n\nkind \"sql\" carries `server` and `database`; kind \"csharp\" carries `system_id`.\nfreshness: current | outdated | refreshing | behind_source.\nlast_scanned_at is the time on the cache's meta file; None when the cache was never scanned.\nlast_job is None for a cache that never had a Refresh Job in this service run.",
+        "description": "One cache of one system: its Cache Freshness, last scan time, and last Refresh Job.\n\nkind \"sql\" carries `server` and `database`; kind \"csharp\" carries `system_id`, plus\n`repo` and `paths` (the catalog folders it scans; empty means the whole repository).\nfreshness: current | outdated | refreshing | behind_source.\nlast_scanned_at is the time on the cache's meta file; None when the cache was never scanned.\nlast_job is None for a cache that never had a Refresh Job in this service run.",
         "properties": {
           "database": {
             "default": "",
@@ -259,6 +259,23 @@
               }
             ],
             "title": "Last Scanned At"
+          },
+          "locked_reason": {
+            "default": "",
+            "title": "Locked Reason",
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Paths",
+            "type": "array"
+          },
+          "repo": {
+            "default": "",
+            "title": "Repo",
+            "type": "string"
           },
           "server": {
             "default": "",
@@ -2228,6 +2245,83 @@
         "additionalProperties": false,
         "properties": {},
         "title": "EmptyPathCounts",
+        "type": "object"
+      },
+      "EnvironmentCapability": {
+        "description": "One Update Capability that the Impact service tests, for one target.\n\ncapability: sql_server (target: a server of the Database Registry) | azure_repos (target: a\nremote host, `dev.azure.com/<org>/<project>`). reason and locks are empty when ok is true.",
+        "properties": {
+          "capability": {
+            "enum": [
+              "sql_server",
+              "azure_repos"
+            ],
+            "title": "Capability",
+            "type": "string"
+          },
+          "locks": {
+            "default": "",
+            "title": "Locks",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "target",
+          "ok"
+        ],
+        "title": "EnvironmentCapability",
+        "type": "object"
+      },
+      "EnvironmentCheckRequest": {
+        "description": "POST /environment/check: the scan account of each SQL server (ADR-0010), keyed as in \"update all\".",
+        "properties": {
+          "sql_credentials": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SqlCredentialOverride"
+            },
+            "title": "Sql Credentials",
+            "type": "object"
+          }
+        },
+        "title": "EnvironmentCheckRequest",
+        "type": "object"
+      },
+      "EnvironmentCheckResponse": {
+        "description": "The last Environment Check of the Impact service; checked_at is None before the first check.",
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentCapability"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          }
+        },
+        "title": "EnvironmentCheckResponse",
         "type": "object"
       },
       "ExecutionPath": {
@@ -6250,6 +6344,71 @@
           }
         },
         "summary": "Read Derivation Progress"
+      }
+    },
+    "/environment": {
+      "get": {
+        "description": "The last Environment Check of this service; `checked_at` is None before the first check.",
+        "operationId": "read_environment_environment_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Environment"
+      }
+    },
+    "/environment/check": {
+      "post": {
+        "description": "Run the Environment Check now (`llamaindex-spec-rag` ADR-0020) and return the new result.\n\nIt logs in to each server of the Database Registry with a short login time limit, and runs\n`git ls-remote` one time for each remote host of the catalog. The result locks the SQL rows of\na failed server and the C# rows of a failed host, until the next check.",
+        "operationId": "check_environment_environment_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EnvironmentCheckRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Req"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check Environment"
       }
     },
     "/find_by_sp": {
