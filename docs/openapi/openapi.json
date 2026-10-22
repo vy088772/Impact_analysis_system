@@ -5760,7 +5760,7 @@
         "type": "object"
       },
       "UpdateCapabilityResult": {
-        "description": "The Environment Check result of one Update Capability, for one target.\n\ncapability: sql_server (target: a server of the Database Registry) | azure_repos (target: a\nremote host, `dev.azure.com/<org>/<project>`). reason and locks are empty when ok is true.",
+        "description": "The Environment Check result of one Update Capability, for one target.\n\ncapability: sql_server (target: a server of the Database Registry) | azure_repos (target: a\nrepository of the catalog, `<project>/<repo>`). reason and locks are empty when ok is true.",
         "properties": {
           "capability": {
             "enum": [
@@ -6344,7 +6344,7 @@
     },
     "/environment/check": {
       "post": {
-        "description": "Run the Environment Check now (`llamaindex-spec-rag` ADR-0020) and return the new result.\n\nIt logs in to each server of the Database Registry (and of the catalog) with a short login time limit, and runs\n`git ls-remote` one time for each remote host of the catalog. The result locks the SQL rows of\na failed server and the C# rows of a failed host, until the next check.",
+        "description": "Run the Environment Check now (`llamaindex-spec-rag` ADR-0020) and return the new result.\n\nIt logs in to each server of the Database Registry (and of the catalog) with a short login time limit, and runs\n`git ls-remote` one time for each repository of the catalog. The result locks the SQL rows of\na failed server and the C# rows of a failed repository, until the next check.",
         "operationId": "check_environment_environment_check_post",
         "requestBody": {
           "content": {

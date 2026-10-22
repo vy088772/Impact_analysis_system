@@ -26,7 +26,7 @@
     GET  /refresh_jobs/{job_id} → RefreshJobResponse（狀態、排隊位置、進度、結果）
     POST /refresh_jobs/{job_id}/cancel → RefreshJobResponse（取消 waiting 的 job）
     POST /environment/check → EnvironmentCheckResponse（測試每台 SQL Server 與每個 Azure Repos
-                        遠端主機，保留結果；失敗的目標鎖住它的 SQL 列與 C# 列）
+                        repository，保留結果；失敗的目標鎖住它的 SQL 列與 C# 列）
     POST /wrapper_contracts/accept → WrapperContractAcceptanceResponse（reviewed
                          proposal 的 preview 或明確 apply）
     POST /find_by_sp  → FindBySPResponse（反查哪些程式呼叫了指定 SP，純比對已
@@ -498,8 +498,8 @@ def check_environment(req: Optional[EnvironmentCheckRequest] = None) -> Environm
     """Run the Environment Check now (`llamaindex-spec-rag` ADR-0020) and return the new result.
 
     It logs in to each server of the Database Registry (and of the catalog) with a short login time limit, and runs
-    `git ls-remote` one time for each remote host of the catalog. The result locks the SQL rows of
-    a failed server and the C# rows of a failed host, until the next check."""
+    `git ls-remote` one time for each repository of the catalog. The result locks the SQL rows of
+    a failed server and the C# rows of a failed repository, until the next check."""
     credentials = (req or EnvironmentCheckRequest()).sql_credentials
     registry = system_targets.load_database_registry(system_targets.default_spec_rag_root())
     return environment_check.run(registry, _catalog(), credentials)

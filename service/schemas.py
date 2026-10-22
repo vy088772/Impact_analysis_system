@@ -714,7 +714,7 @@ class UpdateCapabilityResult(BaseModel):
     """The Environment Check result of one Update Capability, for one target.
 
     capability: sql_server (target: a server of the Database Registry) | azure_repos (target: a
-    remote host, `dev.azure.com/<org>/<project>`). reason and locks are empty when ok is true.
+    repository of the catalog, `<project>/<repo>`). reason and locks are empty when ok is true.
     """
 
     capability: Literal["sql_server", "azure_repos"]

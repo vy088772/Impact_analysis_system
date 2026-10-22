@@ -3,12 +3,12 @@
 The web asks for it when it starts and when the maintainer asks to check again
 (`llamaindex-spec-rag` ADR-0020: each Update Capability is tested in the process that makes the
 connection). The check logs in to each server of the Database Registry with a short login time
-limit, and runs `git ls-remote` one time for each remote host, against the first repository of that
-host. A remote host is one Azure DevOps project (`source_check.remote_host`), because the catalog
-puts every repository under one organization.
+limit, and runs `git ls-remote` one time for each repository of the catalog, with at most
+`GIT_AT_ONCE` of them at one time. A failure of one repository locks the C# rows of that
+repository only.
 
 The service keeps the failures of the last check in memory. A SQL row of a failed server and a C#
-row of a failed host get that failure as their lock reason: the service refuses their Refresh Jobs,
+row of a failed repository get that failure as their lock reason: the service refuses their Refresh Jobs,
 and "update all" skips them. Before the first check, and after a restart, nothing is locked.
 
 Each probe returns None when it passes, or a plain reason when it fails. Tests replace the probes.
@@ -16,6 +16,7 @@ Each probe returns None when it passes, or a plain reason when it fails. Tests r
 
 from __future__ import annotations
 
+import math
 import subprocess
 import threading
 import time
@@ -30,6 +31,8 @@ from .schemas import EnvironmentCheckResponse, SqlCredentialOverride, UpdateCapa
 
 SQL_LOGIN_TIMEOUT_SECONDS = 5
 GIT_TIMEOUT_SECONDS = 15
+# 30 repositories take about 1 second at 8 at one time (measured 2026-10-22), well under the SQL limit.
+GIT_AT_ONCE = 8
 # A probe that runs past its limit plus this margin fails, even when its own time limit did not work.
 _MARGIN_SECONDS = 3
 
@@ -102,7 +105,8 @@ class _Probe:
     target: str
     label: str  # the resource name in a reason
     locks: str  # the rows that a failure locks
-    time_limit: float
+    time_limit: float  # the limit of one probe, for its reason
+    wait: float  # how long the check waits for it, from the start; a queued probe starts late
     run: Callable[[], Optional[str]]
 
 
@@ -123,12 +127,26 @@ def _servers(
     return servers
 
 
-def _hosts(catalog: Iterable[dict]) -> dict[str, dict]:
-    """Each remote host of the catalog: its first repository."""
-    hosts: dict[str, dict] = {}
+def repository_target(source: dict) -> str:
+    """The target of a repository in a result: `<project>/<repo>`, as the catalog writes it."""
+    return f"{str(source.get('project') or '').strip()}/{str(source.get('repo') or '').strip()}"
+
+
+def _lock_key(target: str) -> str:
+    # Azure DevOps project and repository names ignore case.
+    return target.casefold()
+
+
+def _repositories(catalog: Iterable[dict]) -> dict[str, dict]:
+    """Each repository of the catalog, one time also when several systems share it."""
+    repositories: dict[str, dict] = {}
+    seen: set[str] = set()
     for source in system_targets.sources_of(catalog):
-        hosts.setdefault(source_check.remote_host(source), source)
-    return hosts
+        target = repository_target(source)
+        if _lock_key(target) not in seen:
+            seen.add(_lock_key(target))
+            repositories[target] = source
+    return repositories
 
 
 def _probes(
@@ -141,15 +159,24 @@ def _probes(
         account = sql_credentials.get(target) or SqlCredentialOverride()
         probes.append(
             _Probe(
-                "sql_server", target, "SQL Server", f"{target} 的 SQL 列", SQL_LOGIN_TIMEOUT_SECONDS,
+                "sql_server", target, "SQL Server", f"{target} 的 SQL 列",
+                SQL_LOGIN_TIMEOUT_SECONDS, SQL_LOGIN_TIMEOUT_SECONDS + _MARGIN_SECONDS,
                 lambda s=server, d=database, a=account: probe_sql_server(s, d, a.db_user_id, a.db_password),
             )
         )
-    for target, source in _hosts(catalog).items():
+    repositories = _repositories(catalog)
+    at_once = threading.Semaphore(GIT_AT_ONCE)
+    git_wait = math.ceil(len(repositories) / GIT_AT_ONCE) * GIT_TIMEOUT_SECONDS + _MARGIN_SECONDS
+
+    def git_probe(source: dict) -> Optional[str]:
+        with at_once:
+            return probe_azure_repos(source)
+
+    for target, source in repositories.items():
         probes.append(
             _Probe(
-                "azure_repos", target, "Azure Repos", f"{target} 的 C# 列", GIT_TIMEOUT_SECONDS,
-                lambda s=source: probe_azure_repos(s),
+                "azure_repos", target, "Azure Repos", f"{target} 的 C# 列",
+                GIT_TIMEOUT_SECONDS, git_wait, lambda s=source: git_probe(s),
             )
         )
     return probes
@@ -177,7 +204,7 @@ def run(
     items = []
     last = LastCheck()
     for index, (probe, thread) in enumerate(zip(probes, threads)):
-        thread.join(max(0.0, started + probe.time_limit + _MARGIN_SECONDS - time.monotonic()))
+        thread.join(max(0.0, started + probe.wait - time.monotonic()))
         reason = _no_answer(probe.label, probe.time_limit) if thread.is_alive() else outcomes[index]
         items.append(
             UpdateCapabilityResult(
@@ -189,7 +216,7 @@ def run(
             )
         )
         if reason is not None:
-            last.locks.setdefault(probe.capability, {})[probe.target] = reason
+            last.locks.setdefault(probe.capability, {})[_lock_key(probe.target)] = reason
     global _last
     with _lock:
         _last = last
@@ -201,7 +228,7 @@ def run(
 def sql_lock_reason(server: str) -> str:
     """The lock reason of the SQL rows of `server` (normalized), or an empty text."""
     with _lock:
-        return _last.locks.get("sql_server", {}).get(server, "")
+        return _last.locks.get("sql_server", {}).get(_lock_key(server), "")
 
 
 def csharp_lock_reason(source: Optional[dict]) -> str:
@@ -209,4 +236,4 @@ def csharp_lock_reason(source: Optional[dict]) -> str:
     if source is None:
         return ""
     with _lock:
-        return _last.locks.get("azure_repos", {}).get(source_check.remote_host(source), "")
+        return _last.locks.get("azure_repos", {}).get(_lock_key(repository_target(source)), "")

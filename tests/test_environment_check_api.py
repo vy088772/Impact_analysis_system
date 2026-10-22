@@ -38,6 +38,9 @@ class FakeProbes:
         self.git_calls: list[str] = []
         self.blocked_servers: set[str] = set()
         self.release = threading.Event()
+        self.git_running = 0
+        self.git_most_at_once = 0
+        self._git_lock = threading.Lock()
 
     def sql(self, server: str, database: str, user_id: str, password: str) -> Optional[str]:
         self.sql_calls.append((server, database, user_id, password))
@@ -46,7 +49,13 @@ class FakeProbes:
         return self.sql_failures.get(server)
 
     def git(self, source: dict) -> Optional[str]:
-        self.git_calls.append(source["repo"])
+        with self._git_lock:
+            self.git_calls.append(source["repo"])
+            self.git_running += 1
+            self.git_most_at_once = max(self.git_most_at_once, self.git_running)
+        threading.Event().wait(0.02)
+        with self._git_lock:
+            self.git_running -= 1
         return self.git_failures.get(source["repo"])
 
 
@@ -63,7 +72,7 @@ def probes(monkeypatch):
 
 @pytest.fixture
 def two_hosts(world):
-    """Two SQL servers and two Azure DevOps projects (two remote hosts)."""
+    """Two SQL servers, and three repositories in two Azure DevOps projects. Delta shares AlphaRepo."""
     catalog = {
         "systems": [
             {
@@ -83,6 +92,11 @@ def two_hosts(world):
                 "system_id": "Gamma",
                 "azure": {"project": "Q", "repo": "GammaRepo", "branch": "", "path": ""},
                 "databases": [{"name": "SharedDb", "server": SERVER_B}],
+            },
+            {
+                "system_id": "Delta",
+                "azure": {"project": "P", "repo": "AlphaRepo", "branch": "", "path": "Delta"},
+                "databases": [],
             },
             {"system_id": "NoCode", "azure": {"project": "", "repo": ""}, "databases": []},
         ]
@@ -123,18 +137,18 @@ def items_of(result: dict, capability: str) -> dict[str, dict]:
     return {item["target"]: item for item in result["capabilities"] if item["capability"] == capability}
 
 
-def test_the_check_gives_one_item_for_each_server_and_each_remote_host(two_hosts, probes) -> None:
+def test_the_check_gives_one_item_for_each_server_and_each_repository(two_hosts, probes) -> None:
     result = check()
 
     assert result["checked_at"]
     servers = items_of(result, "sql_server")
-    hosts = items_of(result, "azure_repos")
+    repositories = items_of(result, "azure_repos")
     assert set(servers) == {SERVER_A, SERVER_B}
-    assert set(hosts) == {"dev.azure.com/org/p", "dev.azure.com/org/q"}
-    for item in [*servers.values(), *hosts.values()]:
+    assert set(repositories) == {"P/AlphaRepo", "P/BetaRepo", "Q/GammaRepo"}
+    for item in [*servers.values(), *repositories.values()]:
         assert item == {**item, "ok": True, "reason": "", "locks": ""}
-    # One git ls-remote for each host, against the first repository of that host.
-    assert sorted(probes.git_calls) == ["AlphaRepo", "GammaRepo"]
+    # One git ls-remote for each repository, also when two systems share it.
+    assert sorted(probes.git_calls) == ["AlphaRepo", "BetaRepo", "GammaRepo"]
     assert sorted(call[0] for call in probes.sql_calls) == [SERVER_A, SERVER_B]
 
 
@@ -153,15 +167,28 @@ def test_a_server_that_does_not_answer_in_the_time_limit_fails_and_the_other_ser
     assert servers[SERVER_B]["ok"] is True
 
 
-def test_a_host_whose_ls_remote_fails_fails_and_the_other_host_keeps_its_result(two_hosts, probes) -> None:
-    probes.git_failures = {"GammaRepo": "git ls-remote 失敗：Authentication failed"}
+def test_a_repository_whose_ls_remote_fails_fails_and_the_other_repositories_keep_their_result(
+    two_hosts, probes
+) -> None:
+    probes.git_failures = {"AlphaRepo": "git ls-remote 失敗：repository not found"}
 
-    hosts = items_of(check(), "azure_repos")
+    repositories = items_of(check(), "azure_repos")
 
-    assert hosts["dev.azure.com/org/q"]["ok"] is False
-    assert hosts["dev.azure.com/org/q"]["reason"] == "git ls-remote 失敗：Authentication failed"
-    assert hosts["dev.azure.com/org/q"]["locks"] == "dev.azure.com/org/q 的 C# 列"
-    assert hosts["dev.azure.com/org/p"]["ok"] is True
+    assert repositories["P/AlphaRepo"]["ok"] is False
+    assert repositories["P/AlphaRepo"]["reason"] == "git ls-remote 失敗：repository not found"
+    assert repositories["P/AlphaRepo"]["locks"] == "P/AlphaRepo 的 C# 列"
+    # BetaRepo is in the same project, and keeps its own result.
+    assert repositories["P/BetaRepo"]["ok"] is True
+    assert repositories["Q/GammaRepo"]["ok"] is True
+
+
+def test_the_check_runs_at_most_a_few_git_ls_remote_at_one_time(two_hosts, probes, monkeypatch) -> None:
+    monkeypatch.setattr(environment_check, "GIT_AT_ONCE", 2)
+
+    repositories = items_of(check(), "azure_repos")
+
+    assert all(item["ok"] for item in repositories.values())
+    assert probes.git_most_at_once == 2
 
 
 def lock_listing() -> dict[str, dict[str, str]]:
@@ -173,7 +200,7 @@ def lock_listing() -> dict[str, dict[str, str]]:
     }
 
 
-def test_the_listing_locks_the_sql_rows_of_a_failed_server_and_the_csharp_rows_of_a_failed_host(
+def test_the_listing_locks_the_sql_rows_of_a_failed_server_and_the_csharp_rows_of_a_failed_repository(
     two_hosts, probes
 ) -> None:
     probes.sql_failures = {SERVER_B: "SQL Server 拒絕這個登入帳號"}
@@ -183,8 +210,9 @@ def test_the_listing_locks_the_sql_rows_of_a_failed_server_and_the_csharp_rows_o
     locks = lock_listing()
 
     assert locks["Alpha"] == {"Alpha": "這台機器沒有 git", "AlphaDb": "", "SharedDb": "SQL Server 拒絕這個登入帳號"}
-    # Beta shares the host of Alpha: the failure of that host locks it too.
-    assert locks["Beta"] == {"Beta": "這台機器沒有 git", "BetaDb": ""}
+    # Delta scans another folder of AlphaRepo: the failure of that repository locks it too.
+    assert locks["Delta"] == {"Delta": "這台機器沒有 git"}
+    assert locks["Beta"] == {"Beta": "", "BetaDb": ""}
     assert locks["Gamma"] == {"Gamma": "", "SharedDb": "SQL Server 拒絕這個登入帳號"}
 
 
@@ -230,12 +258,12 @@ def test_a_refresh_job_for_a_locked_row_gets_409_with_the_reason_and_no_job_star
     )
     csharp = client.post(
         "/refresh_jobs",
-        json={"kind": "csharp", "csharp": {"system": "Beta", "source": {"project": "P", "repo": "BetaRepo"}}},
+        json={"kind": "csharp", "csharp": {"system": "Alpha", "source": {"project": "P", "repo": "AlphaRepo"}}},
     )
     direct = client.post("/refresh_sql", json={"database": "BetaDb", "server": SERVER_A, "db_name": "BetaDb"})
     other_case = client.post(
         "/refresh_jobs",
-        json={"kind": "csharp", "csharp": {"system": "Alpha", "source": {"project": "p", "repo": "AlphaRepo"}}},
+        json={"kind": "csharp", "csharp": {"system": "Alpha", "source": {"project": "p", "repo": "alpharepo"}}},
     )
 
     assert (sql.status_code, sql.json()["detail"]) == (409, "SQL Server 拒絕這個登入帳號")
@@ -244,7 +272,7 @@ def test_a_refresh_job_for_a_locked_row_gets_409_with_the_reason_and_no_job_star
     assert other_case.status_code == 409
     allowed = client.post(
         "/refresh_jobs",
-        json={"kind": "csharp", "csharp": {"system": "Gamma", "source": {"project": "Q", "repo": "GammaRepo"}}},
+        json={"kind": "csharp", "csharp": {"system": "Beta", "source": {"project": "P", "repo": "BetaRepo"}}},
     )
     assert allowed.status_code == 200
     wait_for(allowed.json()["job_id"], "succeeded")
@@ -267,7 +295,11 @@ def test_update_all_skips_locked_rows_and_still_submits_the_other_outdated_rows(
     jobs = response.json()["jobs"]
     keys = sorted(job["key"] for job in jobs)
     assert keys == sorted(
-        [f"sql:{SERVER_B}__SharedDb", "csharp:" + str(scan_root_of("Q", "GammaRepo"))]
+        [
+            f"sql:{SERVER_B}__SharedDb",
+            "csharp:" + str(scan_root_of("P", "BetaRepo")),
+            "csharp:" + str(scan_root_of("Q", "GammaRepo")),
+        ]
     )
     for job in jobs:
         wait_for(job["job_id"], "succeeded", "failed")
