@@ -55,12 +55,15 @@ def load_system_catalog(spec_rag_root: Path) -> List[dict]:
     return [item for item in systems if isinstance(item, dict)] if isinstance(systems, list) else []
 
 
+def has_repository(source: object) -> bool:
+    """A source names a repository. A source without one has no C# Scan Result."""
+    return isinstance(source, dict) and bool(str(source.get("repo") or "").strip())
+
+
 def azure_source_of(system: dict) -> Optional[dict]:
     """The Azure source of a catalog system, or None when the system has no repository."""
     azure = system.get("azure") or {}
-    if isinstance(azure, dict) and str(azure.get("repo") or "").strip():
-        return azure
-    return None
+    return azure if has_repository(azure) else None
 
 
 def sources_of(catalog_systems: Iterable[dict]) -> List[dict]:

@@ -31,6 +31,15 @@ class Unusable:
 
 
 @dataclass(frozen=True)
+class NoRepository:
+    """The request's source names no repository, so it has no scan root.
+
+    Such a system has no C# Scan Result, so there is no cache to report. The handler answers
+    with an empty result, never `skipped` and never `outdated`.
+    """
+
+
+@dataclass(frozen=True)
 class RequestContext:
     roots: list[Path]
     scans: list[ProjectScanResult]
@@ -66,32 +75,30 @@ def build_request_context(
     cache_store: CacheStore,
     check_identity: Callable[[CacheIdentityResult], None] | None = None,
     check_roots: Callable[[list[Path]], None] | None = None,
-) -> RequestContext | Skipped | Unusable:
+) -> RequestContext | Skipped | Unusable | NoRepository:
     """Look up the identity, apply the handler's refusal, then read the scans.
 
     A question never rebuilds a cache (ADR-0045): ``request.refresh`` neither scans nor pulls here.
+    A source without a repository returns NoRepository, or Unusable for its SQL cache.
     A cache-only miss returns Skipped before root resolution or reading.
     A C# Scan Result or a SQL cache that is `outdated` or `refreshing` returns Unusable.
     The context retains the raw identity result; an ambiguous result has no scope identity.
     """
-    database = getattr(request, "database", "")
     identity = cache_identity_of(request, cache_store)
     if check_identity is not None:
         check_identity(identity)
     source = scan_store.resolve_source(request)
     # Paths only: a question never clones, pulls or scans (ADR-0045).
     roots = scan_store.peek_scan_roots(source)
-    if getattr(request, "cache_only", False):
+    if roots and getattr(request, "cache_only", False):
         gate = _unusable_candidates(scan_store, roots)
         if gate is not None:
             return gate
     if check_roots is not None:
         check_roots(roots)
-    # A request that names no Database reads no SQL cache, so it has no SQL cache to report.
-    sql_report = (
-        cache_freshness.sql_unusable(identity)
-        if database.strip() and isinstance(identity, CacheIdentity) else None
-    )
+    sql_report = _sql_report(getattr(request, "database", ""), identity)
+    if not roots:
+        return Unusable([sql_report]) if sql_report is not None else NoRepository()
     refreshing = cache_freshness.csharp_refreshing(roots)
     if refreshing is not None or sql_report is not None:
         return Unusable([report for report in (refreshing, sql_report) if report is not None])
@@ -107,6 +114,16 @@ def build_request_context(
         request, roots, identity if isinstance(identity, CacheIdentity) else None
     )
     return RequestContext(roots, scans, scan, root, identity, scope)
+
+
+def _sql_report(database: str, identity: CacheIdentityResult) -> dict | None:
+    """The `outdated` or `refreshing` report of the request's SQL cache, or None.
+
+    A request that names no Database reads no SQL cache, so it has no SQL cache to report.
+    """
+    if database.strip() and isinstance(identity, CacheIdentity):
+        return cache_freshness.sql_unusable(identity)
+    return None
 
 
 def _unusable_candidates(scan_store: ScanStore, candidates: list[Path]) -> Unusable | Skipped | None:

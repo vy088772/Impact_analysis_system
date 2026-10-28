@@ -90,7 +90,7 @@ from .reference_expander import expand_related_programs
 from .repo_manager import repo_dir, resolve_scan_roots
 from .scan_store import ScanOutdated, cache_status, cached_commit, read_scan, rebuild_scan, save_scan
 from . import cache_freshness, sql_cache_store
-from .request_context import Skipped, Unusable, build_request_context, merge_scans as _merge_scans
+from .request_context import NoRepository, Skipped, Unusable, build_request_context, merge_scans as _merge_scans
 from .request_context_adapters import CacheIdentityResult, CacheStore, RealCacheStore, RealScanStore, ScanStore
 from .derived_execution_evidence import (
     DerivedExecutionEvidence,
@@ -1662,6 +1662,8 @@ def analyze(
     )
     if isinstance(context, Unusable):
         return AnalyzeResponse(programs=[], not_found=[], source_root="", unusable_caches=context.caches)
+    if isinstance(context, NoRepository):
+        return AnalyzeResponse(programs=[], not_found=[], source_root="")
     assert not isinstance(context, Skipped)
     found = context.sql_cache_identity
     sql_cache_identity = found if isinstance(found, sql_cache_store.CacheIdentity) else None
@@ -2144,6 +2146,8 @@ def find_by_sp(
         return FindBySPResponse(sp_name=sp_name, matches=[], unusable_caches=context.caches)
     if isinstance(context, Skipped):
         return FindBySPResponse(sp_name=sp_name, matches=[], skipped=True)
+    if isinstance(context, NoRepository):
+        return FindBySPResponse(sp_name=sp_name, matches=[])
     scans, scan, root = context.scans, context.scan, context.root
     sql_cache_identity = context.scope.sql_cache_identity
 
@@ -2278,6 +2282,8 @@ def find_by_table(
         return FindByTableResponse(table_name=table_name, matches=[], unusable_caches=context.caches)
     if isinstance(context, Skipped):
         return FindByTableResponse(table_name=table_name, matches=[], skipped=True)
+    if isinstance(context, NoRepository):
+        return FindByTableResponse(table_name=table_name, matches=[])
     scans, scan, root = context.scans, context.scan, context.root
     scope = context.scope
     sql_cache_identity = scope.sql_cache_identity
@@ -2605,6 +2611,8 @@ def flow_chain(
         return FlowChainResponse(direction=req.direction, unusable_caches=context.caches)
     if isinstance(context, Skipped):
         return FlowChainResponse(direction=req.direction, skipped=True)
+    if isinstance(context, NoRepository):
+        return FlowChainResponse(direction=req.direction)
     scans, scan, root = context.scans, context.scan, context.root
     sql_cache_identity = context.scope.sql_cache_identity
     scope = context.scope

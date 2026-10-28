@@ -123,7 +123,7 @@ _Avoid_: unresolved label, plain string, legacy string
 The record that one SQL Cache Identity was actually scanned, and when — written beside the scan results at save time. It is the only record that a scan happened; the caller's Database Registry records which Databases *should* exist, never whether any were scanned, so the two are read separately and can never disagree. See `llamaindex-spec-rag`'s [ADR-0005](../llamaindex-spec-rag/docs/adr/0005-registry-records-intent-cache-metadata-records-fact.md).
 
 **C# Scan Result**:
-The saved result of one C# project scan, which the scan store writes under `data/scan_cache`. `llamaindex-spec-rag` reads it with a restricted unpickler that admits only a fixed list of classes. It is not a Scan Record. A Scan Record describes one SQL cache, and a C# Scan Result describes one C# project.
+The saved result of one C# project scan, which the scan store writes under `data/scan_cache`. `llamaindex-spec-rag` reads it with a restricted unpickler that admits only a fixed list of classes. It is not a Scan Record. A Scan Record describes one SQL cache, and a C# Scan Result describes one C# project. A source without a repository (an empty `repo`) has no C# Scan Result: a question about it reads no scan and reports no `csharp` cache, never `skipped` and never `outdated`, the same as the update page.
 _Avoid_: scan record, scan cache entry
 
 **Uncataloged Database**:

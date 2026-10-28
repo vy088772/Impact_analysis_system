@@ -7,6 +7,7 @@ from typing import Protocol
 from code_analyzer.project_scanner import ProjectScanResult
 from . import repo_manager, scan_store, sql_cache_store
 from .scan_store import ScanOutdated
+from .system_targets import has_repository
 
 CacheIdentityResult = sql_cache_store.CacheIdentity | sql_cache_store.AmbiguousServer | None
 Source = dict[str, str | list[str]]
@@ -36,6 +37,10 @@ class RealScanStore:
         }
 
     def peek_scan_roots(self, source: Source) -> list[Path]:
+        # The update page's rule: a source without a repository has no scan root, so no
+        # C# Scan Result. `repo_manager` would name a `default` folder for it.
+        if not has_repository(source):
+            return []
         return repo_manager.peek_scan_roots(source)
 
     def read_scan(self, root: Path) -> ProjectScanResult:
