@@ -306,3 +306,53 @@ def test_the_check_connects_to_the_catalog_address_so_a_named_instance_connects(
     check()
 
     assert reader.calls == [(identity, ScanConnection("dbhost\\NAMED"))]
+
+
+# Ticket 03: the check uses the scan account of each server (ADR-0010).
+
+
+def test_the_check_gives_the_reader_the_scan_account_of_its_server(world, sql_root, reader) -> None:
+    write_sql(sql_root, "AlphaDb", fingerprint=procedures(3))
+
+    response = client.post(
+        "/cache_freshness/check",
+        json={"sql_credentials": {SERVER: {"db_user_id": "scan", "db_password": "secret"}}},
+    )
+
+    assert response.status_code == 200
+    assert reader.calls == [(CacheIdentity.of(SERVER, "AlphaDb"), ScanConnection(SERVER, "scan", "secret"))]
+
+
+def test_a_server_with_no_override_gets_no_override(world, sql_root, reader) -> None:
+    write_sql(sql_root, "AlphaDb", fingerprint=procedures(3))
+
+    response = client.post(
+        "/cache_freshness/check",
+        json={"sql_credentials": {"otherhost": {"db_user_id": "scan", "db_password": "secret"}}},
+    )
+
+    assert response.status_code == 200
+    assert reader.calls == [(CacheIdentity.of(SERVER, "AlphaDb"), ScanConnection(SERVER))]
+
+
+def test_a_named_instance_gets_the_override_of_its_server_as_the_row_shows_it(world, sql_root, reader) -> None:
+    catalog = {
+        "systems": [
+            {
+                "system_id": "Named",
+                "azure": {"project": "", "repo": ""},
+                "databases": [{"name": "AlphaDb", "server": "dbhost\\NAMED"}],
+            }
+        ]
+    }
+    (world / "spec_rag" / "catalog" / "system_catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
+    identity = CacheIdentity.of("dbhost\\NAMED", "AlphaDb")
+    write_cache(sql_root, identity, sql_payload("AlphaDb"), fingerprint=procedures(3))
+
+    response = client.post(
+        "/cache_freshness/check",
+        json={"sql_credentials": {identity.server: {"db_user_id": "scan", "db_password": "secret"}}},
+    )
+
+    assert response.status_code == 200
+    assert reader.calls == [(identity, ScanConnection("dbhost\\NAMED", "scan", "secret"))]

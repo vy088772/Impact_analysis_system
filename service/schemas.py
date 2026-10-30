@@ -704,6 +704,15 @@ class CacheFreshnessResponse(BaseModel):
     source_checked_at: Optional[str] = None  # time of the last `behind_source` check; None before the first
 
 
+class CacheFreshnessCheckRequest(BaseModel):
+    """POST /cache_freshness/check: the scan account of each SQL server (ADR-0010), keyed as in "update all".
+
+    The check reads each Fingerprint with the account that a refresh of that server uses. A server
+    with no key reads with the global scan account."""
+
+    sql_credentials: Dict[str, SqlCredentialOverride] = Field(default_factory=dict)
+
+
 class EnvironmentCheckRequest(BaseModel):
     """POST /environment/check: the scan account of each SQL server (ADR-0010), keyed as in "update all"."""
 

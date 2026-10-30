@@ -21,11 +21,11 @@ under each system.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from . import environment_check, refresh_queue, repo_manager, scan_store, source_check, sql_cache_store
 from .system_targets import azure_source_of, declared_databases
-from .schemas import RefreshRequest, RefreshSqlRequest, UpdateAllRequest
+from .schemas import RefreshRequest, RefreshSqlRequest, SqlCredentialOverride, UpdateAllRequest
 
 CURRENT = "current"
 OUTDATED = "outdated"
@@ -105,12 +105,16 @@ def _sql_is_behind_source(identity: sql_cache_store.CacheIdentity) -> bool:
 
 def sql_check_targets(
     catalog_systems: Iterable[dict],
+    sql_credentials: Optional[Mapping[str, SqlCredentialOverride]] = None,
 ) -> Dict[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection]:
     """The SQL caches that the `behind_source` check reads, each with its Scan Connection: each
     declared cache that is usable and not locked, one time each (a shared cache too).
 
     The Scan Connection holds the server of the catalog, as a refresh of the cache does, so a
-    named instance (`host\\instance`) connects. It holds the global scan account."""
+    named instance (`host\\instance`) connects. It holds the scan account override of the server
+    from `sql_credentials`, keyed by the `server` of a listing row, as in "update all" (ADR-0010).
+    A server with no key gets the global scan account."""
+    credentials = sql_credentials or {}
     targets: dict[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection] = {}
     for system in catalog_systems:
         for server, database in declared_databases(system):
@@ -121,7 +125,8 @@ def sql_check_targets(
             if identity in targets or environment_check.sql_lock_reason(identity.server):
                 continue
             if sql_cache_store.load_cached(identity) is not None:
-                targets[identity] = sql_cache_store.ScanConnection(server)
+                account = credentials.get(identity.server) or SqlCredentialOverride()
+                targets[identity] = sql_cache_store.ScanConnection(server, account.db_user_id, account.db_password)
     return targets
 
 

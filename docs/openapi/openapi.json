@@ -186,6 +186,20 @@
         "title": "AzureSource",
         "type": "object"
       },
+      "CacheFreshnessCheckRequest": {
+        "description": "POST /cache_freshness/check: the scan account of each SQL server (ADR-0010), keyed as in \"update all\".\n\nThe check reads each Fingerprint with the account that a refresh of that server uses. A server\nwith no key reads with the global scan account.",
+        "properties": {
+          "sql_credentials": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SqlCredentialOverride"
+            },
+            "title": "Sql Credentials",
+            "type": "object"
+          }
+        },
+        "title": "CacheFreshnessCheckRequest",
+        "type": "object"
+      },
       "CacheFreshnessResponse": {
         "description": "GET /cache_freshness: every cache of every catalog system, grouped by system.",
         "properties": {
@@ -6306,8 +6320,25 @@
     },
     "/cache_freshness/check": {
       "post": {
-        "description": "Run the `behind_source` check now and return the new listing (Impact ADR-0045).\n\nOnly the update page calls this: when it opens, and when the analyst asks to check again.\nIt asks each remote repository for its branch head (no clone, no pull). It reads the current\nFingerprint of each usable, unlocked SQL cache from the system catalog of its Database (no\ndefinitions). A question never does.",
+        "description": "Run the `behind_source` check now and return the new listing (Impact ADR-0045).\n\nOnly the update page calls this: when it opens, and when the analyst asks to check again.\nIt asks each remote repository for its branch head (no clone, no pull). It reads the current\nFingerprint of each usable, unlocked SQL cache from the system catalog of its Database (no\ndefinitions), with the scan account that a refresh of that server uses (ADR-0010). The body\nis optional: with no body, every server uses the global scan account. A question never does.",
         "operationId": "check_behind_source_cache_freshness_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CacheFreshnessCheckRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Req"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -6318,6 +6349,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Check Behind Source"
