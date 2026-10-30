@@ -138,12 +138,22 @@ def _is_excluded_schema(schema: str) -> bool:
 
 
 def _listing_query() -> str:
+    """One query for the four kinds. Each kind keeps the `sys.objects` scope of its
+    Fingerprint kind group: no object that SQL Server ships, and only the object
+    types of the group (so no CLR procedure or CLR function). The scope of the scan
+    then equals the scope of the Fingerprint.
+    """
     selects = []
     for kind, view, schema_column, name_column, condition in _LISTING_KINDS:
-        where = f" WHERE {condition}" if condition else ""
+        object_types = ", ".join(f"'{object_type}'" for object_type in sql_fingerprint.object_types_of(kind))
+        conditions = [condition] if condition else []
+        conditions += ["o.is_ms_shipped = 0", f"o.type IN ({object_types})"]
         selects.append(
-            f"SELECT '{kind}' AS kind, {schema_column} AS schema_name, "
-            f"{name_column} AS object_name FROM {view}{where}"
+            f"SELECT '{kind}' AS kind, l.{schema_column} AS schema_name, "
+            f"l.{name_column} AS object_name FROM {view} AS l "
+            f"JOIN sys.objects AS o ON o.object_id = "
+            f"OBJECT_ID(QUOTENAME(l.{schema_column}) + '.' + QUOTENAME(l.{name_column})) "
+            f"WHERE {' AND '.join(conditions)}"
         )
     return (
         "SELECT kind, schema_name, object_name FROM (\n"

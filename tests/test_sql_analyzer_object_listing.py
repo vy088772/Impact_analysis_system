@@ -198,3 +198,33 @@ def test_a_typed_menu_name_needs_one_match_across_the_listed_schemas() -> None:
     assert _match_typed_procedure(procedures, "[COMMON].[usp_Load]") == procedures[0]
     assert _match_typed_procedure(procedures, "USP_SAVE") == procedures[2]
     assert _match_typed_procedure(procedures, "sales.usp_Save") is None
+
+
+def _listing_selects(cursor: ListingCursor) -> List[str]:
+    return [query for query, _ in cursor.executed if "UNION ALL" in query][0].split("UNION ALL")
+
+
+def test_the_listing_drops_the_objects_that_sql_server_ships() -> None:
+    analyzer, cursor = _analyzer([])
+
+    analyzer.list_objects()
+
+    # The scan holds no shipped object, so the Fingerprint can drop them too.
+    for select in _listing_selects(cursor):
+        assert "is_ms_shipped = 0" in select
+
+
+def test_the_listing_keeps_only_the_object_types_of_the_fingerprint_kind_groups() -> None:
+    analyzer, cursor = _analyzer([])
+
+    analyzer.list_objects()
+
+    # The scope of the scan equals the scope of the Fingerprint: a CLR procedure
+    # (`PC`) or a CLR function (`FS`, `FT`) is in neither.
+    selects = {select.split("'")[1]: select for select in _listing_selects(cursor)}
+    assert "IN ('P')" in selects["procedures"]
+    assert "IN ('V')" in selects["views"]
+    assert "IN ('FN', 'IF', 'TF')" in selects["functions"]
+    assert "IN ('U')" in selects["tables"]
+    for clr_type in ("'PC'", "'FS'", "'FT'"):
+        assert all(clr_type not in select for select in selects.values())

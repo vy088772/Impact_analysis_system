@@ -114,7 +114,7 @@ def sql_check_targets(
     named instance (`host\\instance`) connects. It holds the scan account override of the server
     from `sql_credentials`, keyed by the `server` of a listing row, as in "update all" (ADR-0010).
     A server with no key gets the global scan account."""
-    credentials = sql_credentials or {}
+    scan_accounts = sql_credentials or {}
     targets: dict[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection] = {}
     for system in catalog_systems:
         for server, database in declared_databases(system):
@@ -125,7 +125,7 @@ def sql_check_targets(
             if identity in targets or environment_check.sql_lock_reason(identity.server):
                 continue
             if sql_cache_store.load_cached(identity) is not None:
-                account = credentials.get(identity.server) or SqlCredentialOverride()
+                account = scan_accounts.get(identity.server) or SqlCredentialOverride()
                 targets[identity] = sql_cache_store.ScanConnection(server, account.db_user_id, account.db_password)
     return targets
 

@@ -465,11 +465,10 @@ def cached_saved_at(identity: CacheIdentity) -> Optional[str]:
 
 
 def cached_fingerprint(identity: CacheIdentity) -> Optional[Fingerprint]:
-    """The recorded Fingerprint in the Scan Record of this cache, or None.
+    """這份快取的 Scan Record 記錄的 Fingerprint；沒有時是 None。
 
-    None when the Scan Record is missing, holds null (the scan could not read one),
-    or holds a malformed value. Like cached_saved_at(), it reads the meta file only
-    and never connects.
+    Scan Record 不存在、記的是 null（scan 讀不到 Fingerprint）、或格式壞掉時，
+    都回傳 None。與 cached_saved_at() 一樣，只讀 meta 檔，從不連線。
     """
     _, meta_path = _paths(identity)
     try:
@@ -481,13 +480,12 @@ def cached_fingerprint(identity: CacheIdentity) -> Optional[Fingerprint]:
 
 @dataclass(frozen=True)
 class ScanConnection:
-    """How a scan reaches the SQL Server of one cache: the address and the scan account override.
+    """scan 怎麼連到一份快取的 SQL Server：連線位址與掃描帳密覆寫。
 
-    server is the connection address exactly as the caller gives it. It can differ
-    from CacheIdentity.server, because normalization drops a named instance
-    (`host\\instance`) and the connection must still reach that instance.
-    user_id/password are the scan account override of this server. Both must hold
-    a value; otherwise the global DB_AUTH_MODE identity applies (ADR-0010).
+    server 是呼叫端給的連線位址，原樣保留。它可以和 CacheIdentity.server 不同：
+    正規化會去掉 named instance（`host\\instance`），但連線仍要連到那個 instance。
+    user_id/password 是這台伺服器的掃描帳密覆寫，兩個都有值才生效；
+    否則用全域的 DB_AUTH_MODE 身分（ADR-0010）。
     """
 
     server: str
@@ -508,29 +506,29 @@ def _sql_analyzer(identity: CacheIdentity, connection: ScanConnection) -> "SQLAn
 
 
 def read_fingerprint(identity: CacheIdentity, connection: ScanConnection) -> Optional[Fingerprint]:
-    """Read the current Fingerprint of one SQL cache from the system catalog of SQL Server.
+    """從 SQL Server 的系統目錄讀一份 SQL 快取目前的 Fingerprint。
 
-    This is the one reader of a Fingerprint: the scan and the `behind_source`
-    check both call it. It reads `sys.objects` only, and never a definition.
+    這是唯一讀 Fingerprint 的地方：scan 與 `behind_source` 檢查都呼叫它。
+    它只讀 `sys.objects`，從不讀定義。
 
-    Returns None when it cannot connect or when the query fails. A caller then
-    knows nothing about the Database, and that is not a change.
+    連不上或查詢失敗時回傳 None。呼叫端這時對這個 Database 一無所知，
+    這不算變更。
     """
     db = identity.database
-    connected = None
+    open_analyzer = None
     try:
         analyzer = _sql_analyzer(identity, connection)
         if not analyzer.connect():
             return None
-        connected = analyzer
+        open_analyzer = analyzer
         return analyzer.read_fingerprint()
     except Exception as exc:
         print(f"⚠️  無法讀取 Fingerprint（非致命）：{db}：{exc}")
         return None
     finally:
-        if connected is not None:
+        if open_analyzer is not None:
             try:
-                connected.disconnect()
+                open_analyzer.disconnect()
             except Exception:
                 pass
 
@@ -554,8 +552,8 @@ def write_meta(
 
     路徑由 identity 決定，寫到哪裡跟記錄的身分不可能對不上。_save() 與測試的
     快取 fixture 共用這一個出口。saved_at 照傳照寫、不補值。fingerprint 是 scan
-    開始時讀到的 Fingerprint；讀不到時記 null，
-    之後的 `behind_source` 檢查不把 null 當成變更。
+    開始時讀到的 Fingerprint；讀不到時記 null，之後的 `behind_source` 檢查
+    不把 null 當成變更。
     """
     _, meta_path = _paths(identity)
     meta_path.write_text(
@@ -812,8 +810,8 @@ def get_or_dump(
 
     print(f"🔍 連線 SQL Server 重新撈取物件定義：{db}")
     _report_progress(progress_callback, "connecting", 0, 1, db)
-    # The Fingerprint comes before any definition: a change during the scan then
-    # makes the recorded Fingerprint older than the content, never newer.
+    # 先讀 Fingerprint 再讀定義：scan 期間的變更只會讓記錄的 Fingerprint 比內容舊，
+    # 不會比內容新。
     fingerprint = read_fingerprint(identity, connection)
     analyzer = _sql_analyzer(identity, connection)
     if not analyzer.connect():

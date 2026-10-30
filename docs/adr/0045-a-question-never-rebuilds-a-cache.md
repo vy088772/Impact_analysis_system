@@ -13,7 +13,7 @@ A question never rebuilds a SQL cache or a C# Scan Result. Only a Refresh Job re
 
 When a question needs a cache with the Cache Freshness `outdated` or `refreshing`, the run does not read that cache. The run lists the system as an Unread System with the reason `cache_outdated` or `cache_refreshing`, and the answer links to the update page. When a Pinned System has such a cache, the run stops before it starts, and spends no LLM tokens. When every system that the run needs has such a cache, the answer only tells the analyst which systems to update.
 
-A `behind_source` cache does not block a question. The answer stays correct for the scanned commit.
+A `behind_source` cache does not block a question. The answer stays correct for the scanned state: the scanned commit of a C# Scan Result, or the scanned Database of a SQL cache.
 
 Derived Execution Evidence is not a cache that an analyst refreshes. Each Refresh Job derives it as its last step. A change to one of the three configuration inputs of Derived Execution Evidence starts a Refresh Job automatically. If a question still finds no valid Derived Execution Evidence, the question derives it and shows a progress stage. This exception is acceptable because a derivation reads the existing caches only. It never scans a repository or connects to SQL Server.
 
@@ -29,7 +29,7 @@ Derived Execution Evidence is not a cache that an analyst refreshes. Each Refres
 - An analyst can cancel a waiting Refresh Job. An analyst cannot stop a running Refresh Job, because a stop can leave a partly written cache.
 - A failed Refresh Job keeps the previous Cache Freshness. The update page shows the last error. The Refresh Queue does not retry.
 - The Refresh Queue lives in memory. A restart of the Impact service drops the waiting Refresh Jobs.
-- The update page checks for `behind_source` when an analyst opens it, and again when the analyst asks for a new check. The page shows the time of the last check. A question never checks the remote repository.
+- The update page checks for `behind_source` when an analyst opens it, and again when the analyst asks for a new check. The page shows the time of the last check. A question never runs this check. It never reads a remote repository or the Fingerprint of a Database.
 - An "update all" action submits a Refresh Job for each `outdated` cache. It does not include a `behind_source` cache. An analyst submits each `behind_source` cache alone.
 - Any later proposal to rebuild a cache inside a question reverses this ADR and needs its own ADR.
 

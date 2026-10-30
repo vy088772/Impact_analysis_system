@@ -492,9 +492,9 @@ def check_behind_source(req: Optional[CacheFreshnessCheckRequest] = None) -> Cac
     definitions), with the scan account that a refresh of that server uses (ADR-0010). A question
     never runs this check. The body is optional: with no body, every server uses the global scan
     account."""
-    credentials = (req or CacheFreshnessCheckRequest()).sql_credentials
+    scan_accounts = (req or CacheFreshnessCheckRequest()).sql_credentials
     catalog = _catalog()
-    source_check.check(system_targets.sources_of(catalog), cache_freshness.sql_check_targets(catalog, credentials))
+    source_check.check(system_targets.sources_of(catalog), cache_freshness.sql_check_targets(catalog, scan_accounts))
     return _freshness_response(catalog)
 
 

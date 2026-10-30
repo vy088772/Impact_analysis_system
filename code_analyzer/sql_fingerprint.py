@@ -37,6 +37,11 @@ def object_types() -> Tuple[str, ...]:
     return tuple(object_type for _, group_types in KIND_GROUPS for object_type in group_types)
 
 
+def object_types_of(kind: str) -> Tuple[str, ...]:
+    """The `sys.objects.type` values of one kind group."""
+    return dict(KIND_GROUPS)[kind]
+
+
 @dataclass(frozen=True)
 class FingerprintEntry:
     """One kind group: the object count and the latest `modify_date` (None when the group is empty)."""
@@ -92,5 +97,7 @@ class Fingerprint:
 
 
 # The kind groups and the fields of a Fingerprint are one list: a rename of one
-# without the other fails at import, not in a scan.
-assert [kind for kind, _ in KIND_GROUPS] == [entry.name for entry in fields(Fingerprint)]
+# without the other fails at import, not in a scan. An `if`, not an `assert`, so
+# that `python -O` keeps the check.
+if [kind for kind, _ in KIND_GROUPS] != [entry.name for entry in fields(Fingerprint)]:
+    raise RuntimeError("KIND_GROUPS and the fields of Fingerprint differ")
