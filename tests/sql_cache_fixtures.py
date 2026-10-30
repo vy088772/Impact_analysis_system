@@ -355,6 +355,29 @@ END;
     )
 
 
+# One kind group of a Fingerprint: (object count, latest ``modify_date`` text).
+FingerprintGroup = tuple[int, str]
+
+
+def fingerprint(
+    *,
+    procedures: FingerprintGroup = (0, ""),
+    views: FingerprintGroup = (0, ""),
+    functions: FingerprintGroup = (0, ""),
+    tables: FingerprintGroup = (0, ""),
+) -> dict:
+    """Build one Fingerprint: the object count and the latest time of each kind group.
+
+    A group that the caller does not name has no objects: a count of zero and an
+    empty latest time.
+    """
+    groups = {"procedures": procedures, "views": views, "functions": functions, "tables": tables}
+    return {
+        kind: {"count": count, "latest_modified": latest_modified}
+        for kind, (count, latest_modified) in groups.items()
+    }
+
+
 _SAVED_AT = "2026-08-04 13:29:13"
 
 
@@ -363,12 +386,14 @@ def write_cache(
     identity: CacheIdentity,
     payload: dict,
     cache_version: int | None = None,
+    fingerprint: Optional[dict] = None,
 ) -> None:
     """Write one cache file pair under ``identity``, as a refresh names it.
 
     The cache store's own meta writer writes the meta file, so the meta format
     stays defined in one place. ``cache_version`` replaces the version in that
     file, for a test that needs a cache from another format version.
+    ``fingerprint`` is the recorded Fingerprint, from ``fingerprint()``.
     """
     # The meta writer writes under settings.SQL_CACHE_ROOT, so both files land
     # in one directory only when cache_root is that root (a CacheRoot gives it).
@@ -376,7 +401,7 @@ def write_cache(
     (cache_root / identity.filename).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    sql_cache_store.write_meta(identity, _SAVED_AT)
+    sql_cache_store.write_meta(identity, _SAVED_AT, fingerprint)
     meta_path = cache_root / identity.meta_filename
     if cache_version is not None:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))

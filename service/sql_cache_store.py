@@ -55,7 +55,10 @@ from config.settings import settings
 # v11：one cache holds one Database. The cache identity and the filename lose the
 # schema part, and the meta file and the Object Location Index lose their `schema`
 # field. A cache written under a three-part filename never loads again.
-_SQL_CACHE_VERSION = 11
+# v12：the Scan Record holds the Fingerprint of the Database beside `saved_at`
+# (`.scratch/sql-cache-behind-source/`). Every older cache lists as `outdated`
+# one time, and its rescan records a Fingerprint.
+_SQL_CACHE_VERSION = 12
 
 # Object Location Index 自己的格式版本，跟上面的快取版本各管各的檔案：索引的形狀
 # 換了、快取的形狀沒換時，只有這一個常數往上加。
@@ -457,24 +460,82 @@ def cached_saved_at(identity: CacheIdentity) -> Optional[str]:
         return None
 
 
-def _meta_payload(identity: CacheIdentity, saved_at: str) -> Dict[str, object]:
+# A Fingerprint: for each kind group (procedures, views, functions, tables), the
+# object count and the latest `modify_date` (see SQLAnalyzer.read_fingerprint()).
+Fingerprint = Dict[str, Dict[str, object]]
+
+
+def read_fingerprint(
+    identity: CacheIdentity,
+    *,
+    user_id: str = "",
+    password: str = "",
+    connection_server: Optional[str] = None,
+) -> Optional[Fingerprint]:
+    """Read the current Fingerprint of one SQL cache from the system catalog of SQL Server.
+
+    The one reader of a Fingerprint: the scan and the `behind_source` check both
+    call it. It reads `sys.objects` only, and never a definition.
+
+    user_id/password：the scan account override of this server, the same as a
+    refresh (ADR-0010). connection_server：the address to connect to, when it
+    differs from identity.server (a named instance); with none, identity.server.
+
+    Returns None when it cannot connect or when the query fails. A caller then
+    knows nothing about the Database, which is not a change.
+    """
+    from code_analyzer.sql_analyzer import SQLAnalyzer
+
+    db = identity.database
+    try:
+        analyzer = SQLAnalyzer(
+            db,
+            server=connection_server or identity.server,
+            database_name=db,
+            user_id=user_id,
+            password=password,
+        )
+        if not analyzer.connect():
+            return None
+    except Exception as exc:
+        print(f"⚠️  無法讀取 Fingerprint（非致命）：{db}：{exc}")
+        return None
+    try:
+        return analyzer.read_fingerprint()
+    except Exception as exc:
+        print(f"⚠️  無法讀取 Fingerprint（非致命）：{db}：{exc}")
+        return None
+    finally:
+        try:
+            analyzer.disconnect()
+        except Exception:
+            pass
+
+
+def _meta_payload(
+    identity: CacheIdentity, saved_at: str, fingerprint: Optional[Fingerprint]
+) -> Dict[str, object]:
     return {
         "cache_version": _SQL_CACHE_VERSION,
         "server": identity.server,
         "database": identity.database,
         "saved_at": saved_at,
+        "fingerprint": fingerprint,
     }
 
 
-def write_meta(identity: CacheIdentity, saved_at: str) -> None:
+def write_meta(
+    identity: CacheIdentity, saved_at: str, fingerprint: Optional[Fingerprint] = None
+) -> None:
     """把 identity 的 meta 檔寫到它自己的路徑。meta 格式只在這裡定義一次。
 
     路徑由 identity 決定，寫到哪裡跟記錄的身分不可能對不上。_save() 與測試的
-    快取 fixture 共用這一個出口。saved_at 照傳照寫、不補值。
+    快取 fixture 共用這一個出口。saved_at 照傳照寫、不補值。fingerprint 是 scan
+    開始時讀到的 Fingerprint；讀不到時記 None。
     """
     _, meta_path = _paths(identity)
     meta_path.write_text(
-        json.dumps(_meta_payload(identity, saved_at), ensure_ascii=False, indent=2),
+        json.dumps(_meta_payload(identity, saved_at, fingerprint), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -668,13 +729,13 @@ def _load(identity: CacheIdentity) -> Optional[Dict]:
         return None
 
 
-def _save(identity: CacheIdentity, data: Dict) -> None:
+def _save(identity: CacheIdentity, data: Dict, fingerprint: Optional[Fingerprint] = None) -> None:
     data_path, _meta_path = _paths(identity)
     try:
         data_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        write_meta(identity, time.strftime("%Y-%m-%d %H:%M:%S"))
+        write_meta(identity, time.strftime("%Y-%m-%d %H:%M:%S"), fingerprint)
     except Exception as exc:  # 寫檔失敗不致命
         print(f"⚠️  SQL 快取寫出失敗（非致命）：{exc}")
         return
@@ -734,6 +795,11 @@ def get_or_dump(
 
     print(f"🔍 連線 SQL Server 重新撈取物件定義：{db}")
     _report_progress(progress_callback, "connecting", 0, 1, db)
+    # The Fingerprint comes before any definition: a change during the scan then
+    # makes the recorded Fingerprint older than the content, never newer.
+    fingerprint = read_fingerprint(
+        identity, user_id=user_id, password=password, connection_server=connection_server
+    )
     from code_analyzer.sql_analyzer import SQLAnalyzer
 
     analyzer = SQLAnalyzer(
@@ -765,7 +831,7 @@ def get_or_dump(
         )
     _retain_in_mem_cache(identity, data)
     _report_progress(progress_callback, "saving", 0, 1, "SQL cache")
-    _save(identity, data)
+    _save(identity, data, fingerprint)
     _report_progress(progress_callback, "saving", 1, 1, "SQL cache")
     return data
 

@@ -151,6 +151,48 @@ def _listing_query() -> str:
     )
 
 
+# The kind groups of a Fingerprint: (kind, the `sys.objects.type` values of the group).
+# The kind values are the keys the cache payload already uses, as in `_LISTING_KINDS`.
+_FINGERPRINT_KINDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("procedures", ("P",)),
+    ("views", ("V",)),
+    ("functions", ("FN", "IF", "TF")),
+    ("tables", ("U",)),
+)
+
+
+def _fingerprint_query() -> str:
+    """One row for each (kind group, schema): the object count and the latest `modify_date`.
+
+    The query reads `sys.objects` of the connected Database only, and drops the
+    objects that SQL Server ships. The excluded-schema rule runs over the
+    returned rows, the same rule as the object listing.
+    """
+    cases = "\n".join(
+        f"        WHEN o.type IN ({', '.join(repr(t) for t in types)}) THEN '{kind}'"
+        for kind, types in _FINGERPRINT_KINDS
+    )
+    all_types = ", ".join(repr(t) for _, types in _FINGERPRINT_KINDS for t in types)
+    return (
+        "SELECT grouped.kind, grouped.schema_name, COUNT(*) AS object_count, "
+        "MAX(grouped.modify_date) AS latest_modified FROM (\n"
+        "    SELECT CASE\n"
+        f"{cases}\n"
+        "    END AS kind, s.name AS schema_name, o.modify_date\n"
+        "    FROM sys.objects AS o\n"
+        "    JOIN sys.schemas AS s ON s.schema_id = o.schema_id\n"
+        f"    WHERE o.is_ms_shipped = 0 AND o.type IN ({all_types})\n"
+        ") AS grouped\n"
+        "GROUP BY grouped.kind, grouped.schema_name"
+    )
+
+
+def _fingerprint_time(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="microseconds")
+    return str(value or "")
+
+
 def quote_name(*parts: str) -> str:
     """Bracket each part of a qualified name; a closing bracket inside a part is doubled."""
     return ".".join("[" + part.replace("]", "]]") + "]" for part in parts)
@@ -344,6 +386,27 @@ class SQLAnalyzer:
             if not _is_excluded_schema(row.schema_name)
             and (kind is None or row.kind == kind)
         ]
+
+    def read_fingerprint(self) -> Dict[str, Dict[str, object]]:
+        """Read the Fingerprint of the connected Database from the system catalog.
+
+        The Fingerprint has one entry for each kind group: the object count and
+        the latest `modify_date`. A group with no objects has a count of zero and
+        an empty latest time. The query reads no definition.
+        """
+        self.cursor.execute(_fingerprint_query())
+        counts: Dict[str, int] = {kind: 0 for kind, _ in _FINGERPRINT_KINDS}
+        latest: Dict[str, str] = {kind: "" for kind, _ in _FINGERPRINT_KINDS}
+        for row in self.cursor.fetchall():
+            if row.kind not in counts or _is_excluded_schema(row.schema_name):
+                continue
+            counts[row.kind] += int(row.object_count)
+            # One format for every time, so the text order is the time order.
+            latest[row.kind] = max(latest[row.kind], _fingerprint_time(row.latest_modified))
+        return {
+            kind: {"count": counts[kind], "latest_modified": latest[kind]}
+            for kind, _ in _FINGERPRINT_KINDS
+        }
 
     def _get_native_referenced_tables(self, proc_name: str, schema: str) -> Set[ObjectName]:
         """

@@ -21,6 +21,7 @@ from tests.sql_cache_fixtures import (
     analyzer_operation,
     cache_payload,
     execution_graph,
+    fingerprint,
     write_cache,
 )
 
@@ -155,7 +156,17 @@ def _sample_cache_files() -> dict:
         graph=graph,
     )
     with CacheRoot() as root:
-        write_cache(root, identity, payload)
+        write_cache(
+            root,
+            identity,
+            payload,
+            fingerprint=fingerprint(
+                procedures=(1, "2026-08-04T13:00:00.000000"),
+                views=(1, "2026-08-01T09:30:00.000000"),
+                functions=(1, "2026-07-15T08:00:00.250000"),
+                tables=(2, "2026-08-04T12:45:00.000000"),
+            ),
+        )
         return {
             "data_file": json.loads((root / identity.filename).read_text(encoding="utf-8")),
             "meta_file": json.loads((root / identity.meta_filename).read_text(encoding="utf-8")),
