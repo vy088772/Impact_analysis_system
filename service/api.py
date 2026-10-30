@@ -65,6 +65,7 @@ from .schemas import (
     RefreshSqlResponse,
     RefreshJobRequest,
     RefreshJobResponse,
+    CacheFreshnessCheckRequest,
     CacheFreshnessResponse,
     UpdateAllRequest,
     UpdateAllResponse,
@@ -81,7 +82,6 @@ from .schemas import (
     PathEvidenceResponse,
     ScanRecordEntry,
     ScanRecordListResponse,
-    CacheFreshnessCheckRequest,
     EnvironmentCheckRequest,
     EnvironmentCheckResponse,
 )
@@ -489,8 +489,9 @@ def check_behind_source(req: Optional[CacheFreshnessCheckRequest] = None) -> Cac
     Only the update page calls this: when it opens, and when the analyst asks to check again.
     It asks each remote repository for its branch head (no clone, no pull). It reads the current
     Fingerprint of each usable, unlocked SQL cache from the system catalog of its Database (no
-    definitions), with the scan account that a refresh of that server uses (ADR-0010). The body
-    is optional: with no body, every server uses the global scan account. A question never does."""
+    definitions), with the scan account that a refresh of that server uses (ADR-0010). A question
+    never runs this check. The body is optional: with no body, every server uses the global scan
+    account."""
     credentials = (req or CacheFreshnessCheckRequest()).sql_credentials
     catalog = _catalog()
     source_check.check(system_targets.sources_of(catalog), cache_freshness.sql_check_targets(catalog, credentials))
