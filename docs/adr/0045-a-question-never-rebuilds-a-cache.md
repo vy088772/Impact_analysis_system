@@ -45,9 +45,11 @@ Before this amendment, only a C# Scan Result could be `behind_source`. A person 
 
 The source of a SQL cache is its Database. Each SQL scan reads the Fingerprint of the Database before it reads any definition, and the Scan Record holds it beside `saved_at`. The SQL cache format version 12 adds this field, so every older SQL cache is `outdated` one time.
 
-The decision for the check follows. Ticket 02 of `.scratch/sql-cache-behind-source/` builds it. Until then, a SQL cache is never `behind_source`.
+The decision for the check follows. Ticket 02 of `.scratch/sql-cache-behind-source/` builds it.
 
 - The `behind_source` check also reads the current Fingerprint of each declared SQL cache that is usable and not locked.
 - A SQL cache is `behind_source` when the current Fingerprint differs from the recorded Fingerprint. `outdated` and `refreshing` win over `behind_source`.
 - A missing Fingerprint gives no `behind_source`. This covers no check yet, an unreachable server, a failed query, a locked row, and a null recorded Fingerprint.
 - The rules for C# also apply to SQL. A question never runs the check. A `behind_source` SQL cache does not block a question. "Update all" leaves the cache out.
+- The check reads a shared SQL cache one time. It connects with the address that a refresh of that server uses, so a named instance connects.
+- The service keeps the current Fingerprints in memory with the remote heads, and keeps one check time for both. A restart forgets them.

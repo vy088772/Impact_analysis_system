@@ -486,10 +486,11 @@ def check_behind_source() -> CacheFreshnessResponse:
     """Run the `behind_source` check now and return the new listing (Impact ADR-0045).
 
     Only the update page calls this: when it opens, and when the analyst asks to check again.
-    It asks each remote repository for its branch head (no clone, no pull). A question never
-    does."""
+    It asks each remote repository for its branch head (no clone, no pull). It reads the current
+    Fingerprint of each usable, unlocked SQL cache from the system catalog of its Database (no
+    definitions). A question never does."""
     catalog = _catalog()
-    source_check.check(system_targets.sources_of(catalog))
+    source_check.check(system_targets.sources_of(catalog), cache_freshness.sql_check_targets(catalog))
     return _freshness_response(catalog)
 
 

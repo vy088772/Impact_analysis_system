@@ -8,9 +8,11 @@ from the last remote check (`source_check`).
 - `refreshing`: a Refresh Job for the cache runs now. A waiting job changes nothing.
 - A failed job changes nothing either: the state is the state of the cache on disk.
 - `behind_source`: a usable C# Scan Result whose recorded commit differs from the remote head
-  that the last check found. SQL caches never get it. `outdated` and `refreshing` win.
+  that the last check found, or a usable SQL cache whose recorded Fingerprint differs from the
+  current Fingerprint that the last check read. `outdated` and `refreshing` win.
 
-The module only reads. It never scans, clones, pulls or connects to a database.
+The module only reads. It never scans, clones, pulls or connects to a database. It names the
+SQL caches that the check reads (`sql_check_targets`), but the check itself runs in `source_check`.
 A cache that several systems share is computed once per listing and shows the same state
 under each system.
 """
@@ -80,9 +82,42 @@ def sql_row(server: str, database: str) -> Optional[dict[str, Any]]:
         has_usable_cache=usable,
         last_scanned_at=sql_cache_store.cached_saved_at(identity),
         locked_reason=environment_check.sql_lock_reason(identity.server),
+        behind_source=usable and _sql_is_behind_source(identity),
         server=identity.server,
         database=identity.database,
     )
+
+
+def _sql_is_behind_source(identity: sql_cache_store.CacheIdentity) -> bool:
+    """True when the last check read a current Fingerprint that differs from the recorded one.
+
+    No current Fingerprint (no check, a read failure, a locked row) and no recorded
+    Fingerprint (a scan that could not read one) both give False."""
+    current = source_check.current_fingerprint(identity)
+    if current is None:
+        return False
+    recorded = sql_cache_store.cached_fingerprint(identity)
+    return recorded is not None and recorded != current
+
+
+def sql_check_targets(catalog_systems: Iterable[dict]) -> List[source_check.SqlTarget]:
+    """The SQL caches that the `behind_source` check reads: each declared cache that is usable and
+    not locked, one time each, with the connection address that a refresh of it uses.
+
+    The address is the server of the catalog, so a named instance (`host\\instance`) connects.
+    The account is the global DB_AUTH_MODE identity."""
+    targets: dict[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection] = {}
+    for system in catalog_systems:
+        for server, database in declared_databases(system):
+            try:
+                identity = sql_cache_store.CacheIdentity.of(server, database)
+            except ValueError:
+                continue
+            if identity in targets or environment_check.sql_lock_reason(identity.server):
+                continue
+            if sql_cache_store.load_cached(identity) is not None:
+                targets[identity] = sql_cache_store.ScanConnection(server)
+    return list(targets.items())
 
 
 def _is_behind_source(source: dict, scan_roots: Iterable[Path]) -> bool:

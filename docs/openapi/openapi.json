@@ -6306,7 +6306,7 @@
     },
     "/cache_freshness/check": {
       "post": {
-        "description": "Run the `behind_source` check now and return the new listing (Impact ADR-0045).\n\nOnly the update page calls this: when it opens, and when the analyst asks to check again.\nIt asks each remote repository for its branch head (no clone, no pull). A question never\ndoes.",
+        "description": "Run the `behind_source` check now and return the new listing (Impact ADR-0045).\n\nOnly the update page calls this: when it opens, and when the analyst asks to check again.\nIt asks each remote repository for its branch head (no clone, no pull). It reads the current\nFingerprint of each usable, unlocked SQL cache from the system catalog of its Database (no\ndefinitions). A question never does.",
         "operationId": "check_behind_source_cache_freshness_check_post",
         "responses": {
           "200": {

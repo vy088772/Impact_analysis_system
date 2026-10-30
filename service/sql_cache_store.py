@@ -464,6 +464,21 @@ def cached_saved_at(identity: CacheIdentity) -> Optional[str]:
         return None
 
 
+def cached_fingerprint(identity: CacheIdentity) -> Optional[Fingerprint]:
+    """The recorded Fingerprint in the Scan Record of this cache, or None.
+
+    None when the Scan Record is missing, holds null (the scan could not read one),
+    or holds a malformed value. Like cached_saved_at(), it reads the meta file only
+    and never connects.
+    """
+    _, meta_path = _paths(identity)
+    try:
+        recorded = json.loads(meta_path.read_text(encoding="utf-8")).get("fingerprint")
+        return None if recorded is None else Fingerprint.from_dict(recorded)
+    except Exception:
+        return None
+
+
 @dataclass(frozen=True)
 class ScanConnection:
     """How a scan reaches the SQL Server of one cache: the address and the scan account override.

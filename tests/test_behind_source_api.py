@@ -11,7 +11,7 @@ from typing import Optional
 
 import pytest
 
-from service import analyze_service, scan_store, source_check
+from service import analyze_service, scan_store, source_check, sql_cache_store
 from tests.test_cache_freshness_api import (  # noqa: F401  (fixtures and helpers)
     build_scan,
     client,
@@ -42,6 +42,10 @@ def remote(monkeypatch):
     monkeypatch.setattr(source_check, "fetch_remote_head", fake)
     monkeypatch.setattr(source_check, "_heads", {})
     monkeypatch.setattr(source_check, "_checked_at", None)
+    # The check also reads the Fingerprint of each SQL cache. These tests are about C#:
+    # no Database answers, so no SQL cache is behind_source here.
+    monkeypatch.setattr(sql_cache_store, "read_fingerprint", lambda identity, connection: None)
+    monkeypatch.setattr(source_check, "_fingerprints", {})
     return fake
 
 
@@ -116,7 +120,7 @@ def test_an_unreachable_repository_is_not_behind_source(world, remote) -> None:
     assert row_of(check(), "Alpha", "Alpha")["freshness"] == "current"
 
 
-def test_an_outdated_cache_stays_outdated_and_a_sql_cache_is_never_behind_source(
+def test_an_outdated_cache_stays_outdated_and_a_sql_cache_follows_its_database_not_the_remote(
     world, remote, sql_root
 ) -> None:
     write_sql(sql_root, "AlphaDb")

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from datetime import datetime
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 # (kind group, the `sys.objects.type` values of the group). The kind values are
 # the keys of the SQL cache payload, in the order the dump reports them, and the
@@ -52,6 +52,12 @@ class FingerprintEntry:
         latest = "" if self.latest_modified is None else self.latest_modified.isoformat(timespec="microseconds")
         return {"count": self.count, "latest_modified": latest}
 
+    @classmethod
+    def from_dict(cls, entry: Dict[str, Any]) -> "FingerprintEntry":
+        """The reverse of `to_dict()`. A malformed entry raises."""
+        latest = str(entry["latest_modified"] or "")
+        return cls(count=int(entry["count"]), latest_modified=datetime.fromisoformat(latest) if latest else None)
+
 
 @dataclass(frozen=True)
 class Fingerprint:
@@ -78,6 +84,11 @@ class Fingerprint:
     def to_dict(self) -> Dict[str, Dict[str, object]]:
         """The form the Scan Record holds beside `saved_at`."""
         return {entry.name: getattr(self, entry.name).to_dict() for entry in fields(self)}
+
+    @classmethod
+    def from_dict(cls, recorded: Dict[str, Dict[str, Any]]) -> "Fingerprint":
+        """The reverse of `to_dict()`: the Fingerprint that a Scan Record holds. A malformed form raises."""
+        return cls(**{entry.name: FingerprintEntry.from_dict(recorded[entry.name]) for entry in fields(cls)})
 
 
 # The kind groups and the fields of a Fingerprint are one list: a rename of one
