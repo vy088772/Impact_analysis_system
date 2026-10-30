@@ -22,7 +22,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Mapping, Optional
 from urllib.parse import quote
 
 from code_analyzer.sql_fingerprint import Fingerprint
@@ -103,28 +103,27 @@ def fetch_remote_head(source: dict) -> Optional[str]:
     return fields[0] if fields else None
 
 
-# One SQL cache to check: its identity and the connection that a refresh of it uses.
-SqlTarget = Tuple[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection]
-
-
-def check(sources: Iterable[dict], sql_targets: Iterable[SqlTarget] = ()) -> None:
+def check(
+    sources: Iterable[dict],
+    sql_caches: Optional[Mapping[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection]] = None,
+) -> None:
     """Ask the remote for the head of each distinct repository, read the current Fingerprint of
-    each distinct SQL cache, and keep the answers. A shared SQL cache gets one read."""
+    each SQL cache in `sql_caches` through its Scan Connection, and keep the answers."""
     distinct = {_key_of(source): source for source in sources if source.get("repo")}
     keys = list(distinct)
-    databases: dict[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection] = {}
-    for identity, connection in sql_targets:
-        databases.setdefault(identity, connection)
-    identities = list(databases)
+    connections = dict(sql_caches or {})
+    identities = list(connections)
     with ThreadPoolExecutor(max_workers=_MAX_PARALLEL_CHECKS) as pool:
-        heads = pool.map(lambda key: fetch_remote_head(distinct[key]), keys)
-        # Look the reader up at call time: tests replace it on the module.
-        read = pool.map(lambda identity: sql_cache_store.read_fingerprint(identity, databases[identity]), identities)
-        answers, fingerprints = list(heads), list(read)
+        head_answers = pool.map(lambda key: fetch_remote_head(distinct[key]), keys)
+        # Through the module, as `fetch_remote_head`: tests replace the one reader there.
+        fingerprint_answers = pool.map(
+            lambda identity: sql_cache_store.read_fingerprint(identity, connections[identity]), identities
+        )
+        heads, fingerprints = list(head_answers), list(fingerprint_answers)
     with _lock:
         global _checked_at
         _heads.clear()
-        _heads.update({key: head for key, head in zip(keys, answers) if head})
+        _heads.update({key: head for key, head in zip(keys, heads) if head})
         _fingerprints.clear()
         _fingerprints.update({identity: found for identity, found in zip(identities, fingerprints) if found})
         _checked_at = datetime.now().astimezone().isoformat(timespec="seconds")

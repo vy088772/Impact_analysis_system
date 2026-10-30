@@ -51,5 +51,5 @@ The decision for the check follows. Ticket 02 of `.scratch/sql-cache-behind-sour
 - A SQL cache is `behind_source` when the current Fingerprint differs from the recorded Fingerprint. `outdated` and `refreshing` win over `behind_source`.
 - A missing Fingerprint gives no `behind_source`. This covers no check yet, an unreachable server, a failed query, a locked row, and a null recorded Fingerprint.
 - The rules for C# also apply to SQL. A question never runs the check. A `behind_source` SQL cache does not block a question. "Update all" leaves the cache out.
-- The check reads a shared SQL cache one time. It connects with the address that a refresh of that server uses, so a named instance connects.
+- The check reads a shared SQL cache one time. It connects with the address that a refresh of that cache uses, so a named instance connects.
 - The service keeps the current Fingerprints in memory with the remote heads, and keeps one check time for both. A restart forgets them.

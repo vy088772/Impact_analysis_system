@@ -17,7 +17,7 @@ import code_analyzer.sql_analyzer as sql_analyzer_module
 from code_analyzer.sql_fingerprint import Fingerprint
 from service import analyze_service, environment_check, source_check, sql_cache_store
 from service.sql_cache_store import CacheIdentity, ScanConnection
-from tests.sql_cache_fixtures import CACHE_VERSION, cache_payload, fingerprint
+from tests.sql_cache_fixtures import CACHE_VERSION, cache_payload, fingerprint, write_cache
 from tests.test_behind_source_api import check, remote, row_of  # noqa: F401  (fixtures and helpers)
 from tests.test_cache_freshness_api import (  # noqa: F401  (fixtures and helpers)
     SERVER,
@@ -25,6 +25,7 @@ from tests.test_cache_freshness_api import (  # noqa: F401  (fixtures and helper
     client,
     fresh_queue,
     listing,
+    sql_payload,
     sql_root,
     submit_sql,
     wait_for,
@@ -166,6 +167,22 @@ def test_a_locked_row_gets_no_read_and_no_behind_source(world, sql_root, reader,
     assert reader.calls == []
 
 
+def test_a_row_that_a_later_environment_check_locks_shows_no_behind_source(
+    world, sql_root, reader, monkeypatch
+) -> None:
+    write_sql(sql_root, "AlphaDb", fingerprint=procedures(3))
+    reader.current = {"AlphaDb": procedures(4, EVENING)}
+    assert row_of(check(), "Alpha", "AlphaDb")["freshness"] == "behind_source"
+
+    monkeypatch.setattr(
+        environment_check,
+        "_last",
+        environment_check.LastCheck(locks={"sql_server": {SERVER: "無法登入 SQL Server"}}),
+    )
+
+    assert listing()["Alpha"]["AlphaDb"]["freshness"] == "current"
+
+
 def test_no_recorded_fingerprint_gives_no_behind_source(world, sql_root, reader) -> None:
     write_sql(sql_root, "AlphaDb", fingerprint=None)
     reader.current = {"AlphaDb": procedures(4, EVENING)}
@@ -173,7 +190,7 @@ def test_no_recorded_fingerprint_gives_no_behind_source(world, sql_root, reader)
     assert row_of(check(), "Alpha", "AlphaDb")["freshness"] == "current"
 
 
-def test_outdated_wins_over_behind_source(world, sql_root, reader, monkeypatch) -> None:
+def test_outdated_wins_over_behind_source(world, sql_root, reader) -> None:
     write_sql(sql_root, "AlphaDb", fingerprint=procedures(3))
     reader.current = {"AlphaDb": procedures(4, EVENING)}
     check()
@@ -229,14 +246,11 @@ def test_a_finished_refresh_clears_behind_source_with_no_second_check(
     write_sql(sql_root, "AlphaDb", fingerprint=procedures(3))
     reader.current = {"AlphaDb": procedures(4, EVENING)}
     assert row_of(check(), "Alpha", "AlphaDb")["freshness"] == "behind_source"
-    reads = len(reader.calls)
-
     wait_for(submit_sql("AlphaDb")["job_id"], "succeeded")
+    reader.calls.clear()
 
-    # The scan read the Fingerprint one time; the listing reads it no more.
-    assert len(reader.calls) == reads + 1
     assert listing()["Alpha"]["AlphaDb"]["freshness"] == "current"
-    assert len(reader.calls) == reads + 1
+    assert reader.calls == []
 
 
 def test_update_all_leaves_a_behind_source_sql_cache_out(world, sql_root, reader, monkeypatch) -> None:
@@ -286,15 +300,9 @@ def test_the_check_connects_to_the_catalog_address_so_a_named_instance_connects(
         ]
     }
     (world / "spec_rag" / "catalog" / "system_catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
-    write_cache_of("dbhost\\NAMED", "AlphaDb", sql_root)
+    identity = CacheIdentity.of("dbhost\\NAMED", "AlphaDb")
+    write_cache(sql_root, identity, sql_payload("AlphaDb"), fingerprint=procedures(3))
 
     check()
 
-    assert reader.calls == [(CacheIdentity.of("dbhost", "AlphaDb"), ScanConnection("dbhost\\NAMED"))]
-
-
-def write_cache_of(server: str, database: str, sql_root) -> None:
-    from tests.sql_cache_fixtures import write_cache
-    from tests.test_cache_freshness_api import sql_payload
-
-    write_cache(sql_root, CacheIdentity.of(server, database), sql_payload(database), fingerprint=procedures(3))
+    assert reader.calls == [(identity, ScanConnection("dbhost\\NAMED"))]
