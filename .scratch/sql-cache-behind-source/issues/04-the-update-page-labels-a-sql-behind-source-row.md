@@ -20,7 +20,7 @@ See the spec: `.scratch/sql-cache-behind-source/spec.md` (decision Q11).
 **Implementation notes (2026-10-30)**
 
 - **Branch and commits.** This ticket changes `llamaindex-spec-rag` only, on the branch
-  `feat/sql-cache-fingerprint`. `f7196f4` adds the label, and `0490057` holds the review follow-ups.
+  `feat/sql-cache-fingerprint`. `f7196f4` adds the label, `0490057` holds the review follow-ups, and `2f155fc` changes the tooltip.
 - **Label.** `freshnessLabel(state)` in `impact_web/frontend/src/updates.ts` takes a `CacheState`
   (the kind and the freshness of a cache). One table, `BEHIND_SOURCE_LABELS`, holds the two words
   for `behind_source`: 資料庫有變更 for SQL and 來源有新 commit for C#. The other states have one
@@ -48,12 +48,9 @@ The Standards review and the Spec review ran after the first commit.
   `CacheFreshness` has it, and the other comments say "查 `behind_source`".
 - **Fixed: DESIGN.md.** The Freshness tag entry in `impact_web/frontend/DESIGN.md` records the two
   labels and the rule of the pin menu.
-- **Kept on purpose.** The tooltip `UPDATE_ALL_TITLE` still names only the C# rows
-  (「來源有新 commit」的 C# 不會動). The spec `spec-update-web` sets this exact text, and the
-  sentence is still true. A SQL `behind_source` row also stays out of "update all", but the tooltip
-  does not say so. A change to the text is a product decision.
-
-**Open points for later tickets**
-
-- Decide if `UPDATE_ALL_TITLE` (and the matching line in DESIGN.md) also names the SQL rows with
-  資料庫有變更.
+- **Fixed after a user decision: the tooltip of "update all".** `UPDATE_ALL_TITLE` named only the C#
+  rows. The user decided to change the text. It is now
+  更新「需要更新」的快取與比 ESP 舊的規格書；「來源有新 commit」的 C# 與「資料庫有變更」的 SQL 不會動.
+  `llamaindex-spec-rag` commit `2f155fc` changes the constant, its test, the header entry in
+  DESIGN.md, and the title line in `.scratch/spec-update-web/spec.md` (with a note on the change).
+  The done ticket 07 of `spec-update-web` keeps the old text, because it records history.
