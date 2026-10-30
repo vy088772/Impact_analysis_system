@@ -18,6 +18,7 @@ from service.sql_cache_store import CacheIdentity
 from tests.sql_cache_fixtures import cache_payload, fingerprint
 from tests.test_cache_freshness_api import (  # noqa: F401  (fixtures and helpers)
     SERVER,
+    client,
     fresh_queue,
     listing,
     sql_root,
@@ -105,8 +106,6 @@ def test_the_scan_record_keeps_its_other_fields(world, sql_root, reader, analyze
 
 
 def test_the_scan_passes_the_account_override_to_the_reader(world, sql_root, reader, analyzer) -> None:
-    from tests.test_cache_freshness_api import client
-
     response = client.post(
         "/refresh_sql",
         json={
@@ -142,65 +141,67 @@ def test_a_cache_of_the_previous_format_version_lists_as_outdated(world, sql_roo
 # The one reader, over a fake analyzer: no Fingerprint when it cannot connect or the query fails.
 
 
-class _ReaderAnalyzer:
-    connects = True
-    fails = False
-    seen: dict = {}
-    disconnected = False
+class FakeServer:
+    """The SQL Server behind the reader: whether it connects, whether the query fails, and what it saw."""
 
-    def __init__(self, database_alias=None, server=None, database_name=None, **kwargs):
-        type(self).seen = {"server": server, "database_name": database_name, **kwargs}
+    def __init__(self) -> None:
+        self.connects = True
+        self.fails = False
+        self.seen: dict = {}
+        self.disconnected = False
+
+    def analyzer(self, database_alias=None, server=None, database_name=None, **kwargs) -> "FakeServer":
+        self.seen = {"server": server, "database_name": database_name, **kwargs}
+        return self
 
     def connect(self) -> bool:
-        return type(self).connects
+        return self.connects
 
     def disconnect(self) -> None:
-        type(self).disconnected = True
+        self.disconnected = True
 
     def read_fingerprint(self) -> dict:
-        if type(self).fails:
+        if self.fails:
             raise RuntimeError("query failed")
         return with_procedures(1)
 
 
 @pytest.fixture
-def reader_analyzer(monkeypatch):
-    class Analyzer(_ReaderAnalyzer):
-        pass
-
-    monkeypatch.setattr(sql_analyzer_module, "SQLAnalyzer", Analyzer)
-    return Analyzer
+def sql_server(monkeypatch):
+    fake = FakeServer()
+    monkeypatch.setattr(sql_analyzer_module, "SQLAnalyzer", fake.analyzer)
+    return fake
 
 
-def test_the_reader_returns_the_fingerprint_of_the_identity(reader_analyzer) -> None:
+def test_the_reader_returns_the_fingerprint_of_the_identity(sql_server) -> None:
     identity = CacheIdentity.of(SERVER, "AlphaDb")
 
     assert sql_cache_store.read_fingerprint(identity, user_id="ScanUser", password="secret") == with_procedures(1)
-    assert reader_analyzer.seen == {
+    assert sql_server.seen == {
         "server": SERVER,
         "database_name": "AlphaDb",
         "user_id": "ScanUser",
         "password": "secret",
     }
-    assert reader_analyzer.disconnected
+    assert sql_server.disconnected
 
 
-def test_the_reader_connects_to_the_given_connection_server(reader_analyzer) -> None:
+def test_the_reader_connects_to_the_given_connection_server(sql_server) -> None:
     identity = CacheIdentity.of("dbhost\\NAMED", "AlphaDb")
 
     sql_cache_store.read_fingerprint(identity, connection_server="dbhost\\NAMED")
 
-    assert reader_analyzer.seen["server"] == "dbhost\\NAMED"
+    assert sql_server.seen["server"] == "dbhost\\NAMED"
 
 
-def test_the_reader_returns_no_fingerprint_when_it_cannot_connect(reader_analyzer) -> None:
-    reader_analyzer.connects = False
-
-    assert sql_cache_store.read_fingerprint(CacheIdentity.of(SERVER, "AlphaDb")) is None
-
-
-def test_the_reader_returns_no_fingerprint_when_the_query_fails(reader_analyzer) -> None:
-    reader_analyzer.fails = True
+def test_the_reader_returns_no_fingerprint_when_it_cannot_connect(sql_server) -> None:
+    sql_server.connects = False
 
     assert sql_cache_store.read_fingerprint(CacheIdentity.of(SERVER, "AlphaDb")) is None
-    assert reader_analyzer.disconnected
+
+
+def test_the_reader_returns_no_fingerprint_when_the_query_fails(sql_server) -> None:
+    sql_server.fails = True
+
+    assert sql_cache_store.read_fingerprint(CacheIdentity.of(SERVER, "AlphaDb")) is None
+    assert sql_server.disconnected

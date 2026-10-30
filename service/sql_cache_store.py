@@ -487,6 +487,7 @@ def read_fingerprint(
     from code_analyzer.sql_analyzer import SQLAnalyzer
 
     db = identity.database
+    connected = None
     try:
         analyzer = SQLAnalyzer(
             db,
@@ -497,19 +498,17 @@ def read_fingerprint(
         )
         if not analyzer.connect():
             return None
-    except Exception as exc:
-        print(f"⚠️  無法讀取 Fingerprint（非致命）：{db}：{exc}")
-        return None
-    try:
+        connected = analyzer
         return analyzer.read_fingerprint()
     except Exception as exc:
         print(f"⚠️  無法讀取 Fingerprint（非致命）：{db}：{exc}")
         return None
     finally:
-        try:
-            analyzer.disconnect()
-        except Exception:
-            pass
+        if connected is not None:
+            try:
+                connected.disconnect()
+            except Exception:
+                pass
 
 
 def _meta_payload(
