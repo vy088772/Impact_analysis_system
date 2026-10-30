@@ -13,6 +13,7 @@ from pathlib import Path
 import json
 
 from canonical_object_identity import ObjectName, bare_key, bare_name, parse
+from code_analyzer import sql_fingerprint
 from config.settings import settings, DatabaseConfig
 from schema_resolution import DEFAULT_SCHEMA
 
@@ -151,46 +152,29 @@ def _listing_query() -> str:
     )
 
 
-# The kind groups of a Fingerprint: (kind, the `sys.objects.type` values of the group).
-# The kind values are the keys the cache payload already uses, as in `_LISTING_KINDS`.
-_FINGERPRINT_KINDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("procedures", ("P",)),
-    ("views", ("V",)),
-    ("functions", ("FN", "IF", "TF")),
-    ("tables", ("U",)),
-)
-
-
 def _fingerprint_query() -> str:
-    """One row for each (kind group, schema): the object count and the latest `modify_date`.
+    """One row for each `sys.objects.type` of the kind groups: the object count and the latest `modify_date`.
 
-    The query reads `sys.objects` of the connected Database only, and drops the
-    objects that SQL Server ships. The excluded-schema rule runs over the
-    returned rows, the same rule as the object listing.
+    The query reads `sys.objects` of the connected Database only. It drops the
+    objects that SQL Server ships, and the schemas that SQL Server owns, with the
+    same schema rule as the object listing.
     """
-    cases = "\n".join(
-        f"        WHEN o.type IN ({', '.join(repr(t) for t in types)}) THEN '{kind}'"
-        for kind, types in _FINGERPRINT_KINDS
+    object_types = ", ".join(
+        f"'{object_type}'" for _, group_types in sql_fingerprint.KIND_GROUPS for object_type in group_types
     )
-    all_types = ", ".join(repr(t) for _, types in _FINGERPRINT_KINDS for t in types)
+    excluded_schemas = ", ".join(f"'{schema}'" for schema in sorted(_EXCLUDED_SCHEMAS))
+    # `_` is a wildcard in LIKE; `[_]` makes it the literal prefix of `db_`.
+    excluded_prefix = _EXCLUDED_SCHEMA_PREFIX.replace("_", "[_]")
     return (
-        "SELECT grouped.kind, grouped.schema_name, COUNT(*) AS object_count, "
-        "MAX(grouped.modify_date) AS latest_modified FROM (\n"
-        "    SELECT CASE\n"
-        f"{cases}\n"
-        "    END AS kind, s.name AS schema_name, o.modify_date\n"
-        "    FROM sys.objects AS o\n"
-        "    JOIN sys.schemas AS s ON s.schema_id = o.schema_id\n"
-        f"    WHERE o.is_ms_shipped = 0 AND o.type IN ({all_types})\n"
-        ") AS grouped\n"
-        "GROUP BY grouped.kind, grouped.schema_name"
+        "SELECT o.type AS object_type, COUNT(*) AS object_count, "
+        "MAX(o.modify_date) AS latest_modified\n"
+        "FROM sys.objects AS o\n"
+        "JOIN sys.schemas AS s ON s.schema_id = o.schema_id\n"
+        f"WHERE o.is_ms_shipped = 0 AND o.type IN ({object_types})\n"
+        f"AND LOWER(s.name) NOT IN ({excluded_schemas})\n"
+        f"AND LOWER(s.name) NOT LIKE '{excluded_prefix}%'\n"
+        "GROUP BY o.type"
     )
-
-
-def _fingerprint_time(value: object) -> str:
-    if isinstance(value, datetime):
-        return value.isoformat(timespec="microseconds")
-    return str(value or "")
 
 
 def quote_name(*parts: str) -> str:
@@ -387,26 +371,29 @@ class SQLAnalyzer:
             and (kind is None or row.kind == kind)
         ]
 
-    def read_fingerprint(self) -> Dict[str, Dict[str, object]]:
+    def read_fingerprint(self) -> sql_fingerprint.Fingerprint:
         """Read the Fingerprint of the connected Database from the system catalog.
 
-        The Fingerprint has one entry for each kind group: the object count and
-        the latest `modify_date`. A group with no objects has a count of zero and
-        an empty latest time. The query reads no definition.
+        The query reads no definition. A kind group with no objects has a count
+        of zero and no latest time.
         """
         self.cursor.execute(_fingerprint_query())
-        counts: Dict[str, int] = {kind: 0 for kind, _ in _FINGERPRINT_KINDS}
-        latest: Dict[str, str] = {kind: "" for kind, _ in _FINGERPRINT_KINDS}
+        counts: Dict[str, int] = {kind: 0 for kind, _ in sql_fingerprint.KIND_GROUPS}
+        latest: Dict[str, Optional[datetime]] = {kind: None for kind, _ in sql_fingerprint.KIND_GROUPS}
         for row in self.cursor.fetchall():
-            if row.kind not in counts or _is_excluded_schema(row.schema_name):
+            kind = sql_fingerprint.kind_of(row.object_type)
+            if kind is None:
                 continue
-            counts[row.kind] += int(row.object_count)
-            # One format for every time, so the text order is the time order.
-            latest[row.kind] = max(latest[row.kind], _fingerprint_time(row.latest_modified))
-        return {
-            kind: {"count": counts[kind], "latest_modified": latest[kind]}
-            for kind, _ in _FINGERPRINT_KINDS
-        }
+            counts[kind] += int(row.object_count)
+            current = latest[kind]
+            if current is None or row.latest_modified > current:
+                latest[kind] = row.latest_modified
+        return sql_fingerprint.Fingerprint(
+            **{
+                kind: sql_fingerprint.FingerprintEntry(count=counts[kind], latest_modified=latest[kind])
+                for kind, _ in sql_fingerprint.KIND_GROUPS
+            }
+        )
 
     def _get_native_referenced_tables(self, proc_name: str, schema: str) -> Set[ObjectName]:
         """

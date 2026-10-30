@@ -120,7 +120,11 @@ The bare-string shape a `connection_sources` entry still carries when it was wri
 _Avoid_: unresolved label, plain string, legacy string
 
 **Scan Record**:
-The record that one SQL Cache Identity was actually scanned, and when — written beside the scan results at save time. It is the only record that a scan happened; the caller's Database Registry records which Databases *should* exist, never whether any were scanned, so the two are read separately and can never disagree. See `llamaindex-spec-rag`'s [ADR-0005](../llamaindex-spec-rag/docs/adr/0005-registry-records-intent-cache-metadata-records-fact.md).
+The record that one SQL Cache Identity was actually scanned, and when — written beside the scan results at save time. It is the only record that a scan happened; the caller's Database Registry records which Databases *should* exist, never whether any were scanned, so the two are read separately and can never disagree. See `llamaindex-spec-rag`'s [ADR-0005](../llamaindex-spec-rag/docs/adr/0005-registry-records-intent-cache-metadata-records-fact.md). Beside `saved_at`, it holds the Fingerprint that the scan read before it read any definition, or null when the scan could not read one.
+
+**Fingerprint**:
+A small summary of one Database that Impact reads from the system catalog of SQL Server (`sys.objects`). It holds, for each kind group, the object count and the latest `modify_date`. The kind groups are procedures (`P`), views (`V`), functions (`FN`, `IF`, `TF`), and tables (`U`). Its scope equals the scope of a SQL scan: it excludes the objects that SQL Server ships and the schemas that SQL Server owns. A drop changes a count, and an `ALTER TABLE` changes a time. Impact compares two Fingerprints only for equality. It is not a Contract Fingerprint, which identifies the behaviour of an External Wrapper Contract. See [ADR-0045](docs/adr/0045-a-question-never-rebuilds-a-cache.md).
+_Avoid_: database hash, schema version, checksum
 
 **C# Scan Result**:
 The saved result of one C# project scan, which the scan store writes under `data/scan_cache`. `llamaindex-spec-rag` reads it with a restricted unpickler that admits only a fixed list of classes. It is not a Scan Record. A Scan Record describes one SQL cache, and a C# Scan Result describes one C# project. A source without a repository (an empty `repo`) has no C# Scan Result: a question about it reads no scan and reports no `csharp` cache, never `skipped` and never `outdated`, the same as the update page.

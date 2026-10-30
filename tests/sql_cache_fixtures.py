@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from datetime import datetime
 import sys
 import tempfile
 from pathlib import Path
@@ -24,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import canonical_object_identity
+from code_analyzer.sql_fingerprint import Fingerprint, FingerprintEntry
 from code_analyzer.sql_text_analysis import (
     InMemorySqlTextAnalysis,
     SqlModuleIdentity,
@@ -35,6 +37,11 @@ from schema_resolution import SchemaSource
 from service import sql_cache_store
 from service.sql_cache_store import CacheIdentity
 from service.sql_execution_graph import GRAPH_VERSION
+
+# The SQL cache format version that the cache store writes today. A test that
+# needs a cache from another version passes one relative to it, for example
+# ``CACHE_VERSION - 1``.
+CACHE_VERSION = sql_cache_store._SQL_CACHE_VERSION
 
 
 class CacheRoot:
@@ -355,27 +362,28 @@ END;
     )
 
 
-# One kind group of a Fingerprint: (object count, latest ``modify_date`` text).
-FingerprintGroup = tuple[int, str]
+# One kind group of a Fingerprint: (object count, latest ``modify_date``, or None for no objects).
+FingerprintGroup = tuple[int, Optional[datetime]]
 
 
 def fingerprint(
     *,
-    procedures: FingerprintGroup = (0, ""),
-    views: FingerprintGroup = (0, ""),
-    functions: FingerprintGroup = (0, ""),
-    tables: FingerprintGroup = (0, ""),
-) -> dict:
+    procedures: FingerprintGroup = (0, None),
+    views: FingerprintGroup = (0, None),
+    functions: FingerprintGroup = (0, None),
+    tables: FingerprintGroup = (0, None),
+) -> Fingerprint:
     """Build one Fingerprint: the object count and the latest time of each kind group.
 
-    A group that the caller does not name has no objects: a count of zero and an
-    empty latest time.
+    A group that the caller does not name has no objects: a count of zero and no
+    latest time.
     """
-    groups = {"procedures": procedures, "views": views, "functions": functions, "tables": tables}
-    return {
-        kind: {"count": count, "latest_modified": latest_modified}
-        for kind, (count, latest_modified) in groups.items()
-    }
+    return Fingerprint(
+        procedures=FingerprintEntry(*procedures),
+        views=FingerprintEntry(*views),
+        functions=FingerprintEntry(*functions),
+        tables=FingerprintEntry(*tables),
+    )
 
 
 _SAVED_AT = "2026-08-04 13:29:13"
@@ -386,7 +394,7 @@ def write_cache(
     identity: CacheIdentity,
     payload: dict,
     cache_version: int | None = None,
-    fingerprint: Optional[dict] = None,
+    fingerprint: Optional[Fingerprint] = None,
 ) -> None:
     """Write one cache file pair under ``identity``, as a refresh names it.
 

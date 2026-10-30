@@ -38,3 +38,11 @@ Derived Execution Evidence is not a cache that an analyst refreshes. Each Refres
 `llamaindex-spec-rag` ADR-0020 adds an Environment Check. The Impact service tests SQL Server access and Azure Repos access itself, because it is the process that makes the connections. The test logs in to each server of the Database Registry (and each server that only the catalog names), and runs `git ls-remote` one time for each repository of the catalog, with at most 8 at one time. A test for each repository, and not one for each Azure DevOps project, keeps the failure of one repository (for example a removed repository) from locking the other repositories. On 2026-10-22, 30 calls took about 1 second at 8 at one time.
 
 The service keeps the last result in memory. Each SQL row of a failed server and each C# row of a failed repository gets a `locked_reason`. A Refresh Job for a locked row gets HTTP 409 with that reason, and no job starts. "Update all" skips the locked rows and still submits the other `outdated` caches. Before the first check, and after a restart, no row is locked.
+
+## Amendment: a SQL cache can be `behind_source` (2026-10-30)
+
+Before this amendment, only a C# Scan Result could be `behind_source`. A person can change a procedure, a view, a function, or a table directly in SQL Server, and the update page still showed that SQL cache as `current`. The accepted decisions are in `.scratch/sql-cache-behind-source/spec.md`.
+
+The source of a SQL cache is its Database. Each SQL scan reads the Fingerprint of the Database before it reads any definition, and the Scan Record holds it beside `saved_at`. The SQL cache format version 12 adds this field, so every older SQL cache is `outdated` one time.
+
+The `behind_source` check also reads the current Fingerprint of each declared SQL cache that is usable and not locked. A SQL cache is `behind_source` when the current Fingerprint differs from the recorded Fingerprint. `outdated` and `refreshing` win over `behind_source`. A missing Fingerprint never gives `behind_source`: no check yet, an unreachable server, a failed query, a locked row, and a null recorded Fingerprint all keep the previous state. The rules for C# still apply: a question never runs the check, a `behind_source` SQL cache does not block a question, and "update all" leaves it out.

@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -161,10 +162,10 @@ def _sample_cache_files() -> dict:
             identity,
             payload,
             fingerprint=fingerprint(
-                procedures=(1, "2026-08-04T13:00:00.000000"),
-                views=(1, "2026-08-01T09:30:00.000000"),
-                functions=(1, "2026-07-15T08:00:00.250000"),
-                tables=(2, "2026-08-04T12:45:00.000000"),
+                procedures=(1, datetime(2026, 8, 4, 13, 0, 0)),
+                views=(1, datetime(2026, 8, 1, 9, 30, 0)),
+                functions=(1, datetime(2026, 7, 15, 8, 0, 0, 250000)),
+                tables=(2, datetime(2026, 8, 4, 12, 45, 0)),
             ),
         )
         return {

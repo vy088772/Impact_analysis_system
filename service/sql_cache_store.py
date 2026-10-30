@@ -29,13 +29,17 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 # 索引的兩個桶跟 /find_by_sp、/find_by_table 比對時用同一個 bare key
 # （Canonical Object Identity module），特意重用而不是自己另寫一份等價邏輯——否則
 # 索引跟真正的比對邏輯日後可能悄悄長歪，讓索引誤刪一個端點其實會找到的名字。
 from canonical_object_identity import ObjectName, bare_key, full_key, parse
+from code_analyzer.sql_fingerprint import Fingerprint
 from config.settings import settings
+
+if TYPE_CHECKING:
+    from code_analyzer.sql_analyzer import SQLAnalyzer
 
 # 快取格式版本：dump_all_sql_objects() 回傳結構若變動則遞增，讓舊快取自動失效
 # v2：tables[].primary_keys（原供已移除的 fk_resolver.py 之 PK 命名慣例推論關聯使用）
@@ -460,42 +464,47 @@ def cached_saved_at(identity: CacheIdentity) -> Optional[str]:
         return None
 
 
-# A Fingerprint: for each kind group (procedures, views, functions, tables), the
-# object count and the latest `modify_date` (see SQLAnalyzer.read_fingerprint()).
-Fingerprint = Dict[str, Dict[str, object]]
+@dataclass(frozen=True)
+class ScanConnection:
+    """How a scan reaches the SQL Server of one cache: the address and the scan account override.
 
-
-def read_fingerprint(
-    identity: CacheIdentity,
-    *,
-    user_id: str = "",
-    password: str = "",
-    connection_server: Optional[str] = None,
-) -> Optional[Fingerprint]:
-    """Read the current Fingerprint of one SQL cache from the system catalog of SQL Server.
-
-    The one reader of a Fingerprint: the scan and the `behind_source` check both
-    call it. It reads `sys.objects` only, and never a definition.
-
-    user_id/password：the scan account override of this server, the same as a
-    refresh (ADR-0010). connection_server：the address to connect to, when it
-    differs from identity.server (a named instance); with none, identity.server.
-
-    Returns None when it cannot connect or when the query fails. A caller then
-    knows nothing about the Database, which is not a change.
+    server is the connection address exactly as the caller gives it. It can differ
+    from CacheIdentity.server, because normalization drops a named instance
+    (`host\\instance`) and the connection must still reach that instance.
+    user_id/password are the scan account override of this server. Both must hold
+    a value; otherwise the global DB_AUTH_MODE identity applies (ADR-0010).
     """
+
+    server: str
+    user_id: str = ""
+    password: str = ""
+
+
+def _sql_analyzer(identity: CacheIdentity, connection: ScanConnection) -> "SQLAnalyzer":
     from code_analyzer.sql_analyzer import SQLAnalyzer
 
+    return SQLAnalyzer(
+        identity.database,
+        server=connection.server,
+        database_name=identity.database,
+        user_id=connection.user_id,
+        password=connection.password,
+    )
+
+
+def read_fingerprint(identity: CacheIdentity, connection: ScanConnection) -> Optional[Fingerprint]:
+    """Read the current Fingerprint of one SQL cache from the system catalog of SQL Server.
+
+    This is the one reader of a Fingerprint: the scan and the `behind_source`
+    check both call it. It reads `sys.objects` only, and never a definition.
+
+    Returns None when it cannot connect or when the query fails. A caller then
+    knows nothing about the Database, and that is not a change.
+    """
     db = identity.database
     connected = None
     try:
-        analyzer = SQLAnalyzer(
-            db,
-            server=connection_server or identity.server,
-            database_name=db,
-            user_id=user_id,
-            password=password,
-        )
+        analyzer = _sql_analyzer(identity, connection)
         if not analyzer.connect():
             return None
         connected = analyzer
@@ -519,7 +528,7 @@ def _meta_payload(
         "server": identity.server,
         "database": identity.database,
         "saved_at": saved_at,
-        "fingerprint": fingerprint,
+        "fingerprint": None if fingerprint is None else fingerprint.to_json(),
     }
 
 
@@ -530,7 +539,8 @@ def write_meta(
 
     路徑由 identity 決定，寫到哪裡跟記錄的身分不可能對不上。_save() 與測試的
     快取 fixture 共用這一個出口。saved_at 照傳照寫、不補值。fingerprint 是 scan
-    開始時讀到的 Fingerprint；讀不到時記 None。
+    開始時讀到的 Fingerprint；讀不到時記 null，
+    之後的 `behind_source` 檢查不把 null 當成變更。
     """
     _, meta_path = _paths(identity)
     meta_path.write_text(
@@ -796,14 +806,9 @@ def get_or_dump(
     _report_progress(progress_callback, "connecting", 0, 1, db)
     # The Fingerprint comes before any definition: a change during the scan then
     # makes the recorded Fingerprint older than the content, never newer.
-    fingerprint = read_fingerprint(
-        identity, user_id=user_id, password=password, connection_server=connection_server
-    )
-    from code_analyzer.sql_analyzer import SQLAnalyzer
-
-    analyzer = SQLAnalyzer(
-        db, server=connection_server, database_name=db, user_id=user_id, password=password
-    )
+    connection = ScanConnection(connection_server, user_id, password)
+    fingerprint = read_fingerprint(identity, connection)
+    analyzer = _sql_analyzer(identity, connection)
     if not analyzer.connect():
         raise RuntimeError(f"無法連線資料庫：{db}")
     _report_progress(progress_callback, "connecting", 1, 1, db)

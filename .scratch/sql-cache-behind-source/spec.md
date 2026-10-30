@@ -88,10 +88,12 @@ One "update all" action rescans them, and each rescan records a Fingerprint.
 - The scan and the check both call this function. No other code reads the Fingerprint from SQL Server.
 - The function takes the SQL Cache Identity and the optional scan account override.
 - The function returns no Fingerprint when it cannot connect or when the query fails.
+- The function takes the connection address of the server, as a refresh does. The address keeps a named instance, which the SQL Cache Identity drops.
 
 **Scan.**
 - A SQL scan reads the Fingerprint before it reads any definition.
 - The scan writes the Fingerprint into the Scan Record (the meta file) beside `saved_at`.
+- When the reader returns no Fingerprint, the scan still succeeds, and the Scan Record holds null (decided 2026-10-30).
 - The SQL cache format version increases by one. Every cache with the old version lists as `outdated`.
 
 **Check.**
@@ -106,6 +108,7 @@ One "update all" action rescans them, and each rescan records a Fingerprint.
 - A SQL cache is `behind_source` when it is usable, the last check read a current Fingerprint, and that Fingerprint differs from the recorded Fingerprint.
 - `refreshing` and `outdated` win over `behind_source`, the same as for C#.
 - No current Fingerprint (no check yet, server unreachable, query failed, or row locked) gives no `behind_source`.
+- No recorded Fingerprint (a null in the Scan Record) gives no `behind_source` either. The next successful scan records one (decided 2026-10-30).
 - A finished refresh writes a new recorded Fingerprint. The listing then compares again and clears `behind_source` with no second check.
 
 **Update all.**
