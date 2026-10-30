@@ -19,11 +19,12 @@ See the spec: `.scratch/sql-cache-behind-source/spec.md` (decisions Q2, Q3, Q4, 
 - [ ] No current Fingerprint (no check yet, server unreachable, query failed, or row locked) gives no `behind_source`.
 - [ ] No recorded Fingerprint (a null in the Scan Record, from a scan that could not read one) gives no `behind_source`.
 - [ ] The check gives the reader the same connection address as a refresh of that server (`ScanConnection.server`), so a named instance connects correctly.
+- [ ] The listing reads the recorded Fingerprint back from the Scan Record into a `Fingerprint` (for example a `Fingerprint.from_dict()` beside `to_dict()`), and compares the two values for equality.
 - [ ] A finished refresh clears `behind_source` with no second check.
 - [ ] A shared SQL cache shows the same state under each system.
 - [ ] "Update all" submits no Refresh Job for a `behind_source` SQL cache.
 - [ ] `GET /cache_freshness` and a question never call the Fingerprint reader. A `behind_source` SQL cache never blocks a question.
 - [ ] HTTP API tests replace the Fingerprint reader with a fake (prior art: the `behind_source` API tests) and cover each criterion above. The existing test that says a SQL cache is never `behind_source` changes to match.
-- [x] ADR-0045 states that a SQL cache can be `behind_source`, and that its source is the Database. (Done in ticket 01 review follow-ups: the amendment of 2026-10-30.)
+- [ ] ADR-0045 states that a SQL cache can be `behind_source`, and that its source is the Database. The amendment of 2026-10-30 records the decision and says that this ticket builds the check. When the check ships, remove the sentence "Until then, a SQL cache is never `behind_source`."
 - [x] CONTEXT.md adds the term **Fingerprint** and updates the entry for Scan Record. (Done in ticket 01 review follow-ups.)
 - [ ] CONTEXT.md updates the entry for Cache Freshness: a SQL cache can be `behind_source` when its Database changed.

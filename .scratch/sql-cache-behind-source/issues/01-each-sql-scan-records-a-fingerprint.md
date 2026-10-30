@@ -58,18 +58,50 @@ See the spec: `.scratch/sql-cache-behind-source/spec.md` (decisions Q1, Q5, Q6, 
   they use one instance fake. A test imported `client` inside a function; now the
   import is at module level.
 
-**Open points for later tickets**
+**Open points for later tickets** (first pass; see the second pass below for their outcome)
 
-- **Ticket 02: a null recorded Fingerprint.** When the reader fails at scan start,
-  the Scan Record holds `"fingerprint": null`. Ticket 02 must decide how a null
-  recorded value compares with a current Fingerprint. A plain "differs" rule makes
-  the row `behind_source` until the next rescan.
-- **Ticket 02/03: the connection address of the check.** The check must give the
-  reader the same address as the scan. If it gives none, the reader connects to
-  the bare host, which is wrong for a named instance.
-- **Ticket 02: documents.** CONTEXT.md has no **Fingerprint** entry yet. ADR-0045
-  still says only a C# cache can be `behind_source`. The spec puts these edits in
-  the Documents section, and ticket 02 names them.
-- **Test gap (accepted).** The fake-cursor tests check that the query names each
-  type, but not that the `CASE` puts `IF` and `TF` under `functions`. Only a real
-  SQL Server can show this.
+- Ticket 02 must decide how a null recorded Fingerprint compares.
+- The check must give the reader the connection address of the scan.
+- CONTEXT.md and ADR-0045 do not mention the Fingerprint.
+- No test shows that `IF` and `TF` count under `functions`.
+
+**Review follow-ups, second pass (2026-10-30)**
+
+The user asked to fix every finding of the Spec review and the Standards review.
+Commits: `44e4dd9` fixes the first review. A later commit on this branch fixes
+the review of `44e4dd9`. The notes above describe the first pass; where they
+differ, these notes win.
+
+- **User decision: a null recorded Fingerprint.** The scan still succeeds and
+  records `"fingerprint": null`. A null recorded Fingerprint never gives
+  `behind_source`. The next successful scan records a value. The spec and
+  ticket 02 now state this rule.
+- **A typed Fingerprint.** `code_analyzer/sql_fingerprint.py` holds `Fingerprint`
+  and `FingerprintEntry` as frozen dataclasses. Times are `datetime` values, so
+  no code compares times as text. `Fingerprint.from_rows()` puts each catalog
+  row in its kind group. `to_dict()` gives the JSON form of the Scan Record.
+  That form did not change, and the spec-rag agreement tests still pass.
+- **The query excludes the schemas.** The SQL now holds
+  `LOWER(s.name) NOT IN ('guest', 'information_schema', 'sys')` and
+  `NOT LIKE 'db[_]%'`. Both come from the constants of the object listing.
+  The query groups by `o.type`. A fake-cursor test now shows that `FN`, `IF`,
+  and `TF` count under `functions`, and that a type outside the groups counts
+  nowhere.
+- **Scan Connection.** `ScanConnection(server, user_id, password)` holds the
+  connection address and the scan account override. The reader requires one,
+  so it never falls back to the bare host. `get_or_dump()` takes one too, and
+  the scan and the reader build the analyzer in one function. The first-pass
+  note "Extra parameter" no longer applies.
+- **Tests.** The tests read `CACHE_VERSION` from `tests/sql_cache_fixtures.py`,
+  not the private constant of the cache store.
+- **Documents.** CONTEXT.md adds **Fingerprint** and **Scan Connection**, and the
+  Scan Record entry names the Fingerprint. ADR-0045 has an amendment of
+  2026-10-30. It records the decision and says that ticket 02 builds the check.
+  Ticket 02 keeps the ADR item and the Cache Freshness item open, and adds
+  items for the null rule, the connection address, and `Fingerprint.from_dict()`.
+- **Kept on purpose.** The excluded-schema rule has two forms: a Python check
+  for the object listing and an SQL condition for the Fingerprint. Both read the
+  same constants. `_save()` keeps its default `fingerprint=None`, because many
+  tests call it with no Fingerprint.
+- **Accepted gap.** A fake cursor cannot run SQL. Only a real SQL Server can
+  show that the `WHERE` condition drops the right rows.

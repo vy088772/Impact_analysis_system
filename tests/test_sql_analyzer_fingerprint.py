@@ -110,7 +110,7 @@ def test_a_kind_group_with_no_objects_has_a_zero_count_and_no_latest_time() -> N
     read = analyzer.read_fingerprint()
 
     for kind in ("procedures", "views", "functions"):
-        assert read.to_json()[kind] == {"count": 0, "latest_modified": ""}
+        assert read.to_dict()[kind] == {"count": 0, "latest_modified": ""}
 
 
 def test_a_database_with_no_objects_gives_four_empty_entries() -> None:

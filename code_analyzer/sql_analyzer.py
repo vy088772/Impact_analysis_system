@@ -159,9 +159,7 @@ def _fingerprint_query() -> str:
     objects that SQL Server ships, and the schemas that SQL Server owns, with the
     same schema rule as the object listing.
     """
-    object_types = ", ".join(
-        f"'{object_type}'" for _, group_types in sql_fingerprint.KIND_GROUPS for object_type in group_types
-    )
+    object_types = ", ".join(f"'{object_type}'" for object_type in sql_fingerprint.object_types())
     excluded_schemas = ", ".join(f"'{schema}'" for schema in sorted(_EXCLUDED_SCHEMAS))
     # `_` is a wildcard in LIKE; `[_]` makes it the literal prefix of `db_`.
     excluded_prefix = _EXCLUDED_SCHEMA_PREFIX.replace("_", "[_]")
@@ -378,21 +376,8 @@ class SQLAnalyzer:
         of zero and no latest time.
         """
         self.cursor.execute(_fingerprint_query())
-        counts: Dict[str, int] = {kind: 0 for kind, _ in sql_fingerprint.KIND_GROUPS}
-        latest: Dict[str, Optional[datetime]] = {kind: None for kind, _ in sql_fingerprint.KIND_GROUPS}
-        for row in self.cursor.fetchall():
-            kind = sql_fingerprint.kind_of(row.object_type)
-            if kind is None:
-                continue
-            counts[kind] += int(row.object_count)
-            current = latest[kind]
-            if current is None or row.latest_modified > current:
-                latest[kind] = row.latest_modified
-        return sql_fingerprint.Fingerprint(
-            **{
-                kind: sql_fingerprint.FingerprintEntry(count=counts[kind], latest_modified=latest[kind])
-                for kind, _ in sql_fingerprint.KIND_GROUPS
-            }
+        return sql_fingerprint.Fingerprint.from_rows(
+            (row.object_type, row.object_count, row.latest_modified) for row in self.cursor.fetchall()
         )
 
     def _get_native_referenced_tables(self, proc_name: str, schema: str) -> Set[ObjectName]:

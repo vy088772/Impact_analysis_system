@@ -88,7 +88,7 @@ One "update all" action rescans them, and each rescan records a Fingerprint.
 - The scan and the check both call this function. No other code reads the Fingerprint from SQL Server.
 - The function takes the SQL Cache Identity and the optional scan account override.
 - The function returns no Fingerprint when it cannot connect or when the query fails.
-- The function takes the connection address of the server, as a refresh does. The address keeps a named instance, which the SQL Cache Identity drops.
+- The function takes the connection address of the server, as a refresh does. The address keeps a named instance, which the SQL Cache Identity drops (decided 2026-10-30, in the review of ticket 01).
 
 **Scan.**
 - A SQL scan reads the Fingerprint before it reads any definition.

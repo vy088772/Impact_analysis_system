@@ -459,7 +459,7 @@ def test_get_or_dump_refuses_to_key_a_cache_by_the_display_alias() -> None:
     """database is a display label; without db_name there is no cache identity."""
     with pytest.raises(ValueError):
         sql_cache_store.get_or_dump(
-            CacheIdentity.of("vmsystest07", ""), connection_server="vmsystest07"
+            CacheIdentity.of("vmsystest07", ""), sql_cache_store.ScanConnection("vmsystest07")
         )
 
 

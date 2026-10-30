@@ -528,7 +528,7 @@ def _meta_payload(
         "server": identity.server,
         "database": identity.database,
         "saved_at": saved_at,
-        "fingerprint": None if fingerprint is None else fingerprint.to_json(),
+        "fingerprint": None if fingerprint is None else fingerprint.to_dict(),
     }
 
 
@@ -773,11 +773,9 @@ def load_cached(identity: CacheIdentity) -> Optional[Dict]:
 
 def get_or_dump(
     identity: CacheIdentity,
+    connection: ScanConnection,
     *,
-    connection_server: str,
     refresh: bool = False,
-    user_id: str = "",
-    password: str = "",
     progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> Dict:
     """
@@ -786,13 +784,8 @@ def get_or_dump(
 
     identity：這份快取的身分，由呼叫端如 spec-rag 的 catalog 逐資料庫提供。
 
-    connection_server：實際連線位址，照呼叫端給的原樣交給 SQLAnalyzer。它跟
-    identity.server 不同——正規化會丟掉具名執行個體尾綴（`host\\instance`），
-    快取鍵不分執行個體，連線卻一定要連到那個執行個體。缺值時由 SQLAnalyzer
-    報錯、不嘗試連線（見 config.settings.build_database_config）。
-
-    user_id/password：這一台伺服器的掃描帳密覆寫，兩者都有值才生效；缺一即沿用
-    .env 的全域 DB_AUTH_MODE 身分（見 docs/adr/0010-scan-identity-independent-of-app-credentials.md）。
+    connection：實際連線位址與掃描帳密覆寫（見 ScanConnection）。位址缺值時由
+    SQLAnalyzer 報錯、不嘗試連線（見 config.settings.build_database_config）。
     掃描用的連線身分永遠不從被掃應用程式的 Web.config 推導。
     """
     db = identity.database
@@ -806,7 +799,6 @@ def get_or_dump(
     _report_progress(progress_callback, "connecting", 0, 1, db)
     # The Fingerprint comes before any definition: a change during the scan then
     # makes the recorded Fingerprint older than the content, never newer.
-    connection = ScanConnection(connection_server, user_id, password)
     fingerprint = read_fingerprint(identity, connection)
     analyzer = _sql_analyzer(identity, connection)
     if not analyzer.connect():

@@ -1,4 +1,4 @@
-"""The Fingerprint of one Database (`.scratch/sql-cache-behind-source/`).
+"""The Fingerprint of one Database (ADR-0045, amendment of 2026-10-30).
 
 A Fingerprint is a small summary that Impact reads from the system catalog of
 SQL Server. It holds, for each kind group, the object count and the latest
@@ -12,10 +12,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from datetime import datetime
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 # (kind group, the `sys.objects.type` values of the group). The kind values are
-# the keys of the SQL cache payload, in the order the dump reports them.
+# the keys of the SQL cache payload, in the order the dump reports them, and the
+# field names of a Fingerprint.
 KIND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("procedures", ("P",)),
     ("views", ("V",)),
@@ -27,13 +28,13 @@ _KIND_OF_TYPE: Dict[str, str] = {
     object_type: kind for kind, object_types in KIND_GROUPS for object_type in object_types
 }
 
+# One catalog row: (`sys.objects.type`, object count, latest `modify_date`).
+CatalogRow = Tuple[str, int, datetime]
 
-def kind_of(object_type: str) -> Optional[str]:
-    """The kind group of one `sys.objects.type` value, or None for a type outside the groups.
 
-    SQL Server returns `type` as char(2), so a one-letter type ends with a space.
-    """
-    return _KIND_OF_TYPE.get(str(object_type or "").strip())
+def object_types() -> Tuple[str, ...]:
+    """Every `sys.objects.type` value of the kind groups, in group order."""
+    return tuple(object_type for _, group_types in KIND_GROUPS for object_type in group_types)
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,11 @@ class FingerprintEntry:
     count: int = 0
     latest_modified: Optional[datetime] = None
 
-    def to_json(self) -> Dict[str, object]:
+    def with_row(self, count: int, latest_modified: datetime) -> "FingerprintEntry":
+        latest = latest_modified if self.latest_modified is None else max(self.latest_modified, latest_modified)
+        return FingerprintEntry(count=self.count + count, latest_modified=latest)
+
+    def to_dict(self) -> Dict[str, object]:
         latest = "" if self.latest_modified is None else self.latest_modified.isoformat(timespec="microseconds")
         return {"count": self.count, "latest_modified": latest}
 
@@ -57,6 +62,24 @@ class Fingerprint:
     functions: FingerprintEntry = field(default_factory=FingerprintEntry)
     tables: FingerprintEntry = field(default_factory=FingerprintEntry)
 
-    def to_json(self) -> Dict[str, Dict[str, object]]:
+    @classmethod
+    def from_rows(cls, rows: Iterable[CatalogRow]) -> "Fingerprint":
+        """Put each catalog row in its kind group. A type outside the groups counts nowhere.
+
+        SQL Server returns `type` as char(2), so a one-letter type ends with a space.
+        """
+        entries = {kind: FingerprintEntry() for kind, _ in KIND_GROUPS}
+        for object_type, count, latest_modified in rows:
+            kind = _KIND_OF_TYPE.get(str(object_type or "").strip())
+            if kind is not None:
+                entries[kind] = entries[kind].with_row(int(count), latest_modified)
+        return cls(**entries)
+
+    def to_dict(self) -> Dict[str, Dict[str, object]]:
         """The form the Scan Record holds beside `saved_at`."""
-        return {entry.name: getattr(self, entry.name).to_json() for entry in fields(self)}
+        return {entry.name: getattr(self, entry.name).to_dict() for entry in fields(self)}
+
+
+# The kind groups and the fields of a Fingerprint are one list: a rename of one
+# without the other fails at import, not in a scan.
+assert [kind for kind, _ in KIND_GROUPS] == [entry.name for entry in fields(Fingerprint)]

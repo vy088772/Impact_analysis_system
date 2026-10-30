@@ -14,8 +14,8 @@ from typing import Optional
 import pytest
 
 import code_analyzer.sql_analyzer as sql_analyzer_module
-from service import sql_cache_store
 from code_analyzer.sql_fingerprint import Fingerprint
+from service import sql_cache_store
 from service.sql_cache_store import CacheIdentity, ScanConnection
 from tests.sql_cache_fixtures import CACHE_VERSION, cache_payload, fingerprint
 from tests.test_cache_freshness_api import (  # noqa: F401  (fixtures and helpers)
@@ -91,7 +91,7 @@ def test_the_scan_writes_the_fingerprint_that_the_reader_returned_at_the_start(
 
     record = scan_record(sql_root, "AlphaDb")
     # The committed sample cache pins the JSON form of a Fingerprint.
-    assert record["fingerprint"] == with_procedures(3).to_json()
+    assert record["fingerprint"] == with_procedures(3).to_dict()
     assert record["saved_at"]
     assert listing()["Alpha"]["AlphaDb"]["freshness"] == "current"
 

@@ -301,7 +301,7 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
         try:
             data = sql_cache_store.get_or_dump(
                 sql_cache_store.CacheIdentity.of(TEST_SERVER, "TestDb"),
-                connection_server=TEST_SERVER,
+                sql_cache_store.ScanConnection(TEST_SERVER),
                 refresh=True,
             )
             # ADR-0031：舊有 dependencies/write_dependencies 欄位名稱不能出現在

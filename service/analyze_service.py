@@ -3740,14 +3740,12 @@ def refresh_sql_source(
     回傳 {database, procedures, views, functions, tables} 數量摘要；
     SQL Execution Graph 會與 object definitions 一起落地到 SQL cache。
     """
-    from .sql_cache_store import CacheIdentity, get_or_dump
+    from .sql_cache_store import CacheIdentity, ScanConnection, get_or_dump
 
     data = get_or_dump(
         CacheIdentity.of(server, db_name),
-        connection_server=server,
+        ScanConnection(server, user_id, password),
         refresh=True,
-        user_id=user_id,
-        password=password,
         progress_callback=progress_callback,
     )
     return {

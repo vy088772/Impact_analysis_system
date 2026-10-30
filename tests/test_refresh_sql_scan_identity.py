@@ -71,10 +71,8 @@ def test_get_or_dump_hands_the_override_to_the_analyzer(monkeypatch) -> None:
     try:
         sql_cache_store.get_or_dump(
             sql_cache_store.CacheIdentity.of("vmsystest07.topmost.com.tw", "SysErrorRecord"),
-            connection_server="vmsystest07.topmost.com.tw",
+            sql_cache_store.ScanConnection("vmsystest07.topmost.com.tw", "ScanUser", "secret"),
             refresh=True,
-            user_id="ScanUser",
-            password="secret",
         )
     except RuntimeError:
         pass  # _FakeAnalyzer.connect() returns False; the call under test already happened.

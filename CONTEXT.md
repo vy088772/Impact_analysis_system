@@ -126,6 +126,10 @@ The record that one SQL Cache Identity was actually scanned, and when — writte
 A small summary of one Database that Impact reads from the system catalog of SQL Server (`sys.objects`). It holds, for each kind group, the object count and the latest `modify_date`. The kind groups are procedures (`P`), views (`V`), functions (`FN`, `IF`, `TF`), and tables (`U`). Its scope equals the scope of a SQL scan: it excludes the objects that SQL Server ships and the schemas that SQL Server owns. A drop changes a count, and an `ALTER TABLE` changes a time. Impact compares two Fingerprints only for equality. It is not a Contract Fingerprint, which identifies the behaviour of an External Wrapper Contract. See [ADR-0045](docs/adr/0045-a-question-never-rebuilds-a-cache.md).
 _Avoid_: database hash, schema version, checksum
 
+**Scan Connection**:
+How a SQL scan reaches the SQL Server of one cache: the connection address and the scan account override. The address is the one the caller gives, so it keeps a named instance (`host\instance`). The SQL Cache Identity drops that instance. The scan account override applies only when it has both a user id and a password. Otherwise the global scan account applies. The scan and the Fingerprint reader both use one Scan Connection. See [ADR-0010](docs/adr/0010-scan-identity-independent-of-app-credentials.md).
+_Avoid_: credentials, connection string, login
+
 **C# Scan Result**:
 The saved result of one C# project scan, which the scan store writes under `data/scan_cache`. `llamaindex-spec-rag` reads it with a restricted unpickler that admits only a fixed list of classes. It is not a Scan Record. A Scan Record describes one SQL cache, and a C# Scan Result describes one C# project. A source without a repository (an empty `repo`) has no C# Scan Result: a question about it reads no scan and reports no `csharp` cache, never `skipped` and never `outdated`, the same as the update page.
 _Avoid_: scan record, scan cache entry
