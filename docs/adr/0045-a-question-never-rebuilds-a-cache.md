@@ -53,3 +53,41 @@ The decision for the check follows. Ticket 02 of `.scratch/sql-cache-behind-sour
 - The rules for C# also apply to SQL. A question never runs the check. A `behind_source` SQL cache does not block a question. "Update all" leaves the cache out.
 - The check reads a shared SQL cache one time. It connects with the address that a refresh of that cache uses, so a named instance connects.
 - The service keeps the current Fingerprints in memory with the remote heads, and keeps one check time for both. A restart forgets them.
+
+## Amendment: one check time for each system (2026-11-02)
+
+This amendment changes the rule "keeps one check time for both" of the amendment of 2026-10-30. The accepted decisions are in `TCCDIV1/AI_LlamaIndex` issue #8. Issue #9 builds this part.
+
+- `POST /cache_freshness/check` accepts an optional `system_id`. With `system_id`, the check reads only the repository and the declared SQL Databases of that catalog system. Without `system_id`, the check reads every system, as before.
+- The check merges its answers into the answers that the service keeps. It replaces only the remote heads and the Fingerprints that it read. Thus a check of one system keeps the results of the other systems. A source that gives no answer loses its kept answer.
+- The service keeps one check time for each catalog system. The listing gives each system its own `source_checked_at`. A check without `system_id` sets the time of every system. The listing has no global check time.
+- A shared SQL cache has one Fingerprint. A check of one system shows the new result under every system that uses the cache. Only the time of the checked system changes.
+- A locked C# row stays out of the check, as a locked SQL row does. A lock that arrives after the check hides the kept head, so a locked row is never `behind_source`.
+- An unknown `system_id` gets HTTP 404, and the check reads nothing.
+
+Each analyst action on the update page still asks for the check, so the rule "A question never runs this check" stays. Later tickets of issue #8 move the check of every system from the page open to the Daily Source Check of the web.
+
+## Amendment: the page shows a read failure (2026-11-02)
+
+Before this amendment, a row whose repository or Database the check could not read looked `current`. The analyst could not see the failure. The accepted decisions are in `TCCDIV1/AI_LlamaIndex` issue #8. Issue #10 builds this part.
+
+- The check keeps a short reason for each source that it could not read, for example a timeout or a failed login. The reason never holds the PAT or the password.
+- The listing gives the reason on the row as `source_check_failure`. The field is empty when the check read the source, before the first check, and for a locked row. A locked row needs no failure, because its Lock Reason already explains it.
+- A source has a kept answer or a failure, never both. A later successful read clears the failure. A failed read still forgets the kept answer, so a failure is never `behind_source`.
+- A read failure is not a Cache Freshness value. It changes no `freshness`. The rules for a Pinned System, an Unread System, and "update all" stay the same.
+- The Environment Check and the check give the same reasons for the same `git ls-remote` failure and the same SQL Server login failure.
+- The update page shows "無法檢查" for a C# or SQL row with a failure, and the reason as the hover text. `outdated` and `refreshing` show before "無法檢查".
+
+## Amendment: the web checks in the background (2026-11-02)
+
+This amendment replaces the rule "The update page checks for `behind_source` when an analyst opens it, and again when the analyst asks for a new check". The accepted decisions are in `TCCDIV1/AI_LlamaIndex` issue #8. Issue #12 builds this part.
+
+- The update page does not start a check when it opens. It shows the results of the last check immediately.
+- The web starts a Daily Source Check in the background when it starts. The web does not wait for it. After that, the web starts it again every 24 hours. The interval starts when the web starts.
+- The Daily Source Check puts every catalog system into the Source Check Queue of the web in catalog order. The queue checks one system at a time, with `POST /cache_freshness/check` and that `system_id`.
+- An analyst checks one system with the "檢查來源" button of that system. The request moves the system to the front of the queue. Thus the Daily Source Check does not check that system again.
+- The page header shows the progress of the Daily Source Check, for example "背景檢查中：3 / 12 個系統". The page header has no "檢查來源" button.
+- The web has no endpoint that checks every system with one request. The Impact service still accepts a check without `system_id`.
+- The web keeps no check result and no check time in a file. A restart of the web starts a new Daily Source Check.
+
+The rule "A question never runs this check" stays.

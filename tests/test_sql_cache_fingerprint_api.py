@@ -42,8 +42,10 @@ class FakeReader:
         self.current: Optional[Fingerprint] = None
         self.calls: list[tuple[CacheIdentity, ScanConnection]] = []
 
-    def __call__(self, identity: CacheIdentity, connection: ScanConnection) -> Optional[Fingerprint]:
+    def __call__(self, identity: CacheIdentity, connection: ScanConnection) -> Fingerprint:
         self.calls.append((identity, connection))
+        if self.current is None:
+            raise sql_cache_store.FingerprintUnreadable("資料庫沒有回應")
         return self.current
 
 
@@ -145,7 +147,7 @@ def test_a_cache_of_the_previous_format_version_lists_as_outdated(world, sql_roo
     assert row["last_scanned_at"]
 
 
-# The one reader, over a fake analyzer: no Fingerprint when it cannot connect or the query fails.
+# The one reader, over a fake analyzer: a short reason when it cannot connect or the query fails.
 
 
 class FakeServer:
@@ -153,6 +155,7 @@ class FakeServer:
 
     def __init__(self) -> None:
         self.connects = True
+        self.connect_error: Optional[Exception] = None
         self.fails = False
         self.seen: dict = {}
         self.disconnected = False
@@ -204,14 +207,57 @@ def test_the_reader_connects_to_the_address_of_the_connection(sql_server) -> Non
     assert sql_server.seen["user_id"] == ""
 
 
-def test_the_reader_returns_no_fingerprint_when_it_cannot_connect(sql_server) -> None:
+def unreadable_reason(connection: ScanConnection = ScanConnection(SERVER)) -> str:
+    with pytest.raises(sql_cache_store.FingerprintUnreadable) as failure:
+        sql_cache_store.read_fingerprint(CacheIdentity.of(SERVER, "AlphaDb"), connection)
+    return str(failure.value)
+
+
+def odbc_error(state: str, message: str) -> Exception:
+    """A pyodbc error, as the driver raises it: its first argument is the SQLSTATE."""
+    pyodbc = pytest.importorskip("pyodbc")
+    return pyodbc.Error(state, message)
+
+
+def test_a_reader_that_cannot_connect_gives_the_reason(sql_server) -> None:
+    sql_server.connects = False
+    sql_server.connect_error = odbc_error("28000", "Login failed for user 'ScanUser'.")
+
+    assert unreadable_reason() == "SQL Server 拒絕這個登入帳號"
+
+
+def test_a_reader_whose_login_times_out_gives_the_reason(sql_server) -> None:
+    sql_server.connects = False
+    sql_server.connect_error = odbc_error("HYT00", "Login timeout expired")
+
+    assert "沒有回應" in unreadable_reason()
+
+
+def test_a_reader_that_cannot_connect_for_no_known_cause_still_gives_a_reason(sql_server) -> None:
     sql_server.connects = False
 
-    assert sql_cache_store.read_fingerprint(CacheIdentity.of(SERVER, "AlphaDb"), ScanConnection(SERVER)) is None
+    assert unreadable_reason()
 
 
-def test_the_reader_returns_no_fingerprint_when_the_query_fails(sql_server) -> None:
+def test_a_reader_whose_query_fails_gives_the_reason_and_disconnects(sql_server) -> None:
     sql_server.fails = True
 
-    assert sql_cache_store.read_fingerprint(CacheIdentity.of(SERVER, "AlphaDb"), ScanConnection(SERVER)) is None
+    assert "query failed" in unreadable_reason()
     assert sql_server.disconnected
+
+
+def test_a_reason_never_holds_the_password(sql_server) -> None:
+    sql_server.connects = False
+    sql_server.connect_error = RuntimeError("bad connection string PWD=secret;")
+
+    assert "secret" not in unreadable_reason(ScanConnection(SERVER, "ScanUser", "secret"))
+
+
+def test_a_reason_is_one_short_line(sql_server) -> None:
+    sql_server.connects = False
+    sql_server.connect_error = RuntimeError("driver said " + "x" * 500 + "\nand a second line")
+
+    reason = unreadable_reason()
+
+    assert "\n" not in reason
+    assert len(reason) <= 160

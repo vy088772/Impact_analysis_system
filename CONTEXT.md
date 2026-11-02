@@ -356,6 +356,10 @@ _Avoid_: health check, preflight
 The failure of the last Environment Check that stops the update of one cache. A SQL row gets the reason of its server, and a C# row gets the reason of its repository. A Refresh Job for a cache with a Lock Reason gets HTTP 409 and does not start, and "update all" skips it. An empty Lock Reason means that the cache is not locked.
 _Avoid_: blocked reason, disabled reason
 
+**Source Check Failure**:
+The short reason why the last `behind_source` check could not read the source of one cache: a repository that `git ls-remote` could not read, or a Database whose Fingerprint the check could not read. Examples are a timeout and a failed login. A later successful read clears it. It is not a Cache Freshness: it changes no state, so a row with a Source Check Failure keeps its Cache Freshness. A locked cache has no Source Check Failure, because its Lock Reason already explains it. See ADR-0045.
+_Avoid_: read error, check error, unread source
+
 ## Repository Management
 
 **Clone**:

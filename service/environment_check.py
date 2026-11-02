@@ -17,7 +17,6 @@ Each probe returns None when it passes, or a plain reason when it fails. Tests r
 from __future__ import annotations
 
 import math
-import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -27,6 +26,7 @@ from typing import Callable, Iterable, List, Mapping, Optional, Tuple
 from config.settings import settings
 
 from . import source_check, sql_cache_store, system_targets
+from .failure_reasons import no_answer, sql_failure_reason
 from .schemas import EnvironmentCheckResponse, SqlCredentialOverride, UpdateCapabilityResult
 
 SQL_LOGIN_TIMEOUT_SECONDS = 5
@@ -35,10 +35,6 @@ GIT_TIMEOUT_SECONDS = 15
 GIT_AT_ONCE = 8
 # A probe that runs past its limit plus this margin fails, even when its own time limit did not work.
 _MARGIN_SECONDS = 3
-
-
-def _no_answer(what: str, seconds: float) -> str:
-    return f"{what} 在 {seconds:g} 秒內沒有回應"
 
 
 def probe_sql_server(server: str, database: str, user_id: str, password: str) -> Optional[str]:
@@ -53,38 +49,18 @@ def probe_sql_server(server: str, database: str, user_id: str, password: str) ->
         )
         config.timeout = SQL_LOGIN_TIMEOUT_SECONDS
         connection = pyodbc.connect(config.get_connection_string(), timeout=SQL_LOGIN_TIMEOUT_SECONDS)
-    except pyodbc.Error as exc:
-        state = str(exc.args[0]) if exc.args else ""
-        if state == "HYT00":
-            return _no_answer("SQL Server", SQL_LOGIN_TIMEOUT_SECONDS)
-        if state in ("08001", "08S01"):
-            return "連不到 SQL Server（主機名稱錯誤、網路不通，或伺服器沒有回應）"
-        if state == "28000":
-            return "SQL Server 拒絕這個登入帳號"
-        # Windows says IM002; unixODBC says 01000 "Can't open lib".
-        if state == "IM002" or "Can't open lib" in str(exc):
-            return "這台機器沒有 SQL Server 的 ODBC 驅動程式"
-        return f"SQL Server 連線失敗（{state or type(exc).__name__}）"
     except Exception as exc:  # a broken configuration is a failure of this server only
-        return f"SQL Server 連線失敗：{exc}"
+        return sql_failure_reason(exc, SQL_LOGIN_TIMEOUT_SECONDS)
     connection.close()
     return None
 
 
 def probe_azure_repos(source: dict) -> Optional[str]:
     """Run `git ls-remote` against the repository of `source`."""
-    if not source_check.can_ask_remote(source):
-        return "Impact 服務沒有設定 AZURE_DEVOPS_ORG 或 AZURE_DEVOPS_PAT"
     try:
-        result = source_check.ls_remote(source, timeout=GIT_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        return _no_answer("Azure Repos", GIT_TIMEOUT_SECONDS)
-    except FileNotFoundError:
-        return "這台機器沒有 git"
-    if result.returncode != 0:
-        lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
-        detail = (lines[-1] if lines else f"exit {result.returncode}").replace(settings.AZURE_DEVOPS_PAT or "\0", "***")
-        return f"git ls-remote 失敗：{detail}"
+        source_check.read_ls_remote(source, timeout=GIT_TIMEOUT_SECONDS)
+    except source_check.SourceUnreadable as exc:
+        return str(exc)
     return None
 
 
@@ -205,7 +181,7 @@ def run(
     last = LastCheck()
     for index, (probe, thread) in enumerate(zip(probes, threads)):
         thread.join(max(0.0, started + probe.wait - time.monotonic()))
-        reason = _no_answer(probe.label, probe.time_limit) if thread.is_alive() else outcomes[index]
+        reason = no_answer(probe.label, probe.time_limit) if thread.is_alive() else outcomes[index]
         items.append(
             UpdateCapabilityResult(
                 capability=probe.capability,

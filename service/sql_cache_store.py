@@ -38,6 +38,8 @@ from canonical_object_identity import ObjectName, bare_key, full_key, parse
 from code_analyzer.sql_fingerprint import Fingerprint
 from config.settings import settings
 
+from .failure_reasons import short_reason, sql_failure_reason
+
 if TYPE_CHECKING:
     from code_analyzer.sql_analyzer import SQLAnalyzer
 
@@ -505,26 +507,38 @@ def _sql_analyzer(identity: CacheIdentity, connection: ScanConnection) -> "SQLAn
     )
 
 
-def read_fingerprint(identity: CacheIdentity, connection: ScanConnection) -> Optional[Fingerprint]:
+class FingerprintUnreadable(Exception):
+    """讀不到一份 SQL 快取目前的 Fingerprint。訊息是頁面顯示的簡短原因。"""
+
+
+def _without_password(reason: str, connection: ScanConnection) -> str:
+    return short_reason(reason.replace(connection.password, "***") if connection.password else reason)
+
+
+def read_fingerprint(identity: CacheIdentity, connection: ScanConnection) -> Fingerprint:
     """從 SQL Server 的系統目錄讀一份 SQL 快取目前的 Fingerprint。
 
     這是唯一讀 Fingerprint 的地方：scan 與 `behind_source` 檢查都呼叫它。
     它只讀 `sys.objects`，從不讀定義。
 
-    連不上或查詢失敗時回傳 None。呼叫端這時對這個 Database 一無所知，
-    這不算變更。
+    連不上或查詢失敗時丟出 FingerprintUnreadable，訊息是簡短原因（不含密碼）。
+    呼叫端這時對這個 Database 一無所知，這不算變更。
     """
     db = identity.database
     open_analyzer = None
     try:
         analyzer = _sql_analyzer(identity, connection)
         if not analyzer.connect():
-            return None
+            reason = sql_failure_reason(getattr(analyzer, "connect_error", None))
+            raise FingerprintUnreadable(_without_password(reason, connection))
         open_analyzer = analyzer
         return analyzer.read_fingerprint()
+    except FingerprintUnreadable:
+        raise
     except Exception as exc:
-        print(f"⚠️  無法讀取 Fingerprint（非致命）：{db}：{exc}")
-        return None
+        print(f"⚠️  無法讀取 Fingerprint（非致命）：{db}：{type(exc).__name__}")
+        reason = f"讀取 Fingerprint 失敗：{exc}"
+        raise FingerprintUnreadable(_without_password(reason, connection)) from None
     finally:
         if open_analyzer is not None:
             try:
@@ -812,7 +826,10 @@ def get_or_dump(
     _report_progress(progress_callback, "connecting", 0, 1, db)
     # 先讀 Fingerprint 再讀定義：scan 期間的變更只會讓記錄的 Fingerprint 比內容舊，
     # 不會比內容新。
-    fingerprint = read_fingerprint(identity, connection)
+    try:
+        fingerprint: Optional[Fingerprint] = read_fingerprint(identity, connection)
+    except FingerprintUnreadable:
+        fingerprint = None  # 記錄 null：之後的檢查不會把這份快取標成 behind_source
     analyzer = _sql_analyzer(identity, connection)
     if not analyzer.connect():
         raise RuntimeError(f"無法連線資料庫：{db}")

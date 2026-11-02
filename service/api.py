@@ -20,7 +20,7 @@
     GET  /cache_freshness → CacheFreshnessResponse（每份 SQL 快取與 C# Scan Result 的
                         Cache Freshness，依 catalog 系統分組；唯讀）
     POST /cache_freshness/check → CacheFreshnessResponse（執行 behind_source 檢查，回傳新清單；
-                        只有更新頁會呼叫，問答不會）
+                        可只檢查一個 system_id；只有 web 會呼叫，問答不會）
     POST /refresh_jobs → RefreshJobResponse（提交一個 Refresh Job，排入 Refresh Queue）
     POST /refresh_jobs/update_all → UpdateAllResponse（為每一份 outdated 快取提交一個 Refresh Job）
     GET  /refresh_jobs/{job_id} → RefreshJobResponse（狀態、排隊位置、進度、結果）
@@ -476,25 +476,31 @@ def read_cache_freshness() -> CacheFreshnessResponse:
 
 
 def _freshness_response(catalog: list) -> CacheFreshnessResponse:
-    return CacheFreshnessResponse(
-        systems=cache_freshness.list_by_system(catalog),
-        source_checked_at=source_check.checked_at(),
-    )
+    return CacheFreshnessResponse(systems=cache_freshness.list_by_system(catalog))
 
 
 @app.post("/cache_freshness/check", response_model=CacheFreshnessResponse)
 def check_behind_source(req: Optional[CacheFreshnessCheckRequest] = None) -> CacheFreshnessResponse:
     """Run the `behind_source` check now and return the new listing (Impact ADR-0045).
 
-    Only the update page calls this: when it opens, and when the analyst asks to check again.
-    It asks each remote repository for its branch head (no clone, no pull). It reads the current
-    Fingerprint of each usable, unlocked SQL cache from the system catalog of its Database (no
-    definitions), with the scan account that a refresh of that server uses (ADR-0010). A question
-    never runs this check. The body is optional: with no body, every server uses the global scan
+    Only the web calls this. With `system_id`, it reads only the repository and the declared SQL
+    Databases of that catalog system, and keeps the results of the other systems. With no
+    `system_id`, it reads every system. It asks each remote repository for its branch head (no
+    clone, no pull). It reads the current Fingerprint of each usable, unlocked SQL cache from the
+    system catalog of its Database (no definitions), with the scan account that a refresh of that
+    server uses (ADR-0010). A locked row stays out. A question never runs this check. The body is
+    optional: with no body, the check reads every system and every server uses the global scan
     account."""
-    scan_accounts = (req or CacheFreshnessCheckRequest()).sql_credentials
+    req = req or CacheFreshnessCheckRequest()
     catalog = _catalog()
-    source_check.check(system_targets.sources_of(catalog), cache_freshness.sql_check_targets(catalog, scan_accounts))
+    checked = catalog if req.system_id is None else system_targets.systems_named(catalog, req.system_id)
+    if not checked:
+        raise HTTPException(status_code=404, detail=f"catalog 沒有系統 {req.system_id}")
+    source_check.check(
+        cache_freshness.csharp_check_targets(checked),
+        cache_freshness.sql_check_targets(checked, req.sql_credentials),
+        [system_targets.system_id_of(system) for system in checked],
+    )
     return _freshness_response(catalog)
 
 

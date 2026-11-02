@@ -18,7 +18,7 @@ from code_analyzer.sql_fingerprint import Fingerprint
 from service import analyze_service, environment_check, source_check, sql_cache_store
 from service.sql_cache_store import CacheIdentity, ScanConnection
 from tests.sql_cache_fixtures import CACHE_VERSION, cache_payload, fingerprint, write_cache
-from tests.test_behind_source_api import check, remote, row_of  # noqa: F401  (fixtures and helpers)
+from tests.test_behind_source_api import check, checked_at, remote, row_of  # noqa: F401  (fixtures and helpers)
 from tests.test_cache_freshness_api import (  # noqa: F401  (fixtures and helpers)
     SERVER,
     GatedRebuild,
@@ -42,15 +42,20 @@ def procedures(count: int, latest_modified: datetime = MORNING) -> Fingerprint:
 
 
 class FakeReader:
-    """Stands in for the one Fingerprint reader: the current Fingerprint of each Database."""
+    """Stands in for the one Fingerprint reader: the current Fingerprint of each Database, or the
+    reason it cannot be read. A Database with no Fingerprint and no reason does not answer."""
 
     def __init__(self) -> None:
         self.current: dict[str, Optional[Fingerprint]] = {}
+        self.failures: dict[str, str] = {}
         self.calls: list[tuple[CacheIdentity, ScanConnection]] = []
 
-    def __call__(self, identity: CacheIdentity, connection: ScanConnection) -> Optional[Fingerprint]:
+    def __call__(self, identity: CacheIdentity, connection: ScanConnection) -> Fingerprint:
         self.calls.append((identity, connection))
-        return self.current.get(identity.database)
+        current = self.current.get(identity.database)
+        if current is None:
+            raise sql_cache_store.FingerprintUnreadable(self.failures.get(identity.database, "資料庫沒有回應"))
+        return current
 
 
 @pytest.fixture
@@ -58,6 +63,7 @@ def reader(monkeypatch, remote):
     fake = FakeReader()
     monkeypatch.setattr(sql_cache_store, "read_fingerprint", fake)
     monkeypatch.setattr(source_check, "_fingerprints", {})
+    monkeypatch.setattr(source_check, "_fingerprint_failures", {})
     return fake
 
 
@@ -108,17 +114,17 @@ def test_the_check_reads_only_usable_sql_caches(world, sql_root, reader) -> None
     assert [identity.database for identity, _ in reader.calls] == ["AlphaDb"]
 
 
-def test_one_check_asks_the_remote_and_reads_the_fingerprint_and_keeps_one_time(
+def test_one_check_asks_the_remote_and_reads_the_fingerprint_and_keeps_one_time_for_each_system(
     world, sql_root, reader, remote
 ) -> None:
     write_sql(sql_root, "AlphaDb", fingerprint=procedures(3))
-    assert client.get("/cache_freshness").json()["source_checked_at"] is None
+    assert checked_at(client.get("/cache_freshness").json(), "Alpha") is None
 
     body = check()
 
     assert remote.calls and reader.calls
-    assert body["source_checked_at"]
-    assert client.get("/cache_freshness").json()["source_checked_at"] == body["source_checked_at"]
+    assert checked_at(body, "Alpha")
+    assert checked_at(client.get("/cache_freshness").json(), "Alpha") == checked_at(body, "Alpha")
 
 
 def test_check_again_reads_the_fingerprint_again_and_forgets_the_previous_answer(

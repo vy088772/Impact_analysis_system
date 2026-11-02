@@ -66,6 +66,16 @@ def azure_source_of(system: dict) -> Optional[dict]:
     return azure if has_repository(azure) else None
 
 
+def system_id_of(system: dict) -> str:
+    """The `system_id` of a catalog system, with no surrounding spaces; empty when it has none."""
+    return str(system.get("system_id") or "").strip()
+
+
+def systems_named(catalog_systems: Iterable[dict], system_id: str) -> List[dict]:
+    """The catalog systems whose `system_id` is `system_id`: one system, or none when the catalog lacks it."""
+    return [system for system in catalog_systems if system_id_of(system) == system_id]
+
+
 def sources_of(catalog_systems: Iterable[dict]) -> List[dict]:
     """The Azure source of each catalog system that has a repository."""
     return [azure for azure in map(azure_source_of, catalog_systems) if azure is not None]
