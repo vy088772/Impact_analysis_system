@@ -33,8 +33,8 @@ FIXTURE_CLONES = Path(__file__).parent / "fixtures" / "web_config_clones"
 
 
 @dataclass(frozen=True)
-class WebConfigClones:
-    """The paths of the source files in the copied fixture clones."""
+class FixtureCloneFiles:
+    """複製出來的 fixture clone 裡，測試要讀的四個原始檔路徑。"""
 
     stc_web_config: Path
     ttpur_web_config: Path
@@ -43,18 +43,18 @@ class WebConfigClones:
 
 
 @pytest.fixture(scope="module")
-def clones(tmp_path_factory) -> WebConfigClones:
+def clones(tmp_path_factory) -> FixtureCloneFiles:
     """把 tests/fixtures/web_config_clones 複製到暫存目錄，當成 STC 與 Y-DOCs 兩份 clone。
 
     這些 fixture 是真實 Web.config 的精簡版，帳號密碼換成假值，所以測試不讀
-    被 git 忽略的 data/repos。每個 repository 的根目錄要有 `.git`，
-    find_clone_root 才會停在那裡，declared_in 才會是 "STC/Web.config"。
+    本機那份被 git 忽略的 clone，也不會因為少了它而被跳過。每個 repository
+    的根目錄要有 `.git`，find_clone_root 才會停在那裡，declared_in 才會是 "STC/Web.config"。
     repo 裡不能 commit `.git` 目錄，所以這裡複製後再建立。"""
     root = tmp_path_factory.mktemp("repos")
     shutil.copytree(FIXTURE_CLONES, root, dirs_exist_ok=True)
     for repository in ("STC", "Y-DOCs"):
         (root / repository / ".git").mkdir()
-    return WebConfigClones(
+    return FixtureCloneFiles(
         stc_web_config=root / "STC/STC/Web.config",
         ttpur_web_config=root / "Y-DOCs/TTPUR/Web.config",
         response_web_config=root / "Y-DOCs/Response/Web.config",
@@ -193,11 +193,12 @@ def _view_of(source_file: Path):
 
 class TestDBConnectionTrackerWithView:
     @staticmethod
-    def _stc_view(clones: WebConfigClones):
+    def _stc_view(clones: FixtureCloneFiles):
         return _view_of(clones.stc_global_asax)
 
     @staticmethod
-    def _ttpur_view(clones: WebConfigClones):
+    def _ttpur_view(clones: FixtureCloneFiles):
+        # Default.aspx.cs 不必存在：view 只看它所在目錄的專案檔與 Web.config。
         return _view_of(clones.ttpur_web_config.parent / "Default.aspx.cs")
 
     def test_direct_sqlconnection_from_appsettings_resolves_real_database(self, clones):
