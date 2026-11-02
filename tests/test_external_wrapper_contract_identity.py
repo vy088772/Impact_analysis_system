@@ -692,25 +692,19 @@ def test_the_shipped_sqlobject_contract_states_its_required_parameter_counts() -
         (Path(__file__).resolve().parent.parent / "config" / "external_wrapper_contracts.json")
         .read_text(encoding="utf-8")
     )
-    contracts = registry["contracts"]
-    sqlobject = next(
-        contract
-        for name, contract in contracts.items()
-        if name.casefold().startswith("sqlobject")
-        and any(
-            str(overload.get("method_identity", "")).startswith("sqlobject.createdataset")
-            for overload in contract["methods"]["CreateDataSet"]
-        )
-        and any(
-            overload.get("required_parameter_count") is not None
-            for overload in contract["methods"]["CreateDataSet"]
-        )
+    call_site_identity = (
+        "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[],string,int)"
     )
+    contracts = registry["contracts"]
+    # Several SqlObject builds ship a contract; only the build that declares the
+    # four-parameter call-site overload is the one this test pins.
     call_site_overload = next(
         overload
-        for overload in sqlobject["methods"]["CreateDataSet"]
-        if overload["method_identity"]
-        == "sqlobject.createdataset(string,system.data.sqlclient.sqlparameter[],string,int)"
+        for name, contract in contracts.items()
+        if name.casefold().startswith("sqlobject")
+        for overload in contract["methods"].get("CreateDataSet", [])
+        if overload.get("method_identity") == call_site_identity
+        and overload.get("required_parameter_count") is not None
     )
 
     assert call_site_overload["method_arity"] == 4
