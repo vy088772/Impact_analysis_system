@@ -26,6 +26,7 @@ from typing import Callable, Iterable, List, Mapping, Optional, Tuple
 from config.settings import settings
 
 from . import source_check, sql_cache_store, system_targets
+from .failure_reasons import no_answer, sql_failure_reason
 from .schemas import EnvironmentCheckResponse, SqlCredentialOverride, UpdateCapabilityResult
 
 SQL_LOGIN_TIMEOUT_SECONDS = 5
@@ -49,7 +50,7 @@ def probe_sql_server(server: str, database: str, user_id: str, password: str) ->
         config.timeout = SQL_LOGIN_TIMEOUT_SECONDS
         connection = pyodbc.connect(config.get_connection_string(), timeout=SQL_LOGIN_TIMEOUT_SECONDS)
     except Exception as exc:  # a broken configuration is a failure of this server only
-        return sql_cache_store.sql_failure_reason(exc, SQL_LOGIN_TIMEOUT_SECONDS)
+        return sql_failure_reason(exc, SQL_LOGIN_TIMEOUT_SECONDS)
     connection.close()
     return None
 
@@ -180,7 +181,7 @@ def run(
     last = LastCheck()
     for index, (probe, thread) in enumerate(zip(probes, threads)):
         thread.join(max(0.0, started + probe.wait - time.monotonic()))
-        reason = source_check.no_answer(probe.label, probe.time_limit) if thread.is_alive() else outcomes[index]
+        reason = no_answer(probe.label, probe.time_limit) if thread.is_alive() else outcomes[index]
         items.append(
             UpdateCapabilityResult(
                 capability=probe.capability,

@@ -60,12 +60,12 @@ This amendment changes the rule "keeps one check time for both" of the amendment
 
 - `POST /cache_freshness/check` accepts an optional `system_id`. With `system_id`, the check reads only the repository and the declared SQL Databases of that catalog system. Without `system_id`, the check reads every system, as before.
 - The check merges its answers into the answers that the service keeps. It replaces only the remote heads and the Fingerprints that it read. Thus a check of one system keeps the results of the other systems. A source that gives no answer loses its kept answer.
-- The service keeps one check time for each catalog system. The listing gives each system its own `source_checked_at`. A full check sets the time of every system. The listing has no global check time.
+- The service keeps one check time for each catalog system. The listing gives each system its own `source_checked_at`. A check without `system_id` sets the time of every system. The listing has no global check time.
 - A shared SQL cache has one Fingerprint. A check of one system shows the new result under every system that uses the cache. Only the time of the checked system changes.
 - A locked C# row stays out of the check, as a locked SQL row does. A lock that arrives after the check hides the kept head, so a locked row is never `behind_source`.
 - An unknown `system_id` gets HTTP 404, and the check reads nothing.
 
-Each analyst action on the update page still asks for the check, so the rule "A question never runs this check" stays. Later tickets of issue #8 move the full check from the page open to a daily background check of the web.
+Each analyst action on the update page still asks for the check, so the rule "A question never runs this check" stays. Later tickets of issue #8 move the check of every system from the page open to the Daily Source Check of the web.
 
 ## Amendment: the page shows a read failure (2026-11-02)
 

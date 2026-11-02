@@ -34,6 +34,7 @@ from code_analyzer.sql_fingerprint import Fingerprint
 from config.settings import settings
 
 from . import sql_cache_store
+from .failure_reasons import no_answer
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +96,6 @@ def ls_remote(source: dict, timeout: float = _LS_REMOTE_TIMEOUT_SECONDS) -> subp
         timeout=timeout,
         env=env,
     )
-
-
-def no_answer(what: str, seconds: float) -> str:
-    """The reason of a source that gave no answer in its time limit."""
-    return f"{what} 在 {seconds:g} 秒內沒有回應"
 
 
 def read_ls_remote(source: dict, timeout: float = _LS_REMOTE_TIMEOUT_SECONDS) -> str:
