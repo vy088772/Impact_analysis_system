@@ -77,3 +77,17 @@ Before this amendment, a row whose repository or Database the check could not re
 - A read failure is not a Cache Freshness value. It changes no `freshness`. The rules for a Pinned System, an Unread System, and "update all" stay the same.
 - The Environment Check and the check give the same reasons for the same `git ls-remote` failure and the same SQL Server login failure.
 - The update page shows "無法檢查" for a C# or SQL row with a failure, and the reason as the hover text. `outdated` and `refreshing` show before "無法檢查".
+
+## Amendment: the web checks in the background (2026-11-02)
+
+This amendment replaces the rule "The update page checks for `behind_source` when an analyst opens it, and again when the analyst asks for a new check". The accepted decisions are in `TCCDIV1/AI_LlamaIndex` issue #8. Issue #12 builds this part.
+
+- The update page does not start a check when it opens. It shows the results of the last check immediately.
+- The web starts a Daily Source Check in the background when it starts. The web does not wait for it. After that, the web starts it again every 24 hours. The interval starts when the web starts.
+- The Daily Source Check puts every catalog system into the Source Check Queue of the web in catalog order. The queue checks one system at a time, with `POST /cache_freshness/check` and that `system_id`.
+- An analyst checks one system with the "檢查來源" button of that system. The request moves the system to the front of the queue. Thus the Daily Source Check does not check that system again.
+- The page header shows the progress of the Daily Source Check, for example "背景檢查中：3 / 12 個系統". The page header has no "檢查來源" button.
+- The web has no endpoint for a full check. The Impact service still accepts a check without `system_id`.
+- The web keeps no check result and no check time in a file. A restart of the web starts a new Daily Source Check.
+
+The rule "A question never runs this check" stays.
