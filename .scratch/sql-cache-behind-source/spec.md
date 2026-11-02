@@ -79,7 +79,7 @@ One "update all" action rescans them, and each rescan records a Fingerprint.
 **Fingerprint scope.**
 - The query reads `sys.objects` in the scanned Database only.
 - The query excludes objects where `is_ms_shipped` is 1.
-- The query excludes the schemas `sys`, `INFORMATION_SCHEMA`, and `guest`, the same as the object listing of the SQL analyzer.
+- The query excludes the schemas `sys`, `INFORMATION_SCHEMA`, and `guest`, and each schema that starts with `db_`, the same as the object listing of the SQL analyzer.
 - The scope of the Fingerprint equals the scope of the scan. A change outside the scan scope gives no `behind_source`.
 - The granularity is one Database. The check does not name the changed objects.
 

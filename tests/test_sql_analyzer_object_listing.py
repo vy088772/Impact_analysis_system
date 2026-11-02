@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, List, NamedTuple, Optional, Set, Tuple
 
 from code_analyzer.sql_analyzer import ObjectListing, SQLAnalyzer, quote_name
 
@@ -201,20 +201,30 @@ def test_a_typed_menu_name_needs_one_match_across_the_listed_schemas() -> None:
     assert _match_typed_procedure(procedures, "sales.usp_Save") is None
 
 
-def _listing_scope(cursor: ListingCursor) -> Dict[str, Tuple[bool, Set[str]]]:
-    """For each kind of the listing query: (drops shipped objects, the `sys.objects.type` values it keeps).
+class SelectScope(NamedTuple):
+    """The `sys.objects` scope of one SELECT of the listing query."""
+
+    kind_group: str
+    drops_shipped: bool
+    object_types: Set[str]
+
+
+def _listing_scope(cursor: ListingCursor) -> List[SelectScope]:
+    """The scope of each SELECT of the listing query, in query order.
 
     The parse ignores spacing, case, and the order of the conditions, so a new
     layout of the query does not break the test.
     """
     query = [query for query, _ in cursor.executed if "UNION ALL" in query][0]
-    scope = {}
+    scopes = []
     for select in re.split(r"\bUNION\s+ALL\b", query, flags=re.IGNORECASE):
-        kind = re.search(r"SELECT\s+'(\w+)'\s+AS\s+kind", select, flags=re.IGNORECASE).group(1)
+        kind_group = re.search(r"SELECT\s+'(\w+)'\s+AS\s+kind", select, flags=re.IGNORECASE)
+        assert kind_group is not None, f"a SELECT with no kind: {select}"
         shipped = re.search(r"\bo\.is_ms_shipped\s*=\s*0\b", select, flags=re.IGNORECASE) is not None
         types = re.search(r"\bo\.type\s+IN\s*\(([^)]*)\)", select, flags=re.IGNORECASE)
-        scope[kind] = (shipped, set(re.findall(r"'(\w+)'", types.group(1))) if types else set())
-    return scope
+        object_types = set(re.findall(r"'(\w+)'", types.group(1))) if types else set()
+        scopes.append(SelectScope(kind_group.group(1), shipped, object_types))
+    return scopes
 
 
 def test_the_listing_drops_the_objects_that_sql_server_ships() -> None:
@@ -223,7 +233,7 @@ def test_the_listing_drops_the_objects_that_sql_server_ships() -> None:
     analyzer.list_objects()
 
     # The scan holds no shipped object, so the Fingerprint can drop them too.
-    assert all(shipped for shipped, _ in _listing_scope(cursor).values())
+    assert all(scope.drops_shipped for scope in _listing_scope(cursor))
 
 
 def test_the_listing_keeps_only_the_object_types_of_the_fingerprint_kind_groups() -> None:
@@ -233,7 +243,10 @@ def test_the_listing_keeps_only_the_object_types_of_the_fingerprint_kind_groups(
 
     # The scope of the scan equals the scope of the Fingerprint: a CLR procedure
     # (`PC`) or a CLR function (`FS`, `FT`) is in neither.
-    kept = {(kind, object_type) for kind, (_, types) in _listing_scope(cursor).items() for object_type in types}
+    scopes = _listing_scope(cursor)
+    # One SELECT for each Kind Group: a second SELECT of one group cannot hide.
+    assert len({scope.kind_group for scope in scopes}) == len(scopes)
+    kept = {(scope.kind_group, object_type) for scope in scopes for object_type in scope.object_types}
     assert kept == {
         ("procedures", "P"),
         ("views", "V"),

@@ -27,7 +27,7 @@ KIND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 _TYPES_OF_GROUP: Dict[str, Tuple[str, ...]] = dict(KIND_GROUPS)
 
 _KIND_OF_TYPE: Dict[str, str] = {
-    object_type: kind for kind, object_types in KIND_GROUPS for object_type in object_types
+    object_type: kind_group for kind_group, object_types in KIND_GROUPS for object_type in object_types
 }
 
 # One catalog row: (`sys.objects.type`, object count, latest `modify_date`).
@@ -106,5 +106,5 @@ class Fingerprint:
 # The Kind Groups and the fields of a Fingerprint are one list: a rename of one
 # without the other fails at import, not in a scan. An `if`, not an `assert`, so
 # that `python -O` keeps the check.
-if [kind for kind, _ in KIND_GROUPS] != [entry.name for entry in fields(Fingerprint)]:
+if kind_group_names() != tuple(entry.name for entry in fields(Fingerprint)):
     raise RuntimeError("KIND_GROUPS and the fields of Fingerprint differ")
