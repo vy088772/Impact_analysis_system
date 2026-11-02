@@ -2,11 +2,11 @@
 
 ### Issue tracker
 
-Issues live as files under `.scratch/<feature>/` in this repo (local Markdown). See `docs/agents/issue-tracker.md`.
+Issues and specs live as GitHub issues in `vy088772/Impact_analysis_system` (use the `gh` CLI). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default five roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+Unified label set: the five default roles plus `blocked`, `in-review`, `superseded` and `spec`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
