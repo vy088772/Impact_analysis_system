@@ -13,6 +13,7 @@ from pathlib import Path
 import json
 
 from canonical_object_identity import ObjectName, bare_key, bare_name, parse
+from code_analyzer import sql_fingerprint
 from config.settings import settings, DatabaseConfig
 from schema_resolution import DEFAULT_SCHEMA
 
@@ -131,23 +132,62 @@ _EXCLUDED_SCHEMAS = frozenset({"sys", "information_schema", "guest"})
 _EXCLUDED_SCHEMA_PREFIX = "db_"
 
 
+# The listing and the Fingerprint name the same Kind Groups in the same order: a
+# rename of one without the other fails at import, not in a scan.
+if tuple(kind for kind, *_ in _LISTING_KINDS) != sql_fingerprint.kind_group_names():
+    raise RuntimeError("_LISTING_KINDS and the Kind Groups of a Fingerprint differ")
+
+
 def _is_excluded_schema(schema: str) -> bool:
     folded = schema.casefold()
     return folded in _EXCLUDED_SCHEMAS or folded.startswith(_EXCLUDED_SCHEMA_PREFIX)
 
 
 def _listing_query() -> str:
+    """One query for the four Kind Groups. Each group keeps the `sys.objects` scope of
+    its Fingerprint entry: no object that SQL Server ships, and only the object
+    types of the group (so no CLR procedure or CLR function). The scope of the scan
+    then equals the scope of the Fingerprint.
+    """
     selects = []
     for kind, view, schema_column, name_column, condition in _LISTING_KINDS:
-        where = f" WHERE {condition}" if condition else ""
+        object_types = ", ".join(f"'{object_type}'" for object_type in sql_fingerprint.object_types_of(kind))
+        conditions = [condition] if condition else []
+        conditions += ["o.is_ms_shipped = 0", f"o.type IN ({object_types})"]
         selects.append(
-            f"SELECT '{kind}' AS kind, {schema_column} AS schema_name, "
-            f"{name_column} AS object_name FROM {view}{where}"
+            f"SELECT '{kind}' AS kind, l.{schema_column} AS schema_name, "
+            f"l.{name_column} AS object_name FROM {view} AS l "
+            f"JOIN sys.objects AS o ON o.object_id = "
+            f"OBJECT_ID(QUOTENAME(l.{schema_column}) + '.' + QUOTENAME(l.{name_column})) "
+            f"WHERE {' AND '.join(conditions)}"
         )
     return (
         "SELECT kind, schema_name, object_name FROM (\n"
         + "\nUNION ALL\n".join(selects)
         + "\n) AS listing\nORDER BY kind, schema_name, object_name"
+    )
+
+
+def _fingerprint_query() -> str:
+    """One row for each `sys.objects.type` of the Kind Groups: the object count and the latest `modify_date`.
+
+    The query reads `sys.objects` of the connected Database only. It drops the
+    objects that SQL Server ships, and the schemas that SQL Server owns, with the
+    same schema rule as the object listing.
+    """
+    object_types = ", ".join(f"'{object_type}'" for object_type in sql_fingerprint.object_types())
+    excluded_schemas = ", ".join(f"'{schema}'" for schema in sorted(_EXCLUDED_SCHEMAS))
+    # `_` is a wildcard in LIKE; `[_]` makes it the literal prefix of `db_`.
+    excluded_prefix = _EXCLUDED_SCHEMA_PREFIX.replace("_", "[_]")
+    return (
+        "SELECT o.type AS object_type, COUNT(*) AS object_count, "
+        "MAX(o.modify_date) AS latest_modified\n"
+        "FROM sys.objects AS o\n"
+        "JOIN sys.schemas AS s ON s.schema_id = o.schema_id\n"
+        f"WHERE o.is_ms_shipped = 0 AND o.type IN ({object_types})\n"
+        f"AND LOWER(s.name) NOT IN ({excluded_schemas})\n"
+        f"AND LOWER(s.name) NOT LIKE '{excluded_prefix}%'\n"
+        "GROUP BY o.type"
     )
 
 
@@ -344,6 +384,17 @@ class SQLAnalyzer:
             if not _is_excluded_schema(row.schema_name)
             and (kind is None or row.kind == kind)
         ]
+
+    def read_fingerprint(self) -> sql_fingerprint.Fingerprint:
+        """Read the Fingerprint of the connected Database from the system catalog.
+
+        The query reads no definition. A Kind Group with no objects has a count
+        of zero and no latest time.
+        """
+        self.cursor.execute(_fingerprint_query())
+        return sql_fingerprint.Fingerprint.from_rows(
+            (row.object_type, row.object_count, row.latest_modified) for row in self.cursor.fetchall()
+        )
 
     def _get_native_referenced_tables(self, proc_name: str, schema: str) -> Set[ObjectName]:
         """

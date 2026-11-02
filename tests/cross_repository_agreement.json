@@ -380,10 +380,28 @@
       }
     },
     "meta_file": {
-      "cache_version": 11,
+      "cache_version": 12,
       "server": "sqlsrv01.topmost.com.tw",
       "database": "SampleDb",
-      "saved_at": "2026-08-04 13:29:13"
+      "saved_at": "2026-08-04 13:29:13",
+      "fingerprint": {
+        "procedures": {
+          "count": 1,
+          "latest_modified": "2026-08-04T13:00:00.000000"
+        },
+        "views": {
+          "count": 1,
+          "latest_modified": "2026-08-01T09:30:00.000000"
+        },
+        "functions": {
+          "count": 1,
+          "latest_modified": "2026-07-15T08:00:00.250000"
+        },
+        "tables": {
+          "count": 2,
+          "latest_modified": "2026-08-04T12:45:00.000000"
+        }
+      }
     }
   }
 }

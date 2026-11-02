@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from tests.sql_cache_fixtures import (
     analyzer_operation,
     cache_payload,
     execution_graph,
+    fingerprint,
     write_cache,
 )
 
@@ -155,7 +157,17 @@ def _sample_cache_files() -> dict:
         graph=graph,
     )
     with CacheRoot() as root:
-        write_cache(root, identity, payload)
+        write_cache(
+            root,
+            identity,
+            payload,
+            fingerprint=fingerprint(
+                procedures=(1, datetime(2026, 8, 4, 13, 0, 0)),
+                views=(1, datetime(2026, 8, 1, 9, 30, 0)),
+                functions=(1, datetime(2026, 7, 15, 8, 0, 0, 250000)),
+                tables=(2, datetime(2026, 8, 4, 12, 45, 0)),
+            ),
+        )
         return {
             "data_file": json.loads((root / identity.filename).read_text(encoding="utf-8")),
             "meta_file": json.loads((root / identity.meta_filename).read_text(encoding="utf-8")),
@@ -447,7 +459,7 @@ def test_get_or_dump_refuses_to_key_a_cache_by_the_display_alias() -> None:
     """database is a display label; without db_name there is no cache identity."""
     with pytest.raises(ValueError):
         sql_cache_store.get_or_dump(
-            CacheIdentity.of("vmsystest07", ""), connection_server="vmsystest07"
+            CacheIdentity.of("vmsystest07", ""), sql_cache_store.ScanConnection("vmsystest07")
         )
 
 

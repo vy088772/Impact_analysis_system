@@ -1,13 +1,16 @@
-"""The `behind_source` check: is the remote head newer than the scanned commit? (Impact ADR-0045)
+"""The `behind_source` check: did the source change after the scan? (Impact ADR-0045)
 
-The check asks the remote repository for the head commit of a branch (`git ls-remote`, no clone,
-no pull). It runs only when the update page asks for it (`POST /cache_freshness/check`); a
-question never runs it. The service keeps the heads and the time of the last check in memory, so
-a restart forgets them and the rows show no `behind_source` until the next check.
+For a C# Scan Result, the source is the remote repository. The check asks it for the head commit
+of a branch (`git ls-remote`, no clone, no pull). For a SQL cache, the source is the Database. The
+check reads its current Fingerprint from the system catalog (`sql_cache_store.read_fingerprint`).
 
-The comparison with the recorded commit of a C# Scan Result happens when a listing is built
-(`cache_freshness`), so a finished Refresh Job clears `behind_source` with no second check.
-A repository that cannot be reached keeps no head: its row is never `behind_source`.
+The check runs only when the update page asks for it (`POST /cache_freshness/check`); a question
+never runs it. The service keeps the heads, the Fingerprints and the one time of the last check in
+memory, so a restart forgets them and the rows show no `behind_source` until the next check.
+
+The comparison with the recorded commit or the recorded Fingerprint happens when a listing is
+built (`cache_freshness`), so a finished Refresh Job clears `behind_source` with no second check.
+A repository or a Database that cannot be read keeps no value: its row is never `behind_source`.
 """
 
 from __future__ import annotations
@@ -19,10 +22,13 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 from urllib.parse import quote
 
+from code_analyzer.sql_fingerprint import Fingerprint
 from config.settings import settings
+
+from . import sql_cache_store
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +37,7 @@ _MAX_PARALLEL_CHECKS = 4
 
 _lock = threading.Lock()
 _heads: dict[tuple[str, str, str], str] = {}
+_fingerprints: dict[sql_cache_store.CacheIdentity, Fingerprint] = {}
 _checked_at: Optional[str] = None
 
 
@@ -96,16 +103,29 @@ def fetch_remote_head(source: dict) -> Optional[str]:
     return fields[0] if fields else None
 
 
-def check(sources: Iterable[dict]) -> None:
-    """Ask the remote for the head of each distinct repository, and keep the answers."""
+def check(
+    sources: Iterable[dict],
+    sql_caches: Optional[Mapping[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection]] = None,
+) -> None:
+    """Ask the remote for the head of each distinct repository, read the current Fingerprint of
+    each SQL cache in `sql_caches` through its Scan Connection, and keep the answers."""
     distinct = {_key_of(source): source for source in sources if source.get("repo")}
     keys = list(distinct)
+    connections = dict(sql_caches or {})
+    identities = list(connections)
     with ThreadPoolExecutor(max_workers=_MAX_PARALLEL_CHECKS) as pool:
-        answers = list(pool.map(lambda key: fetch_remote_head(distinct[key]), keys))
+        head_answers = pool.map(lambda key: fetch_remote_head(distinct[key]), keys)
+        # Through the module, as `fetch_remote_head`: tests replace the one reader there.
+        fingerprint_answers = pool.map(
+            lambda identity: sql_cache_store.read_fingerprint(identity, connections[identity]), identities
+        )
+        heads, fingerprints = list(head_answers), list(fingerprint_answers)
     with _lock:
         global _checked_at
         _heads.clear()
-        _heads.update({key: head for key, head in zip(keys, answers) if head})
+        _heads.update({key: head for key, head in zip(keys, heads) if head})
+        _fingerprints.clear()
+        _fingerprints.update({identity: found for identity, found in zip(identities, fingerprints) if found})
         _checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
 
 
@@ -113,6 +133,12 @@ def remote_head(source: dict) -> Optional[str]:
     """The head kept by the last check, or None when no check has run or the repository failed."""
     with _lock:
         return _heads.get(_key_of(source))
+
+
+def current_fingerprint(identity: sql_cache_store.CacheIdentity) -> Optional[Fingerprint]:
+    """The Fingerprint kept by the last check, or None when no check read one for `identity`."""
+    with _lock:
+        return _fingerprints.get(identity)
 
 
 def checked_at() -> Optional[str]:

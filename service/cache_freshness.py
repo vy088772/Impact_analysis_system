@@ -8,9 +8,12 @@ from the last remote check (`source_check`).
 - `refreshing`: a Refresh Job for the cache runs now. A waiting job changes nothing.
 - A failed job changes nothing either: the state is the state of the cache on disk.
 - `behind_source`: a usable C# Scan Result whose recorded commit differs from the remote head
-  that the last check found. SQL caches never get it. `outdated` and `refreshing` win.
+  that the last check found, or a usable SQL cache whose recorded Fingerprint differs from the
+  current Fingerprint that the last check read. `outdated` and `refreshing` win.
 
-The module only reads. It never scans, clones, pulls or connects to a database.
+The module only reads. It never scans, clones, pulls or connects to a database. It names the
+SQL caches that the check reads (`sql_check_targets`), because it knows which rows are usable and
+not locked. The check itself runs in `source_check`.
 A cache that several systems share is computed once per listing and shows the same state
 under each system.
 """
@@ -18,11 +21,11 @@ under each system.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from . import environment_check, refresh_queue, repo_manager, scan_store, source_check, sql_cache_store
 from .system_targets import azure_source_of, declared_databases
-from .schemas import RefreshRequest, RefreshSqlRequest, UpdateAllRequest
+from .schemas import RefreshRequest, RefreshSqlRequest, SqlCredentialOverride, UpdateAllRequest
 
 CURRENT = "current"
 OUTDATED = "outdated"
@@ -73,16 +76,58 @@ def sql_row(server: str, database: str) -> Optional[dict[str, Any]]:
     except ValueError:
         return None
     usable = sql_cache_store.load_cached(identity) is not None
+    locked_reason = environment_check.sql_lock_reason(identity.server)
     return _row(
         kind="sql",
         key=refresh_queue.sql_key(identity.key),
         label=identity.database,
         has_usable_cache=usable,
         last_scanned_at=sql_cache_store.cached_saved_at(identity),
-        locked_reason=environment_check.sql_lock_reason(identity.server),
+        locked_reason=locked_reason,
+        # A lock that arrives after the check hides the Fingerprint that the check read.
+        behind_source=usable and not locked_reason and _sql_is_behind_source(identity),
         server=identity.server,
         database=identity.database,
     )
+
+
+def _sql_is_behind_source(identity: sql_cache_store.CacheIdentity) -> bool:
+    """True when the last check read a current Fingerprint that differs from the recorded one.
+
+    No current Fingerprint (no check, a read failure, a locked row) and no recorded
+    Fingerprint (a scan that could not read one) both give False."""
+    current = source_check.current_fingerprint(identity)
+    if current is None:
+        return False
+    recorded = sql_cache_store.cached_fingerprint(identity)
+    return recorded is not None and recorded != current
+
+
+def sql_check_targets(
+    catalog_systems: Iterable[dict],
+    sql_credentials: Optional[Mapping[str, SqlCredentialOverride]] = None,
+) -> Dict[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection]:
+    """The SQL caches that the `behind_source` check reads, each with its Scan Connection: each
+    declared cache that is usable and not locked, one time each (a shared cache too).
+
+    The Scan Connection holds the server of the catalog, as a refresh of the cache does, so a
+    named instance (`host\\instance`) connects. It holds the scan account override of the server
+    from `sql_credentials`, keyed by the `server` of a listing row, as in "update all" (ADR-0010).
+    A server with no key gets the global scan account."""
+    scan_accounts = sql_credentials or {}
+    targets: dict[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection] = {}
+    for system in catalog_systems:
+        for server, database in declared_databases(system):
+            try:
+                identity = sql_cache_store.CacheIdentity.of(server, database)
+            except ValueError:
+                continue
+            if identity in targets or environment_check.sql_lock_reason(identity.server):
+                continue
+            if sql_cache_store.load_cached(identity) is not None:
+                account = scan_accounts.get(identity.server) or SqlCredentialOverride()
+                targets[identity] = sql_cache_store.ScanConnection(server, account.db_user_id, account.db_password)
+    return targets
 
 
 def _is_behind_source(source: dict, scan_roots: Iterable[Path]) -> bool:

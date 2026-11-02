@@ -29,13 +29,17 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 # 索引的兩個桶跟 /find_by_sp、/find_by_table 比對時用同一個 bare key
 # （Canonical Object Identity module），特意重用而不是自己另寫一份等價邏輯——否則
 # 索引跟真正的比對邏輯日後可能悄悄長歪，讓索引誤刪一個端點其實會找到的名字。
 from canonical_object_identity import ObjectName, bare_key, full_key, parse
+from code_analyzer.sql_fingerprint import Fingerprint
 from config.settings import settings
+
+if TYPE_CHECKING:
+    from code_analyzer.sql_analyzer import SQLAnalyzer
 
 # 快取格式版本：dump_all_sql_objects() 回傳結構若變動則遞增，讓舊快取自動失效
 # v2：tables[].primary_keys（原供已移除的 fk_resolver.py 之 PK 命名慣例推論關聯使用）
@@ -55,7 +59,10 @@ from config.settings import settings
 # v11：one cache holds one Database. The cache identity and the filename lose the
 # schema part, and the meta file and the Object Location Index lose their `schema`
 # field. A cache written under a three-part filename never loads again.
-_SQL_CACHE_VERSION = 11
+# v12：the Scan Record holds the Fingerprint of the Database beside `saved_at`
+# (`.scratch/sql-cache-behind-source/`). Every older cache lists as `outdated`
+# one time, and its rescan records a Fingerprint.
+_SQL_CACHE_VERSION = 12
 
 # Object Location Index 自己的格式版本，跟上面的快取版本各管各的檔案：索引的形狀
 # 換了、快取的形狀沒換時，只有這一個常數往上加。
@@ -457,24 +464,100 @@ def cached_saved_at(identity: CacheIdentity) -> Optional[str]:
         return None
 
 
-def _meta_payload(identity: CacheIdentity, saved_at: str) -> Dict[str, object]:
+def cached_fingerprint(identity: CacheIdentity) -> Optional[Fingerprint]:
+    """這份快取的 Scan Record 記錄的 Fingerprint；沒有時是 None。
+
+    Scan Record 不存在、記的是 null（scan 讀不到 Fingerprint）、或格式壞掉時，
+    都回傳 None。與 cached_saved_at() 一樣，只讀 meta 檔，從不連線。
+    """
+    _, meta_path = _paths(identity)
+    try:
+        recorded = json.loads(meta_path.read_text(encoding="utf-8")).get("fingerprint")
+        return None if recorded is None else Fingerprint.from_dict(recorded)
+    except Exception:
+        return None
+
+
+@dataclass(frozen=True)
+class ScanConnection:
+    """scan 怎麼連到一份快取的 SQL Server：連線位址與掃描帳密覆寫。
+
+    server 是呼叫端給的連線位址，原樣保留。它可以和 CacheIdentity.server 不同：
+    正規化會去掉 named instance（`host\\instance`），但連線仍要連到那個 instance。
+    user_id/password 是這台伺服器的掃描帳密覆寫，兩個都有值才生效；
+    否則用全域的 DB_AUTH_MODE 身分（ADR-0010）。
+    """
+
+    server: str
+    user_id: str = ""
+    password: str = ""
+
+
+def _sql_analyzer(identity: CacheIdentity, connection: ScanConnection) -> "SQLAnalyzer":
+    from code_analyzer.sql_analyzer import SQLAnalyzer
+
+    return SQLAnalyzer(
+        identity.database,
+        server=connection.server,
+        database_name=identity.database,
+        user_id=connection.user_id,
+        password=connection.password,
+    )
+
+
+def read_fingerprint(identity: CacheIdentity, connection: ScanConnection) -> Optional[Fingerprint]:
+    """從 SQL Server 的系統目錄讀一份 SQL 快取目前的 Fingerprint。
+
+    這是唯一讀 Fingerprint 的地方：scan 與 `behind_source` 檢查都呼叫它。
+    它只讀 `sys.objects`，從不讀定義。
+
+    連不上或查詢失敗時回傳 None。呼叫端這時對這個 Database 一無所知，
+    這不算變更。
+    """
+    db = identity.database
+    open_analyzer = None
+    try:
+        analyzer = _sql_analyzer(identity, connection)
+        if not analyzer.connect():
+            return None
+        open_analyzer = analyzer
+        return analyzer.read_fingerprint()
+    except Exception as exc:
+        print(f"⚠️  無法讀取 Fingerprint（非致命）：{db}：{exc}")
+        return None
+    finally:
+        if open_analyzer is not None:
+            try:
+                open_analyzer.disconnect()
+            except Exception:
+                pass
+
+
+def _meta_payload(
+    identity: CacheIdentity, saved_at: str, fingerprint: Optional[Fingerprint]
+) -> Dict[str, object]:
     return {
         "cache_version": _SQL_CACHE_VERSION,
         "server": identity.server,
         "database": identity.database,
         "saved_at": saved_at,
+        "fingerprint": None if fingerprint is None else fingerprint.to_dict(),
     }
 
 
-def write_meta(identity: CacheIdentity, saved_at: str) -> None:
+def write_meta(
+    identity: CacheIdentity, saved_at: str, fingerprint: Optional[Fingerprint] = None
+) -> None:
     """把 identity 的 meta 檔寫到它自己的路徑。meta 格式只在這裡定義一次。
 
     路徑由 identity 決定，寫到哪裡跟記錄的身分不可能對不上。_save() 與測試的
-    快取 fixture 共用這一個出口。saved_at 照傳照寫、不補值。
+    快取 fixture 共用這一個出口。saved_at 照傳照寫、不補值。fingerprint 是 scan
+    開始時讀到的 Fingerprint；讀不到時記 null，之後的 `behind_source` 檢查
+    不把 null 當成變更。
     """
     _, meta_path = _paths(identity)
     meta_path.write_text(
-        json.dumps(_meta_payload(identity, saved_at), ensure_ascii=False, indent=2),
+        json.dumps(_meta_payload(identity, saved_at, fingerprint), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -668,13 +751,13 @@ def _load(identity: CacheIdentity) -> Optional[Dict]:
         return None
 
 
-def _save(identity: CacheIdentity, data: Dict) -> None:
+def _save(identity: CacheIdentity, data: Dict, fingerprint: Optional[Fingerprint] = None) -> None:
     data_path, _meta_path = _paths(identity)
     try:
         data_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        write_meta(identity, time.strftime("%Y-%m-%d %H:%M:%S"))
+        write_meta(identity, time.strftime("%Y-%m-%d %H:%M:%S"), fingerprint)
     except Exception as exc:  # 寫檔失敗不致命
         print(f"⚠️  SQL 快取寫出失敗（非致命）：{exc}")
         return
@@ -703,11 +786,9 @@ def load_cached(identity: CacheIdentity) -> Optional[Dict]:
 
 def get_or_dump(
     identity: CacheIdentity,
+    connection: ScanConnection,
     *,
-    connection_server: str,
     refresh: bool = False,
-    user_id: str = "",
-    password: str = "",
     progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> Dict:
     """
@@ -716,13 +797,8 @@ def get_or_dump(
 
     identity：這份快取的身分，由呼叫端如 spec-rag 的 catalog 逐資料庫提供。
 
-    connection_server：實際連線位址，照呼叫端給的原樣交給 SQLAnalyzer。它跟
-    identity.server 不同——正規化會丟掉具名執行個體尾綴（`host\\instance`），
-    快取鍵不分執行個體，連線卻一定要連到那個執行個體。缺值時由 SQLAnalyzer
-    報錯、不嘗試連線（見 config.settings.build_database_config）。
-
-    user_id/password：這一台伺服器的掃描帳密覆寫，兩者都有值才生效；缺一即沿用
-    .env 的全域 DB_AUTH_MODE 身分（見 docs/adr/0010-scan-identity-independent-of-app-credentials.md）。
+    connection：實際連線位址與掃描帳密覆寫（見 ScanConnection）。位址缺值時由
+    SQLAnalyzer 報錯、不嘗試連線（見 config.settings.build_database_config）。
     掃描用的連線身分永遠不從被掃應用程式的 Web.config 推導。
     """
     db = identity.database
@@ -734,11 +810,10 @@ def get_or_dump(
 
     print(f"🔍 連線 SQL Server 重新撈取物件定義：{db}")
     _report_progress(progress_callback, "connecting", 0, 1, db)
-    from code_analyzer.sql_analyzer import SQLAnalyzer
-
-    analyzer = SQLAnalyzer(
-        db, server=connection_server, database_name=db, user_id=user_id, password=password
-    )
+    # 先讀 Fingerprint 再讀定義：scan 期間的變更只會讓記錄的 Fingerprint 比內容舊，
+    # 不會比內容新。
+    fingerprint = read_fingerprint(identity, connection)
+    analyzer = _sql_analyzer(identity, connection)
     if not analyzer.connect():
         raise RuntimeError(f"無法連線資料庫：{db}")
     _report_progress(progress_callback, "connecting", 1, 1, db)
@@ -765,7 +840,7 @@ def get_or_dump(
         )
     _retain_in_mem_cache(identity, data)
     _report_progress(progress_callback, "saving", 0, 1, "SQL cache")
-    _save(identity, data)
+    _save(identity, data, fingerprint)
     _report_progress(progress_callback, "saving", 1, 1, "SQL cache")
     return data
 

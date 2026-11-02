@@ -65,6 +65,7 @@ from .schemas import (
     RefreshSqlResponse,
     RefreshJobRequest,
     RefreshJobResponse,
+    CacheFreshnessCheckRequest,
     CacheFreshnessResponse,
     UpdateAllRequest,
     UpdateAllResponse,
@@ -482,14 +483,18 @@ def _freshness_response(catalog: list) -> CacheFreshnessResponse:
 
 
 @app.post("/cache_freshness/check", response_model=CacheFreshnessResponse)
-def check_behind_source() -> CacheFreshnessResponse:
+def check_behind_source(req: Optional[CacheFreshnessCheckRequest] = None) -> CacheFreshnessResponse:
     """Run the `behind_source` check now and return the new listing (Impact ADR-0045).
 
     Only the update page calls this: when it opens, and when the analyst asks to check again.
-    It asks each remote repository for its branch head (no clone, no pull). A question never
-    does."""
+    It asks each remote repository for its branch head (no clone, no pull). It reads the current
+    Fingerprint of each usable, unlocked SQL cache from the system catalog of its Database (no
+    definitions), with the scan account that a refresh of that server uses (ADR-0010). A question
+    never runs this check. The body is optional: with no body, every server uses the global scan
+    account."""
+    scan_accounts = (req or CacheFreshnessCheckRequest()).sql_credentials
     catalog = _catalog()
-    source_check.check(system_targets.sources_of(catalog))
+    source_check.check(system_targets.sources_of(catalog), cache_freshness.sql_check_targets(catalog, scan_accounts))
     return _freshness_response(catalog)
 
 

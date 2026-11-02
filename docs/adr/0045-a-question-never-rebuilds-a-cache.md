@@ -13,7 +13,7 @@ A question never rebuilds a SQL cache or a C# Scan Result. Only a Refresh Job re
 
 When a question needs a cache with the Cache Freshness `outdated` or `refreshing`, the run does not read that cache. The run lists the system as an Unread System with the reason `cache_outdated` or `cache_refreshing`, and the answer links to the update page. When a Pinned System has such a cache, the run stops before it starts, and spends no LLM tokens. When every system that the run needs has such a cache, the answer only tells the analyst which systems to update.
 
-A `behind_source` cache does not block a question. The answer stays correct for the scanned commit.
+A `behind_source` cache does not block a question. The answer stays correct for the scanned state: the scanned commit of a C# Scan Result, or the scanned Database of a SQL cache.
 
 Derived Execution Evidence is not a cache that an analyst refreshes. Each Refresh Job derives it as its last step. A change to one of the three configuration inputs of Derived Execution Evidence starts a Refresh Job automatically. If a question still finds no valid Derived Execution Evidence, the question derives it and shows a progress stage. This exception is acceptable because a derivation reads the existing caches only. It never scans a repository or connects to SQL Server.
 
@@ -29,7 +29,7 @@ Derived Execution Evidence is not a cache that an analyst refreshes. Each Refres
 - An analyst can cancel a waiting Refresh Job. An analyst cannot stop a running Refresh Job, because a stop can leave a partly written cache.
 - A failed Refresh Job keeps the previous Cache Freshness. The update page shows the last error. The Refresh Queue does not retry.
 - The Refresh Queue lives in memory. A restart of the Impact service drops the waiting Refresh Jobs.
-- The update page checks for `behind_source` when an analyst opens it, and again when the analyst asks for a new check. The page shows the time of the last check. A question never checks the remote repository.
+- The update page checks for `behind_source` when an analyst opens it, and again when the analyst asks for a new check. The page shows the time of the last check. A question never runs this check. It never reads a remote repository or the Fingerprint of a Database.
 - An "update all" action submits a Refresh Job for each `outdated` cache. It does not include a `behind_source` cache. An analyst submits each `behind_source` cache alone.
 - Any later proposal to rebuild a cache inside a question reverses this ADR and needs its own ADR.
 
@@ -38,3 +38,18 @@ Derived Execution Evidence is not a cache that an analyst refreshes. Each Refres
 `llamaindex-spec-rag` ADR-0020 adds an Environment Check. The Impact service tests SQL Server access and Azure Repos access itself, because it is the process that makes the connections. The test logs in to each server of the Database Registry (and each server that only the catalog names), and runs `git ls-remote` one time for each repository of the catalog, with at most 8 at one time. A test for each repository, and not one for each Azure DevOps project, keeps the failure of one repository (for example a removed repository) from locking the other repositories. On 2026-10-22, 30 calls took about 1 second at 8 at one time.
 
 The service keeps the last result in memory. Each SQL row of a failed server and each C# row of a failed repository gets a `locked_reason`. A Refresh Job for a locked row gets HTTP 409 with that reason, and no job starts. "Update all" skips the locked rows and still submits the other `outdated` caches. Before the first check, and after a restart, no row is locked.
+
+## Amendment: a SQL cache can be `behind_source` (2026-10-30)
+
+Before this amendment, only a C# Scan Result could be `behind_source`. A person can change a procedure, a view, a function, or a table directly in SQL Server, and the update page still showed that SQL cache as `current`. The accepted decisions are in `.scratch/sql-cache-behind-source/spec.md`.
+
+The source of a SQL cache is its Database. Each SQL scan reads the Fingerprint of the Database before it reads any definition, and the Scan Record holds it beside `saved_at`. The SQL cache format version 12 adds this field, so every older SQL cache is `outdated` one time. Version 12 also limits a scan to the objects of the Kind Groups that SQL Server does not ship, so the scope of the scan equals the scope of the Fingerprint.
+
+The decision for the check follows. Ticket 02 of `.scratch/sql-cache-behind-source/` builds it.
+
+- The `behind_source` check also reads the current Fingerprint of each declared SQL cache that is usable and not locked.
+- A SQL cache is `behind_source` when the current Fingerprint differs from the recorded Fingerprint. `outdated` and `refreshing` win over `behind_source`.
+- A missing Fingerprint gives no `behind_source`. This covers no check yet, an unreachable server, a failed query, a locked row, and a null recorded Fingerprint.
+- The rules for C# also apply to SQL. A question never runs the check. A `behind_source` SQL cache does not block a question. "Update all" leaves the cache out.
+- The check reads a shared SQL cache one time. It connects with the address that a refresh of that cache uses, so a named instance connects.
+- The service keeps the current Fingerprints in memory with the remote heads, and keeps one check time for both. A restart forgets them.

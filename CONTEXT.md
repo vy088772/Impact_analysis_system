@@ -120,7 +120,19 @@ The bare-string shape a `connection_sources` entry still carries when it was wri
 _Avoid_: unresolved label, plain string, legacy string
 
 **Scan Record**:
-The record that one SQL Cache Identity was actually scanned, and when — written beside the scan results at save time. It is the only record that a scan happened; the caller's Database Registry records which Databases *should* exist, never whether any were scanned, so the two are read separately and can never disagree. See `llamaindex-spec-rag`'s [ADR-0005](../llamaindex-spec-rag/docs/adr/0005-registry-records-intent-cache-metadata-records-fact.md).
+The record that one SQL Cache Identity was actually scanned, and when — written beside the scan results at save time. It is the only record that a scan happened; the caller's Database Registry records which Databases *should* exist, never whether any were scanned, so the two are read separately and can never disagree. See `llamaindex-spec-rag`'s [ADR-0005](../llamaindex-spec-rag/docs/adr/0005-registry-records-intent-cache-metadata-records-fact.md). Beside `saved_at`, it holds the Fingerprint that the scan read before it read any definition, or null when the scan could not read one.
+
+**Fingerprint**:
+A small summary of one Database that Impact reads from the system catalog of SQL Server (`sys.objects`). It holds, for each Kind Group, the object count and the latest `modify_date`. The Kind Groups are procedures (`P`), views (`V`), functions (`FN`, `IF`, `TF`), and tables (`U`). Its scope equals the scope of a SQL scan: it excludes the objects that SQL Server ships and the schemas that SQL Server owns. A drop changes a count, and an `ALTER TABLE` changes a time. Impact compares two Fingerprints only for equality. It is not a Contract Fingerprint, which identifies the behaviour of an External Wrapper Contract. See [ADR-0045](docs/adr/0045-a-question-never-rebuilds-a-cache.md).
+_Avoid_: database hash, schema version, checksum
+
+**Kind Group**:
+One of the four object lists of a SQL cache, with the `sys.objects.type` values that belong to it: procedures (`P`), views (`V`), functions (`FN`, `IF`, `TF`), and tables (`U`). A Fingerprint has one entry for each Kind Group, and a SQL scan lists only the objects of these types. A CLR procedure or a CLR function is in no Kind Group, so a SQL cache does not hold it and a change to it gives no `behind_source`.
+_Avoid_: object kind, object type (a Kind Group can hold several `sys.objects.type` values)
+
+**Scan Connection**:
+How a SQL scan reaches the SQL Server of one cache: the connection address and the scan account override. The address is the one the caller gives, so it keeps a named instance (`host\instance`). The SQL Cache Identity drops that instance. The scan account override applies only when it has both a user id and a password. Otherwise the global scan account applies. The scan and the Fingerprint reader both use one Scan Connection. See [ADR-0010](docs/adr/0010-scan-identity-independent-of-app-credentials.md).
+_Avoid_: credentials, connection string, login
 
 **C# Scan Result**:
 The saved result of one C# project scan, which the scan store writes under `data/scan_cache`. `llamaindex-spec-rag` reads it with a restricted unpickler that admits only a fixed list of classes. It is not a Scan Record. A Scan Record describes one SQL cache, and a C# Scan Result describes one C# project. A source without a repository (an empty `repo`) has no C# Scan Result: a question about it reads no scan and reports no `csharp` cache, never `skipped` and never `outdated`, the same as the update page.
@@ -321,7 +333,7 @@ _Avoid_: partial contribution, component SPs, included control
 ## Cache Maintenance
 
 **Cache Freshness**:
-The state of one SQL cache or one C# Scan Result, as an analyst sees it. The states are `current`, `outdated`, `refreshing`, and `behind_source`. `outdated` means that the analyzer changed the cache format, so an answer from the cache can be wrong. `refreshing` means that a Refresh Job for the cache is running now. `behind_source` means that the remote repository has newer commits than the C# Scan Result. An `outdated` or `refreshing` cache blocks the answers that need it. A `behind_source` cache does not block an answer, because the answer stays correct for the scanned commit. Derived Execution Evidence has no Cache Freshness of its own, because an analyst never refreshes it directly.
+The state of one SQL cache or one C# Scan Result, as an analyst sees it. The states are `current`, `outdated`, `refreshing`, and `behind_source`. `outdated` means that the analyzer changed the cache format, so an answer from the cache can be wrong. `refreshing` means that a Refresh Job for the cache is running now. `behind_source` means that the source changed after the scan. For a C# Scan Result, the remote repository has newer commits. For a SQL cache, the current Fingerprint of the Database differs from the Fingerprint in the Scan Record. An `outdated` or `refreshing` cache blocks the answers that need it. A `behind_source` cache does not block an answer, because the answer stays correct for the scanned state. Derived Execution Evidence has no Cache Freshness of its own, because an analyst never refreshes it directly.
 _Avoid_: stale, expired, cache status
 
 **Refresh Job**:
