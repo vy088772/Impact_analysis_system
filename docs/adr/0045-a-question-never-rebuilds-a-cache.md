@@ -53,3 +53,16 @@ The decision for the check follows. Ticket 02 of `.scratch/sql-cache-behind-sour
 - The rules for C# also apply to SQL. A question never runs the check. A `behind_source` SQL cache does not block a question. "Update all" leaves the cache out.
 - The check reads a shared SQL cache one time. It connects with the address that a refresh of that cache uses, so a named instance connects.
 - The service keeps the current Fingerprints in memory with the remote heads, and keeps one check time for both. A restart forgets them.
+
+## Amendment: one check time for each system (2026-11-02)
+
+This amendment changes the rule "keeps one check time for both" of the amendment of 2026-10-30. The accepted decisions are in `TCCDIV1/AI_LlamaIndex` issue #8. Issue #9 builds this part.
+
+- `POST /cache_freshness/check` accepts an optional `system_id`. With `system_id`, the check reads only the repository and the declared SQL Databases of that catalog system. Without `system_id`, the check reads every system, as before.
+- The check merges its answers into the answers that the service keeps. It replaces only the remote heads and the Fingerprints that it read. Thus a check of one system keeps the results of the other systems. A source that gives no answer loses its kept answer.
+- The service keeps one check time for each catalog system. The listing gives each system its own `source_checked_at`. A full check sets the time of every system. The listing has no global check time.
+- A shared SQL cache has one Fingerprint. A check of one system shows the new result under every system that uses the cache. Only the time of the checked system changes.
+- A locked C# row stays out of the check, as a locked SQL row does. A lock that arrives after the check hides the kept head, so a locked row is never `behind_source`.
+- An unknown `system_id` gets HTTP 404, and the check reads nothing.
+
+Each analyst action on the update page still asks for the check, so the rule "A question never runs this check" stays. Later tickets of issue #8 move the full check from the page open to a daily background check of the web.

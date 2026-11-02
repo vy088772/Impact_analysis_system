@@ -41,7 +41,7 @@ def remote(monkeypatch):
     fake = FakeRemote()
     monkeypatch.setattr(source_check, "fetch_remote_head", fake)
     monkeypatch.setattr(source_check, "_heads", {})
-    monkeypatch.setattr(source_check, "_checked_at", None)
+    monkeypatch.setattr(source_check, "_checked_at", {})
     # The check also reads the Fingerprint of each SQL cache. These tests are about C#:
     # no Database answers, so no SQL cache is behind_source here.
     monkeypatch.setattr(sql_cache_store, "read_fingerprint", lambda identity, connection: None)
@@ -61,6 +61,10 @@ def check() -> dict:
     response = client.post("/cache_freshness/check")
     assert response.status_code == 200
     return response.json()
+
+
+def checked_at(body: dict, system: str) -> Optional[str]:
+    return {item["system_id"]: item["source_checked_at"] for item in body["systems"]}[system]
 
 
 def row_of(body: dict, system: str, label: str) -> dict:
@@ -86,12 +90,12 @@ def test_a_scan_whose_commit_differs_from_the_remote_head_lists_as_behind_source
 
 
 def test_the_listing_shows_the_time_of_the_last_check(world, remote) -> None:
-    assert client.get("/cache_freshness").json()["source_checked_at"] is None
+    assert checked_at(client.get("/cache_freshness").json(), "Alpha") is None
 
     body = check()
 
-    assert body["source_checked_at"]
-    assert client.get("/cache_freshness").json()["source_checked_at"] == body["source_checked_at"]
+    assert checked_at(body, "Alpha")
+    assert checked_at(client.get("/cache_freshness").json(), "Alpha") == checked_at(body, "Alpha")
 
 
 def test_check_again_asks_the_remote_again(world, remote) -> None:

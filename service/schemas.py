@@ -695,21 +695,25 @@ class CacheFreshnessRow(BaseModel):
 class CacheFreshnessSystem(BaseModel):
     system_id: str
     caches: List[CacheFreshnessRow] = Field(default_factory=list)
+    source_checked_at: Optional[str] = None  # time of the last `behind_source` check of this system; None before the first
 
 
 class CacheFreshnessResponse(BaseModel):
     """GET /cache_freshness: every cache of every catalog system, grouped by system."""
 
     systems: List[CacheFreshnessSystem] = Field(default_factory=list)
-    source_checked_at: Optional[str] = None  # time of the last `behind_source` check; None before the first
 
 
 class CacheFreshnessCheckRequest(BaseModel):
-    """POST /cache_freshness/check: the scan account of each SQL server (ADR-0010), keyed as in "update all".
+    """POST /cache_freshness/check: the system to check, and the scan account of each SQL server
+    (ADR-0010), keyed as in "update all".
 
-    The check reads each Fingerprint with the account that a refresh of that server uses. A server
-    with no key reads with the global scan account."""
+    With `system_id`, the check reads only the repository and the declared SQL Databases of that
+    catalog system. With no `system_id`, it reads every system. The check reads each Fingerprint
+    with the account that a refresh of that server uses. A server with no key reads with the
+    global scan account."""
 
+    system_id: Optional[str] = None
     sql_credentials: Dict[str, SqlCredentialOverride] = Field(default_factory=dict)
 
 

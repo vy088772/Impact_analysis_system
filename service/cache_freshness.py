@@ -12,8 +12,8 @@ from the last remote check (`source_check`).
   current Fingerprint that the last check read. `outdated` and `refreshing` win.
 
 The module only reads. It never scans, clones, pulls or connects to a database. It names the
-SQL caches that the check reads (`sql_check_targets`), because it knows which rows are usable and
-not locked. The check itself runs in `source_check`.
+repositories (`csharp_check_targets`) and the SQL caches (`sql_check_targets`) that the check
+reads, because it knows which rows are usable and not locked. The check itself runs in `source_check`.
 A cache that several systems share is computed once per listing and shows the same state
 under each system.
 """
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from . import environment_check, refresh_queue, repo_manager, scan_store, source_check, sql_cache_store
-from .system_targets import azure_source_of, declared_databases
+from .system_targets import azure_source_of, declared_databases, sources_of
 from .schemas import RefreshRequest, RefreshSqlRequest, SqlCredentialOverride, UpdateAllRequest
 
 CURRENT = "current"
@@ -130,6 +130,12 @@ def sql_check_targets(
     return targets
 
 
+def csharp_check_targets(catalog_systems: Iterable[dict]) -> List[dict]:
+    """The Azure sources that the `behind_source` check asks the remote for: each source that
+    is not locked. A locked row stays out, because its Lock Reason already explains it."""
+    return [source for source in sources_of(catalog_systems) if not environment_check.csharp_lock_reason(source)]
+
+
 def _is_behind_source(source: dict, scan_roots: Iterable[Path]) -> bool:
     """True when the last check found a remote head that differs from a recorded commit."""
     head = source_check.remote_head(source)
@@ -156,14 +162,16 @@ def csharp_row(
     roots = list(scan_roots)
     usable = all(scan_store.load_cached(root) is not None for root in roots)
     saved = [scan_store.cached_saved_at(root) for root in roots]
+    locked_reason = environment_check.csharp_lock_reason(source)
     return _row(
         kind="csharp",
         key=refresh_queue.csharp_key(str(root) for root in roots),
         label=system_id,
         has_usable_cache=usable,
         last_scanned_at=min((stamp for stamp in saved if stamp), default=None),
-        locked_reason=environment_check.csharp_lock_reason(source),
-        behind_source=usable and source is not None and _is_behind_source(source, roots),
+        locked_reason=locked_reason,
+        # A lock that arrives after the check hides the head that the check read, as for SQL.
+        behind_source=usable and not locked_reason and source is not None and _is_behind_source(source, roots),
         system_id=system_id,
         repo=str((source or {}).get("repo") or "").strip(),
         paths=_source_paths(source),
@@ -206,7 +214,8 @@ def sql_unusable(identity: sql_cache_store.CacheIdentity) -> Optional[dict[str, 
 
 
 def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
-    """Every cache of every catalog system, grouped by system, in catalog order."""
+    """Every cache of every catalog system, grouped by system, in catalog order, each system with
+    the time of its last `behind_source` check."""
     shared_sql: dict[tuple[str, str], Optional[dict[str, Any]]] = {}
     grouped: List[dict[str, Any]] = []
     for system in catalog_systems:
@@ -223,7 +232,9 @@ def list_by_system(catalog_systems: Iterable[dict]) -> List[dict[str, Any]]:
             row = shared_sql[pair]
             if row is not None and all(row["key"] != seen["key"] for seen in caches):
                 caches.append(row)
-        grouped.append({"system_id": system_id, "caches": caches})
+        grouped.append(
+            {"system_id": system_id, "caches": caches, "source_checked_at": source_check.checked_at(system_id)}
+        )
     return grouped
 
 
