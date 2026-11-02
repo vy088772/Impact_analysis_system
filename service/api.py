@@ -8,7 +8,7 @@
     uvicorn service.api:app --host 127.0.0.1 --port 8800
 
 端點：
-    GET  /health   → {"status": "ok"}
+    GET  /health   → {"status": "ok", "code_time": Impact Code Time（啟動時算一次）}
     POST /analyze  → AnalyzeResponse（依 program_names 回傳靜態分析結果）
     POST /refresh  → RefreshJobResponse（提交 Refresh Job：git pull + 重新解析，
                         覆寫快取；指定 program_names 時直接執行並回 RefreshResponse）
@@ -84,10 +84,12 @@ from .schemas import (
     ScanRecordListResponse,
     EnvironmentCheckRequest,
     EnvironmentCheckResponse,
+    HealthResponse,
 )
 from . import (
     analyze_service,
     cache_freshness,
+    code_time,
     contract_acceptance,
     derivation_progress,
     environment_check,
@@ -131,9 +133,13 @@ def _graph_readiness_http_error(exc: analyze_service.SqlExecutionGraphRequiredEr
     )
 
 
-@app.get("/health")
-def health() -> dict:
-    return {"status": "ok"}
+# The Impact Code Time of the code that this process loaded. Calculated one time, at start.
+_CODE_TIME = code_time.impact_code_time()
+
+
+@app.get("/health", response_model=HealthResponse)
+def health() -> HealthResponse:
+    return HealthResponse(code_time=_CODE_TIME)
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)

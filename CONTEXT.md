@@ -360,6 +360,10 @@ _Avoid_: blocked reason, disabled reason
 The short reason why the last `behind_source` check could not read the source of one cache: a repository that `git ls-remote` could not read, or a Database whose Fingerprint the check could not read. Examples are a timeout and a failed login. A later successful read clears it. It is not a Cache Freshness: it changes no state, so a row with a Source Check Failure keeps its Cache Freshness. A locked cache has no Source Check Failure, because its Lock Reason already explains it. See ADR-0045.
 _Avoid_: read error, check error, unread source
 
+**Impact Code Time**:
+The newest modification time of the `*.py` files under the `service/` package of the Impact code, subdirectories included. The service records it one time, when it starts, and reports it as `code_time` in `GET /health`. The text is ISO 8601 with whole seconds (the fraction is cut, not rounded) and the local offset as `+HH:MM`. The web and the launcher calculate the same text from the Impact code on the disk. A different text means that the running service uses older code. It is not a version number and not a git commit: a change that is not committed also changes it.
+_Avoid_: code version, build time, deploy time
+
 ## Repository Management
 
 **Clone**:
