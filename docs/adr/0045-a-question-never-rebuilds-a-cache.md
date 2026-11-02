@@ -87,7 +87,7 @@ This amendment replaces the rule "The update page checks for `behind_source` whe
 - The Daily Source Check puts every catalog system into the Source Check Queue of the web in catalog order. The queue checks one system at a time, with `POST /cache_freshness/check` and that `system_id`.
 - An analyst checks one system with the "檢查來源" button of that system. The request moves the system to the front of the queue. Thus the Daily Source Check does not check that system again.
 - The page header shows the progress of the Daily Source Check, for example "背景檢查中：3 / 12 個系統". The page header has no "檢查來源" button.
-- The web has no endpoint for a full check. The Impact service still accepts a check without `system_id`.
+- The web has no endpoint that checks every system with one request. The Impact service still accepts a check without `system_id`.
 - The web keeps no check result and no check time in a file. A restart of the web starts a new Daily Source Check.
 
 The rule "A question never runs this check" stays.
