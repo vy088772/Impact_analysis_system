@@ -4,9 +4,13 @@
 
 **Blocked by:** 05 — 自動解析 source-available database wrapper；06 — 支援分支 SP 名稱與常見 data-access adapters；07 — 處理跨 DB 歧義與 unresolved invocation
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] 報告依 caller/database/SP identity 對齊新舊結果並分類差異。
 - [x] legacy 命中若未成為新 formal relation，必須有 unresolved reason 或 dropped 記錄。
 - [x] 報告能辨識新 Gateway 發現的 direct SqlClient、wrapper 或 branch invocation。
 - [x] 至少 2 至 3 個 data-access 風格不同的代表性系統可重複產生報告。
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

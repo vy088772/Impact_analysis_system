@@ -4,9 +4,13 @@
 
 **Blocked by:** 04 — 串起第一條 C# 到 DML 的 Execution Path
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] 已解析 database source 時只比對該 database 的 SP Catalog。
 - [x] database source 不明但名稱全域唯一時最多標為 `likely`。
 - [x] 同名存在多個 database 時標為 `unresolved` 並列出歧義原因。
 - [x] dynamic string 與 unavailable wrapper source 保留 caller、span 與 unresolved reason。
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

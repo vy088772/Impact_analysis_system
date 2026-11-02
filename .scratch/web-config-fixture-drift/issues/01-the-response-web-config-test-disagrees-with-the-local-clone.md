@@ -4,7 +4,9 @@
 
 **Blocked by:** None
 
-**Status:** needs-triage
+**Status:** superseded
+
+**Moved to:** #6 (https://github.com/vy088772/Impact_analysis_system/issues/6). Track this ticket on GitHub from now on.
 
 ## Evidence
 

@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 — Full Refresh Wrapper Reconciliation; 03 — Catalog-Selected Contract Propagation
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A program-scoped refresh replaces only selected C# records and their derived raw wrapper facts in the scan cache.
 - [x] The selected-file analyzer receives the complete current scan root as source context, allowing same-root source wrappers to remain source-backed without scanning unrelated input files.
@@ -14,3 +14,7 @@
 - [x] Unchanged files retain their raw invocation facts and wrapper observations; removed files no longer appear in the reconciled result.
 - [x] Multi-root tests verify that source-wrapper lookup does not cross a scan-root boundary.
 - [x] The CLI returns a non-zero exit code for program-refresh failures and exposes the wrapper summary for successful partial refreshes.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

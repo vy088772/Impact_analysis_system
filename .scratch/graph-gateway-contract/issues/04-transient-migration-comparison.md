@@ -4,8 +4,12 @@
 
 **Blocked by:** 01 — Graph-Only Cache Contract; 03 — Evidence-Preserving Gateway Responses.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] The comparison report exposes deterministic `dropped`, `new`, `confidence_changed`, and `unresolved` categories with caller/source, evidence, reason, and source-kind context.
 - [x] Comparison output can be rendered or saved as a review artifact but is never persisted as formal SQL relationships or used by graph, path, lookup, or flow consumers.
 - [x] Representative fixtures demonstrate confirmed Gateway parity or explicit unresolved reasons, and prevent false `proven` detections for inline SQL and ordinary methods.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

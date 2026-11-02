@@ -1,11 +1,13 @@
 ---
 labels: wayfinder:map
-status: ready-for-agent
-triage: ready-for-agent
+status: superseded
+triage: superseded
 tracker: local-markdown
 ---
 
 # UI-linked Impact Analysis Routing
+
+> **Superseded (2026-11-02).** This design was not implemented. [deterministic-exploration-routing/spec.md](../../../../llamaindex-spec-rag/.scratch/deterministic-exploration-routing/spec.md) is the newer decision: it decides the routing from the question text before the Agent runs. Keep this document as history only. Do not implement it.
 
 ## Destination
 

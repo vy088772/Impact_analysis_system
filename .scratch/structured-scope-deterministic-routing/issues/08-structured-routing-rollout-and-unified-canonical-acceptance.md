@@ -4,7 +4,7 @@
 
 **Blocked by:** 07 — 建立 Adaptive Final Answer、Compact Inventory Table 與 Conversation Analysis State
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 - [ ] 相同 normalized scope 與相同 source snapshot 重複執行時，candidate identities、`interaction_id`、`path_id`、provenance 與 status 保持穩定且可比較。
 - [ ] malformed scope、source-cache unavailable、stale snapshot、missing SQL graph 與 user ambiguity 會以不同 operational status 回報，不會全部折疊成 generic clarification 或 generic analysis failure。
@@ -13,3 +13,7 @@
 - [ ] structured routing 可被設為主要 mode，legacy routing 只能透過明確 fallback boundary 使用，並可觀測 fallback、scope validation、discovery 與 path-selection failure 類型。
 - [ ] deterministic routing contract suite、既有 exact SP/table tests、既有 path-selection tests 與 canonical acceptance tests 在不依賴 live LLM 的情況下通過；live LLM smoke test 不得成為 correctness gate。
 - [ ] completeness inventory、evidence recovery、spec-vs-observed 分類與 conversation follow-up 的 acceptance scenario 與既有 PUR/TTPUR canonical scenario 一起執行，兩者共用同一 structured-default rollout boundary，且互不回歸。
+
+## Comments
+
+2026-11-02: Will not be implemented. `llamaindex-spec-rag/.scratch/deterministic-exploration-routing/spec.md` chose a different design (routing decided from the question text before the Agent runs) and records itself as the newer decision over `doc/WAYFINDER_ROUTING_ARCHITECTURE.md`.

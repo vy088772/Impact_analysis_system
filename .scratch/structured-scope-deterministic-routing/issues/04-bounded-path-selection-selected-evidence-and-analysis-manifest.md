@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 — 建立 Mandatory Discovery Dispatcher、Additive Merge 與 Completeness Query Routing；03 — 建立 UI-linked Handler-scoped Path Candidates 與 Canonical Object Identity
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 - [ ] UI-linked 與 non-UI candidates 可在同一 selection contract 中被列出、比較與選擇，valid `path_id` 才能取得正式 path evidence。
 - [ ] invalid `path_id`、重複 expansion、已拒絕 candidate 與 ambiguity decision 都會被 deterministic handling 限制，不會觸發任意 repository exploration 或無界 context growth。
@@ -13,3 +13,7 @@
 - [ ] selection contract tests 驗證 bounded answer、expand、clarify 行為與現有 expansion safety，不依賴 final natural-language prompt 的特定措辭。
 - [ ] selected path evidence 回應附上 Analysis Manifest（`spec_revision`、`source_commit`、`sql_revision` 等獨立版本欄位）。
 - [ ] manifest 內任兩個 artifact revision 不一致時，回應標示 Consistency Status，不會假設所有 artifact 都是同步版本。
+
+## Comments
+
+2026-11-02: Will not be implemented. `llamaindex-spec-rag/.scratch/deterministic-exploration-routing/spec.md` chose a different design (routing decided from the question text before the Agent runs) and records itself as the newer decision over `doc/WAYFINDER_ROUTING_ARCHITECTURE.md`.

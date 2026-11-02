@@ -4,9 +4,13 @@
 
 **Blocked by:** 04 — 串起第一條 C# 到 DML 的 Execution Path
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] EXEC/EXECUTE 建立 typed `calls` relationship 並可遞迴展開。
 - [x] IF/ELSE、TRY/CATCH 與迴圈條件保留在 operation branch path。
 - [x] 同一 SP 不同 terminal DML branch 產生不同 `path_id`。
 - [x] recursion 與循環呼叫有 deterministic visited/depth 保護。
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

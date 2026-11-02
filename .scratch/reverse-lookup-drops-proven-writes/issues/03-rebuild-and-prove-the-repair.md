@@ -19,10 +19,7 @@ either repository sees it.
 - `llamaindex-spec-rag` 06 — SELECT_INTO counts as a write on both sides
 - `llamaindex-spec-rag` 07 — An unproven path is disclosed, not analysed
 
-**Status:** ready-for-agent — mode 4 re-verified and passes. Mode 5 still
-needs its own re-run before this ticket can close (see Comments: the first
-acceptance attempt was a false negative from a stale cache, now fixed and
-corroborated for mode 4 only, at the user's request for this round).
+**Status:** done (the mode 5 box stays open: mode 5 is no longer used)
 
 - [x] The SQL refresh runs for all five declared databases and every cache is
       rebuilt under the new graph version. (Substitute method — see Comments.)
@@ -171,3 +168,5 @@ Given mode 4's false negative is now fully explained and reversed, mode 5's
 recorded "identical miss" is very likely the same artifact — but that is an
 inference, not a re-measurement, and this ticket should not close on an
 inference.
+
+2026-11-02: Closed. Only mode 4 stays in use, so the mode 5 re-run will not happen. Mode 4 was re-verified and passes.

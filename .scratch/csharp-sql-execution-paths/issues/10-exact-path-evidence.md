@@ -4,9 +4,13 @@
 
 **Blocked by:** 04 — 串起第一條 C# 到 DML 的 Execution Path
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] valid path ID 能取得完整 method source、SP definitions 與 terminal DML evidence。
 - [x] source snapshot 透過 identity 與 span 還原內容，不在 path 中重複保存原始碼。
 - [x] sibling branches、無關 methods 與 FK extensions 預設不出現在 evidence。
 - [x] invalid 或 stale path ID 回傳明確且可處理的錯誤。
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

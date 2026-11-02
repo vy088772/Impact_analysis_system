@@ -4,7 +4,7 @@
 
 **Blocked by:** Existing `csharp-sql-execution-paths` 01 — Source Snapshot Seam; existing `csharp-sql-execution-paths` 02 — Direct SqlClient Invocation.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Direct `SqlClient` default/Text 呼叫會產生一筆 `Database Invocation`，並保留 `method semantics`、`invocation mode`、command text、terminal sink、connection source、source span、provenance 與 `Evidence Status`。
 - [x] `SELECT`、`INSERT`、`UPDATE`、`DELETE` 等 literal SQL 會被記錄為 `inline_sql`，不會被轉成 stored-procedure invocation。
@@ -13,3 +13,7 @@
 - [x] Focused Gateway tests 能在沒有 live SQL Server、LLM 或 runtime invocation 的情況下驗證上述結果。
 
 - 本次設計決策影響後續 06/07/08/10。01 維持 direct SqlClient / inline SQL 的既定範圍，不負責 wrapper contract identity 或 system binding。
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

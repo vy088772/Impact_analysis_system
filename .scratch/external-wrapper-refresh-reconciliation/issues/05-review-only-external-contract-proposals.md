@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — Canonical Wrapper Reconciliation Boundary; 02 — Full Refresh Wrapper Reconciliation
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A new external receiver type produces a review candidate with unresolved contract status unless preflight has complete verified semantics for a staged contract.
 - [x] A method missing from an otherwise matching contract produces a distinct `unresolved_method` review item.
@@ -14,3 +14,7 @@
 - [x] A valid selector leaves the contract registry and system catalog unchanged during refresh; incomplete or ambiguous observations never change them, while complete proposals commit only through the staged atomic workflow.
 - [x] The refresh response distinguishes review candidates from active contract selection and from `InvocationEvidence`.
 - [x] Tests verify that unknown and ambiguous observations remain review-only and cannot become `proven` by name matching alone.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

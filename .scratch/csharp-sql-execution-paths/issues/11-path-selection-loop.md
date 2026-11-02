@@ -4,9 +4,13 @@
 
 **Blocked by:** 10 — 提供 Exact Path Evidence API
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] 兩種模式使用同一 coordinator 與結構化 decision contract。
 - [x] expand 最多三輪，重複 path 不重抓 evidence 且不消耗輪次。
 - [x] invalid ID 只允許一次修正，第二次失敗轉為 clarify。
 - [x] 最終 context 只包含 selected Path Evidence，並區分 verified facts 與 unresolved uncertainty。
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

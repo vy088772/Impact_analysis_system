@@ -4,8 +4,12 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] SQL refresh creates, updates, completes, and fails bounded progress jobs that the status interface exposes consistently.
 - [x] Progress lifecycle and status API tests are independent from Graph/Gateway evidence and cache-readiness acceptance tests.
 - [x] Operational documentation and acceptance criteria state that progress completion is not proof of formal graph readiness and is not a Graph/Gateway migration release gate.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

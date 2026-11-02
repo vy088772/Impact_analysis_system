@@ -4,10 +4,14 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 - [ ] 同一份 scope 可在不啟動 live LLM 的情況下完成 serialize、validate、normalize 與 round-trip，並保留 system、program、UI、SP、table、specification、confidence、provenance 與 ambiguity signals。
 - [ ] malformed field type、未知 enum value、互相矛盾的 identifier metadata 會產生可辨識的 validation failure，不會靜默執行 discovery。
 - [ ] 等價 identifier 會去重，但所有來源 provenance、原始 spelling 與 interpretation conflict 仍可被查閱。
 - [ ] scope 能區分 explicit identifier、semantic candidate、requested discovery intent 與 deterministic result，且不把任何候選直接標記成 selected path 或 backend proof。
 - [ ] contract tests 可使用 fake Agent output 驗證上述行為，不依賴 prompt wording、model vendor 或外部 repository。
+
+## Comments
+
+2026-11-02: Will not be implemented. `llamaindex-spec-rag/.scratch/deterministic-exploration-routing/spec.md` chose a different design (routing decided from the question text before the Agent runs) and records itself as the newer decision over `doc/WAYFINDER_ROUTING_ARCHITECTURE.md`.

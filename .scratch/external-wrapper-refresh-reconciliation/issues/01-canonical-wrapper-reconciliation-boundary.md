@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] The reconciliation boundary accepts raw invocation facts, source-wrapper availability, an optional explicit contract, receiver-type contract candidates, and the database-scoped SP Catalog.
 - [x] Source-backed wrappers are classified separately from external wrappers and do not require an external contract when their implementation is available within the current scan root.
@@ -14,3 +14,7 @@
 - [x] Every unresolved or ambiguous result retains receiver type, wrapper method, source span, scan root, candidate contracts, and an actionable unresolved reason.
 - [x] `discover_external_wrappers` consumes the shared reconciliation boundary and produces equivalent classifications without defining duplicate matching logic.
 - [x] Gateway-level tests cover the classification matrix through the highest existing analysis seam.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

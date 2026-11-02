@@ -4,8 +4,12 @@
 
 **Blocked by:** 01 — Graph-Only Cache Contract.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Path construction and evidence, SP reverse lookup, graph-backed table lookup, and forward/backward flow all reject missing, stale, invalid, or mismatched graphs through one machine-readable readiness contract.
 - [x] Source-only C# method Flow, raw invocation facts, source spans, and direct inline-SQL facts remain available without a graph and do not claim formal SQL relationships.
 - [x] API tests distinguish invalid requests, unavailable graphs, source-scan skips, and genuine domain not-found results.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

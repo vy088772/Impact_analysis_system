@@ -4,7 +4,7 @@
 
 **Blocked by:** 05 — Review-Only External Contract Proposals
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A reviewed proposal can be explicitly accepted; ordinary refresh has only the conditional preflight path for complete evidence and never implicitly accepts incomplete proposals.
 - [x] Acceptance validates receiver types, method identity, allowed `mode` values, sink values, contract uniqueness, and any requested system selector before writing active configuration.
@@ -14,3 +14,7 @@
 - [x] Changing only contract configuration reclassifies existing cached raw facts without invoking the C# analyzer or changing source snapshots.
 - [x] A source revision still requires a normal full or program-scoped refresh before new raw observations can be classified.
 - [x] Acceptance, validation, conditional atomic write, reuse, and no-rescan behavior are covered by focused tests.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

@@ -4,9 +4,13 @@
 
 **Blocked by:** 04 — 串起第一條 C# 到 DML 的 Execution Path
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] 同一變數在不同 branch 指向不同 SP 時產生分離的 invocation 與 branch context。
 - [x] 預設值與條件重新賦值都不會被遺漏。
 - [x] Dapper 與 Entity Framework 的 SP mode 使用相同 evidence 與 Catalog 規則。
 - [x] 普通 query、inline SQL 與不明 command type 不會被誤標為 `proven`。
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

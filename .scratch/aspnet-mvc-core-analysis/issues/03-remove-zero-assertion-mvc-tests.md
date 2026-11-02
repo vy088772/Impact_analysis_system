@@ -11,7 +11,7 @@ gap.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] The three zero-assertion MVC test files are gone.
 - [x] No remaining test hard-codes an absolute path to a developer machine.
@@ -38,3 +38,7 @@ assertions match `optional-parameter-aware-overload-selection` and
 Windows-specific path/line-ending behavior (`WindowsPath` string form, CRLF
 JSON output, a `PermissionError` on a temp file). None of the 13 touch the
 three removed files or MVC/Core scanning.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

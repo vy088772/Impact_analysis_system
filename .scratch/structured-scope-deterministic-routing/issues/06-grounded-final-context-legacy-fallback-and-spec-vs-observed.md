@@ -4,7 +4,7 @@
 
 **Blocked by:** 04 — 串接 Bounded Path Selection、Selected Evidence 與 Analysis Manifest；05 — 建立 Structured Writer/Reader Completeness Inventory 與 Bounded Evidence Recovery
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 - [ ] final context 能區分 Agent interpretation、deterministic discovery result、source-backed path fact、partial/ambiguous/unresolved evidence 與 user clarification requirement。
 - [ ] final answer 的 material conclusion 只可由 selected path 的完整 source-backed evidence 支持；unselected alternatives 仍以 summary、rejection reason 與 gap 呈現，不可透過名稱相似度補造 backend relation。
@@ -13,3 +13,7 @@
 - [ ] structured 與 legacy mode 可在相同 deterministic fixture 上分別執行與比較，輸出會保留各自 provenance、coverage 差異與 fallback 使用狀態，不會靜默合併兩份 evidence。
 - [ ] 每筆 finding 依證據分類為「規格提及且程式證實」「規格提及但目前無法驗證（Specification-indicated / Unverified）」或「程式證實但規格未載明（Observed but Undocumented）」三類之一。
 - [ ] 缺乏證據時只會標記為 `unresolved`／`Evidence Gap`，不會被解讀為該 writer/reader/path 不存在（Negative Inference Prohibition）。
+
+## Comments
+
+2026-11-02: Will not be implemented. `llamaindex-spec-rag/.scratch/deterministic-exploration-routing/spec.md` chose a different design (routing decided from the question text before the Agent runs) and records itself as the newer decision over `doc/WAYFINDER_ROUTING_ARCHITECTURE.md`.

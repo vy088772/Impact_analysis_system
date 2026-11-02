@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 — Full Refresh Wrapper Reconciliation
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] The refresh request contract accepts an optional `wrapper_contract` selector.
 - [x] When the caller does not provide a selector, the spec-rag refresh client resolves it from the system catalog.
@@ -13,3 +13,7 @@
 - [x] A catalog selector is treated as routing configuration and is not reported as proof of a stored-procedure or database operation by itself.
 - [x] `Y-Docs_TTPUR` can select the existing `sqlobject` contract through its catalog entry without a second discovery HTTP request.
 - [x] Client, API, and service tests verify catalog resolution, explicit override behavior, and payload compatibility with existing refresh callers.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — 建立 Structured DiscoveryScope Handoff
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 - [ ] 同時包含 screen、SP、table、system、program 或 specification intent 的問題，會完成所有適用的 mandatory discovery；任何一個 signal 都不會因另一個 route 被選中而消失。
 - [ ] Agent 刻意漏填 explicit SP 或 table action，但原始問題含有明確 identifier 時，dispatcher 仍會執行對應 exact lookup，並記錄 deterministic recovery 或 interpretation conflict。
@@ -14,3 +14,7 @@
 - [ ] 問題被判定為 completeness 查詢（例如「哪些程式會寫入 X table」）時，dispatcher 會路由到 completeness inventory 查詢；此路由與既有 exact SP/table/UI discovery 並存，不會取代或跳過 mandatory discovery。
 - [ ] completeness 路由與 Execution Path 選擇路由彼此獨立：選擇其中一種不會抑制另一種在同一 scope 下的可用性。
 - [ ] contract tests 使用 fake discovery adapters 驗證 mandatory action completion、additive merge、ambiguity policy 與 completeness routing 判斷，不依賴 live LLM 或外部服務。
+
+## Comments
+
+2026-11-02: Will not be implemented. `llamaindex-spec-rag/.scratch/deterministic-exploration-routing/spec.md` chose a different design (routing decided from the question text before the Agent runs) and records itself as the newer decision over `doc/WAYFINDER_ROUTING_ARCHITECTURE.md`.

@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 — 建立 Mandatory Discovery Dispatcher 與 Additive Merge
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 - [ ] 每個可辨識的 UI operation 都保留穩定且可追溯的 `interaction_id`，query、save、delete、cancel 與 row command 不會只以 shared method name 表示。
 - [ ] 每個 proven handler-scoped route 都保留穩定的 `path_id`，並帶有 page、event、handler、reachable methods、database invocation 與 SQL relationship provenance。
@@ -14,3 +14,7 @@
 - [ ] dynamic SQL、unresolved API target、missing source 或低信心 invocation 會保留 rated uncertainty，且只有 source-backed facts 才能進入正式 path candidate。
 - [ ] SP、table 與 program 等 backend identifier 在 join 前先正規化為 Canonical Object Identity，跨 schema 或跨 system 的同名 object 不會被誤判為同一實體。
 - [ ] 無法唯一決定 canonical identity 的 identifier（跨 unrelated systems 同名）會回報為 `ambiguous`，並列出所有候選來源與 provenance，不會任意選擇其中一個。
+
+## Comments
+
+2026-11-02: Will not be implemented. `llamaindex-spec-rag/.scratch/deterministic-exploration-routing/spec.md` chose a different design (routing decided from the question text before the Agent runs) and records itself as the newer decision over `doc/WAYFINDER_ROUTING_ARCHITECTURE.md`.

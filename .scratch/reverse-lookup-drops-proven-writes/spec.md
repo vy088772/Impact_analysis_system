@@ -1,6 +1,6 @@
 # A Reverse Lookup Reports Every Proven Writer It Found
 
-Status: ready-for-agent
+Status: done (only mode 4 stays in use; the mode 5 check will not happen)
 
 The measurement behind this spec lives in the companion repository, at
 `llamaindex-spec-rag/.scratch/first-round-exact-lookup-misses/`. Read it before

@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — Canonical Wrapper Reconciliation Boundary
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A full refresh invokes one source scan and then reconciles the resulting raw wrapper facts from that scan.
 - [x] `POST /refresh` returns additive wrapper summary data including observed receiver types, methods, classification statuses, selected contracts, selection sources, candidate contracts, source provenance, and review reasons.
@@ -13,3 +13,7 @@
 - [x] A valid existing selector does not create or overwrite `external_wrapper_contracts` or `system_catalog`; an unspecified or invalid selector writes only a validated complete proposal after formal classification and reconciliation succeed.
 - [x] Existing refresh counts, source-root information, partial-refresh fields, and legacy response aliases remain backward compatible.
 - [x] API and service tests verify the single-scan/preflight flow, response serialization, conditional write and rollback behavior, and machine-readable unresolved results.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

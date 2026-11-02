@@ -4,9 +4,13 @@
 
 **Blocked by:** 03 — 建立基本 SQL Execution Graph
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] CTE 與 temp table lineage 能展開回基礎資料來源。
 - [x] View、Function 與 Table 使用不同 node types 並保留 uses/reads relationships。
 - [x] dynamic SQL 產生 unresolved operation，不建立猜測目標。
 - [x] lineage recursion 有循環保護且輸出順序可重現。
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.

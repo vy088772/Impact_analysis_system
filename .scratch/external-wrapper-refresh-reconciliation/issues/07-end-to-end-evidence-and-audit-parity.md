@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 — Catalog-Selected Contract Propagation; 04 — Program-Scoped Wrapper Reconciliation; 06 — Explicit Contract Acceptance and Cached Reclassification
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] The same shared reconciliation semantics are observable through refresh, analyze, path evidence, reverse lookup, and the optional audit CLI.
 - [x] An accepted external contract contributes only the evidence allowed by its declared receiver, method, mode, sink, call-site mode, and database Catalog validation.
@@ -14,3 +14,7 @@
 - [x] Wrapper classification remains separate from SQL Execution Graph readiness; a current code refresh does not imply a current graph.
 - [x] The focused regression suite covers full refresh, program refresh, catalog propagation, proposal acceptance, cached reclassification, and audit parity.
 - [x] One end-to-end smoke test exercises typed receiver extraction from the real StaticAnalyzerHost and verifies the resulting downstream evidence shape.
+
+## Comments
+
+2026-11-02: Status corrected to `done`. Every acceptance box was already checked; only the status line was out of date.
