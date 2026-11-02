@@ -43,7 +43,7 @@ The service keeps the last result in memory. Each SQL row of a failed server and
 
 Before this amendment, only a C# Scan Result could be `behind_source`. A person can change a procedure, a view, a function, or a table directly in SQL Server, and the update page still showed that SQL cache as `current`. The accepted decisions are in `.scratch/sql-cache-behind-source/spec.md`.
 
-The source of a SQL cache is its Database. Each SQL scan reads the Fingerprint of the Database before it reads any definition, and the Scan Record holds it beside `saved_at`. The SQL cache format version 12 adds this field, so every older SQL cache is `outdated` one time.
+The source of a SQL cache is its Database. Each SQL scan reads the Fingerprint of the Database before it reads any definition, and the Scan Record holds it beside `saved_at`. The SQL cache format version 12 adds this field, so every older SQL cache is `outdated` one time. Version 12 also limits a scan to the objects of the Kind Groups that SQL Server does not ship, so the scope of the scan equals the scope of the Fingerprint.
 
 The decision for the check follows. Ticket 02 of `.scratch/sql-cache-behind-source/` builds it.
 

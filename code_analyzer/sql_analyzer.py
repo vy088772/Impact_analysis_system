@@ -132,14 +132,20 @@ _EXCLUDED_SCHEMAS = frozenset({"sys", "information_schema", "guest"})
 _EXCLUDED_SCHEMA_PREFIX = "db_"
 
 
+# The listing and the Fingerprint name the same Kind Groups in the same order: a
+# rename of one without the other fails at import, not in a scan.
+if tuple(kind for kind, *_ in _LISTING_KINDS) != sql_fingerprint.kind_group_names():
+    raise RuntimeError("_LISTING_KINDS and the Kind Groups of a Fingerprint differ")
+
+
 def _is_excluded_schema(schema: str) -> bool:
     folded = schema.casefold()
     return folded in _EXCLUDED_SCHEMAS or folded.startswith(_EXCLUDED_SCHEMA_PREFIX)
 
 
 def _listing_query() -> str:
-    """One query for the four kinds. Each kind keeps the `sys.objects` scope of its
-    Fingerprint kind group: no object that SQL Server ships, and only the object
+    """One query for the four Kind Groups. Each group keeps the `sys.objects` scope of
+    its Fingerprint entry: no object that SQL Server ships, and only the object
     types of the group (so no CLR procedure or CLR function). The scope of the scan
     then equals the scope of the Fingerprint.
     """
@@ -163,7 +169,7 @@ def _listing_query() -> str:
 
 
 def _fingerprint_query() -> str:
-    """One row for each `sys.objects.type` of the kind groups: the object count and the latest `modify_date`.
+    """One row for each `sys.objects.type` of the Kind Groups: the object count and the latest `modify_date`.
 
     The query reads `sys.objects` of the connected Database only. It drops the
     objects that SQL Server ships, and the schemas that SQL Server owns, with the
@@ -382,7 +388,7 @@ class SQLAnalyzer:
     def read_fingerprint(self) -> sql_fingerprint.Fingerprint:
         """Read the Fingerprint of the connected Database from the system catalog.
 
-        The query reads no definition. A kind group with no objects has a count
+        The query reads no definition. A Kind Group with no objects has a count
         of zero and no latest time.
         """
         self.cursor.execute(_fingerprint_query())

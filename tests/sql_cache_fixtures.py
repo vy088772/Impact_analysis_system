@@ -362,7 +362,7 @@ END;
     )
 
 
-# One kind group of a Fingerprint: (object count, latest ``modify_date``, or None for no objects).
+# One Kind Group of a Fingerprint: (object count, latest ``modify_date``, or None for no objects).
 FingerprintGroup = tuple[int, Optional[datetime]]
 
 
@@ -373,7 +373,7 @@ def fingerprint(
     functions: FingerprintGroup = (0, None),
     tables: FingerprintGroup = (0, None),
 ) -> Fingerprint:
-    """Build one Fingerprint: the object count and the latest time of each kind group.
+    """Build one Fingerprint: the object count and the latest time of each Kind Group.
 
     A group that the caller does not name has no objects: a count of zero and no
     latest time.

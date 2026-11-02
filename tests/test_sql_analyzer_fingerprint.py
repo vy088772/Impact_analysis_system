@@ -1,6 +1,6 @@
 """Seam 2: the Fingerprint query of the SQL analyzer, over a fake cursor.
 
-A Fingerprint holds, for each kind group, the latest `modify_date` and the
+A Fingerprint holds, for each Kind Group, the latest `modify_date` and the
 object count (`.scratch/sql-cache-behind-source/` ticket 01). The query returns
 one row for each `sys.objects.type`; the analyzer puts each type in its group.
 """

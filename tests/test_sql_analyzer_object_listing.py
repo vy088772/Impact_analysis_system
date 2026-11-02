@@ -7,8 +7,9 @@ applies no schema filter. The excluded-schema rule runs over the returned rows
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from code_analyzer.sql_analyzer import ObjectListing, SQLAnalyzer, quote_name
 
@@ -200,8 +201,20 @@ def test_a_typed_menu_name_needs_one_match_across_the_listed_schemas() -> None:
     assert _match_typed_procedure(procedures, "sales.usp_Save") is None
 
 
-def _listing_selects(cursor: ListingCursor) -> List[str]:
-    return [query for query, _ in cursor.executed if "UNION ALL" in query][0].split("UNION ALL")
+def _listing_scope(cursor: ListingCursor) -> Dict[str, Tuple[bool, Set[str]]]:
+    """For each kind of the listing query: (drops shipped objects, the `sys.objects.type` values it keeps).
+
+    The parse ignores spacing, case, and the order of the conditions, so a new
+    layout of the query does not break the test.
+    """
+    query = [query for query, _ in cursor.executed if "UNION ALL" in query][0]
+    scope = {}
+    for select in re.split(r"\bUNION\s+ALL\b", query, flags=re.IGNORECASE):
+        kind = re.search(r"SELECT\s+'(\w+)'\s+AS\s+kind", select, flags=re.IGNORECASE).group(1)
+        shipped = re.search(r"\bo\.is_ms_shipped\s*=\s*0\b", select, flags=re.IGNORECASE) is not None
+        types = re.search(r"\bo\.type\s+IN\s*\(([^)]*)\)", select, flags=re.IGNORECASE)
+        scope[kind] = (shipped, set(re.findall(r"'(\w+)'", types.group(1))) if types else set())
+    return scope
 
 
 def test_the_listing_drops_the_objects_that_sql_server_ships() -> None:
@@ -210,8 +223,7 @@ def test_the_listing_drops_the_objects_that_sql_server_ships() -> None:
     analyzer.list_objects()
 
     # The scan holds no shipped object, so the Fingerprint can drop them too.
-    for select in _listing_selects(cursor):
-        assert "is_ms_shipped = 0" in select
+    assert all(shipped for shipped, _ in _listing_scope(cursor).values())
 
 
 def test_the_listing_keeps_only_the_object_types_of_the_fingerprint_kind_groups() -> None:
@@ -221,10 +233,12 @@ def test_the_listing_keeps_only_the_object_types_of_the_fingerprint_kind_groups(
 
     # The scope of the scan equals the scope of the Fingerprint: a CLR procedure
     # (`PC`) or a CLR function (`FS`, `FT`) is in neither.
-    selects = {select.split("'")[1]: select for select in _listing_selects(cursor)}
-    assert "IN ('P')" in selects["procedures"]
-    assert "IN ('V')" in selects["views"]
-    assert "IN ('FN', 'IF', 'TF')" in selects["functions"]
-    assert "IN ('U')" in selects["tables"]
-    for clr_type in ("'PC'", "'FS'", "'FT'"):
-        assert all(clr_type not in select for select in selects.values())
+    kept = {(kind, object_type) for kind, (_, types) in _listing_scope(cursor).items() for object_type in types}
+    assert kept == {
+        ("procedures", "P"),
+        ("views", "V"),
+        ("functions", "FN"),
+        ("functions", "IF"),
+        ("functions", "TF"),
+        ("tables", "U"),
+    }
