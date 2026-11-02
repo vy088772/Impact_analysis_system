@@ -8,7 +8,9 @@ SysErrorRecord，而不是把查找鍵 "error" 大寫成 "ERROR" 當資料庫名
 "TTOA"。
 """
 
+import shutil
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -27,20 +29,37 @@ from code_analyzer.webconfig_connection_resolver import (
     parse_web_config_file,
 )
 
-STC_WEB_CONFIG = PROJECT_ROOT / "data/repos/System_Dept_1/STC/STC/Web.config"
-TTPUR_WEB_CONFIG = PROJECT_ROOT / "data/repos/System_Dept_1/Y-DOCs/TTPUR/Web.config"
-RESPONSE_WEB_CONFIG = PROJECT_ROOT / "data/repos/System_Dept_1/Y-DOCs/Response/Web.config"
-STC_GLOBAL_ASAX = PROJECT_ROOT / "data/repos/System_Dept_1/STC/STC/Global.asax.cs"
+FIXTURE_CLONES = Path(__file__).parent / "fixtures" / "web_config_clones"
 
-requires_web_config_fixtures = pytest.mark.skipif(
-    not (
-        STC_WEB_CONFIG.exists()
-        and TTPUR_WEB_CONFIG.exists()
-        and RESPONSE_WEB_CONFIG.exists()
-        and STC_GLOBAL_ASAX.exists()
-    ),
-    reason="local data/repos/System_Dept_1 fixture checkout is not present",
-)
+
+@dataclass(frozen=True)
+class WebConfigClones:
+    """The paths of the source files in the copied fixture clones."""
+
+    stc_web_config: Path
+    ttpur_web_config: Path
+    response_web_config: Path
+    stc_global_asax: Path
+
+
+@pytest.fixture(scope="module")
+def clones(tmp_path_factory) -> WebConfigClones:
+    """把 tests/fixtures/web_config_clones 複製到暫存目錄，當成 STC 與 Y-DOCs 兩份 clone。
+
+    這些 fixture 是真實 Web.config 的精簡版，帳號密碼換成假值，所以測試不讀
+    被 git 忽略的 data/repos。每個 repository 的根目錄要有 `.git`，
+    find_clone_root 才會停在那裡，declared_in 才會是 "STC/Web.config"。
+    repo 裡不能 commit `.git` 目錄，所以這裡複製後再建立。"""
+    root = tmp_path_factory.mktemp("repos")
+    shutil.copytree(FIXTURE_CLONES, root, dirs_exist_ok=True)
+    for repository in ("STC", "Y-DOCs"):
+        (root / repository / ".git").mkdir()
+    return WebConfigClones(
+        stc_web_config=root / "STC/STC/Web.config",
+        ttpur_web_config=root / "Y-DOCs/TTPUR/Web.config",
+        response_web_config=root / "Y-DOCs/Response/Web.config",
+        stc_global_asax=root / "STC/STC/Global.asax.cs",
+    )
 
 
 # ============================================================
@@ -49,67 +68,60 @@ requires_web_config_fixtures = pytest.mark.skipif(
 
 
 class TestParseWebConfigConnections:
-    @requires_web_config_fixtures
-    def test_appsettings_short_hostname_style(self):
+    def test_appsettings_short_hostname_style(self, clones):
         """STC 自己的 <appSettings key="error">——鎖住這張票要修的 bug 本身：
         查找鍵 "error" 與真正的資料庫 SysErrorRecord 完全不同。"""
-        resolved = parse_web_config_file(STC_WEB_CONFIG)
+        resolved = parse_web_config_file(clones.stc_web_config)
         assert resolved.app_settings["error"] == ResolvedConnection(
             server="vmsystest07", database="SysErrorRecord"
         )
 
-    @requires_web_config_fixtures
-    def test_appsettings_key_can_coincidentally_equal_database_name(self):
+    def test_appsettings_key_can_coincidentally_equal_database_name(self, clones):
         """STC 的 "STC" 鍵巧合等於資料庫名稱，但兩者仍必須各自從值解析出來，
         不能只是把查找鍵原樣搬過去當資料庫名稱。"""
-        resolved = parse_web_config_file(STC_WEB_CONFIG)
+        resolved = parse_web_config_file(clones.stc_web_config)
         assert resolved.app_settings["STC"] == ResolvedConnection(
             server="vmsystest07", database="STC"
         )
 
-    @requires_web_config_fixtures
-    def test_connectionstrings_fqdn_style_with_named_instance(self):
+    def test_connectionstrings_fqdn_style_with_named_instance(self, clones):
         """TTPUR 的 <connectionStrings name="TTOA">——查找鍵 "TTOA" 與真正的
         資料庫 EFNETDB 完全不同；伺服器帶有具名執行個體後綴，維持未正規化
         （正規化是 02/03 號票的範圍）。"""
-        resolved = parse_web_config_file(TTPUR_WEB_CONFIG)
+        resolved = parse_web_config_file(clones.ttpur_web_config)
         assert resolved.connection_strings["TTOA"] == ResolvedConnection(
             server="vmsystest08.topmost.com.tw\\vmsystest08_pdcs",
             database="EFNETDB",
         )
 
-    @requires_web_config_fixtures
-    def test_connectionstrings_active_entry_in_ttpur(self):
+    def test_connectionstrings_active_entry_in_ttpur(self, clones):
         """TTPUR 的 Web.config 裡 "ErrLog" 是一個活躍（未被註解）的
         <connectionStrings> entry，同樣解析成真正的資料庫 SysErrorRecord，
         而不是連線字串的 name "ErrLog"。"""
-        resolved = parse_web_config_file(TTPUR_WEB_CONFIG)
+        resolved = parse_web_config_file(clones.ttpur_web_config)
         assert resolved.connection_strings["ErrLog"] == ResolvedConnection(
             server="vmsystest07.topmost.com.tw", database="SysErrorRecord"
         )
 
-    @requires_web_config_fixtures
-    def test_connectionstrings_active_entry_in_response(self):
-        resolved = parse_web_config_file(RESPONSE_WEB_CONFIG)
+    def test_connectionstrings_active_entry_in_response(self, clones):
+        resolved = parse_web_config_file(clones.response_web_config)
         assert resolved.connection_strings["PUR-FAQ"] == ResolvedConnection(
             server="vmsystest07", database="Response"
         )
 
-    @requires_web_config_fixtures
-    def test_commented_out_entries_never_resolve(self):
+    def test_commented_out_entries_never_resolve(self, clones):
         """Response 的 Web.config 裡 "PUR" 與 "ErrLog" 兩個 <connectionStrings>
         entry 都被整段註解掉（"ErrLog" 這個查找鍵在 TTPUR 是活躍的，但在
         Response 是死的）；真正的 XML 解析器讓它們在解析樹裡根本不是
         element，絕不能被誤判為有效連線。"""
-        resolved = parse_web_config_file(RESPONSE_WEB_CONFIG)
+        resolved = parse_web_config_file(clones.response_web_config)
         assert "PUR" not in resolved.connection_strings
         assert "ErrLog" not in resolved.connection_strings
 
-    @requires_web_config_fixtures
-    def test_entries_without_a_database_are_omitted(self):
+    def test_entries_without_a_database_are_omitted(self, clones):
         """沒有資料庫可解析的 appSettings entry（純郵件伺服器、路徑設定等）
         不該出現在結果裡。"""
-        resolved = parse_web_config_file(STC_WEB_CONFIG)
+        resolved = parse_web_config_file(clones.stc_web_config)
         assert "MailServer" not in resolved.app_settings
         assert "SysAdminMail" not in resolved.app_settings
 
@@ -181,29 +193,27 @@ def _view_of(source_file: Path):
 
 class TestDBConnectionTrackerWithView:
     @staticmethod
-    def _stc_view():
-        return _view_of(STC_GLOBAL_ASAX)
+    def _stc_view(clones: WebConfigClones):
+        return _view_of(clones.stc_global_asax)
 
     @staticmethod
-    def _ttpur_view():
-        return _view_of(TTPUR_WEB_CONFIG.parent / "Default.aspx.cs")
+    def _ttpur_view(clones: WebConfigClones):
+        return _view_of(clones.ttpur_web_config.parent / "Default.aspx.cs")
 
-    @requires_web_config_fixtures
-    def test_direct_sqlconnection_from_appsettings_resolves_real_database(self):
+    def test_direct_sqlconnection_from_appsettings_resolves_real_database(self, clones):
         """鎖住這張票要修的核心 bug：STC/Global.asax.cs 的
         `SqlConnection cn = new SqlConnection(ConfigurationManager.AppSettings["error"])`
         必須解析成真正的資料庫 SysErrorRecord，而不是把 key "error" 大寫成
         "ERROR" 當資料庫名稱。"""
-        content = STC_GLOBAL_ASAX.read_text(encoding="utf-8")
-        tracker = DBConnectionTracker(connections=self._stc_view())
+        content = clones.stc_global_asax.read_text(encoding="utf-8")
+        tracker = DBConnectionTracker(connections=self._stc_view(clones))
         connections = tracker.analyze_connections(content)
 
         assert connections["cn"].database_name == "SysErrorRecord"
         assert connections["cn"].server == "vmsystest07"
         assert connections["cn"].connection_string_key == "error"
 
-    @requires_web_config_fixtures
-    def test_direct_sqlconnection_from_connectionstrings_resolves_real_database(self):
+    def test_direct_sqlconnection_from_connectionstrings_resolves_real_database(self, clones):
         """TTOA -> EFNETDB，不是連線字串的 name "TTOA"。"""
         content = (
             "using System.Data.SqlClient;\n"
@@ -214,20 +224,19 @@ class TestDBConnectionTrackerWithView:
             "    }\n"
             "}\n"
         )
-        tracker = DBConnectionTracker(connections=self._ttpur_view())
+        tracker = DBConnectionTracker(connections=self._ttpur_view(clones))
         connections = tracker.analyze_connections(content)
 
         assert connections["cn"].database_name == "EFNETDB"
         assert connections["cn"].server == "vmsystest08.topmost.com.tw\\vmsystest08_pdcs"
 
-    @requires_web_config_fixtures
-    def test_unresolvable_key_produces_no_connection_when_a_table_is_present(self):
+    def test_unresolvable_key_produces_no_connection_when_a_table_is_present(self, clones):
         """一旦 view 有一張 Web.config 查找表，查找不到的鍵就不再退回猜測——維持
         unresolved，而不是捏造一個資料庫名稱。"""
         content = (
             'SqlConnection cn = new SqlConnection(ConfigurationManager.AppSettings["NotInWebConfig"]);'
         )
-        tracker = DBConnectionTracker(connections=self._stc_view())
+        tracker = DBConnectionTracker(connections=self._stc_view(clones))
         connections = tracker.analyze_connections(content)
         assert "cn" not in connections
 
@@ -240,30 +249,27 @@ class TestDBConnectionTrackerWithView:
         assert connections["obj"].database_name == "PUR"
         assert connections["obj"].server is None
 
-    @requires_web_config_fixtures
-    def test_pattern4_flexible_heuristic_is_removed(self):
+    def test_pattern4_flexible_heuristic_is_removed(self, clones):
         """舊的「模式4」會把任何 `Type var = new Type(...)` 建構式裡 2-10 個
         字母的字串常數當成資料庫名稱（不論是否透過 ConfigurationManager 存
         取），現在完全移除，不能再誤判。"""
         content = 'SomeClass instance = new SomeClass(ConfigurationManager.AppSettings["error"]);'
-        tracker = DBConnectionTracker(connections=self._stc_view())
+        tracker = DBConnectionTracker(connections=self._stc_view(clones))
         connections = tracker.analyze_connections(content)
         assert "instance" not in connections
 
-    @requires_web_config_fixtures
-    def test_sqlfunc_appsettings_resolves_through_web_config(self):
+    def test_sqlfunc_appsettings_resolves_through_web_config(self, clones):
         content = 'SQLFunc obj = new SQLFunc(ConfigurationManager.AppSettings["error"]);'
-        tracker = DBConnectionTracker(connections=self._stc_view())
+        tracker = DBConnectionTracker(connections=self._stc_view(clones))
         connections = tracker.analyze_connections(content)
         assert connections["obj"].database_name == "SysErrorRecord"
         assert connections["obj"].server == "vmsystest07"
 
-    @requires_web_config_fixtures
-    def test_sqlobject_connectionstrings_resolves_through_web_config(self):
+    def test_sqlobject_connectionstrings_resolves_through_web_config(self, clones):
         content = (
             'SQLObject obj = new SQLObject(ConfigurationManager.ConnectionStrings["TTOA"].ConnectionString);'
         )
-        tracker = DBConnectionTracker(connections=self._ttpur_view())
+        tracker = DBConnectionTracker(connections=self._ttpur_view(clones))
         connections = tracker.analyze_connections(content)
         assert connections["obj"].database_name == "EFNETDB"
         assert connections["obj"].server == "vmsystest08.topmost.com.tw\\vmsystest08_pdcs"
@@ -309,21 +315,20 @@ class TestDBConnectionTrackerWithView:
 # ============================================================
 
 
-@requires_web_config_fixtures
-def test_project_scanner_resolves_stc_global_asax_connection_source():
+def test_project_scanner_resolves_stc_global_asax_connection_source(clones):
     """驗收條件：掃描 STC/Global.asax.cs 應該讓 connection_sources 裡 "cn"
     這個項目 database=SysErrorRecord, server=vmsystest07（未正規化——正規化
     是 02/03 號票的範圍）。"""
-    project_root = STC_GLOBAL_ASAX.parent
+    project_root = clones.stc_global_asax.parent
     scanner = ProjectScanner(project_root=str(project_root), project_name="STC")
     scan_result = ProjectScanResult(
         project_root=str(project_root),
         project_name="STC",
         scan_time=datetime.now(),
     )
-    scan_result = scanner.refresh_csharp_files(scan_result, [str(STC_GLOBAL_ASAX)])
+    scan_result = scanner.refresh_csharp_files(scan_result, [str(clones.stc_global_asax)])
 
-    file_key = str(STC_GLOBAL_ASAX.resolve())
+    file_key = str(clones.stc_global_asax.resolve())
     assert scan_result.connection_sources[file_key]["cn"] == {
         "database": "SysErrorRecord",
         "server": "vmsystest07",
