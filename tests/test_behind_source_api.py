@@ -27,13 +27,21 @@ from tests.test_cache_freshness_api import (  # noqa: F401  (fixtures and helper
 
 
 class FakeRemote:
+    """Stands in for `git ls-remote`: the head of each repository, or the reason it cannot be read.
+
+    A repository with no head and no reason does not answer."""
+
     def __init__(self) -> None:
         self.heads: dict[str, Optional[str]] = {}
+        self.failures: dict[str, str] = {}
         self.calls: list[str] = []
 
-    def __call__(self, source: dict) -> Optional[str]:
+    def __call__(self, source: dict) -> str:
         self.calls.append(source["repo"])
-        return self.heads.get(source["repo"])
+        head = self.heads.get(source["repo"])
+        if head is None:
+            raise source_check.SourceUnreadable(self.failures.get(source["repo"], "遠端沒有回應"))
+        return head
 
 
 @pytest.fixture
@@ -41,12 +49,18 @@ def remote(monkeypatch):
     fake = FakeRemote()
     monkeypatch.setattr(source_check, "fetch_remote_head", fake)
     monkeypatch.setattr(source_check, "_heads", {})
+    monkeypatch.setattr(source_check, "_head_failures", {})
     monkeypatch.setattr(source_check, "_checked_at", {})
     # The check also reads the Fingerprint of each SQL cache. These tests are about C#:
     # no Database answers, so no SQL cache is behind_source here.
-    monkeypatch.setattr(sql_cache_store, "read_fingerprint", lambda identity, connection: None)
+    monkeypatch.setattr(sql_cache_store, "read_fingerprint", _no_database_answers)
     monkeypatch.setattr(source_check, "_fingerprints", {})
+    monkeypatch.setattr(source_check, "_fingerprint_failures", {})
     return fake
+
+
+def _no_database_answers(identity, connection):
+    raise sql_cache_store.FingerprintUnreadable("資料庫沒有回應")
 
 
 def record_commit(repo: str, commit: str) -> None:
@@ -204,7 +218,7 @@ def test_a_question_never_checks_the_remote_and_answers_normally_for_a_behind_so
     assert remote.calls == []
 
 
-def test_ls_remote_keeps_the_token_out_of_the_command_line_and_failures_give_no_head(monkeypatch) -> None:
+def test_ls_remote_keeps_the_token_out_of_the_command_line_and_failures_give_a_reason(monkeypatch) -> None:
     import subprocess
 
     monkeypatch.setattr(source_check.settings, "AZURE_DEVOPS_ORG", "org")
@@ -225,4 +239,21 @@ def test_ls_remote_keeps_the_token_out_of_the_command_line_and_failures_give_no_
         raise subprocess.TimeoutExpired(args, 30)
 
     monkeypatch.setattr(source_check.subprocess, "run", timeout)
-    assert source_check.fetch_remote_head(source) is None
+    with pytest.raises(source_check.SourceUnreadable, match="沒有回應"):
+        source_check.fetch_remote_head(source)
+
+    def refused(args, **kwargs):
+        return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal: auth failed for s3cret-pat\n")
+
+    monkeypatch.setattr(source_check.subprocess, "run", refused)
+    with pytest.raises(source_check.SourceUnreadable) as failure:
+        source_check.fetch_remote_head(source)
+    assert "auth failed" in str(failure.value)
+    assert "s3cret-pat" not in str(failure.value)
+
+    def no_branch(args, **kwargs):
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(source_check.subprocess, "run", no_branch)
+    with pytest.raises(source_check.SourceUnreadable, match="main"):
+        source_check.fetch_remote_head(source)

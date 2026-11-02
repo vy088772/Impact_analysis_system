@@ -54,6 +54,7 @@ def _row(
     last_scanned_at: Optional[str],
     locked_reason: str,
     behind_source: bool = False,
+    source_check_failure: str = "",
     **identity: Any,
 ) -> dict[str, Any]:
     last_job = refresh_queue.shared_queue.latest_for_key(key)
@@ -65,6 +66,7 @@ def _row(
         "last_scanned_at": last_scanned_at,
         "last_job": last_job,
         "locked_reason": locked_reason,
+        "source_check_failure": source_check_failure,
         **identity,
     }
 
@@ -77,6 +79,8 @@ def sql_row(server: str, database: str) -> Optional[dict[str, Any]]:
         return None
     usable = sql_cache_store.load_cached(identity) is not None
     locked_reason = environment_check.sql_lock_reason(identity.server)
+    # A lock that arrives after the check hides what the check read: the Fingerprint and the failure.
+    checked = usable and not locked_reason
     return _row(
         kind="sql",
         key=refresh_queue.sql_key(identity.key),
@@ -84,8 +88,8 @@ def sql_row(server: str, database: str) -> Optional[dict[str, Any]]:
         has_usable_cache=usable,
         last_scanned_at=sql_cache_store.cached_saved_at(identity),
         locked_reason=locked_reason,
-        # A lock that arrives after the check hides the Fingerprint that the check read.
-        behind_source=usable and not locked_reason and _sql_is_behind_source(identity),
+        behind_source=checked and _sql_is_behind_source(identity),
+        source_check_failure=source_check.fingerprint_failure(identity) if checked else "",
         server=identity.server,
         database=identity.database,
     )
@@ -163,6 +167,9 @@ def csharp_row(
     usable = all(scan_store.load_cached(root) is not None for root in roots)
     saved = [scan_store.cached_saved_at(root) for root in roots]
     locked_reason = environment_check.csharp_lock_reason(source)
+    # A lock that arrives after the check hides what the check read, as for SQL. A locked row gets
+    # no failure either: its Lock Reason already explains it.
+    checked = usable and not locked_reason and source is not None
     return _row(
         kind="csharp",
         key=refresh_queue.csharp_key(str(root) for root in roots),
@@ -170,8 +177,8 @@ def csharp_row(
         has_usable_cache=usable,
         last_scanned_at=min((stamp for stamp in saved if stamp), default=None),
         locked_reason=locked_reason,
-        # A lock that arrives after the check hides the head that the check read, as for SQL.
-        behind_source=usable and not locked_reason and source is not None and _is_behind_source(source, roots),
+        behind_source=checked and _is_behind_source(source, roots),
+        source_check_failure=source_check.remote_failure(source) if checked else "",
         system_id=system_id,
         repo=str((source or {}).get("repo") or "").strip(),
         paths=_source_paths(source),

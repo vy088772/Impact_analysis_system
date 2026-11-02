@@ -42,15 +42,20 @@ def procedures(count: int, latest_modified: datetime = MORNING) -> Fingerprint:
 
 
 class FakeReader:
-    """Stands in for the one Fingerprint reader: the current Fingerprint of each Database."""
+    """Stands in for the one Fingerprint reader: the current Fingerprint of each Database, or the
+    reason it cannot be read. A Database with no Fingerprint and no reason does not answer."""
 
     def __init__(self) -> None:
         self.current: dict[str, Optional[Fingerprint]] = {}
+        self.failures: dict[str, str] = {}
         self.calls: list[tuple[CacheIdentity, ScanConnection]] = []
 
-    def __call__(self, identity: CacheIdentity, connection: ScanConnection) -> Optional[Fingerprint]:
+    def __call__(self, identity: CacheIdentity, connection: ScanConnection) -> Fingerprint:
         self.calls.append((identity, connection))
-        return self.current.get(identity.database)
+        current = self.current.get(identity.database)
+        if current is None:
+            raise sql_cache_store.FingerprintUnreadable(self.failures.get(identity.database, "資料庫沒有回應"))
+        return current
 
 
 @pytest.fixture
@@ -58,6 +63,7 @@ def reader(monkeypatch, remote):
     fake = FakeReader()
     monkeypatch.setattr(sql_cache_store, "read_fingerprint", fake)
     monkeypatch.setattr(source_check, "_fingerprints", {})
+    monkeypatch.setattr(source_check, "_fingerprint_failures", {})
     return fake
 
 

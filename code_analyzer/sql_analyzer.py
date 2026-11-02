@@ -281,7 +281,8 @@ class SQLAnalyzer:
     # ========================================
     
     def connect(self) -> bool:
-        """建立資料庫連線"""
+        """建立資料庫連線。失敗時回傳 False，並把錯誤留在 `connect_error`。"""
+        self.connect_error = None
         try:
             print(f"🔌 連接資料庫: {self.db_config.alias}...")
             
@@ -301,6 +302,7 @@ class SQLAnalyzer:
             
         except pyodbc.Error as e:
             print(f"❌ 連線失敗: {e}")
+            self.connect_error = e
             return False
     
     def disconnect(self):

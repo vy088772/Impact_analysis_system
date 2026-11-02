@@ -66,3 +66,14 @@ This amendment changes the rule "keeps one check time for both" of the amendment
 - An unknown `system_id` gets HTTP 404, and the check reads nothing.
 
 Each analyst action on the update page still asks for the check, so the rule "A question never runs this check" stays. Later tickets of issue #8 move the full check from the page open to a daily background check of the web.
+
+## Amendment: the page shows a read failure (2026-11-02)
+
+Before this amendment, a row whose repository or Database the check could not read looked `current`. The analyst could not see the failure. The accepted decisions are in `TCCDIV1/AI_LlamaIndex` issue #8. Issue #10 builds this part.
+
+- The check keeps a short reason for each source that it could not read, for example a timeout or a failed login. The reason never holds the PAT or the password.
+- The listing gives the reason on the row as `source_check_failure`. The field is empty when the check read the source, before the first check, and for a locked row. A locked row needs no failure, because its Lock Reason already explains it.
+- A source has a kept answer or a failure, never both. A later successful read clears the failure. A failed read still forgets the kept answer, so a failure is never `behind_source`.
+- A read failure is not a Cache Freshness value. It changes no `freshness`. The rules for a Pinned System, an Unread System, and "update all" stay the same.
+- The Environment Check and the check give the same reasons for the same `git ls-remote` failure and the same SQL Server login failure.
+- The update page shows "無法檢查" for a C# or SQL row with a failure, and the reason as the hover text. `outdated` and `refreshing` show before "無法檢查".

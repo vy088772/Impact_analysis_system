@@ -690,6 +690,10 @@ class CacheFreshnessRow(BaseModel):
     repo: str = ""
     paths: List[str] = Field(default_factory=list)
     locked_reason: str = ""  # the failure of the last Environment Check that locks this row; empty when none
+    # Why the last `behind_source` check could not read the source of this row (a timeout, a failed
+    # login); empty when it read the source, before the first check, and for a locked row.
+    # A failure is not a Cache Freshness: it changes no `freshness`.
+    source_check_failure: str = ""
 
 
 class CacheFreshnessSystem(BaseModel):

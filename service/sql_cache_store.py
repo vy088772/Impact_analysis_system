@@ -505,26 +505,76 @@ def _sql_analyzer(identity: CacheIdentity, connection: ScanConnection) -> "SQLAn
     )
 
 
-def read_fingerprint(identity: CacheIdentity, connection: ScanConnection) -> Optional[Fingerprint]:
+class FingerprintUnreadable(Exception):
+    """讀不到一份 SQL 快取目前的 Fingerprint。訊息是頁面顯示的簡短原因。"""
+
+
+try:
+    import pyodbc as _pyodbc
+
+    _odbc_errors: tuple = (_pyodbc.Error,)
+except ImportError:  # 沒有 pyodbc 的機器：沒有 ODBC 錯誤可分類
+    _odbc_errors = ()
+
+
+_MAX_REASON_LENGTH = 160
+
+
+def short_reason(text: str) -> str:
+    """原因只留第一行，最多 _MAX_REASON_LENGTH 個字：頁面把它當滑鼠提示顯示。"""
+    first = (text.strip().splitlines() or [""])[0]
+    return first if len(first) <= _MAX_REASON_LENGTH else first[: _MAX_REASON_LENGTH - 1] + "…"
+
+
+def sql_failure_reason(exc: Optional[BaseException], seconds: Optional[float] = None) -> str:
+    """一個 SQL Server 連線錯誤的簡短原因。Environment Check 與 `behind_source` 檢查用同一套原因。
+
+    seconds：登入時間限制，用在逾時的原因；None 表示不寫秒數。"""
+    if exc is None:
+        return "SQL Server 連線失敗"
+    if isinstance(exc, _odbc_errors):
+        state = str(exc.args[0]) if exc.args else ""
+        if state == "HYT00":
+            return "SQL Server 沒有回應" if seconds is None else f"SQL Server 在 {seconds:g} 秒內沒有回應"
+        if state in ("08001", "08S01"):
+            return "連不到 SQL Server（主機名稱錯誤、網路不通，或伺服器沒有回應）"
+        if state == "28000":
+            return "SQL Server 拒絕這個登入帳號"
+        # Windows says IM002; unixODBC says 01000 "Can't open lib".
+        if state == "IM002" or "Can't open lib" in str(exc):
+            return "這台機器沒有 SQL Server 的 ODBC 驅動程式"
+        return f"SQL Server 連線失敗（{state or type(exc).__name__}）"
+    return short_reason(f"SQL Server 連線失敗：{exc}")
+
+
+def _without_password(reason: str, connection: ScanConnection) -> str:
+    return short_reason(reason.replace(connection.password, "***") if connection.password else reason)
+
+
+def read_fingerprint(identity: CacheIdentity, connection: ScanConnection) -> Fingerprint:
     """從 SQL Server 的系統目錄讀一份 SQL 快取目前的 Fingerprint。
 
     這是唯一讀 Fingerprint 的地方：scan 與 `behind_source` 檢查都呼叫它。
     它只讀 `sys.objects`，從不讀定義。
 
-    連不上或查詢失敗時回傳 None。呼叫端這時對這個 Database 一無所知，
-    這不算變更。
+    連不上或查詢失敗時丟出 FingerprintUnreadable，訊息是簡短原因（不含密碼）。
+    呼叫端這時對這個 Database 一無所知，這不算變更。
     """
     db = identity.database
     open_analyzer = None
     try:
         analyzer = _sql_analyzer(identity, connection)
         if not analyzer.connect():
-            return None
+            reason = sql_failure_reason(getattr(analyzer, "connect_error", None))
+            raise FingerprintUnreadable(_without_password(reason, connection))
         open_analyzer = analyzer
         return analyzer.read_fingerprint()
+    except FingerprintUnreadable:
+        raise
     except Exception as exc:
-        print(f"⚠️  無法讀取 Fingerprint（非致命）：{db}：{exc}")
-        return None
+        print(f"⚠️  無法讀取 Fingerprint（非致命）：{db}：{type(exc).__name__}")
+        reason = f"讀取 Fingerprint 失敗：{exc}"
+        raise FingerprintUnreadable(_without_password(reason, connection)) from None
     finally:
         if open_analyzer is not None:
             try:
@@ -812,7 +862,10 @@ def get_or_dump(
     _report_progress(progress_callback, "connecting", 0, 1, db)
     # 先讀 Fingerprint 再讀定義：scan 期間的變更只會讓記錄的 Fingerprint 比內容舊，
     # 不會比內容新。
-    fingerprint = read_fingerprint(identity, connection)
+    try:
+        fingerprint: Optional[Fingerprint] = read_fingerprint(identity, connection)
+    except FingerprintUnreadable:
+        fingerprint = None  # 記錄 null：之後的檢查不會把這份快取標成 behind_source
     analyzer = _sql_analyzer(identity, connection)
     if not analyzer.connect():
         raise RuntimeError(f"無法連線資料庫：{db}")

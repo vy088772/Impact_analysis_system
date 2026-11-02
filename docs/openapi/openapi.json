@@ -296,6 +296,11 @@
             "title": "Server",
             "type": "string"
           },
+          "source_check_failure": {
+            "default": "",
+            "title": "Source Check Failure",
+            "type": "string"
+          },
           "system_id": {
             "default": "",
             "title": "System Id",
