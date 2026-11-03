@@ -361,11 +361,11 @@ The short reason why the last `behind_source` check could not read the source of
 _Avoid_: read error, check error, unread source
 
 **Impact Code Time**:
-The newest modification time of the `*.py` files under the `service/` package of the Impact code, subdirectories included. The service records it one time, when it starts, and reports it as `code_time` in `GET /health`. The text is ISO 8601 with whole seconds (the fraction is cut, not rounded) and the local offset as `+HH:MM`. The web and the launcher calculate the same text from the Impact code on the disk. A different text means that the running service uses older code. It is not a version number and not a git commit: a change that is not committed also changes it.
+The newest modification time of the `*.py` files under the `service/` package of the Impact code, subdirectories included. The service records it one time, when it starts, and reports it as `code_time` in `GET /health`. A package with no `*.py` file has no Impact Code Time, and `code_time` is null. The text is ISO 8601 with whole seconds (the fraction is cut, not rounded) and the local offset as `+HH:MM`. The web and the launcher calculate the same text from the Impact code on the disk. A different text means that the running service uses older code. It is not a version number and not a git commit: a change that is not committed also changes it.
 _Avoid_: code version, build time, deploy time
 
 **Stale Impact Service**:
-A running Impact service whose Impact Code Time is different from the Impact Code Time of the Impact code on the disk, or that gives no Impact Code Time. The web and the launcher find it, not the Impact service: the web shows it as one line of the yellow notice of the update page, and the launcher prints it in the console when it reuses the service. It locks no row. The fix is to stop the Impact service and start the launcher again. The web glossary owns the full definition.
+A running Impact service whose Impact Code Time is different from the Impact Code Time of the Impact code on the disk, or that gives no Impact Code Time. The web and the launcher find it, not the Impact service: the web shows it as one line of the yellow notice of the update page, and the launcher prints it in the console when it reuses the service. It locks no row. The fix is to stop the Impact service and start the launcher again. See the `CONTEXT.md` of `TCCDIV1/AI_LlamaIndex`.
 _Avoid_: old service, outdated service
 
 ## Repository Management
