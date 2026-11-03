@@ -3693,6 +3693,32 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HealthResponse": {
+        "description": "GET /health 回應。`code_time` 是 Impact Code Time（啟動時算一次，見 service/code_time.py）；\nservice 套件沒有 Python 檔時是 null。web 把 null 當成沒有 `code_time`（見 docs/進階手冊.md）。",
+        "properties": {
+          "code_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Time"
+          },
+          "status": {
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code_time"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
       "InputField": {
         "additionalProperties": false,
         "properties": {
@@ -6570,9 +6596,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Health Health Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/HealthResponse"
                 }
               }
             },

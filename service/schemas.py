@@ -775,6 +775,14 @@ class ScanRecordEntry(BaseModel):
     scanned_at: Optional[str] = None
 
 
+class HealthResponse(BaseModel):
+    """GET /health 回應。`code_time` 是 Impact Code Time（啟動時算一次，見 service/code_time.py）；
+    service 套件沒有 Python 檔時是 null。web 把 null 當成沒有 `code_time`（見 docs/進階手冊.md）。"""
+
+    status: str = "ok"
+    code_time: Optional[str]
+
+
 class ScanRecordListResponse(BaseModel):
     records: List[ScanRecordEntry] = Field(default_factory=list)
 
