@@ -776,10 +776,11 @@ class ScanRecordEntry(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """GET /health 回應。`code_time` 是 Impact Code Time（啟動時算一次，見 service/code_time.py）。"""
+    """GET /health 回應。`code_time` 是 Impact Code Time（啟動時算一次，見 service/code_time.py）；
+    service 套件沒有 Python 檔時是 null，web 把它當成 Stale Impact Service。"""
 
     status: str = "ok"
-    code_time: str
+    code_time: Optional[str]
 
 
 class ScanRecordListResponse(BaseModel):

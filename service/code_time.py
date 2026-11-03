@@ -9,6 +9,7 @@ The rule, so that another program can calculate the same text:
   `__pycache__` holds only `.pyc` files, so it adds nothing.
 - The text is ISO 8601 with whole seconds and the local offset as `+HH:MM`, for example
   `2026-11-02T15:09:00+08:00`. The fraction of a second is cut, not rounded.
+- A package with no `*.py` file has no Impact Code Time (None), not an error.
 
 The web and the launcher compare two texts. The comparison is correct only when both
 processes use the same time zone, which is true for two processes on one machine with
@@ -23,8 +24,9 @@ from typing import Optional
 SERVICE_PACKAGE_DIR = Path(__file__).resolve().parent
 
 
-def impact_code_time(package_dir: Optional[Path] = None) -> str:
-    """Return the Impact Code Time of `package_dir` (default: this service package)."""
+def impact_code_time(package_dir: Optional[Path] = None) -> Optional[str]:
+    """Return the Impact Code Time of `package_dir` (default: this service package),
+    or None when the package has no Python file."""
     root = SERVICE_PACKAGE_DIR if package_dir is None else package_dir
     mtimes = []
     for path in root.rglob("*.py"):
@@ -32,5 +34,7 @@ def impact_code_time(package_dir: Optional[Path] = None) -> str:
             mtimes.append(path.stat().st_mtime)
         except FileNotFoundError:
             continue  # an editor or sync tool removed the file after rglob saw it
+    if not mtimes:
+        return None
     newest = datetime.fromtimestamp(max(mtimes)).astimezone()
     return newest.isoformat(timespec="seconds")

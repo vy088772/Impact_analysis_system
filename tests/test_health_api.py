@@ -70,3 +70,10 @@ def test_code_time_stays_the_start_value_after_a_file_changes_on_the_disk(tmp_pa
 
     assert second == first
     assert third == first
+
+
+def test_code_time_is_none_when_the_package_has_no_python_file(tmp_path):
+    # The same rule as the web: no Python file means no Impact Code Time, not an error.
+    _touch(tmp_path / "notes.txt", "2026-11-02T16:44:00")
+
+    assert impact_code_time(tmp_path) is None
