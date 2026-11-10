@@ -87,6 +87,7 @@ _Avoid_: generic dependency, flow chain
 
 **Path Evidence**:
 The smallest complete source set needed to justify one Execution Path: involved C# methods, SQL modules, DML operations, predicates, and referenced View/UDF definitions.
+A method of a path is one call graph node ([ADR-0044](docs/adr/0044-the-call-graph-follows-the-bound-target-of-each-call.md)), so two overloads are two methods. The rated Database Invocation of the path records the node of each method in `method_node_chain`, beside the simple names of `method_chain`; the `/analyze` path record shows the simple names only. The Path Evidence holds the source of the overload that the path goes through, and not the source of the other overloads. A path with no node for a method finds the method by its simple name; when two or more methods have that name, the error is `ambiguous_method`, not `stale_path`. `stale_path` stays the error for a source snapshot or a method span that no longer exists.
 _Avoid_: full analysis context
 
 **Unresolved Dynamic SQL**:

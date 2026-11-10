@@ -201,6 +201,8 @@ class DbInvocation:
     branch_context: tuple[str, ...] = ()
     source_snapshot_hash: str = ""
     method_class_chain: tuple[str, ...] = ()
+    # The call graph node of each method of `method_chain` (ADR-0044), or "" where none is known.
+    method_node_chain: tuple[str, ...] = ()
     database_candidates: tuple[str, ...] = ()
     raw_command_text: Optional[str] = None
     external_wrapper_method: str = ""
