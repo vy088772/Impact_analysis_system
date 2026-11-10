@@ -785,8 +785,8 @@ def test_method_chain_does_not_cross_class_for_unqualified_call() -> None:
         ],
     )
 
-    assert analyze_service._method_chain_for_file(file_result, "Helper", "SaveData") == ["SaveData"]
-    assert analyze_service._method_chain_for_file(file_result, "OrderPage", "SaveData") == ["SaveData"]
+    assert analyze_service._method_chains_for_file(file_result, "Helper", "SaveData") == [["SaveData"]]
+    assert analyze_service._method_chains_for_file(file_result, "OrderPage", "SaveData") == [["SaveData"]]
 
 
 def test_analyze_can_disable_execution_paths(monkeypatch, tmp_path: Path) -> None:

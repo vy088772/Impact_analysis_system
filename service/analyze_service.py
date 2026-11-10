@@ -99,7 +99,7 @@ from .derived_execution_evidence import (
     evidence_for_scope,
     _execution_sql_context,
     _execution_connection_sources,
-    _method_chain_for_file,
+    _method_chains_for_file,
     _overlay_method_class_chain,
     _find_source_snapshot,
     _rel,

@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple, TypeVar
 
 from config.settings import settings
 from canonical_object_identity import ObjectName, parse, schema_qualified
@@ -531,12 +531,39 @@ def _execution_connection_sources(
     }
 
 
-def _method_chain_for_file(
+_Chain = TypeVar("_Chain", bound=Sequence[object])
+
+
+def _one_chain_per_entry(
+    chains: Iterable[_Chain],
+    entry_of: Callable[[_Chain], str],
+    rank: Callable[[_Chain], Tuple[object, ...]],
+) -> List[_Chain]:
+    """One caller chain for each entry method, in entry-method order (Impact #11).
+
+    Each root method of a file gives its own Execution Path. `path_id` holds the
+    entry method, not the whole chain, so two chains from one entry method keep
+    the one with the highest `rank`: the longest chain, then the last by name.
+    """
+    best: Dict[str, _Chain] = {}
+    for chain in chains:
+        entry = entry_of(chain)
+        if entry not in best or rank(chain) > rank(best[entry]):
+            best[entry] = chain
+    return [best[entry] for entry in sorted(best)]
+
+
+def _method_chains_for_file(
     file_result: FileAnalysisResult,
     class_name: str,
     method_name: str,
-) -> List[str]:
-    """Return the longest deterministic same-file caller chain to a sink method."""
+) -> List[List[str]]:
+    """The same-file caller chains to a sink method by name: one for each entry method.
+
+    A chain starts at a root method, which no other method of the file calls, or
+    stops where it meets a method that it holds already. A part of a longer chain
+    is not a chain of its own.
+    """
     methods: Dict[Tuple[str, str], MethodInfo] = {}
     methods_by_name: Dict[str, List[Tuple[str, str]]] = {}
     for class_info in file_result.classes:
@@ -548,7 +575,7 @@ def _method_chain_for_file(
     if sink_candidates[0] not in methods:
         sink_candidates = methods_by_name.get(method_name, []) if not class_name else []
     if not sink_candidates:
-        return [method_name]
+        return [[method_name]]
     parents: Dict[Tuple[str, str], set[Tuple[str, str]]] = {}
     for caller_key, method in methods.items():
         caller_class, _ = caller_key
@@ -575,7 +602,9 @@ def _method_chain_for_file(
     candidates: List[List[str]] = []
     for sink in sorted(sink_candidates):
         candidates.extend(expand(sink, set()))
-    return max(candidates, key=lambda chain: (len(chain), tuple(chain)))
+    return _one_chain_per_entry(
+        candidates, lambda chain: chain[0], lambda chain: (len(chain), tuple(chain))
+    )
 
 
 def _has_overloads(file_result: FileAnalysisResult) -> bool:
@@ -588,11 +617,14 @@ def _spans_by_node(spans: Iterable[MethodSourceSpan]) -> Dict[str, MethodSourceS
     return {span.node: span for span in spans if span.node}
 
 
-def _caller_spans_by_bound_calls(snapshot: SourceSnapshot, sink: str) -> List[MethodSourceSpan]:
-    """The same-file caller chain to the node `sink`, along Bound Call Targets (ADR-0044).
+def _caller_span_chains_by_bound_calls(
+    snapshot: SourceSnapshot, sink: str
+) -> List[List[MethodSourceSpan]]:
+    """The same-file caller chains to the node `sink`, along Bound Call Targets (ADR-0044).
 
-    Two overloads stay two nodes. A chain is selected as `_method_chain_for_file`
-    selects one: the longest chain, then the first by name.
+    Two overloads stay two nodes. The chains follow the rule of
+    `_method_chains_for_file`: one for each entry method by name, so a file with
+    overloads and a file without overloads give the same entry methods.
     """
     spans = _spans_by_node(snapshot.method_spans)
     parents: Dict[str, set[str]] = {}
@@ -613,8 +645,12 @@ def _caller_spans_by_bound_calls(snapshot: SourceSnapshot, sink: str) -> List[Me
     def names(chain: List[str]) -> Tuple[str, ...]:
         return tuple(spans[node].method_name for node in chain)
 
-    best = max(expand(sink, frozenset()), key=lambda chain: (len(chain), names(chain), tuple(chain)))
-    return [spans[node] for node in best]
+    chains = _one_chain_per_entry(
+        expand(sink, frozenset()),
+        lambda chain: spans[chain[0]].method_name,
+        lambda chain: (len(chain), names(chain), tuple(chain)),
+    )
+    return [[spans[node] for node in chain] for chain in chains]
 
 
 def _nodes_along_names(snapshot: Optional[SourceSnapshot], sink: str, names: List[str]) -> List[str]:
@@ -794,33 +830,53 @@ def _rated_execution_invocations(
             sink = snapshot.node_at(invocation.source.start_offset) if snapshot is not None else ""
             # The name rule cannot tell two overloads apart, so only a file with
             # overloads follows the Bound Call Targets. Other files keep their chains.
-            caller_spans = (
-                _caller_spans_by_bound_calls(snapshot, sink)
+            # Each caller chain gives its own rated invocation, so each entry method
+            # gives its own Execution Path (Impact #11).
+            span_chains = (
+                _caller_span_chains_by_bound_calls(snapshot, sink)
                 if snapshot is not None and sink and _has_overloads(file_result)
                 else []
             )
-            if caller_spans:
-                caller_chain = [span.method_name for span in caller_spans]
-                caller_nodes = [span.node for span in caller_spans]
-            else:
-                caller_chain = _method_chain_for_file(file_result, invocation.class_name, invocation.method_name)
-                caller_nodes = _nodes_along_names(snapshot, sink, caller_chain)
-            method_chain = _merge_method_chains(caller_chain, invocation.method_chain)
-            class_chain_by_name = _method_class_chain_for_file(file_result, invocation.class_name, method_chain)
-            for index, span in enumerate(caller_spans):
-                class_chain_by_name[index] = span.class_name
-            method_class_chain = _overlay_method_class_chain(
-                method_chain,
-                class_chain_by_name,
-                invocation.method_chain, invocation.method_class_chain,
+            caller_chains: List[Tuple[List[str], List[str], List[MethodSourceSpan]]] = (
+                [([span.method_name for span in spans], [span.node for span in spans], spans) for spans in span_chains]
+                if span_chains
+                else [
+                    (chain, _nodes_along_names(snapshot, sink, chain), [])
+                    for chain in _method_chains_for_file(file_result, invocation.class_name, invocation.method_name)
+                ]
             )
-            rated_invocations.append(replace(
-                invocation, method_chain=tuple(method_chain),
-                method_class_chain=tuple(method_class_chain),
-                method_node_chain=_method_node_chain(scan, caller_nodes, method_chain),
-                source_snapshot_hash=(snapshot.content_hash if snapshot else ""),
-            ))
+            for caller_chain, caller_nodes, caller_spans in caller_chains:
+                rated_invocations.append(_with_caller_chain(
+                    scan, file_result, invocation, snapshot, caller_chain, caller_nodes, caller_spans,
+                ))
     return rated_invocations, graph
+
+
+def _with_caller_chain(
+    scan: ProjectScanResult,
+    file_result: FileAnalysisResult,
+    invocation: DbInvocation,
+    snapshot: Optional[SourceSnapshot],
+    caller_chain: List[str],
+    caller_nodes: List[str],
+    caller_spans: List[MethodSourceSpan],
+) -> DbInvocation:
+    """`invocation` as one same-file caller chain reaches it."""
+    method_chain = _merge_method_chains(caller_chain, invocation.method_chain)
+    class_chain_by_name = _method_class_chain_for_file(file_result, invocation.class_name, method_chain)
+    for index, span in enumerate(caller_spans):
+        class_chain_by_name[index] = span.class_name
+    method_class_chain = _overlay_method_class_chain(
+        method_chain,
+        class_chain_by_name,
+        invocation.method_chain, invocation.method_class_chain,
+    )
+    return replace(
+        invocation, method_chain=tuple(method_chain),
+        method_class_chain=tuple(method_class_chain),
+        method_node_chain=_method_node_chain(scan, caller_nodes, method_chain),
+        source_snapshot_hash=(snapshot.content_hash if snapshot else ""),
+    )
 
 
 def evidence_for_scope(
