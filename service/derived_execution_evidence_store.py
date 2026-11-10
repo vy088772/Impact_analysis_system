@@ -60,7 +60,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance only
 # than unpickled into an object this version does not expect. Bump it also when
 # the path builder gives another answer for the same graph: the validity stamp
 # reads the inputs, not the code, so only this version makes such a file a miss.
-_STORE_VERSION = 6  # see the history below.
+_STORE_VERSION = 7  # see the history below.
 # v2: each Execution Path gains `read_full_keys` and `write_full_keys`.
 # v3: each full key gains `schema_source`.
 # v4: a path that stops at a call with the schema source `unresolved` carries
@@ -72,6 +72,8 @@ _STORE_VERSION = 6  # see the history below.
 # the order of `rated_invocations` (derived-execution-evidence-one-module, ticket 02).
 # v6: each rated invocation gains `method_node_chain`. In a file with overloads, the
 # caller chain follows the Bound Call Targets of the snapshot (overloaded-method-path-evidence, Impact #9).
+# v7: each entry method that reaches a database invocation gives its own rated invocation,
+# so one call can give several rated invocations (Impact #11). The scan cache does not change.
 
 _DATA_SUFFIX = ".pkl"
 

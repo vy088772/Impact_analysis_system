@@ -99,7 +99,7 @@ from .derived_execution_evidence import (
     evidence_for_scope,
     _execution_sql_context,
     _execution_connection_sources,
-    _method_chain_for_file,
+    _method_chains_for_file,
     _overlay_method_class_chain,
     _find_source_snapshot,
     _rel,
@@ -1157,6 +1157,23 @@ def _invocation_response_fields(invocation: DbInvocation) -> Dict:
     return response
 
 
+def _one_invocation_per_call(invocations: Iterable[DbInvocation]) -> List[DbInvocation]:
+    """The first rated invocation of each call site, in order.
+
+    Each entry method that reaches a call gives its own rated invocation (Impact #11).
+    A diagnostic is about the call, so it names the call once.
+    """
+    seen: set = set()
+    result: List[DbInvocation] = []
+    for invocation in invocations:
+        source = invocation.source
+        key = (source.relative_path, source.start_offset, source.end_offset)
+        if key not in seen:
+            seen.add(key)
+            result.append(invocation)
+    return result
+
+
 def _invocation_diagnostic(
     invocation: DbInvocation,
     **context: object,
@@ -1815,7 +1832,7 @@ def analyze(
             ]
             diagnostics = [
                 _invocation_diagnostic(invocation)
-                for invocation in rated_invocations
+                for invocation in _one_invocation_per_call(rated_invocations)
                 if invocation.evidence is not InvocationEvidence.PROVEN
             ]
 
@@ -2390,7 +2407,7 @@ def find_by_table(
     if req.database:
         diagnostics.extend(
             _invocation_diagnostic(invocation, requested_table=table_name)
-            for invocation in rated_invocations
+            for invocation in _one_invocation_per_call(rated_invocations)
             if invocation.evidence is not InvocationEvidence.PROVEN
         )
         for access_record in filter_table_accesses(
@@ -2653,7 +2670,7 @@ def flow_chain(
         execution_paths = evidence.paths_of(rated_invocations)
         diagnostics = [
             _invocation_diagnostic(invocation, requested_table=req.table_name)
-            for invocation in rated_invocations
+            for invocation in _one_invocation_per_call(rated_invocations)
             if invocation.evidence is not InvocationEvidence.PROVEN
         ]
         backward = flow_chain_builder.build_backward_chains(
