@@ -1501,24 +1501,24 @@ def _source_methods_for_path(
         method_names = [invocation.method_name]
     external_wrapper_method = str(path.get("external_wrapper_method") or "").casefold()
     method_classes = list(path.get("method_class_chain", []) or [])
+    # The rated invocation holds the node chain; the `/analyze` path record shows names only.
+    method_nodes = list(invocation.method_node_chain)
     for index, method_name in enumerate(method_names):
         class_hint = method_classes[index] if index < len(method_classes) else ""
         if not class_hint and index == 0:
             class_hint = invocation.class_name
-        source_match = _find_method_source(
-            scan,
-            snapshot,
-            method_name,
-            class_hint,
+        node = method_nodes[index] if index < len(method_nodes) else ""
+        is_external_wrapper = bool(
+            external_wrapper_method and method_name.casefold() == external_wrapper_method
         )
-        if source_match is None:
-            if external_wrapper_method and method_name.casefold() == external_wrapper_method:
-                continue
-            raise PathEvidenceError(
-                "stale_path",
-                f"C# method span 已不存在或不唯一：{method_name}",
+        try:
+            method_snapshot, span = _find_method_source(
+                scan, snapshot, method_name, class_hint, node
             )
-        method_snapshot, span = source_match
+        except PathEvidenceError:
+            if is_external_wrapper:
+                continue
+            raise
         key = (
             method_snapshot.relative_path,
             span.class_name,
@@ -1538,6 +1538,7 @@ def _source_methods_for_path(
                 "content_hash": method_snapshot.content_hash,
                 "class": span.class_name,
                 "method": span.method_name,
+                "node": span.node,
                 "start_offset": span.start_offset,
                 "end_offset": span.end_offset,
                 "source": source,
@@ -1546,28 +1547,54 @@ def _source_methods_for_path(
     return methods
 
 
-def _find_method_source(scan, preferred_snapshot, method_name: str, class_hint: str):
-    preferred_matches = [
-        span
-        for span in preferred_snapshot.method_spans
-        if span.method_name == method_name
-        and (not class_hint or span.class_name == class_hint)
-    ]
-    if preferred_matches:
-        return (preferred_snapshot, preferred_matches[0]) if len(preferred_matches) == 1 else None
+def _find_method_source(scan, preferred_snapshot, method_name: str, class_hint: str, node: str):
+    """The snapshot and span of one method of a path; a method is one call graph node (ADR-0044).
 
-    matches = [
-        (snapshot, span)
-        for key, snapshot in sorted(
+    A path with the node of the method finds the span with that node. A path without it
+    (a path from before the node chain, or a call site with no node) finds the span by
+    simple name and class. Two overloads then give two spans, and the service does not
+    select one by a guess: it raises `ambiguous_method`. A method with no span raises
+    `stale_path`.
+    """
+    def snapshots_in_order():
+        yield preferred_snapshot
+        for _, snapshot in sorted(
             getattr(scan, "source_snapshots", {}).items(),
             key=lambda item: str(item[0]).casefold(),
-        )
+        ):
+            if snapshot is not preferred_snapshot:
+                yield snapshot
+
+    if node:
+        for snapshot in snapshots_in_order():
+            for span in snapshot.method_spans:
+                if span.node == node:
+                    return snapshot, span
+        raise PathEvidenceError("stale_path", f"C# method span 已不存在：{node}")
+
+    def matches_in(snapshot):
+        return [
+            (snapshot, span)
+            for span in snapshot.method_spans
+            if span.method_name == method_name
+            and (not class_hint or span.class_name == class_hint)
+        ]
+
+    matches = matches_in(preferred_snapshot) or [
+        match
+        for snapshot in snapshots_in_order()
         if snapshot is not preferred_snapshot
-        for span in snapshot.method_spans
-        if span.method_name == method_name
-        and (not class_hint or span.class_name == class_hint)
+        for match in matches_in(snapshot)
     ]
-    return matches[0] if len(matches) == 1 else None
+    if not matches:
+        raise PathEvidenceError("stale_path", f"C# method span 已不存在：{method_name}")
+    if len(matches) > 1:
+        raise PathEvidenceError(
+            "ambiguous_method",
+            f"C# method 不明確（ambiguous）：{method_name} 有 {len(matches)} 個 method span，"
+            "path 沒有 call graph node，無法決定是哪一個 overload",
+        )
+    return matches[0]
 
 
 def _cached_sql_object(cached: Mapping[str, object], node: Mapping[str, object]) -> Dict | None:
