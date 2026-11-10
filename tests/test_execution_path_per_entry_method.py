@@ -218,3 +218,22 @@ def test_a_new_entry_method_keeps_the_path_id_of_the_existing_path(tmp_path: Pat
     after_by_entry = {path["entry_method"]: path["path_id"] for path in after}
     assert after_by_entry["OrderPage.OnDeleteRow"] == before[0]["path_id"]
     assert after_by_entry["OrderPage.OnInsert"] != before[0]["path_id"]
+
+
+def test_a_cycle_gives_no_path_to_a_method_that_has_a_caller(tmp_path: Path) -> None:
+    """`A` and `B` call each other. Only the root method `R` is an entry method."""
+    methods: Methods = [("R", ["A"]), ("A", ["B"]), ("B", ["A", "Save"]), ("Save", [])]
+
+    evidence = _evidence(tmp_path, methods, "Save")
+
+    assert [chain[0] for chain in _chains(evidence)] == ["R"]
+
+
+def test_a_call_that_two_entry_methods_reach_gives_one_diagnostic(tmp_path: Path) -> None:
+    """A diagnostic is about the call, so the second entry method adds no diagnostic."""
+    from service import analyze_service
+
+    evidence = _evidence(tmp_path, _DELETE_AND_INSERT, "Save")
+
+    assert len(evidence.rated_invocations) == 2
+    assert len(analyze_service._one_invocation_per_call(evidence.rated_invocations)) == 1
