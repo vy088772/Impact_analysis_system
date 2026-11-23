@@ -7,7 +7,7 @@ text of a "無法檢查" row, so a reason is one short line.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 try:
     import pyodbc as _pyodbc
@@ -18,12 +18,14 @@ except ImportError:  # 沒有 pyodbc 的機器：沒有 ODBC 錯誤可分類
 
 
 _MAX_REASON_LENGTH = 160
+_SERVER_NAME_LABEL = "主機名稱："
+_IP_LABEL = "；IP："
 
 
-def short_reason(text: str) -> str:
-    """原因只留第一行，最多 _MAX_REASON_LENGTH 個字：頁面把它當滑鼠提示顯示。"""
+def short_reason(text: str, limit: int = _MAX_REASON_LENGTH) -> str:
+    """原因只留第一行，最多 limit 個字：頁面把它當滑鼠提示顯示。"""
     first = (text.strip().splitlines() or [""])[0]
-    return first if len(first) <= _MAX_REASON_LENGTH else first[: _MAX_REASON_LENGTH - 1] + "…"
+    return first if len(first) <= limit else first[: limit - 1] + "…"
 
 
 def no_answer(what: str, seconds: float) -> str:
@@ -50,3 +52,17 @@ def sql_failure_reason(exc: Optional[BaseException], seconds: Optional[float] = 
             return "這台機器沒有 SQL Server 的 ODBC 驅動程式"
         return f"SQL Server 連線失敗（{state or type(exc).__name__}）"
     return short_reason(f"SQL Server 連線失敗：{exc}")
+
+
+def sql_connection_failure_reason(errors: Sequence[BaseException], seconds: Optional[float] = None) -> str:
+    """The short reason of a failed connection rule of the Scan Connection.
+
+    `errors` holds the error of each address that the rule tried: the server name, then the `ip`.
+    One error gives its reason only. Two errors give the reason of the server name and the reason
+    of the `ip`, each from `sql_failure_reason`. Each part gets half of the length limit, so the
+    reason stays one short line and keeps both parts."""
+    reasons = [sql_failure_reason(error, seconds) for error in errors]
+    if len(reasons) == 1:
+        return reasons[0]
+    half = (_MAX_REASON_LENGTH - len(_SERVER_NAME_LABEL) - len(_IP_LABEL)) // 2
+    return f"{_SERVER_NAME_LABEL}{short_reason(reasons[0], half)}{_IP_LABEL}{short_reason(reasons[1], half)}"

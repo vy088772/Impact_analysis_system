@@ -132,7 +132,9 @@ One of the four object lists of a SQL cache, with the `sys.objects.type` values 
 _Avoid_: object kind, object type (a Kind Group can hold several `sys.objects.type` values)
 
 **Scan Connection**:
-How a SQL scan reaches the SQL Server of one cache: the connection address and the scan account override. The address is the one the caller gives, so it keeps a named instance (`host\instance`). The SQL Cache Identity drops that instance. The scan account override applies only when it has both a user id and a password. Otherwise the global scan account applies. The scan and the Fingerprint reader both use one Scan Connection. See [ADR-0010](docs/adr/0010-scan-identity-independent-of-app-credentials.md).
+How a SQL scan reaches the SQL Server of one cache: the connection address, the fallback address and the scan account override. The address is the one the caller gives, so it keeps a named instance (`host\instance`). The SQL Cache Identity drops that instance. The scan account override applies only when it has both a user id and a password. Otherwise the global scan account applies. The scan and the Fingerprint reader both use one Scan Connection.
+
+The fallback address is the `ip` of the server in the caller's Database Registry, found by the normalized server. A missing or empty `ip` gives no fallback address. The connection rule connects by the address first, and by the fallback address when that connection fails for any reason. The rule keeps no memory, so each connection starts with the address. The fallback address goes only into the connection string, and it keeps the named instance of the address. The Environment Check uses the connection rule; the scan and the Fingerprint reader connect by the address only. See [ADR-0010](docs/adr/0010-scan-identity-independent-of-app-credentials.md).
 _Avoid_: credentials, connection string, login
 
 **C# Scan Result**:

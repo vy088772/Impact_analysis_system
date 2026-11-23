@@ -7,6 +7,11 @@ limit, and runs `git ls-remote` one time for each repository of the catalog, wit
 `GIT_AT_ONCE` of them at one time. A failure of one repository locks the C# rows of that
 repository only.
 
+The login uses the connection rule of the Scan Connection: when the server name fails and the
+Database Registry has an `ip` for the server, the check logs in by the `ip` too. Thus the probe of a
+server with an `ip` gets two login limits plus the margin, and the probe of the other servers gets
+one login limit plus the margin.
+
 The service keeps the failures of the last check in memory. A SQL row of a failed server and a C#
 row of a failed repository get that failure as their lock reason: the service refuses their Refresh Jobs,
 and "update all" skips them. Before the first check, and after a restart, nothing is locked.
@@ -21,12 +26,12 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Iterable, List, Mapping, Optional, Tuple
+from typing import Callable, Iterable, List, Mapping, Optional
 
-from config.settings import settings
+from config.settings import ConnectionFailed, settings
 
 from . import source_check, sql_cache_store, system_targets
-from .failure_reasons import no_answer, sql_failure_reason
+from .failure_reasons import no_answer, sql_connection_failure_reason, sql_failure_reason
 from .schemas import EnvironmentCheckResponse, SqlCredentialOverride, UpdateCapabilityResult
 
 SQL_LOGIN_TIMEOUT_SECONDS = 5
@@ -37,18 +42,22 @@ GIT_AT_ONCE = 8
 _MARGIN_SECONDS = 3
 
 
-def probe_sql_server(server: str, database: str, user_id: str, password: str) -> Optional[str]:
-    """Log in to `server` (into `database`) with a short login time limit."""
-    try:
-        import pyodbc
-    except ImportError:
-        return "這台機器沒有 pyodbc，不能連線 SQL Server"
+def probe_sql_server(server: str, database: str, user_id: str, password: str, ip: str = "") -> Optional[str]:
+    """Log in to `server` (into `database`) with a short login time limit.
+
+    It uses the connection rule of the Scan Connection: when `server` fails and `ip` is not empty,
+    it logs in by `ip` too. Each login has its own time limit."""
     try:
         config = settings.build_database_config(
-            alias=server, server=server, database_name=database, user_id=user_id, password=password
+            alias=server, server=server, database_name=database, user_id=user_id, password=password,
+            fallback_address=ip,
         )
         config.timeout = SQL_LOGIN_TIMEOUT_SECONDS
-        connection = pyodbc.connect(config.get_connection_string(), timeout=SQL_LOGIN_TIMEOUT_SECONDS)
+        connection = config.connect(login_timeout=SQL_LOGIN_TIMEOUT_SECONDS)
+    except ImportError:
+        return "這台機器沒有 pyodbc，不能連線 SQL Server"
+    except ConnectionFailed as failed:
+        return sql_connection_failure_reason(failed.errors, SQL_LOGIN_TIMEOUT_SECONDS)
     except Exception as exc:  # a broken configuration is a failure of this server only
         return sql_failure_reason(exc, SQL_LOGIN_TIMEOUT_SECONDS)
     connection.close()
@@ -87,14 +96,14 @@ class _Probe:
 
 
 def _servers(
-    registry: Iterable[Tuple[str, List[str]]], catalog: Iterable[dict]
+    registry: Iterable[system_targets.RegistryServer], catalog: Iterable[dict]
 ) -> dict[str, tuple[str, str]]:
     """Each server (normalized, as a SQL row shows it), with the (server, database) to log in to.
 
     The servers come from the Database Registry. A server that only the catalog names is tested too,
     because its rows still show on the update page."""
     servers: dict[str, tuple[str, str]] = {}
-    declared = [(server, names[0] if names else "master") for server, names in registry]
+    declared = [(entry.server, entry.databases[0] if entry.databases else "master") for entry in registry]
     declared += [pair for system in catalog for pair in system_targets.declared_databases(system)]
     for server, database in declared:
         target = sql_cache_store.normalize_server(server)
@@ -126,18 +135,22 @@ def _repositories(catalog: Iterable[dict]) -> dict[str, dict]:
 
 
 def _probes(
-    registry: Iterable[Tuple[str, List[str]]],
+    registry: List[system_targets.RegistryServer],
     catalog: list,
     sql_credentials: Mapping[str, SqlCredentialOverride],
 ) -> list[_Probe]:
     probes = []
+    ips = system_targets.registry_ips(registry)
     for target, (server, database) in _servers(registry, catalog).items():
         account = sql_credentials.get(target) or SqlCredentialOverride()
+        ip = ips.get(target, "")
+        # A server with an ip can need two logins: by the server name, then by the ip.
+        time_limit = (2 if ip else 1) * SQL_LOGIN_TIMEOUT_SECONDS
         probes.append(
             _Probe(
                 "sql_server", target, "SQL Server", f"{target} 的 SQL 列",
-                SQL_LOGIN_TIMEOUT_SECONDS, SQL_LOGIN_TIMEOUT_SECONDS + _MARGIN_SECONDS,
-                lambda s=server, d=database, a=account: probe_sql_server(s, d, a.db_user_id, a.db_password),
+                time_limit, time_limit + _MARGIN_SECONDS,
+                lambda s=server, d=database, a=account, i=ip: probe_sql_server(s, d, a.db_user_id, a.db_password, i),
             )
         )
     repositories = _repositories(catalog)
@@ -159,19 +172,22 @@ def _probes(
 
 
 def run(
-    registry: Iterable[Tuple[str, List[str]]],
+    registry: Iterable[system_targets.RegistryServer],
     catalog: list,
     sql_credentials: Optional[Mapping[str, SqlCredentialOverride]] = None,
 ) -> EnvironmentCheckResponse:
     """Run every probe at the same time, keep the lock reasons, and return the result."""
-    probes = _probes(registry, catalog, sql_credentials or {})
+    probes = _probes(list(registry), catalog, sql_credentials or {})
     outcomes: dict[int, Optional[str]] = {}
+    finished: dict[int, float] = {}
 
     def run_one(index: int, probe: _Probe) -> None:
         try:
             outcomes[index] = probe.run()
         except Exception as exc:  # a broken probe fails its own target only
             outcomes[index] = f"{probe.label} 的測試失敗：{exc}"
+        finally:
+            finished[index] = time.monotonic()
 
     threads = [threading.Thread(target=run_one, args=item, daemon=True) for item in enumerate(probes)]
     started = time.monotonic()
@@ -180,8 +196,12 @@ def run(
     items = []
     last = LastCheck()
     for index, (probe, thread) in enumerate(zip(probes, threads)):
-        thread.join(max(0.0, started + probe.wait - time.monotonic()))
-        reason = no_answer(probe.label, probe.time_limit) if thread.is_alive() else outcomes[index]
+        deadline = started + probe.wait
+        thread.join(max(0.0, deadline - time.monotonic()))
+        # The probes have different waits, so the check can reach a probe after its own wait.
+        # A probe that ended after its wait fails too.
+        on_time = not thread.is_alive() and finished[index] <= deadline
+        reason = outcomes[index] if on_time else no_answer(probe.label, probe.time_limit)
         items.append(
             UpdateCapabilityResult(
                 capability=probe.capability,

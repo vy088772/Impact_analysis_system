@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 from config.settings import settings
 
-from . import repo_manager, scan_store
+from . import repo_manager, scan_store, sql_cache_store
 
 
 def scan_cache_state(root: Path) -> Tuple[bool, str]:
@@ -90,11 +90,20 @@ def declared_databases(system: dict) -> List[Tuple[str, str]]:
     ]
 
 
-def load_database_registry(spec_rag_root: Path) -> List[Tuple[str, List[str]]]:
-    """Each server of `llamaindex-spec-rag`'s Database Registry, with its database names.
+class RegistryServer(NamedTuple):
+    """One server entry of the Database Registry."""
 
-    It reads names only. The scan account of a server stays with the caller (ADR-0010).
-    An empty list when the Registry cannot be read."""
+    server: str
+    databases: List[str]
+    ip: str  # the fallback address of the Scan Connection; empty: no fallback
+
+
+def load_database_registry(spec_rag_root: Path) -> List[RegistryServer]:
+    """Each server of `llamaindex-spec-rag`'s Database Registry, with its database names and its `ip`.
+
+    It reads names and the `ip` only. The scan account of a server stays with the caller
+    (ADR-0010). A missing or empty `ip` gives an empty `ip`. An empty list when the Registry cannot
+    be read."""
     registry_path = Path(spec_rag_root) / "catalog" / "SQLServerData.json"
     try:
         payload = json.loads(registry_path.read_text(encoding="utf-8"))
@@ -102,10 +111,27 @@ def load_database_registry(spec_rag_root: Path) -> List[Tuple[str, List[str]]]:
         return []
     groups = payload.get("servers", []) if isinstance(payload, dict) else []
     return [
-        (str(group.get("server") or "").strip(), [str(name).strip() for name in group.get("databases") or []])
+        RegistryServer(
+            str(group.get("server") or "").strip(),
+            [str(name).strip() for name in group.get("databases") or []],
+            str(group.get("ip") or "").strip(),
+        )
         for group in groups
         if isinstance(group, dict) and str(group.get("server") or "").strip()
     ]
+
+
+def registry_ips(registry: Iterable[RegistryServer]) -> Dict[str, str]:
+    """The `ip` of each server of the Database Registry that has one, by its normalized server.
+
+    The key is the server as the SQL Cache Identity normalizes it, so a catalog server that names
+    the same host finds the same `ip`. When two entries name the same host, the first `ip` wins."""
+    ips: Dict[str, str] = {}
+    for entry in registry:
+        target = sql_cache_store.normalize_server(entry.server)
+        if target and entry.ip:
+            ips.setdefault(target, entry.ip)
+    return ips
 
 
 def resolve_system_targets(
