@@ -1,5 +1,6 @@
 # config/settings.py
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -32,10 +33,12 @@ class DatabaseConfig:
         self.trust_server_certificate = kwargs.get('trust_server_certificate', True)
         self.application_name = kwargs.get('application_name', 'ImpactAnalysisSystem')
         self.driver = kwargs.get('driver', 'ODBC Driver 17 for SQL Server')
+        # 備援位址：Database Registry 的 `ip`。空字串表示沒有備援（見 connect()）。
+        self.fallback_server = kwargs.get('fallback_server', '')
     
-    def get_connection_string(self) -> str:
-        """取得連線字串"""
-        server = self.server
+    def get_connection_string(self, address: Optional[str] = None) -> str:
+        """取得連線字串。address 是連線位址，預設是 server；connect() 用它換成備援位址。"""
+        server = address or self.server
         if self.port != 1433:
             server = f"{server},{self.port}"
         
@@ -65,6 +68,36 @@ class DatabaseConfig:
         
         return conn_str
     
+    def connect(self, login_timeout: Optional[float] = None):
+        """Scan Connection 的連線規則：先用 server 連線；失敗時，有備援位址就再用備援位址連線一次。
+
+        server 的任何錯誤都會換到備援位址：規則不分類錯誤。規則不記得上一次的結果，所以每一次
+        連線都從 server 開始。備援位址只進連線字串；連接埠、加密、驅動程式與帳密兩個位址都相同。
+        備援位址連上時，寫一行 log。
+
+        Args:
+            login_timeout: 每一次登入的時間限制（秒）；None 表示只用連線字串的 Connection Timeout。
+
+        Raises:
+            ConnectionFailed: 每一個位址都連不上。
+            ImportError: 這台機器沒有 pyodbc。
+        """
+        import pyodbc
+
+        options = {} if login_timeout is None else {"timeout": login_timeout}
+        addresses = [self.server, self.fallback_server] if self.fallback_server else [self.server]
+        errors: List[BaseException] = []
+        for address in addresses:
+            try:
+                connection = pyodbc.connect(self.get_connection_string(address), **options)
+            except Exception as exc:  # 任何錯誤都換下一個位址
+                errors.append(exc)
+                continue
+            if errors:
+                logger.warning("SQL Server %s 的主機名稱連線失敗，改用備援位址 %s 連線成功", self.server, address)
+            return connection
+        raise ConnectionFailed(errors)
+
     def get_safe_connection_string(self) -> str:
         """取得安全的連線字串（隱藏密碼）"""
         conn_str = self.get_connection_string()
@@ -74,6 +107,17 @@ class DatabaseConfig:
     
     def __str__(self):
         return f"{self.alias} -> {self.database_name} @ {self.server}"
+
+
+logger = logging.getLogger(__name__)
+
+
+class ConnectionFailed(Exception):
+    """連線規則的每一個位址都連不上。errors 依連線順序放每個位址的錯誤：先 server，再備援位址。"""
+
+    def __init__(self, errors: List[BaseException]):
+        super().__init__("; ".join(str(error) for error in errors))
+        self.errors = list(errors)
 
 
 class Settings:
@@ -258,6 +302,7 @@ class Settings:
         database_name: str,
         user_id: Optional[str] = None,
         password: Optional[str] = None,
+        fallback_server: str = "",
     ) -> DatabaseConfig:
         """
         依「呼叫端明確提供的 server + database_name」現組一個 DatabaseConfig，
@@ -277,6 +322,8 @@ class Settings:
             database_name: 實際資料庫名稱（不可為空）
             user_id: 這一台伺服器的掃描帳號覆寫，與 password 缺一即不生效
             password: 掃描密碼覆寫，與 user_id 缺一即不生效
+            fallback_server: 備援位址（Database Registry 的 `ip`）。只進連線字串，
+                不改 alias 與 server；空字串表示沒有備援（見 DatabaseConfig.connect()）
 
         Raises:
             ValueError: server 或 database_name 為空時，不嘗試連線。
@@ -301,6 +348,7 @@ class Settings:
             trust_server_certificate=cls.DB_TRUST_SERVER_CERTIFICATE,
             application_name=cls.DB_APPLICATION_NAME,
             driver=cls.DB_DRIVER,
+            fallback_server=str(fallback_server or "").strip(),
         )
 
     

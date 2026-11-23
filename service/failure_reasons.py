@@ -7,7 +7,7 @@ text of a "無法檢查" row, so a reason is one short line.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 try:
     import pyodbc as _pyodbc
@@ -50,3 +50,15 @@ def sql_failure_reason(exc: Optional[BaseException], seconds: Optional[float] = 
             return "這台機器沒有 SQL Server 的 ODBC 驅動程式"
         return f"SQL Server 連線失敗（{state or type(exc).__name__}）"
     return short_reason(f"SQL Server 連線失敗：{exc}")
+
+
+def sql_connection_failure_reason(errors: Sequence[BaseException], seconds: Optional[float] = None) -> str:
+    """The short reason of a failed connection rule of the Scan Connection.
+
+    `errors` holds the error of each address that the rule tried: the server name, then the `ip`.
+    One error gives its reason only. Two errors give the reason of the server name and the reason
+    of the `ip`, each from `sql_failure_reason`."""
+    reasons = [sql_failure_reason(error, seconds) for error in errors] or [sql_failure_reason(None)]
+    if len(reasons) == 1:
+        return reasons[0]
+    return f"主機名稱：{reasons[0]}；IP：{reasons[1]}"

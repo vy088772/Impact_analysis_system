@@ -42,7 +42,7 @@ class FakeProbes:
         self.git_most_at_once = 0
         self._git_lock = threading.Lock()
 
-    def sql(self, server: str, database: str, user_id: str, password: str) -> Optional[str]:
+    def sql(self, server: str, database: str, user_id: str, password: str, ip: str = "") -> Optional[str]:
         self.sql_calls.append((server, database, user_id, password))
         if server in self.blocked_servers:
             self.release.wait(timeout=5)
