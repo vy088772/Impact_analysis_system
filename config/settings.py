@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import List, Optional, Dict
 from dotenv import load_dotenv
 
+logger = logging.getLogger(__name__)
+
 # 載入 .env 檔案
 env_path = Path(__file__).parent.parent / '.env'
 if env_path.exists():
@@ -34,7 +36,7 @@ class DatabaseConfig:
         self.application_name = kwargs.get('application_name', 'ImpactAnalysisSystem')
         self.driver = kwargs.get('driver', 'ODBC Driver 17 for SQL Server')
         # 備援位址：Database Registry 的 `ip`。空字串表示沒有備援（見 connect()）。
-        self.fallback_server = kwargs.get('fallback_server', '')
+        self.fallback_address = kwargs.get('fallback_address', '')
     
     def get_connection_string(self, address: Optional[str] = None) -> str:
         """取得連線字串。address 是連線位址，預設是 server；connect() 用它換成備援位址。"""
@@ -73,6 +75,7 @@ class DatabaseConfig:
 
         server 的任何錯誤都會換到備援位址：規則不分類錯誤。規則不記得上一次的結果，所以每一次
         連線都從 server 開始。備援位址只進連線字串；連接埠、加密、驅動程式與帳密兩個位址都相同。
+        備援位址沒寫 named instance 時，沿用 server 的 instance（`host\\instance` → `ip\\instance`）。
         備援位址連上時，寫一行 log。
 
         Args:
@@ -85,9 +88,8 @@ class DatabaseConfig:
         import pyodbc
 
         options = {} if login_timeout is None else {"timeout": login_timeout}
-        addresses = [self.server, self.fallback_server] if self.fallback_server else [self.server]
         errors: List[BaseException] = []
-        for address in addresses:
+        for address in self._addresses():
             try:
                 connection = pyodbc.connect(self.get_connection_string(address), **options)
             except Exception as exc:  # 任何錯誤都換下一個位址
@@ -98,6 +100,15 @@ class DatabaseConfig:
             return connection
         raise ConnectionFailed(errors)
 
+    def _addresses(self) -> List[str]:
+        """連線規則的位址，依連線順序：server，再備援位址（有的話）。"""
+        if not self.fallback_address:
+            return [self.server]
+        fallback = self.fallback_address
+        if "\\" not in fallback and "\\" in self.server:
+            fallback += "\\" + self.server.split("\\", 1)[1]
+        return [self.server, fallback]
+
     def get_safe_connection_string(self) -> str:
         """取得安全的連線字串（隱藏密碼）"""
         conn_str = self.get_connection_string()
@@ -107,9 +118,6 @@ class DatabaseConfig:
     
     def __str__(self):
         return f"{self.alias} -> {self.database_name} @ {self.server}"
-
-
-logger = logging.getLogger(__name__)
 
 
 class ConnectionFailed(Exception):
@@ -302,7 +310,7 @@ class Settings:
         database_name: str,
         user_id: Optional[str] = None,
         password: Optional[str] = None,
-        fallback_server: str = "",
+        fallback_address: str = "",
     ) -> DatabaseConfig:
         """
         依「呼叫端明確提供的 server + database_name」現組一個 DatabaseConfig，
@@ -322,7 +330,7 @@ class Settings:
             database_name: 實際資料庫名稱（不可為空）
             user_id: 這一台伺服器的掃描帳號覆寫，與 password 缺一即不生效
             password: 掃描密碼覆寫，與 user_id 缺一即不生效
-            fallback_server: 備援位址（Database Registry 的 `ip`）。只進連線字串，
+            fallback_address: 備援位址（Database Registry 的 `ip`）。只進連線字串，
                 不改 alias 與 server；空字串表示沒有備援（見 DatabaseConfig.connect()）
 
         Raises:
@@ -348,7 +356,7 @@ class Settings:
             trust_server_certificate=cls.DB_TRUST_SERVER_CERTIFICATE,
             application_name=cls.DB_APPLICATION_NAME,
             driver=cls.DB_DRIVER,
-            fallback_server=str(fallback_server or "").strip(),
+            fallback_address=str(fallback_address or "").strip(),
         )
 
     

@@ -18,12 +18,14 @@ except ImportError:  # 沒有 pyodbc 的機器：沒有 ODBC 錯誤可分類
 
 
 _MAX_REASON_LENGTH = 160
+_SERVER_NAME_LABEL = "主機名稱："
+_IP_LABEL = "；IP："
 
 
-def short_reason(text: str) -> str:
-    """原因只留第一行，最多 _MAX_REASON_LENGTH 個字：頁面把它當滑鼠提示顯示。"""
+def short_reason(text: str, limit: int = _MAX_REASON_LENGTH) -> str:
+    """原因只留第一行，最多 limit 個字：頁面把它當滑鼠提示顯示。"""
     first = (text.strip().splitlines() or [""])[0]
-    return first if len(first) <= _MAX_REASON_LENGTH else first[: _MAX_REASON_LENGTH - 1] + "…"
+    return first if len(first) <= limit else first[: limit - 1] + "…"
 
 
 def no_answer(what: str, seconds: float) -> str:
@@ -57,8 +59,10 @@ def sql_connection_failure_reason(errors: Sequence[BaseException], seconds: Opti
 
     `errors` holds the error of each address that the rule tried: the server name, then the `ip`.
     One error gives its reason only. Two errors give the reason of the server name and the reason
-    of the `ip`, each from `sql_failure_reason`."""
-    reasons = [sql_failure_reason(error, seconds) for error in errors] or [sql_failure_reason(None)]
+    of the `ip`, each from `sql_failure_reason`. Each part gets half of the length limit, so the
+    reason stays one short line and keeps both parts."""
+    reasons = [sql_failure_reason(error, seconds) for error in errors]
     if len(reasons) == 1:
         return reasons[0]
-    return f"主機名稱：{reasons[0]}；IP：{reasons[1]}"
+    half = (_MAX_REASON_LENGTH - len(_SERVER_NAME_LABEL) - len(_IP_LABEL)) // 2
+    return f"{_SERVER_NAME_LABEL}{short_reason(reasons[0], half)}{_IP_LABEL}{short_reason(reasons[1], half)}"

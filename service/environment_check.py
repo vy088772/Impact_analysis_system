@@ -26,7 +26,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Iterable, List, Mapping, Optional, Tuple
+from typing import Callable, Iterable, List, Mapping, Optional
 
 from config.settings import ConnectionFailed, settings
 
@@ -48,16 +48,14 @@ def probe_sql_server(server: str, database: str, user_id: str, password: str, ip
     It uses the connection rule of the Scan Connection: when `server` fails and `ip` is not empty,
     it logs in by `ip` too. Each login has its own time limit."""
     try:
-        import pyodbc  # noqa: F401  (the connection rule needs it)
-    except ImportError:
-        return "這台機器沒有 pyodbc，不能連線 SQL Server"
-    try:
         config = settings.build_database_config(
             alias=server, server=server, database_name=database, user_id=user_id, password=password,
-            fallback_server=ip,
+            fallback_address=ip,
         )
         config.timeout = SQL_LOGIN_TIMEOUT_SECONDS
         connection = config.connect(login_timeout=SQL_LOGIN_TIMEOUT_SECONDS)
+    except ImportError:
+        return "這台機器沒有 pyodbc，不能連線 SQL Server"
     except ConnectionFailed as failed:
         return sql_connection_failure_reason(failed.errors, SQL_LOGIN_TIMEOUT_SECONDS)
     except Exception as exc:  # a broken configuration is a failure of this server only

@@ -16,7 +16,14 @@ import pytest
 
 from config.settings import settings
 from service import environment_check, system_targets
-from tests.test_environment_check_api import check, items_of, lock_listing, two_hosts  # noqa: F401
+from tests.test_environment_check_api import (  # noqa: F401  (fixtures and helpers)
+    SERVER_A,
+    SERVER_B,
+    check,
+    items_of,
+    lock_listing,
+    two_hosts,
+)
 from tests.test_cache_freshness_api import (  # noqa: F401  (fixtures and helpers)
     client,
     fresh_queue,
@@ -26,8 +33,6 @@ from tests.test_cache_freshness_api import (  # noqa: F401  (fixtures and helper
 
 pyodbc = pytest.importorskip("pyodbc")
 
-SERVER_A = "dba.example.com"
-SERVER_B = "dbb.example.com"
 IP_A = "192.0.2.10"
 IP_B = "192.0.2.20"
 
@@ -35,10 +40,11 @@ IP_B = "192.0.2.20"
 class FakeConnect:
     """Stands in for `pyodbc.connect`: it fails for the addresses in `failing`, else it connects.
 
-    A login to an address in `delays` takes that many seconds first."""
+    A failure is a SQLSTATE (a pyodbc error) or an exception. A login to an address in `delays`
+    takes that many seconds first."""
 
     def __init__(self) -> None:
-        self.failing: dict[str, str] = {}  # address -> SQLSTATE
+        self.failing: dict[str, str | Exception] = {}
         self.delays: dict[str, float] = {}
         self.addresses: list[str] = []
         self.release = threading.Event()
@@ -51,8 +57,11 @@ class FakeConnect:
         with self._lock:
             self.addresses.append(address)
         self.release.wait(self.delays.get(address, 0))
-        if address in self.failing:
-            raise pyodbc.Error(self.failing[address], f"[{self.failing[address]}] login failed")
+        failure = self.failing.get(address)
+        if isinstance(failure, Exception):
+            raise failure
+        if failure is not None:
+            raise pyodbc.Error(failure, f"[{failure}] login failed")
         return FakeConnection()
 
     def tried(self, *addresses: str) -> list[str]:
@@ -104,6 +113,28 @@ def test_when_the_server_name_and_the_ip_both_fail_the_reason_holds_both_reasons
     reason = "主機名稱：連不到 SQL Server（主機名稱錯誤、網路不通，或伺服器沒有回應）；IP：SQL Server 拒絕這個登入帳號"
     assert servers[SERVER_A] == {**servers[SERVER_A], "ok": False, "reason": reason, "locks": f"{SERVER_A} 的 SQL 列"}
     assert lock_listing()["Alpha"]["AlphaDb"] == reason
+
+
+def test_when_both_long_reasons_fail_the_reason_stays_one_short_line_with_both_parts(two_hosts, connect) -> None:
+    write_registry({"server": SERVER_A, "ip": IP_A, "databases": ["AlphaDb"]})
+    connect.failing = {SERVER_A: RuntimeError("名稱" * 200), IP_A: RuntimeError("位址" * 200)}
+
+    reason = items_of(check(), "sql_server")[SERVER_A]["reason"]
+
+    assert len(reason) <= 160
+    assert reason.startswith("主機名稱：SQL Server 連線失敗：名稱")
+    assert "；IP：SQL Server 連線失敗：位址" in reason
+
+
+def test_the_ip_connection_keeps_the_named_instance_of_the_server(two_hosts, connect) -> None:
+    named = "dbc.example.com\\SQL2019"
+    write_registry({"server": named, "ip": "192.0.2.30", "databases": ["Archive"]})
+    connect.failing = {named: "08001"}
+
+    servers = items_of(check(), "sql_server")
+
+    assert servers["dbc.example.com"]["ok"] is True
+    assert connect.tried(named, "192.0.2.30\\SQL2019") == [named, "192.0.2.30\\SQL2019"]
 
 
 def test_a_server_with_no_ip_or_an_empty_ip_logs_in_one_time_and_gives_the_reason_of_today(

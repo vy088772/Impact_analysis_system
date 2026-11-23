@@ -515,8 +515,8 @@ def check_environment(req: Optional[EnvironmentCheckRequest] = None) -> Environm
     """Run the Environment Check now (`llamaindex-spec-rag` ADR-0020) and return the new result.
 
     It logs in to each server of the Database Registry (and of the catalog) with a short login time limit, and runs
-    `git ls-remote` one time for each repository of the catalog. When the server name fails and the Registry has an
-    `ip` for the server, it logs in by the `ip` too; the answer keeps the server name. The result locks the SQL rows of
+    `git ls-remote` one time for each repository of the catalog. When the server name fails, it logs in by the `ip`
+    of the server in the Database Registry. The answer keeps the server name. The result locks the SQL rows of
     a failed server and the C# rows of a failed repository, until the next check."""
     credentials = (req or EnvironmentCheckRequest()).sql_credentials
     registry = system_targets.load_database_registry(system_targets.default_spec_rag_root())
