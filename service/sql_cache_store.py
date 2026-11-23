@@ -36,9 +36,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 # 索引跟真正的比對邏輯日後可能悄悄長歪，讓索引誤刪一個端點其實會找到的名字。
 from canonical_object_identity import ObjectName, bare_key, full_key, parse
 from code_analyzer.sql_fingerprint import Fingerprint
-from config.settings import settings
-
-from config.settings import ConnectionFailed
+from config.settings import ConnectionFailed, settings
 
 from .failure_reasons import short_reason, sql_connection_failure_reason, sql_failure_reason
 
@@ -523,7 +521,7 @@ def _without_password(reason: str, connection: ScanConnection) -> str:
 
 
 def _connect_failure_reason(analyzer: "SQLAnalyzer", connection: ScanConnection) -> str:
-    """The short reason of a failed connect (no password): both reasons when the server and the ip both failed."""
+    """連不上時的簡短原因（不含密碼）。server 與 ip 都連不上時，原因同時放兩個位址的原因。"""
     error = getattr(analyzer, "connect_error", None)
     if isinstance(error, ConnectionFailed):
         return _without_password(sql_connection_failure_reason(error.errors), connection)
@@ -847,7 +845,11 @@ def get_or_dump(
         fingerprint = None  # 記錄 null：之後的檢查不會把這份快取標成 behind_source
     analyzer = _sql_analyzer(identity, connection)
     if not analyzer.connect():
-        raise RuntimeError(f"無法連線資料庫：{db}：{_connect_failure_reason(analyzer, connection)}")
+        error = getattr(analyzer, "connect_error", None)
+        if isinstance(error, ConnectionFailed) and len(error.errors) > 1:
+            # server 與 ip 都連不上：錯誤放兩個原因。只有一個位址時，錯誤和以前一樣。
+            raise RuntimeError(f"無法連線資料庫：{db}：{_connect_failure_reason(analyzer, connection)}")
+        raise RuntimeError(f"無法連線資料庫：{db}")
     _report_progress(progress_callback, "connecting", 1, 1, db)
     try:
         if progress_callback is None:

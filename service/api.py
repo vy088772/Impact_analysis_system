@@ -495,10 +495,10 @@ def check_behind_source(req: Optional[CacheFreshnessCheckRequest] = None) -> Cac
     `system_id`, it reads every system. It asks each remote repository for its branch head (no
     clone, no pull). It reads the current Fingerprint of each usable, unlocked SQL cache from the
     system catalog of its Database (no definitions), with the scan account that a refresh of that
-    server uses (ADR-0010). When the server name fails, it reads by the `ip` of the server in the Database
-    Registry; the answer keeps the server name. A locked row stays out. A question never runs this check. The body is
-    optional: with no body, the check reads every system and every server uses the global scan
-    account."""
+    server uses (ADR-0010). When the server name fails, it reads by the `ip` of the server in the
+    Database Registry; the answer keeps the server name. A locked row stays out. A question never
+    runs this check. The body is optional: with no body, the check reads every system and every
+    server uses the global scan account."""
     req = req or CacheFreshnessCheckRequest()
     catalog = _catalog()
     checked = catalog if req.system_id is None else system_targets.systems_named(catalog, req.system_id)

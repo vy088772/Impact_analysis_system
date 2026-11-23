@@ -205,7 +205,7 @@ def test_with_no_ip_the_refresh_job_connects_by_the_server_name_only(world, sql_
     job = wait_for(submit_sql("AlphaDb")["job_id"], "failed")
 
     assert set(connect.addresses) == {SERVER}
-    assert job["error"] == "無法連線資料庫：AlphaDb：連不到 SQL Server（主機名稱錯誤、網路不通，或伺服器沒有回應）"
+    assert job["error"] == "無法連線資料庫：AlphaDb"
 
 
 def test_with_no_ip_the_fingerprint_read_connects_by_the_server_name_only(world, sql_root, connect) -> None:
