@@ -266,6 +266,7 @@ def test_sql_refresh_builds_and_reloads_typed_execution_graph() -> None:
             database_name: str,
             user_id: str = "",
             password: str = "",
+            fallback_address: str = "",
         ) -> None:
             self.alias = alias
 

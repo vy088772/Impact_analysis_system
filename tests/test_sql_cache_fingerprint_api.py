@@ -194,6 +194,7 @@ def test_the_reader_returns_the_fingerprint_of_the_identity(sql_server) -> None:
         "database_name": "AlphaDb",
         "user_id": "ScanUser",
         "password": "secret",
+        "fallback_address": "",
     }
     assert sql_server.disconnected
 

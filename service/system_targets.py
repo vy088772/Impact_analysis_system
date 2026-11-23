@@ -134,6 +134,13 @@ def registry_ips(registry: Iterable[RegistryServer]) -> Dict[str, str]:
     return ips
 
 
+def registry_ip(server: str) -> str:
+    """The `ip` of `server` in the Database Registry of `llamaindex-spec-rag`, found by the
+    normalized server; empty when the Registry has none. It reads the Registry each time."""
+    ips = registry_ips(load_database_registry(default_spec_rag_root()))
+    return ips.get(sql_cache_store.normalize_server(server), "")
+
+
 def resolve_system_targets(
     systems: Iterable[dict],
     requested_systems: Iterable[str],

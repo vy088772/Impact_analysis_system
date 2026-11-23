@@ -14,7 +14,7 @@ import json
 
 from canonical_object_identity import ObjectName, bare_key, bare_name, parse
 from code_analyzer import sql_fingerprint
-from config.settings import settings, DatabaseConfig
+from config.settings import ConnectionFailed, settings, DatabaseConfig
 from schema_resolution import DEFAULT_SCHEMA
 
 
@@ -233,6 +233,7 @@ class SQLAnalyzer:
         database_name: str = None,
         user_id: str = "",
         password: str = "",
+        fallback_address: str = "",
     ):
         """
         初始化 SQL 分析器
@@ -248,6 +249,8 @@ class SQLAnalyzer:
                 生效；缺一即沿用 .env 的全域 DB_AUTH_MODE 身分（ADR-0010）。
                 掃描身分永遠不從被掃應用程式的 Web.config 推導。
             password: 掃描帳密覆寫的密碼。
+            fallback_address: Scan Connection 的備援位址（Database Registry 的 `ip`）；
+                空字串表示沒有備援（見 DatabaseConfig.connect()）。
 
         每個系統的伺服器/資料庫可能不同，故優先使用明確提供的 server/
         database_name（見 settings.build_database_config()）；只有在完全沒
@@ -261,6 +264,7 @@ class SQLAnalyzer:
                 database_name=database_name,
                 user_id=user_id,
                 password=password,
+                fallback_address=fallback_address,
             )
         elif database_alias:
             self.db_config = settings.get_database_config(database_alias)
@@ -281,13 +285,17 @@ class SQLAnalyzer:
     # ========================================
     
     def connect(self) -> bool:
-        """建立資料庫連線。失敗時回傳 False，並把錯誤留在 `connect_error`。"""
+        """建立資料庫連線。失敗時回傳 False，並把錯誤留在 `connect_error`。
+
+        連線用 Scan Connection 的連線規則（DatabaseConfig.connect()）：server 連不上、
+        又有備援位址時，再用備援位址連一次。每個位址都連不上時，`connect_error` 是
+        ConnectionFailed，裡面依連線順序放每個位址的錯誤。
+        """
         self.connect_error = None
         try:
             print(f"🔌 連接資料庫: {self.db_config.alias}...")
             
-            conn_str = self.db_config.get_connection_string()
-            self.connection = pyodbc.connect(conn_str)
+            self.connection = self.db_config.connect()
             self.cursor = self.connection.cursor()
             
             # 取得資料庫資訊
@@ -300,7 +308,7 @@ class SQLAnalyzer:
             
             return True
             
-        except pyodbc.Error as e:
+        except (ConnectionFailed, pyodbc.Error) as e:
             print(f"❌ 連線失敗: {e}")
             self.connect_error = e
             return False

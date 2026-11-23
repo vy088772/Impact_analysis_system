@@ -77,7 +77,7 @@ def test_get_or_dump_hands_the_override_to_the_analyzer(monkeypatch) -> None:
     except RuntimeError:
         pass  # _FakeAnalyzer.connect() returns False; the call under test already happened.
 
-    assert seen == {"user_id": "ScanUser", "password": "secret"}
+    assert seen == {"user_id": "ScanUser", "password": "secret", "fallback_address": ""}
 
 
 def test_the_refresh_sql_route_forwards_the_override(monkeypatch) -> None:

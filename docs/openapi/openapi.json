@@ -6362,7 +6362,7 @@
     },
     "/cache_freshness/check": {
       "post": {
-        "description": "Run the `behind_source` check now and return the new listing (Impact ADR-0045).\n\nOnly the web calls this. With `system_id`, it reads only the repository and the declared SQL\nDatabases of that catalog system, and keeps the results of the other systems. With no\n`system_id`, it reads every system. It asks each remote repository for its branch head (no\nclone, no pull). It reads the current Fingerprint of each usable, unlocked SQL cache from the\nsystem catalog of its Database (no definitions), with the scan account that a refresh of that\nserver uses (ADR-0010). A locked row stays out. A question never runs this check. The body is\noptional: with no body, the check reads every system and every server uses the global scan\naccount.",
+        "description": "Run the `behind_source` check now and return the new listing (Impact ADR-0045).\n\nOnly the web calls this. With `system_id`, it reads only the repository and the declared SQL\nDatabases of that catalog system, and keeps the results of the other systems. With no\n`system_id`, it reads every system. It asks each remote repository for its branch head (no\nclone, no pull). It reads the current Fingerprint of each usable, unlocked SQL cache from the\nsystem catalog of its Database (no definitions), with the scan account that a refresh of that\nserver uses (ADR-0010). When the server name fails, it reads by the `ip` of the server in the\nDatabase Registry; the answer keeps the server name. A locked row stays out. A question never\nruns this check. The body is optional: with no body, the check reads every system and every\nserver uses the global scan account.",
         "operationId": "check_behind_source_cache_freshness_check_post",
         "requestBody": {
           "content": {
@@ -6891,7 +6891,7 @@
     },
     "/refresh_sql": {
       "post": {
-        "description": "更新 SQL 快取指令：提交一個 Refresh Job 並回傳該 job；不在請求內做事。\n\nRefresh Queue 一次只跑一個 job：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與\n資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取\n（data/sql_cache/）。同一份快取已有 waiting／running 的 job 時，回傳那個既有 job。\n\nserver/db_name 由呼叫端（catalog）提供，缺一即報錯、不排入佇列。連線身分預設\n用 .env 的全域 DB_AUTH_MODE；請求帶了完整的 db_user_id/db_password 才改用那組\n覆寫（ADR-0010）。",
+        "description": "更新 SQL 快取指令：提交一個 Refresh Job 並回傳該 job；不在請求內做事。\n\nRefresh Queue 一次只跑一個 job：重新連線 SQL Server 撈取整庫 SP/View/Function 定義與\n資料表 Schema，使用 ScriptDom 建立 SQL Execution Graph，覆寫本機落地快取\n（data/sql_cache/）。同一份快取已有 waiting／running 的 job 時，回傳那個既有 job。\n\nserver/db_name 由呼叫端（catalog）提供，缺一即報錯、不排入佇列。連線身分預設\n用 .env 的全域 DB_AUTH_MODE；請求帶了完整的 db_user_id/db_password 才改用那組\n覆寫（ADR-0010）。server 連不上、Database Registry 又有這台伺服器的 `ip` 時，scan 改用\n`ip` 連線；快取、Scan Record 與回應仍只用 server。",
         "operationId": "refresh_sql_refresh_sql_post",
         "requestBody": {
           "content": {
