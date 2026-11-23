@@ -38,7 +38,9 @@ from canonical_object_identity import ObjectName, bare_key, full_key, parse
 from code_analyzer.sql_fingerprint import Fingerprint
 from config.settings import settings
 
-from .failure_reasons import short_reason, sql_failure_reason
+from config.settings import ConnectionFailed
+
+from .failure_reasons import short_reason, sql_connection_failure_reason, sql_failure_reason
 
 if TYPE_CHECKING:
     from code_analyzer.sql_analyzer import SQLAnalyzer
@@ -482,17 +484,21 @@ def cached_fingerprint(identity: CacheIdentity) -> Optional[Fingerprint]:
 
 @dataclass(frozen=True)
 class ScanConnection:
-    """scan 怎麼連到一份快取的 SQL Server：連線位址與掃描帳密覆寫。
+    """scan 怎麼連到一份快取的 SQL Server：連線位址、備援位址與掃描帳密覆寫。
 
     server 是呼叫端給的連線位址，原樣保留。它可以和 CacheIdentity.server 不同：
     正規化會去掉 named instance（`host\\instance`），但連線仍要連到那個 instance。
     user_id/password 是這台伺服器的掃描帳密覆寫，兩個都有值才生效；
     否則用全域的 DB_AUTH_MODE 身分（ADR-0010）。
+    ip 是備援位址：Database Registry 裡這台伺服器的 `ip`，空字串表示沒有備援。
+    server 連不上時，連線規則再用 ip 連一次（見 DatabaseConfig.connect()）。
+    ip 只進連線字串；CacheIdentity、快取檔名與 Scan Record 都只用 server。
     """
 
     server: str
     user_id: str = ""
     password: str = ""
+    ip: str = ""
 
 
 def _sql_analyzer(identity: CacheIdentity, connection: ScanConnection) -> "SQLAnalyzer":
@@ -504,6 +510,7 @@ def _sql_analyzer(identity: CacheIdentity, connection: ScanConnection) -> "SQLAn
         database_name=identity.database,
         user_id=connection.user_id,
         password=connection.password,
+        fallback_address=connection.ip,
     )
 
 
@@ -513,6 +520,14 @@ class FingerprintUnreadable(Exception):
 
 def _without_password(reason: str, connection: ScanConnection) -> str:
     return short_reason(reason.replace(connection.password, "***") if connection.password else reason)
+
+
+def _connect_failure_reason(analyzer: "SQLAnalyzer", connection: ScanConnection) -> str:
+    """The short reason of a failed connect (no password): both reasons when the server and the ip both failed."""
+    error = getattr(analyzer, "connect_error", None)
+    if isinstance(error, ConnectionFailed):
+        return _without_password(sql_connection_failure_reason(error.errors), connection)
+    return _without_password(sql_failure_reason(error), connection)
 
 
 def read_fingerprint(identity: CacheIdentity, connection: ScanConnection) -> Fingerprint:
@@ -529,8 +544,7 @@ def read_fingerprint(identity: CacheIdentity, connection: ScanConnection) -> Fin
     try:
         analyzer = _sql_analyzer(identity, connection)
         if not analyzer.connect():
-            reason = sql_failure_reason(getattr(analyzer, "connect_error", None))
-            raise FingerprintUnreadable(_without_password(reason, connection))
+            raise FingerprintUnreadable(_connect_failure_reason(analyzer, connection))
         open_analyzer = analyzer
         return analyzer.read_fingerprint()
     except FingerprintUnreadable:
@@ -833,7 +847,7 @@ def get_or_dump(
         fingerprint = None  # 記錄 null：之後的檢查不會把這份快取標成 behind_source
     analyzer = _sql_analyzer(identity, connection)
     if not analyzer.connect():
-        raise RuntimeError(f"無法連線資料庫：{db}")
+        raise RuntimeError(f"無法連線資料庫：{db}：{_connect_failure_reason(analyzer, connection)}")
     _report_progress(progress_callback, "connecting", 1, 1, db)
     try:
         if progress_callback is None:

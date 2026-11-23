@@ -433,7 +433,8 @@ def refresh_sql(req: RefreshSqlRequest) -> RefreshJobResponse:
 
     server/db_name 由呼叫端（catalog）提供，缺一即報錯、不排入佇列。連線身分預設
     用 .env 的全域 DB_AUTH_MODE；請求帶了完整的 db_user_id/db_password 才改用那組
-    覆寫（ADR-0010）。"""
+    覆寫（ADR-0010）。server 連不上、Database Registry 又有這台伺服器的 `ip` 時，scan 改用
+    `ip` 連線；快取、Scan Record 與回應仍只用 server。"""
     return _submit_sql_job(req)
 
 
@@ -494,7 +495,8 @@ def check_behind_source(req: Optional[CacheFreshnessCheckRequest] = None) -> Cac
     `system_id`, it reads every system. It asks each remote repository for its branch head (no
     clone, no pull). It reads the current Fingerprint of each usable, unlocked SQL cache from the
     system catalog of its Database (no definitions), with the scan account that a refresh of that
-    server uses (ADR-0010). A locked row stays out. A question never runs this check. The body is
+    server uses (ADR-0010). When the server name fails, it reads by the `ip` of the server in the Database
+    Registry; the answer keeps the server name. A locked row stays out. A question never runs this check. The body is
     optional: with no body, the check reads every system and every server uses the global scan
     account."""
     req = req or CacheFreshnessCheckRequest()

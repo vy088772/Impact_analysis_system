@@ -3780,15 +3780,18 @@ def refresh_sql_source(
     server/db_name：實際連線目標，也是快取鍵的兩個組成，由呼叫端（catalog）提供；缺一時
     CacheIdentity.of() 會直接報錯，不嘗試連線。
     user_id/password：這台伺服器的掃描帳密覆寫，兩者都有值才生效（ADR-0010）。
+    server 連不上時，scan 改用 Database Registry 裡這台伺服器的 `ip` 連線；快取仍存在
+    server 的 CacheIdentity 下（見 ScanConnection）。
 
     回傳 {database, procedures, views, functions, tables} 數量摘要；
     SQL Execution Graph 會與 object definitions 一起落地到 SQL cache。
     """
+    from . import system_targets
     from .sql_cache_store import CacheIdentity, ScanConnection, get_or_dump
 
     data = get_or_dump(
         CacheIdentity.of(server, db_name),
-        ScanConnection(server, user_id, password),
+        ScanConnection(server, user_id, password, system_targets.registry_ip(server)),
         refresh=True,
         progress_callback=progress_callback,
     )

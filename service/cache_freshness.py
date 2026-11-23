@@ -23,7 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
-from . import environment_check, refresh_queue, repo_manager, scan_store, source_check, sql_cache_store
+from . import environment_check, refresh_queue, repo_manager, scan_store, source_check, sql_cache_store, system_targets
 from .system_targets import azure_source_of, declared_databases, sources_of
 from .schemas import RefreshRequest, RefreshSqlRequest, SqlCredentialOverride, UpdateAllRequest
 
@@ -117,8 +117,10 @@ def sql_check_targets(
     The Scan Connection holds the server of the catalog, as a refresh of the cache does, so a
     named instance (`host\\instance`) connects. It holds the scan account override of the server
     from `sql_credentials`, keyed by the `server` of a listing row, as in "update all" (ADR-0010).
-    A server with no key gets the global scan account."""
+    A server with no key gets the global scan account. The Scan Connection holds the `ip` of the
+    server in the Database Registry too, so the read connects by the `ip` when the server name fails."""
     scan_accounts = sql_credentials or {}
+    ips = system_targets.registry_ips(system_targets.load_database_registry(system_targets.default_spec_rag_root()))
     targets: dict[sql_cache_store.CacheIdentity, sql_cache_store.ScanConnection] = {}
     for system in catalog_systems:
         for server, database in declared_databases(system):
@@ -130,7 +132,9 @@ def sql_check_targets(
                 continue
             if sql_cache_store.load_cached(identity) is not None:
                 account = scan_accounts.get(identity.server) or SqlCredentialOverride()
-                targets[identity] = sql_cache_store.ScanConnection(server, account.db_user_id, account.db_password)
+                targets[identity] = sql_cache_store.ScanConnection(
+                    server, account.db_user_id, account.db_password, ips.get(identity.server, "")
+                )
     return targets
 
 
