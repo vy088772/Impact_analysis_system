@@ -41,21 +41,27 @@ class FakeConnect:
     """Stands in for `pyodbc.connect`: it fails for the addresses in `failing`, else it connects.
 
     A failure is a SQLSTATE (a pyodbc error) or an exception. A login to an address in `delays`
-    takes that many seconds first."""
+    takes that many seconds first. A login to an address in `needs` needs that many seconds: with a
+    shorter login limit (`timeout`) it fails with 08001 at once, as ODBC Driver 17 does after the limit,
+    so the test does not wait."""
 
     def __init__(self) -> None:
         self.failing: dict[str, str | Exception] = {}
         self.delays: dict[str, float] = {}
+        self.needs: dict[str, float] = {}
         self.addresses: list[str] = []
         self.release = threading.Event()
         self._lock = threading.Lock()
 
-    def __call__(self, connection_string: str, **_kwargs):
+    def __call__(self, connection_string: str, **kwargs):
         match = re.search(r"Server=([^;,]*)", connection_string)
         assert match is not None, connection_string
         address = match.group(1)
         with self._lock:
             self.addresses.append(address)
+        needed = self.needs.get(address)
+        if needed is not None and kwargs.get("timeout", float("inf")) < needed:
+            raise pyodbc.Error("08001", "[08001] Unable to complete login process due to delay in opening server connection")
         self.release.wait(self.delays.get(address, 0))
         failure = self.failing.get(address)
         if isinstance(failure, Exception):
@@ -181,7 +187,7 @@ def test_a_registry_server_that_names_the_host_in_another_form_gives_its_ip_to_t
 def test_a_server_with_an_ip_gets_two_login_limits_plus_the_margin_and_a_server_without_one_gets_one(
     two_hosts, connect, monkeypatch
 ) -> None:
-    # Login limit 0.5 s and margin 0.3 s: 1.3 s with an `ip` and 0.8 s without (13 s and 8 s in production).
+    # Login limit 0.5 s and margin 0.3 s: 1.3 s with an `ip` and 0.8 s without (33 s and 18 s in production).
     monkeypatch.setattr(environment_check, "SQL_LOGIN_TIMEOUT_SECONDS", 0.5)
     monkeypatch.setattr(environment_check, "_MARGIN_SECONDS", 0.3)
     server_c = "dbc.example.com"
@@ -200,6 +206,19 @@ def test_a_server_with_an_ip_gets_two_login_limits_plus_the_margin_and_a_server_
     assert servers[SERVER_B]["reason"] == "SQL Server 在 0.5 秒內沒有回應"
     # A server with an ip that gives no answer: the limit of its probe is two logins.
     assert servers[server_c]["reason"] == "SQL Server 在 1 秒內沒有回應"
+
+
+def test_a_server_whose_ip_login_needs_more_than_5_seconds_passes_on_the_first_check(two_hosts, connect) -> None:
+    # vmsystest07 (2026-11-26): the server name fails at once (Kerberos), and the Windows login by the ip
+    # needs 5.5 to 6.3 seconds when no pooled connection is open. A 5-second login limit failed it at each
+    # web start; it passed only after another login had put a connection in the ODBC pool.
+    write_registry({"server": SERVER_A, "ip": IP_A, "databases": ["AlphaDb"]})
+    connect.failing = {SERVER_A: "HY000"}
+    connect.needs = {IP_A: 6.3}
+
+    servers = items_of(check(), "sql_server")
+
+    assert servers[SERVER_A] == {**servers[SERVER_A], "ok": True, "reason": ""}
 
 
 def warnings_of_server_a(caplog) -> list[str]:

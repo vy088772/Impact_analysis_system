@@ -34,7 +34,9 @@ from . import source_check, sql_cache_store, system_targets
 from .failure_reasons import no_answer, sql_connection_failure_reason, sql_failure_reason
 from .schemas import EnvironmentCheckResponse, SqlCredentialOverride, UpdateCapabilityResult
 
-SQL_LOGIN_TIMEOUT_SECONDS = 5
+# A Windows login by an ip (no Kerberos) needs 5.5 to 6.3 seconds when no pooled connection is open
+# (vmsystest07, measured 2026-11-26). 5 seconds failed it at each web start.
+SQL_LOGIN_TIMEOUT_SECONDS = 15
 GIT_TIMEOUT_SECONDS = 15
 # 30 repositories take about 1 second at 8 at one time (measured 2026-10-22), well under the SQL limit.
 GIT_AT_ONCE = 8
